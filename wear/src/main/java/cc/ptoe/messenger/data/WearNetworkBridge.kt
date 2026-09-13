@@ -247,14 +247,14 @@ class WearNetworkBridge(
                 Log.d(TAG, "NSD service found: ${service.serviceName} ${service.serviceType}")
                 if (resolved.isCompleted) return
                 runCatching {
-                    nsd.resolveService(service, object : NsdManager.ResolveListener {
+                    nsd.resolveServiceCompat(service, object : NsdManager.ResolveListener {
                         override fun onResolveFailed(service: NsdServiceInfo, errorCode: Int) {
                             Log.w(TAG, "NSD resolve failed: $errorCode for ${service.serviceName}")
                         }
 
                         override fun onServiceResolved(service: NsdServiceInfo) {
                             if (resolved.isCompleted) return
-                            val host = service.host?.hostAddress
+                            val host = service.firstHostAddress()
                             if (host == null) {
                                 Log.w(TAG, "NSD resolved but no host address")
                                 return
@@ -487,6 +487,18 @@ class WearNetworkBridge(
         "req-${System.currentTimeMillis()}-${(0..0xffff).random()}"
 
     private data class Endpoint(val host: String, val port: Int)
+
+    // NsdManager.resolveService(NsdServiceInfo, ResolveListener) and NsdServiceInfo.host are
+    // deprecated on API 34+ (Executor-based resolveService / hostAddresses), but those
+    // replacements require API 34 while the wear module's minSdk is 30 (Wear OS 3 devices).
+    @Suppress("DEPRECATION")
+    private fun NsdManager.resolveServiceCompat(
+        service: NsdServiceInfo,
+        listener: NsdManager.ResolveListener,
+    ) = resolveService(service, listener)
+
+    @Suppress("DEPRECATION")
+    private fun NsdServiceInfo.firstHostAddress(): String? = host?.hostAddress
 
     companion object {
         private const val TAG = "WearNetworkBridge"

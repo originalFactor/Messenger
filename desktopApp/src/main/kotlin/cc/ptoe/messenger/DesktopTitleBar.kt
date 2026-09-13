@@ -40,15 +40,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.loadImageBitmap
-import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowScope
+import org.jetbrains.skia.Image as SkiaImage
 import java.awt.Frame
 import java.awt.MouseInfo
 import java.awt.Point
@@ -140,7 +141,12 @@ fun WindowScope.DesktopTitleBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
-            bitmap = useResource("logo.png", ::loadImageBitmap),
+            bitmap = remember {
+                Thread.currentThread().contextClassLoader
+                    .getResourceAsStream("logo.png")
+                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
+                    ?: ImageBitmap(1, 1)
+            },
             contentDescription = null,
             modifier = Modifier.size(20.dp)
         )

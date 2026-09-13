@@ -38,12 +38,16 @@ kotlin {
             jvmTarget.set(JvmTarget.JVM_11)
         }
         androidResources { enable = true }
+
+        // Run commonTest on the Android (JVM) host target as well; silences the
+        // "commonTest source directory exists, but android host tests are not enabled" warning.
+        withHostTest { }
     }
 
     jvm("desktop")
 
     sourceSets {
-        val commonMain by getting {
+        getByName("commonMain") {
             dependencies {
                 implementation(compose.runtime)
                 implementation(compose.foundation)
@@ -88,7 +92,7 @@ kotlin {
             }
         }
 
-        val androidMain by getting {
+        getByName("androidMain") {
             dependencies {
                 implementation(compose.preview)
                 implementation(libs.androidx.activity.compose)
@@ -106,7 +110,7 @@ kotlin {
             }
         }
 
-        val desktopMain by getting {
+        getByName("desktopMain") {
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
@@ -114,7 +118,7 @@ kotlin {
             }
         }
 
-        val commonTest by getting {
+        getByName("commonTest") {
             dependencies {
                 implementation(kotlin("test"))
             }

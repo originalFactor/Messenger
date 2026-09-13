@@ -75,7 +75,7 @@ fun MainScaffold(
                     bottomBar = {
                         if (showTopLevelNav) {
                             BottomNavBar(
-                                currentRoute = currentDestination?.route,
+                                currentRoute = currentDestination.route,
                                 onItemClick = onItemClick
                             )
                         }
@@ -102,7 +102,7 @@ fun MainScaffold(
                             modifier = Modifier.fillMaxHeight()
                         ) {
                             NavigationRailBar(
-                                currentRoute = currentDestination?.route,
+                                currentRoute = currentDestination.route,
                                 onItemClick = onItemClick
                             )
                         }

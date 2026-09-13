@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
@@ -89,7 +89,7 @@ fun ConversationsDualPaneScreen(
             val conversationId = selectedConversationId
             if (conversationId == null) {
                 EmptyState(
-                    icon = Icons.Default.Chat,
+                    icon = Icons.AutoMirrored.Filled.Chat,
                     message = stringResource(Res.string.chat_select_conversation),
                     modifier = Modifier.fillMaxSize()
                 )
