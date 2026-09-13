@@ -19,6 +19,19 @@ package cc.ptoe.messenger.data.cloud
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/**
+ * 单条未过期套餐条目（/api/auth/me 下发）：卡密兑换携带 planName，
+ * 管理员授予 / 迁移条目只有 source 标注。
+ */
+@Serializable
+data class CloudQuotaEntitlement(
+    val planName: String? = null,
+    val source: String? = null,
+    val balance: Long = 0,
+    /** null = 不限有效期。 */
+    val expiresAt: Long? = null
+)
+
 @Serializable
 data class CloudUser(
     val id: String = "",
@@ -28,6 +41,8 @@ data class CloudUser(
     val aiApiKey: String? = null,
     val quotaBalance: Long? = null,
     val quotaExpiresAt: Long? = null,
+    /** 未过期套餐条目（App 端套餐信息展示）；旧服务端响应不含该键。 */
+    val quotaEntitlements: List<CloudQuotaEntitlement> = emptyList(),
     val avatarUrl: String? = null,
     val avatarVersion: Long? = null,
     val syncVersion: Long = 0,

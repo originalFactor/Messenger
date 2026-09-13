@@ -248,6 +248,17 @@
 
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>
+    <string name="cloud_server_title">Server address</string>
+    <string name="cloud_server_edit_hint">Tap to edit</string>
+    <string name="cloud_server_saved">Server address saved</string>
+    <string name="cloud_settings_plan_title">Plan</string>
+    <string name="cloud_settings_plan_balance_label">Remaining quota</string>
+    <string name="cloud_settings_plan_expires_label">Expires</string>
+    <string name="cloud_settings_plan_no_expiry">No expiry</string>
+    <string name="cloud_settings_plan_empty">No active plan. Redeem a card key in the web console.</string>
+    <string name="cloud_settings_plan_source_card">Card redemption</string>
+    <string name="cloud_settings_plan_source_admin">Admin grant</string>
+    <string name="cloud_settings_plan_source_migrated">Migrated quota</string>
     <string name="cloud_settings_account_sync">Cloud account &amp; sync</string>
     <string name="cloud_settings_sync_desc">Securely sync Agents, conversations, and model providers between devices.</string>
     <string name="cloud_settings_server">Server</string>

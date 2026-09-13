@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,17 +34,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -67,19 +71,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
+import cc.ptoe.messenger.data.cloud.CloudQuotaEntitlement
 import cc.ptoe.messenger.data.cloud.CloudSyncRepository
-import cc.ptoe.messenger.data.cloud.DEFAULT_CLOUD_SERVER_URL
 import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Instant
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_login
 import cc.ptoe.messenger.generated.resources.action_save
+import cc.ptoe.messenger.generated.resources.cloud_server_title
+import cc.ptoe.messenger.generated.resources.cloud_server_edit_hint
 import cc.ptoe.messenger.generated.resources.cloud_settings_account
 import cc.ptoe.messenger.generated.resources.cloud_settings_account_deleted
 import cc.ptoe.messenger.generated.resources.cloud_settings_account_security
@@ -113,17 +123,23 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_password_min_length
 import cc.ptoe.messenger.generated.resources.cloud_settings_password_updated
 import cc.ptoe.messenger.generated.resources.cloud_settings_permanently_delete
 import cc.ptoe.messenger.generated.resources.cloud_settings_permanently_delete_button
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_balance_label
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_empty
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_expires_label
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_no_expiry
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_source_admin
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_source_card
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_source_migrated
+import cc.ptoe.messenger.generated.resources.cloud_settings_plan_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_register_and_login
 import cc.ptoe.messenger.generated.resources.cloud_settings_restore
 import cc.ptoe.messenger.generated.resources.cloud_settings_server
 import cc.ptoe.messenger.generated.resources.cloud_settings_server_desc
-import cc.ptoe.messenger.generated.resources.cloud_settings_server_url_label
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_data
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_data_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_upload_sync
-import cc.ptoe.messenger.generated.resources.cloud_settings_use_default_server
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
@@ -142,7 +158,7 @@ fun CloudSettingsScreen(
 ) {
     val user by viewModel.cloudUser.collectAsStateWithLifecycle()
     val savedServerUrl by viewModel.cloudServerUrl.collectAsStateWithLifecycle()
-    var serverUrl by remember(savedServerUrl) { mutableStateOf(savedServerUrl) }
+    var showServerPage by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var register by remember { mutableStateOf(false) }
@@ -191,6 +207,14 @@ fun CloudSettingsScreen(
         viewModel.completeLogin(outcome, useLocalData) { result ->
             notify(result, successMessage, close = true)
         }
+    }
+
+    if (showServerPage) {
+        CloudServerScreen(
+            onBackClick = { showServerPage = false },
+            viewModel = viewModel
+        )
+        return
     }
 
     Scaffold(
@@ -243,24 +267,30 @@ fun CloudSettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedTextField(
-                        value = serverUrl,
-                        onValueChange = { serverUrl = it },
-                        label = { Text(stringResource(Res.string.cloud_settings_server_url_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isBusy
-                    )
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isBusy) { showServerPage = true },
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
-                            onClick = { serverUrl = DEFAULT_CLOUD_SERVER_URL },
-                            enabled = !isBusy
-                        ) {
-                            Text(stringResource(Res.string.cloud_settings_use_default_server))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = savedServerUrl,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = stringResource(Res.string.cloud_server_edit_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = stringResource(Res.string.cloud_server_title),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -294,8 +324,7 @@ fun CloudSettingsScreen(
                         Button(
                             onClick = {
                                 isBusy = true
-                                val normalizedServerUrl = serverUrl.trim()
-                                serverUrl = normalizedServerUrl
+                                val normalizedServerUrl = savedServerUrl.trim()
                                 val callback: (Result<CloudLoginOutcome>) -> Unit = { result ->
                                     result.onSuccess { outcome ->
                                         when {
@@ -325,7 +354,7 @@ fun CloudSettingsScreen(
                             enabled = !isBusy &&
                                 email.isNotBlank() &&
                                 password.isNotBlank() &&
-                                serverUrl.isNotBlank()
+                                savedServerUrl.isNotBlank()
                         ) {
                             Text(if (register) stringResource(Res.string.cloud_settings_register_and_login) else stringResource(Res.string.action_login))
                         }
@@ -367,6 +396,52 @@ fun CloudSettingsScreen(
                     }
 
                     CloudSectionCard(
+                        title = stringResource(Res.string.cloud_settings_plan_title),
+                        icon = Icons.Default.WorkspacePremium
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = formatQuota(user!!.quotaBalance ?: 0L),
+                                    style = MaterialTheme.typography.headlineSmall
+                                )
+                                Text(
+                                    text = stringResource(Res.string.cloud_settings_plan_balance_label),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = stringResource(Res.string.cloud_settings_plan_expires_label),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Text(
+                                    text = user!!.quotaExpiresAt?.let { formatQuotaExpiry(it) }
+                                        ?: stringResource(Res.string.cloud_settings_plan_no_expiry),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        val entitlements = user!!.quotaEntitlements
+                        if (entitlements.isEmpty()) {
+                            Text(
+                                text = stringResource(Res.string.cloud_settings_plan_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            HorizontalDivider()
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                entitlements.forEach { entitlement ->
+                                    PlanEntitlementRow(entitlement)
+                                }
+                            }
+                        }
+                    }
+
+                    CloudSectionCard(
                         title = stringResource(Res.string.cloud_settings_sync_data),
                         icon = Icons.Default.Sync
                     ) {
@@ -378,7 +453,7 @@ fun CloudSettingsScreen(
                         Button(
                             onClick = {
                                 isBusy = true
-                                viewModel.upload(serverUrl.trim()) { notify(it, localDataUploaded) }
+                                viewModel.upload { notify(it, localDataUploaded) }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isBusy
@@ -388,7 +463,7 @@ fun CloudSettingsScreen(
                         FilledTonalButton(
                             onClick = {
                                 isBusy = true
-                                viewModel.restore(serverUrl.trim()) { notify(it, cloudDataRestored) }
+                                viewModel.restore { notify(it, cloudDataRestored) }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isBusy
@@ -610,5 +685,44 @@ private fun CloudIconContainer(icon: ImageVector) {
         Box(contentAlignment = Alignment.Center) {
             Icon(icon, contentDescription = null)
         }
+    }
+}
+
+/** 千分位分组展示额度 token 数。 */
+private fun formatQuota(value: Long): String {
+    val text = value.toString()
+    if (text.length <= 3) return text
+    return text.reversed().chunked(3).joinToString(",").reversed()
+}
+
+/** 到期日期统一展示为 ISO 日期（yyyy-MM-dd），避免内嵌硬编码中文。 */
+private fun formatQuotaExpiry(timestamp: Long): String =
+    Instant.fromEpochMilliseconds(timestamp)
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+        .date
+        .toString()
+
+@Composable
+private fun entitlementLabel(entitlement: CloudQuotaEntitlement): String =
+    entitlement.planName?.takeIf { it.isNotBlank() } ?: when (entitlement.source) {
+        "card" -> stringResource(Res.string.cloud_settings_plan_source_card)
+        "admin" -> stringResource(Res.string.cloud_settings_plan_source_admin)
+        else -> stringResource(Res.string.cloud_settings_plan_source_migrated)
+    }
+
+@Composable
+private fun PlanEntitlementRow(entitlement: CloudQuotaEntitlement) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = entitlementLabel(entitlement),
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = formatQuota(entitlement.balance) + " · " +
+                (entitlement.expiresAt?.let { formatQuotaExpiry(it) }
+                    ?: stringResource(Res.string.cloud_settings_plan_no_expiry)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
