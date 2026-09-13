@@ -250,7 +250,6 @@
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>
     <string name="cloud_server_title">Server address</string>
-    <string name="cloud_server_edit_hint">Tap to edit</string>
     <string name="cloud_server_saved">Server address saved</string>
     <string name="cloud_settings_plan_title">Plan</string>
     <string name="cloud_settings_plan_balance_label">Remaining quota</string>
@@ -277,7 +276,6 @@
     <string name="cloud_redeem_success">Redeemed: %1$s, +%2$s quota, validity %3$s. Current balance %4$s.</string>
     <string name="cloud_settings_account_sync">Cloud account &amp; sync</string>
     <string name="cloud_settings_sync_desc">Securely sync Agents, conversations, and model providers between devices.</string>
-    <string name="cloud_settings_server">Server</string>
     <string name="cloud_settings_server_desc">The cloud service URL determines where data is sent.</string>
     <string name="cloud_settings_server_url_label">Server URL</string>
     <string name="cloud_settings_use_default_server">Use default server</string>

@@ -16,7 +16,6 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,12 +33,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Redeem
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AlertDialog
@@ -72,7 +71,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -91,7 +89,6 @@ import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_login
 import cc.ptoe.messenger.generated.resources.action_save
 import cc.ptoe.messenger.generated.resources.cloud_server_title
-import cc.ptoe.messenger.generated.resources.cloud_server_edit_hint
 import cc.ptoe.messenger.generated.resources.cloud_settings_account
 import cc.ptoe.messenger.generated.resources.cloud_settings_account_deleted
 import cc.ptoe.messenger.generated.resources.cloud_settings_account_security
@@ -135,7 +132,6 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_plan_source_migrated
 import cc.ptoe.messenger.generated.resources.cloud_settings_plan_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_register_and_login
 import cc.ptoe.messenger.generated.resources.cloud_settings_restore
-import cc.ptoe.messenger.generated.resources.cloud_settings_server
 import cc.ptoe.messenger.generated.resources.cloud_settings_server_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_data
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_data_desc
@@ -253,6 +249,15 @@ fun CloudSettingsScreen(
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                     }
+                },
+                actions = {
+                    // 实例地址设置入口（二级页面，见 showServerPage）
+                    IconButton(onClick = { showServerPage = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(Res.string.cloud_server_title)
+                        )
+                    }
                 }
             )
         },
@@ -283,42 +288,6 @@ fun CloudSettingsScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-
-                CloudSectionCard(
-                    title = stringResource(Res.string.cloud_settings_server),
-                    icon = Icons.Default.Cloud
-                ) {
-                    Text(
-                        text = stringResource(Res.string.cloud_settings_server_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !isBusy) { showServerPage = true },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = savedServerUrl,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = stringResource(Res.string.cloud_server_edit_hint),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = stringResource(Res.string.cloud_server_title),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
 
                 if (user == null) {

@@ -249,7 +249,6 @@
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>
     <string name="cloud_server_title">服务地址</string>
-    <string name="cloud_server_edit_hint">点击修改</string>
     <string name="cloud_server_saved">服务地址已保存</string>
     <string name="cloud_settings_plan_title">套餐</string>
     <string name="cloud_settings_plan_balance_label">剩余额度</string>
@@ -276,7 +275,6 @@
     <string name="cloud_redeem_success">兑换成功：%1$s，+%2$s 额度，有效期 %3$s，当前余额 %4$s</string>
     <string name="cloud_settings_account_sync">云端账户与同步</string>
     <string name="cloud_settings_sync_desc">在设备之间安全同步 Agent、对话和模型提供商。</string>
-    <string name="cloud_settings_server">服务器</string>
     <string name="cloud_settings_server_desc">云端服务地址决定数据发送到哪里。</string>
     <string name="cloud_settings_server_url_label">服务器地址</string>
     <string name="cloud_settings_use_default_server">使用默认服务器</string>
