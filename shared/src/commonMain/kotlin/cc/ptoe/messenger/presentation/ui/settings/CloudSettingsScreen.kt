@@ -142,6 +142,7 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_upload_sync
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.presentation.platform.BackHandler
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -210,6 +211,8 @@ fun CloudSettingsScreen(
     }
 
     if (showServerPage) {
+        // 子页面是页内状态切换（无导航栈条目），拦截系统返回，避免直接退出 Cloud 设置页。
+        BackHandler(enabled = true) { showServerPage = false }
         CloudServerScreen(
             onBackClick = { showServerPage = false },
             viewModel = viewModel
