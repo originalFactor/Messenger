@@ -68,11 +68,16 @@ object ChatStreamParser {
                     if (content != null) {
                         val contentText = extractContentText(content)
                         if (contentText.isNotEmpty()) {
-                            if (inThinkBlock) {
-                                emit(ChatStreamEvent.Content("</think>\n"))
-                                inThinkBlock = false
+                            // 部分上游在多段思考之间用纯空白的 content 增量（如 "\n\n"）做分隔。
+                            // 若据此关闭思考块，紧接着恢复的 reasoning 会重新开一个 <think>，
+                            // 导致本应连续的思考被拆成多个思考块 — 纯空白增量直接丢弃。
+                            if (!(contentText.isBlank() && inThinkBlock)) {
+                                if (inThinkBlock) {
+                                    emit(ChatStreamEvent.Content("</think>\n"))
+                                    inThinkBlock = false
+                                }
+                                emit(ChatStreamEvent.Content(contentText))
                             }
-                            emit(ChatStreamEvent.Content(contentText))
                         }
                     }
                     val finishReason = choice.finishReason
@@ -112,11 +117,15 @@ object ChatStreamParser {
                 if (content != null) {
                     val text = extractContentText(content)
                     if (text.isNotEmpty()) {
-                        if (inThinkBlock) {
-                            emit("</think>\n")
-                            inThinkBlock = false
+                        // 与 parseToEvents 相同：思考期间到达的纯空白 content 增量直接丢弃，
+                        // 避免多段思考被拆成多个 <think> 块。
+                        if (!(text.isBlank() && inThinkBlock)) {
+                            if (inThinkBlock) {
+                                emit("</think>\n")
+                                inThinkBlock = false
+                            }
+                            emit(text)
                         }
-                        emit(text)
                     }
                 }
             } catch (_: Exception) {
