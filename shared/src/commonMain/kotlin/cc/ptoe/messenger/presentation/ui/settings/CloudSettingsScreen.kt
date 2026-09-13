@@ -228,337 +228,341 @@ fun CloudSettingsScreen(
         }
     }
 
-    if (showServerPage) {
-        // 子页面是页内状态切换（无导航栈条目），拦截系统返回，避免直接退出 Cloud 设置页；
-        // Android 上返回手势会带预测性动画（见 presentation/platform/BackHandler）。
-        BackHandler(enabled = true, onBack = { showServerPage = false }) {
-            CloudServerScreen(
-                onBackClick = { showServerPage = false },
-                viewModel = viewModel
-            )
-        }
-        return
-    }
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(Res.string.cloud_settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
+    // 子页面是页内状态切换（无导航栈条目），拦截系统返回，避免直接退出 Cloud 设置页；
+    // Android 上返回手势会带预测性动画（见 presentation/platform/BackHandler）。
+    // 主页面始终渲染在底层，子页面作为覆盖层叠在上面——预测性返回划出时
+    // 露出的是主页面而非空白背景。
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text(stringResource(Res.string.cloud_settings_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
+                        }
+                    },
+                    actions = {
+                        // 实例地址设置入口（二级页面，见 showServerPage）
+                        IconButton(onClick = { showServerPage = true }) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = stringResource(Res.string.cloud_server_title)
+                            )
+                        }
                     }
-                },
-                actions = {
-                    // 实例地址设置入口（二级页面，见 showServerPage）
-                    IconButton(onClick = { showServerPage = true }) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = stringResource(Res.string.cloud_server_title)
-                        )
-                    }
-                }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Column(
+                )
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) }
+        ) { innerPadding ->
+            Box(
                 modifier = Modifier
-                    .imePadding()
-                    .verticalScroll(rememberScrollState())
-                    .widthIn(max = 600.dp)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.TopCenter
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(Res.string.cloud_settings_account_sync),
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        text = stringResource(Res.string.cloud_settings_sync_desc),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (user == null) {
-                    CloudSectionCard(
-                        title = stringResource(if (register) Res.string.cloud_settings_create_account else Res.string.cloud_settings_login_account),
-                        icon = Icons.Default.Lock
-                    ) {
+                Column(
+                    modifier = Modifier
+                        .imePadding()
+                        .verticalScroll(rememberScrollState())
+                        .widthIn(max = 600.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = stringResource(if (register) Res.string.cloud_settings_create_account_desc else Res.string.cloud_settings_login_account_desc),
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = stringResource(Res.string.cloud_settings_account_sync),
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            text = stringResource(Res.string.cloud_settings_sync_desc),
+                            style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedTextField(
-                            value = email,
-                            onValueChange = { email = it },
-                            label = { Text(stringResource(Res.string.cloud_settings_email_label)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !isBusy
-                        )
-                        OutlinedTextField(
-                            value = password,
-                            onValueChange = { password = it },
-                            label = { Text(stringResource(Res.string.cloud_settings_password_label)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !isBusy,
-                            visualTransformation = PasswordVisualTransformation()
-                        )
-                        Button(
-                            onClick = {
-                                isBusy = true
-                                val normalizedServerUrl = savedServerUrl.trim()
-                                val callback: (Result<CloudLoginOutcome>) -> Unit = { result ->
-                                    result.onSuccess { outcome ->
-                                        when {
-                                            !outcome.hasLocalData -> {
-                                                completeLogin(outcome, useLocalData = false, loginSuccess)
-                                            }
-                                            outcome.cloudVersion == 0L -> {
-                                                completeLogin(outcome, useLocalData = true, localDataUploaded)
-                                            }
-                                            else -> {
-                                                isBusy = false
-                                                pendingLogin = outcome
-                                            }
-                                        }
-                                    }.onFailure {
-                                        isBusy = false
-                                        showMessage(it.message ?: loginFailed)
-                                    }
-                                }
-                                if (register) {
-                                    viewModel.register(email.trim(), password, normalizedServerUrl, callback)
-                                } else {
-                                    viewModel.login(email.trim(), password, normalizedServerUrl, callback)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy &&
-                                email.isNotBlank() &&
-                                password.isNotBlank() &&
-                                savedServerUrl.isNotBlank()
-                        ) {
-                            Text(if (register) stringResource(Res.string.cloud_settings_register_and_login) else stringResource(Res.string.action_login))
-                        }
-                        if (isBusy) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            TextButton(
-                                onClick = { register = !register },
-                                enabled = !isBusy
-                            ) {
-                                Text(if (register) stringResource(Res.string.cloud_settings_have_account) else stringResource(Res.string.cloud_settings_no_account))
-                            }
-                        }
-                    }
-                } else {
-                    CloudSectionCard(
-                        title = stringResource(Res.string.cloud_settings_account),
-                        icon = Icons.Default.Cloud
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CloudIconContainer(icon = Icons.Default.Cloud)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = user!!.email,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    text = stringResource(Res.string.cloud_settings_connected),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
                     }
 
-                    CloudSectionCard(
-                        title = stringResource(Res.string.cloud_settings_plan_title),
-                        icon = Icons.Default.WorkspacePremium
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = formatQuota(user!!.quotaBalance ?: 0L),
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
-                                Text(
-                                    text = stringResource(Res.string.cloud_settings_plan_balance_label),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = stringResource(Res.string.cloud_settings_plan_expires_label),
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                                Text(
-                                    text = user!!.quotaExpiresAt?.let { formatQuotaExpiry(it) }
-                                        ?: stringResource(Res.string.cloud_settings_plan_no_expiry),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        val entitlements = user!!.quotaEntitlements
-                        if (entitlements.isEmpty()) {
+                    if (user == null) {
+                        CloudSectionCard(
+                            title = stringResource(if (register) Res.string.cloud_settings_create_account else Res.string.cloud_settings_login_account),
+                            icon = Icons.Default.Lock
+                        ) {
                             Text(
-                                text = stringResource(Res.string.cloud_settings_plan_empty),
+                                text = stringResource(if (register) Res.string.cloud_settings_create_account_desc else Res.string.cloud_settings_login_account_desc),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        } else {
-                            HorizontalDivider()
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                entitlements.forEach { entitlement ->
-                                    PlanEntitlementRow(entitlement)
-                                }
-                            }
-                        }
-                    }
-
-                    CloudSectionCard(
-                        title = stringResource(Res.string.cloud_redeem_title),
-                        icon = Icons.Default.Redeem
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.cloud_redeem_desc),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
                             OutlinedTextField(
-                                value = redeemCode,
-                                onValueChange = { redeemCode = it },
-                                label = { Text(stringResource(Res.string.cloud_redeem_code_label)) },
-                                modifier = Modifier.weight(1f),
+                                value = email,
+                                onValueChange = { email = it },
+                                label = { Text(stringResource(Res.string.cloud_settings_email_label)) },
+                                modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
-                                enabled = !redeemChecking && !redeeming
+                                enabled = !isBusy
+                            )
+                            OutlinedTextField(
+                                value = password,
+                                onValueChange = { password = it },
+                                label = { Text(stringResource(Res.string.cloud_settings_password_label)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                enabled = !isBusy,
+                                visualTransformation = PasswordVisualTransformation()
                             )
                             Button(
                                 onClick = {
-                                    redeemChecking = true
-                                    viewModel.previewRedeemCard(redeemCode) { result ->
-                                        redeemChecking = false
-                                        result.onSuccess { redeemPreview = it }
-                                            .onFailure { showMessage(it.message ?: operationFailed) }
+                                    isBusy = true
+                                    val normalizedServerUrl = savedServerUrl.trim()
+                                    val callback: (Result<CloudLoginOutcome>) -> Unit = { result ->
+                                        result.onSuccess { outcome ->
+                                            when {
+                                                !outcome.hasLocalData -> {
+                                                    completeLogin(outcome, useLocalData = false, loginSuccess)
+                                                }
+                                                outcome.cloudVersion == 0L -> {
+                                                    completeLogin(outcome, useLocalData = true, localDataUploaded)
+                                                }
+                                                else -> {
+                                                    isBusy = false
+                                                    pendingLogin = outcome
+                                                }
+                                            }
+                                        }.onFailure {
+                                            isBusy = false
+                                            showMessage(it.message ?: loginFailed)
+                                        }
+                                    }
+                                    if (register) {
+                                        viewModel.register(email.trim(), password, normalizedServerUrl, callback)
+                                    } else {
+                                        viewModel.login(email.trim(), password, normalizedServerUrl, callback)
                                     }
                                 },
-                                enabled = !redeemChecking && !redeeming && redeemCode.isNotBlank()
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy &&
+                                    email.isNotBlank() &&
+                                    password.isNotBlank() &&
+                                    savedServerUrl.isNotBlank()
                             ) {
-                                Text(
-                                    if (redeemChecking) stringResource(Res.string.cloud_redeem_checking)
-                                    else stringResource(Res.string.cloud_redeem_action)
-                                )
+                                Text(if (register) stringResource(Res.string.cloud_settings_register_and_login) else stringResource(Res.string.action_login))
+                            }
+                            if (isBusy) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                TextButton(
+                                    onClick = { register = !register },
+                                    enabled = !isBusy
+                                ) {
+                                    Text(if (register) stringResource(Res.string.cloud_settings_have_account) else stringResource(Res.string.cloud_settings_no_account))
+                                }
                             }
                         }
-                        if (redeemChecking) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        CloudSectionCard(
+                            title = stringResource(Res.string.cloud_settings_account),
+                            icon = Icons.Default.Cloud
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CloudIconContainer(icon = Icons.Default.Cloud)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = user!!.email,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        text = stringResource(Res.string.cloud_settings_connected),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
                         }
-                    }
 
-                    CloudSectionCard(
-                        title = stringResource(Res.string.cloud_settings_sync_data),
-                        icon = Icons.Default.Sync
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.cloud_settings_sync_data_desc),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Button(
-                            onClick = {
-                                isBusy = true
-                                viewModel.upload { notify(it, localDataUploaded) }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy
+                        CloudSectionCard(
+                            title = stringResource(Res.string.cloud_settings_plan_title),
+                            icon = Icons.Default.WorkspacePremium
                         ) {
-                            Text(stringResource(Res.string.cloud_settings_upload_sync))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = formatQuota(user!!.quotaBalance ?: 0L),
+                                        style = MaterialTheme.typography.headlineSmall
+                                    )
+                                    Text(
+                                        text = stringResource(Res.string.cloud_settings_plan_balance_label),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = stringResource(Res.string.cloud_settings_plan_expires_label),
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                    Text(
+                                        text = user!!.quotaExpiresAt?.let { formatQuotaExpiry(it) }
+                                            ?: stringResource(Res.string.cloud_settings_plan_no_expiry),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            val entitlements = user!!.quotaEntitlements
+                            if (entitlements.isEmpty()) {
+                                Text(
+                                    text = stringResource(Res.string.cloud_settings_plan_empty),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                HorizontalDivider()
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    entitlements.forEach { entitlement ->
+                                        PlanEntitlementRow(entitlement)
+                                    }
+                                }
+                            }
                         }
-                        FilledTonalButton(
-                            onClick = {
-                                isBusy = true
-                                viewModel.restore { notify(it, cloudDataRestored) }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy
-                        ) {
-                            Text(stringResource(Res.string.cloud_settings_restore))
-                        }
-                        if (isBusy) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    }
 
-                    CloudSectionCard(
-                        title = stringResource(Res.string.cloud_settings_account_security),
-                        icon = Icons.Default.Lock
-                    ) {
-                        OutlinedButton(
-                            onClick = { showPasswordDialog = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy
+                        CloudSectionCard(
+                            title = stringResource(Res.string.cloud_redeem_title),
+                            icon = Icons.Default.Redeem
                         ) {
-                            Text(stringResource(Res.string.cloud_settings_change_password))
-                        }
-                        TextButton(
-                            onClick = { viewModel.logout { notify(it, logoutSuccess) } },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(Res.string.cloud_settings_logout))
-                        }
-                        androidx.compose.material3.HorizontalDivider()
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                text = stringResource(Res.string.cloud_settings_delete_account),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                text = stringResource(Res.string.cloud_settings_delete_account_desc),
+                                text = stringResource(Res.string.cloud_redeem_desc),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = redeemCode,
+                                    onValueChange = { redeemCode = it },
+                                    label = { Text(stringResource(Res.string.cloud_redeem_code_label)) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    enabled = !redeemChecking && !redeeming
+                                )
+                                Button(
+                                    onClick = {
+                                        redeemChecking = true
+                                        viewModel.previewRedeemCard(redeemCode) { result ->
+                                            redeemChecking = false
+                                            result.onSuccess { redeemPreview = it }
+                                                .onFailure { showMessage(it.message ?: operationFailed) }
+                                        }
+                                    },
+                                    enabled = !redeemChecking && !redeeming && redeemCode.isNotBlank()
+                                ) {
+                                    Text(
+                                        if (redeemChecking) stringResource(Res.string.cloud_redeem_checking)
+                                        else stringResource(Res.string.cloud_redeem_action)
+                                    )
+                                }
+                            }
+                            if (redeemChecking) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
                         }
-                        TextButton(
-                            onClick = { showDeleteDialog = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isBusy
+
+                        CloudSectionCard(
+                            title = stringResource(Res.string.cloud_settings_sync_data),
+                            icon = Icons.Default.Sync
                         ) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(Res.string.cloud_settings_permanently_delete), color = MaterialTheme.colorScheme.error)
+                            Text(
+                                text = stringResource(Res.string.cloud_settings_sync_data_desc),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Button(
+                                onClick = {
+                                    isBusy = true
+                                    viewModel.upload { notify(it, localDataUploaded) }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy
+                            ) {
+                                Text(stringResource(Res.string.cloud_settings_upload_sync))
+                            }
+                            FilledTonalButton(
+                                onClick = {
+                                    isBusy = true
+                                    viewModel.restore { notify(it, cloudDataRestored) }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy
+                            ) {
+                                Text(stringResource(Res.string.cloud_settings_restore))
+                            }
+                            if (isBusy) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+
+                        CloudSectionCard(
+                            title = stringResource(Res.string.cloud_settings_account_security),
+                            icon = Icons.Default.Lock
+                        ) {
+                            OutlinedButton(
+                                onClick = { showPasswordDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy
+                            ) {
+                                Text(stringResource(Res.string.cloud_settings_change_password))
+                            }
+                            TextButton(
+                                onClick = { viewModel.logout { notify(it, logoutSuccess) } },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(Res.string.cloud_settings_logout))
+                            }
+                            androidx.compose.material3.HorizontalDivider()
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = stringResource(Res.string.cloud_settings_delete_account),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = stringResource(Res.string.cloud_settings_delete_account_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = { showDeleteDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isBusy
+                            ) {
+                                Icon(Icons.Default.DeleteForever, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(Res.string.cloud_settings_permanently_delete), color = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
+            }
+        }
+
+        // 实例地址子页：覆盖层 + 预测性返回（划出露出底层主页面）。
+        if (showServerPage) {
+            BackHandler(enabled = true, onBack = { showServerPage = false }) {
+                CloudServerScreen(
+                    onBackClick = { showServerPage = false },
+                    viewModel = viewModel
+                )
             }
         }
     }
