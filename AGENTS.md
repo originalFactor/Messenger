@@ -237,7 +237,7 @@ Messenger/
 │   │       ├── agents/[id]/
 │   │       ├── auth/login/ / register/ / logout/ / me/ / password/ / account/
 │   │       ├── avatars/user/ / agents/[agentId]/
-│   │       ├── console/        # User console APIs (overview/redeem/redemptions/api-key)
+│   │       ├── console/        # User console APIs (overview/redeem/redemptions/api-key, cards/preview)
 │   │       ├── conversations/[id]/
 │   │       ├── market/agents/ / agents/[id]/avatar/
 │   │       ├── plans/          # Public plan list for the website pricing section
