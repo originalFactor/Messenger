@@ -80,7 +80,11 @@ class ConversationRepositoryImpl(
             createdAt = createdAt,
             updatedAt = updatedAt,
             lastMessage = lastMessage,
-            reasoningFormat = reasoningFormat
+            reasoningFormat = reasoningFormat,
+            contextSummary = contextSummary,
+            contextSummaryUntil = contextSummaryUntil,
+            contextTokens = contextTokens,
+            contextTokensAt = contextTokensAt
         )
     }
 
@@ -98,7 +102,11 @@ class ConversationRepositoryImpl(
             createdAt = createdAt,
             updatedAt = updatedAt,
             lastMessage = lastMessage,
-            reasoningFormat = reasoningFormat
+            reasoningFormat = reasoningFormat,
+            contextSummary = contextSummary,
+            contextSummaryUntil = contextSummaryUntil,
+            contextTokens = contextTokens,
+            contextTokensAt = contextTokensAt
         )
     }
 }

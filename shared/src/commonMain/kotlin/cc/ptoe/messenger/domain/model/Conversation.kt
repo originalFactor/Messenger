@@ -29,5 +29,15 @@ data class Conversation(
     val createdAt: Long,
     val updatedAt: Long,
     val lastMessage: String?,
-    val reasoningFormat: String? = null
+    val reasoningFormat: String? = null,
+    /**
+     * 80% 上下文自动摘要：timestamp < [contextSummaryUntil] 的历史消息
+     * 已折叠进 [contextSummary]，请求 API 时以 system 消息形式随摘要后的
+     * 近期消息一起发送。[contextTokens] / [contextTokensAt] 记录最近一次
+     * 用量记账（prompt+completion）及其时间戳，用于下次发送前的阈值判断。
+     */
+    val contextSummary: String? = null,
+    val contextSummaryUntil: Long = 0,
+    val contextTokens: Long = 0,
+    val contextTokensAt: Long = 0
 )

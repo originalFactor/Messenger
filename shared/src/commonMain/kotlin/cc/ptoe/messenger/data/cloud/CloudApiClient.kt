@@ -122,6 +122,10 @@ internal data class CloudConversationRequest(
     val overrideMaxTokens: Int?,
     val overrideReasoningEffort: String?,
     val reasoningFormat: String?,
+    val contextSummary: String? = null,
+    val contextSummaryUntil: Long = 0,
+    val contextTokens: Long = 0,
+    val contextTokensAt: Long = 0,
     val messages: List<CloudMessageRequest>,
     val createdAt: Long,
     val updatedAt: Long
@@ -133,6 +137,7 @@ internal data class CloudModelRequest(
     val modelId: String,
     val displayName: String,
     val isEnabled: Boolean,
+    val contextWindow: Long = 0,
     val createdAt: Long
 )
 

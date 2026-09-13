@@ -23,5 +23,7 @@ import kotlinx.serialization.Serializable
 data class ChatCompletionChunkDto(
     @SerialName("id") val id: String = "",
     @SerialName("choices") val choices: List<ChatChunkChoiceDto> = emptyList(),
-    @SerialName("model") val model: String = ""
+    @SerialName("model") val model: String = "",
+    /** 流末尾的用量统计块（stream_options.include_usage），choices 为空。 */
+    @SerialName("usage") val usage: UsageDto? = null
 )

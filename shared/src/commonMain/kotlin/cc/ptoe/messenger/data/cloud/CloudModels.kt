@@ -108,6 +108,11 @@ data class CloudConversationDocument(
     val overrideMaxTokens: Int? = null,
     val overrideReasoningEffort: String? = null,
     val reasoningFormat: String? = null,
+    /** 80% 上下文自动摘要状态。旧服务端文档不含这些键。 */
+    val contextSummary: String? = null,
+    val contextSummaryUntil: Long = 0,
+    val contextTokens: Long = 0,
+    val contextTokensAt: Long = 0,
     val messages: List<CloudMessageDocument> = emptyList(),
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
@@ -121,6 +126,8 @@ data class CloudModelDocument(
     val modelId: String = "",
     val displayName: String = "",
     val isEnabled: Boolean = false,
+    /** 上下文窗口（tokens），0 = 未知/不限。旧服务端文档不含该键。 */
+    val contextWindow: Long = 0,
     val createdAt: Long = 0
 )
 

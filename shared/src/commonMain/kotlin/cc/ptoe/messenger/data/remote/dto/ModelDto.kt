@@ -24,5 +24,7 @@ data class ModelDto(
     @SerialName("id") val id: String = "",
     @SerialName("object") val `object`: String = "",
     @SerialName("created") val created: Long? = null,
-    @SerialName("owned_by") val ownedBy: String? = null
+    @SerialName("owned_by") val ownedBy: String? = null,
+    /** Messenger 云端代理扩展字段：上下文窗口（tokens），0 = 不限。其他服务商通常不返回。 */
+    @SerialName("context_window") val contextWindow: Long? = null
 )

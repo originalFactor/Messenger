@@ -23,6 +23,7 @@ import cc.ptoe.messenger.data.local.entity.ConversationEntity
 import cc.ptoe.messenger.data.local.entity.MessageEntity
 import cc.ptoe.messenger.data.local.entity.ModelEntity
 import cc.ptoe.messenger.data.local.entity.ProviderEntity
+import cc.ptoe.messenger.data.remote.api.OpenAiClient
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.logE
 import cc.ptoe.messenger.data.util.logI
@@ -96,6 +97,9 @@ class CloudSyncRepository(
     private val syncMutex = Mutex()
     private val avatarSyncMutex = Mutex()
     private var scheduledSync: Job? = null
+    /** 内置云 AI 模型列表的上次成功同步时间（进程内节流，见 syncBuiltinProviderModels）。 */
+    @Volatile
+    private var lastBuiltinModelsSyncAt = 0L
     private val _syncError = MutableStateFlow<String?>(null)
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
     private val apiClient = CloudApiClient(appPreferences)
@@ -1126,25 +1130,72 @@ class CloudSyncRepository(
     /**
      * 登录后自动配置内置云 AI 服务商：固定 ID 指向 {server}/v1，API Key 为
      * 用户级 AI API Key（网页控制台可重置，重置后下一次 /me 刷新即同步到本地）。
-     * 幂等：已存在且配置一致时跳过。
+     * 幂等：已存在且配置一致时跳过。随后自动同步模型列表（含 context window）。
      */
     private suspend fun ensureBuiltinProvider(value: CloudUser) {
         val apiKey = value.aiApiKey
         if (value.id.isEmpty() || apiKey.isNullOrBlank()) return
         val baseUrl = "${serverUrl.first()}/v1"
+        var reconfigured = false
         val existing = database.providerDao().getById(BUILTIN_PROVIDER_ID).first()
         if (existing == null) {
             val now = System.currentTimeMillis()
             database.providerDao().insert(
                 ProviderEntity(BUILTIN_PROVIDER_ID, BUILTIN_PROVIDER_NAME, baseUrl, apiKey, now, now)
             )
+            reconfigured = true
             logI(TAG, "Seeded built-in cloud AI provider baseUrl=$baseUrl")
         } else if (existing.name != BUILTIN_PROVIDER_NAME || existing.baseUrl != baseUrl || existing.apiKey != apiKey) {
             val now = System.currentTimeMillis()
             database.providerDao().insert(
                 existing.copy(name = BUILTIN_PROVIDER_NAME, baseUrl = baseUrl, apiKey = apiKey, updatedAt = now)
             )
+            reconfigured = true
             logI(TAG, "Refreshed built-in cloud AI provider baseUrl=$baseUrl")
+        }
+        syncBuiltinProviderModels(force = reconfigured)
+    }
+
+    /**
+     * 自动同步内置云 AI 服务商的模型列表（含 /v1/models 附带的
+     * context_window 元数据）。每次拉取是幂等的整体替换：保留既有行的
+     * id（Agent 的模型绑定不受影响）与 isEnabled（用户的启停选择不被
+     * 覆盖），消失的模型移除，新增的模型以确定性 ID 落库。
+     *
+     * 触发时机：服务商（重）配置时强制同步；否则按 [BUILTIN_MODELS_SYNC_INTERVAL_MS]
+     * 节流 —— /me 刷新挂在每次云同步与本地变更推送上，不能每次都打 /v1/models。
+     * 失败只记日志，不阻塞登录/同步主流程。
+     */
+    private suspend fun syncBuiltinProviderModels(force: Boolean) {
+        val provider = database.providerDao().getById(BUILTIN_PROVIDER_ID).first() ?: return
+        val now = System.currentTimeMillis()
+        val hasModels = database.modelDao().getByProviderId(BUILTIN_PROVIDER_ID).first().isNotEmpty()
+        if (!force && hasModels && now - lastBuiltinModelsSyncAt < BUILTIN_MODELS_SYNC_INTERVAL_MS) return
+        runCatching {
+            val response = OpenAiClient(provider.baseUrl, provider.apiKey).getModels()
+            val existingByModelId = database.modelDao().getByProviderId(BUILTIN_PROVIDER_ID)
+                .first()
+                .associateBy { it.modelId }
+            val entities = response.data.map { dto ->
+                val previous = existingByModelId[dto.id]
+                ModelEntity(
+                    id = previous?.id ?: "$BUILTIN_PROVIDER_ID:${dto.id}",
+                    providerId = BUILTIN_PROVIDER_ID,
+                    modelId = dto.id,
+                    displayName = dto.id,
+                    isEnabled = previous?.isEnabled ?: true,
+                    contextWindow = dto.contextWindow ?: 0L,
+                    createdAt = previous?.createdAt ?: System.currentTimeMillis()
+                )
+            }
+            database.modelDao().deleteByProviderId(BUILTIN_PROVIDER_ID)
+            if (entities.isNotEmpty()) {
+                database.modelDao().insertAll(entities)
+            }
+            lastBuiltinModelsSyncAt = System.currentTimeMillis()
+            logI(TAG, "Synced ${entities.size} built-in cloud AI models")
+        }.onFailure { error ->
+            logW(TAG, "Built-in cloud AI model sync failed", error)
         }
     }
 
@@ -1360,6 +1411,8 @@ class CloudSyncRepository(
         const val ETAG_SIDECAR_SUFFIX = ".etag"
         /** 与 [cc.ptoe.messenger.data.local.ChatImageStore.CACHE_SUBDIR] 相同的目录。 */
         const val CHAT_IMAGES_SUBDIR = "chat_images"
+        /** 内置云 AI 模型列表自动同步的最小间隔（进程内节流）。 */
+        const val BUILTIN_MODELS_SYNC_INTERVAL_MS = 60L * 60L * 1000L
     }
 }
 
@@ -1408,7 +1461,9 @@ private fun ProviderEntity.toCloudRequest(models: List<ModelEntity>) = CloudProv
     name = name,
     baseUrl = baseUrl,
     apiKey = apiKey,
-    models = models.map { CloudModelRequest(it.id, it.modelId, it.displayName, it.isEnabled, it.createdAt) },
+    models = models.map {
+        CloudModelRequest(it.id, it.modelId, it.displayName, it.isEnabled, it.contextWindow, it.createdAt)
+    },
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1424,6 +1479,10 @@ private fun ConversationEntity.toCloudRequest(messages: List<MessageEntity>) = C
     overrideMaxTokens = overrideMaxTokens,
     overrideReasoningEffort = overrideReasoningEffort,
     reasoningFormat = reasoningFormat,
+    contextSummary = contextSummary,
+    contextSummaryUntil = contextSummaryUntil,
+    contextTokens = contextTokens,
+    contextTokensAt = contextTokensAt,
     messages = messages.map { message ->
         CloudMessageRequest(
             id = message.id,
@@ -1490,7 +1549,7 @@ private fun AgentEntity.toDomain() = Agent(
 private fun CloudProviderDocument.toEntity() = ProviderEntity(id, name, baseUrl, apiKey, createdAt, updatedAt)
 
 private fun CloudModelDocument.toEntity(providerId: String) =
-    ModelEntity(id, providerId, modelId, displayName, isEnabled, createdAt)
+    ModelEntity(id, providerId, modelId, displayName, isEnabled, contextWindow, createdAt)
 
 private fun CloudConversationDocument.toEntity() = ConversationEntity(
     id = id,
@@ -1505,7 +1564,11 @@ private fun CloudConversationDocument.toEntity() = ConversationEntity(
     createdAt = createdAt,
     updatedAt = updatedAt,
     lastMessage = messages.lastOrNull()?.content,
-    reasoningFormat = reasoningFormat
+    reasoningFormat = reasoningFormat,
+    contextSummary = contextSummary,
+    contextSummaryUntil = contextSummaryUntil,
+    contextTokens = contextTokens,
+    contextTokensAt = contextTokensAt
 )
 
 private fun CloudMessageDocument.toEntity(conversationId: String) = MessageEntity(

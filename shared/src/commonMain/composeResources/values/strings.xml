@@ -147,6 +147,8 @@
     <string name="chat_title_default">Chat</string>
     <string name="chat_picture">[Image]</string>
     <string name="chat_select_conversation">Select a conversation to start chatting</string>
+    <string name="context_summarize_prompt">You compress conversation history for a chat app. Compress the conversation below into a concise summary that preserves the user\'s requests and preferences, key facts, decisions, and unfinished tasks. Reply with the summary text only — no preamble, no quotes — written in the same language as the conversation.</string>
+    <string name="error_context_summarize_failed">Context compression failed: %1$s</string>
 
     <!-- Conversations -->
     <string name="conversations_all_agents">All Agents</string>

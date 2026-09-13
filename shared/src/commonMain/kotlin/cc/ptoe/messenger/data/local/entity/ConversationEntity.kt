@@ -46,5 +46,10 @@ data class ConversationEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val lastMessage: String?,
-    val reasoningFormat: String? = null
+    val reasoningFormat: String? = null,
+    /** 80% 上下文自动摘要状态（详见 domain Conversation 注释）。 */
+    val contextSummary: String? = null,
+    val contextSummaryUntil: Long = 0,
+    val contextTokens: Long = 0,
+    val contextTokensAt: Long = 0
 )

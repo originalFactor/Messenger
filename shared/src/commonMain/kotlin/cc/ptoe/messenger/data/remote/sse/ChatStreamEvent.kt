@@ -16,9 +16,15 @@
 
 package cc.ptoe.messenger.data.remote.sse
 
+import cc.ptoe.messenger.data.remote.dto.UsageDto
+
 sealed class ChatStreamEvent {
     data class Content(val text: String) : ChatStreamEvent()
-    data class Done(val finishReason: String?) : ChatStreamEvent()
+    data class Done(
+        val finishReason: String?,
+        /** 流式响应携带的 token 用量（prompt/completion）；服务商不支持时为 null。 */
+        val usage: UsageDto? = null
+    ) : ChatStreamEvent()
     data class Error(val message: String) : ChatStreamEvent()
     /**
      * 表示流式响应中检测到了 `reasoning_content` 字段，

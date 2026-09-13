@@ -37,7 +37,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {

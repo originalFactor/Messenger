@@ -27,6 +27,7 @@ import kotlin.reflect.KClass
 import cc.ptoe.llmtypewriter.StreamingTypewriterState
 import cc.ptoe.llmtypewriter.TypewriterPhase
 import cc.ptoe.messenger.data.local.ChatImageStore
+import cc.ptoe.messenger.data.remote.dto.UsageDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
@@ -58,14 +59,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.chat_picture
+import cc.ptoe.messenger.generated.resources.context_summarize_prompt
 import cc.ptoe.messenger.generated.resources.error_agent_not_found_chat
 import cc.ptoe.messenger.generated.resources.error_api_no_valid_response
 import cc.ptoe.messenger.generated.resources.error_configure_model_first
+import cc.ptoe.messenger.generated.resources.error_context_summarize_failed
 import cc.ptoe.messenger.generated.resources.error_no_available_model
 import cc.ptoe.messenger.generated.resources.error_read_image_failed
 import cc.ptoe.messenger.generated.resources.error_unknown
 import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.data.util.randomUuid
+import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModel(
@@ -217,6 +221,207 @@ class ChatViewModel(
         _conversationId.value = conversationId
     }
 
+    // ------------------------------------------------------------------
+    // Context window / auto summarization
+    //
+    // 模型声明了 context window（内置云 AI 服务商自动同步元数据）时，
+    // 发送前估算上下文占用；达到 80% 就把较早的历史折叠成一份摘要
+    // （保留最近 SUMMARY_KEEP_COUNT 条原文），摘要以 system 消息随请求
+    // 发送，聊天记录本身不动。内置云代理每回合回报精确 usage，覆盖估算。
+    // ------------------------------------------------------------------
+
+    /**
+     * 粗略 token 估算：CJK 字符约 1 token/字，其余约 4 字符/token，
+     * 另加每条约 4 token 的消息开销。只用于阈值判断；内置云代理会回报
+     * 精确 usage 并在每回合后覆盖该估算。
+     */
+    private fun estimateTokens(text: String): Long {
+        if (text.isEmpty()) return 0L
+        var cjk = 0L
+        var other = 0L
+        for (c in text) {
+            if (c.code > 0x2E7F) cjk++ else other++
+        }
+        return cjk + (other + 3) / 4
+    }
+
+    private fun estimateTokens(message: Message): Long {
+        val text = message.parts.filterIsInstance<ContentPart.Text>()
+            .joinToString("\n") { it.text }
+            .ifBlank { message.content }
+        // 一张中等分辨率图按 ~800 tokens 估算
+        val images = message.parts.count { it is ContentPart.Image }
+        return estimateTokens(text) + images * 800L + 4L
+    }
+
+    /**
+     * 估算「下次请求将携带的完整上下文」的 token 数。优先以最近一次精确
+     * 用量记账（[Conversation.contextTokens]）为基数，叠加其后新增消息的
+     * 估算值；没有记账时从系统提示词 + 折叠摘要 + 全量历史估算。
+     */
+    private suspend fun estimateContextTokens(
+        conversation: Conversation,
+        systemPrompt: String?
+    ): Long {
+        val messages = messageRepository.getByConversationId(conversation.id)
+            .first()
+            .filter { it.status == MessageStatus.SENT }
+        return if (conversation.contextTokens > 0L) {
+            conversation.contextTokens +
+                messages.filter { it.timestamp > conversation.contextTokensAt }
+                    .sumOf { estimateTokens(it) }
+        } else {
+            estimateTokens(systemPrompt.orEmpty()) +
+                estimateTokens(conversation.contextSummary.orEmpty()) +
+                messages.filter { it.timestamp >= conversation.contextSummaryUntil }
+                    .sumOf { estimateTokens(it) }
+        }
+    }
+
+    /**
+     * 发送前的 80% 上下文自动摘要。把 timestamp 早于保留窗口的历史
+     * （连同上一份摘要）交给模型压缩成新摘要并写回会话；返回值是写回后
+     * 的最新会话（调用方据此组装请求上下文）。失败时提示但不阻塞发送。
+     */
+    private suspend fun maybeSummarizeContext(
+        conversation: Conversation,
+        agent: Agent,
+        model: ChatModel,
+        provider: Provider
+    ): Conversation {
+        if (model.contextWindow <= 0L) return conversation
+        val threshold = model.contextWindow * 80L / 100L
+        if (estimateContextTokens(conversation, agent.systemPrompt) < threshold) return conversation
+
+        val all = messageRepository.getByConversationId(conversation.id)
+            .first()
+            .filter { it.status == MessageStatus.SENT }
+        if (all.isEmpty()) return conversation
+        val keepCount = minOf(SUMMARY_KEEP_COUNT, all.size)
+        val firstKept = all[all.size - keepCount]
+        val toSummarize = all.filter { it.timestamp < firstKept.timestamp }
+        if (toSummarize.isEmpty()) return conversation
+
+        val transcript = buildString {
+            val previousSummary = conversation.contextSummary
+            if (!previousSummary.isNullOrBlank() && conversation.contextSummaryUntil > 0L) {
+                appendLine("[Earlier summary]")
+                appendLine(previousSummary)
+                appendLine()
+                appendLine("[Conversation since then]")
+            }
+            toSummarize.forEach { message ->
+                appendLine("${roleLabel(message)}: ${messageBrief(message)}")
+            }
+        }
+
+        return try {
+            val result = apiRepository.createChatCompletion(
+                provider = provider,
+                modelId = model.modelId,
+                messages = listOf(
+                    Message(
+                        id = randomUuid(),
+                        conversationId = "",
+                        role = MessageRole.USER,
+                        content = transcript,
+                        timestamp = System.currentTimeMillis(),
+                        status = MessageStatus.SENT
+                    )
+                ),
+                systemPrompt = getString(Res.string.context_summarize_prompt),
+                temperature = 0.3f,
+                topP = 1.0f,
+                maxTokens = null,
+                reasoningEffort = null,
+                reasoningFormat = null
+            )
+            val summary = stripThinkBlock(result.content).trim()
+            if (summary.isEmpty()) return conversation
+            val updated = conversation.copy(
+                contextSummary = summary,
+                contextSummaryUntil = firstKept.timestamp,
+                contextTokens = estimateTokens(agent.systemPrompt.orEmpty()) +
+                    estimateTokens(summary) +
+                    all.filter { it.timestamp >= firstKept.timestamp }
+                        .sumOf { estimateTokens(it) },
+                contextTokensAt = System.currentTimeMillis()
+            )
+            conversationRepository.update(updated)
+            updated
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(
+                getString(
+                    Res.string.error_context_summarize_failed,
+                    e.message ?: getString(Res.string.error_unknown)
+                )
+            )
+            conversation
+        }
+    }
+
+    /**
+     * 组装发送给 API 的上下文消息：折叠摘要（若有，置于最前作为 system
+     * 消息）+ 截止时间戳之后的原文消息，末尾保留 HISTORY_MAX_MESSAGES 条
+     * 兜底截断（模型未声明 context window 时它仍然生效）。
+     */
+    private fun buildApiContextMessages(
+        conversation: Conversation,
+        sentMessages: List<Message>
+    ): List<Message> {
+        val recent = sentMessages.filter { it.timestamp >= conversation.contextSummaryUntil }
+        val summary = conversation.contextSummary
+            ?.takeIf { it.isNotBlank() && conversation.contextSummaryUntil > 0L }
+            ?: return recent.takeLast(HISTORY_MAX_MESSAGES)
+        val summaryMessage = Message(
+            id = SUMMARY_MESSAGE_ID,
+            conversationId = conversation.id,
+            role = MessageRole.SYSTEM,
+            content = "[Summary of earlier conversation]\n$summary",
+            timestamp = 0L,
+            status = MessageStatus.SENT
+        )
+        return (listOf(summaryMessage) + recent).takeLast(HISTORY_MAX_MESSAGES)
+    }
+
+    /** 回合结束后写回上下文用量：优先精确 usage，否则退回估算。 */
+    private suspend fun updateContextTokens(
+        conversationId: String,
+        sentContextEstimate: Long,
+        responseText: String,
+        usage: UsageDto?
+    ) {
+        val conv = conversationRepository.getById(conversationId).first() ?: return
+        val tokens = usage
+            ?.let { it.promptTokens.toLong() + it.completionTokens.toLong() }
+            ?.takeIf { it > 0L }
+            ?: (sentContextEstimate + estimateTokens(responseText))
+        conversationRepository.update(
+            conv.copy(contextTokens = tokens, contextTokensAt = System.currentTimeMillis())
+        )
+    }
+
+    private fun roleLabel(message: Message): String = when (message.role) {
+        MessageRole.USER -> "User"
+        MessageRole.ASSISTANT -> "Assistant"
+        else -> "System"
+    }
+
+    /** 折叠进摘要的单条消息文本：多模态消息以 [image ×N] 占位。 */
+    private fun messageBrief(message: Message): String {
+        val text = message.parts.filterIsInstance<ContentPart.Text>()
+            .joinToString("\n") { it.text }
+            .ifBlank { message.content }
+        val imageCount = message.parts.count { it is ContentPart.Image }
+        return if (imageCount > 0) {
+            (if (text.isBlank()) "" else "$text\n") + "[image ×$imageCount]"
+        } else {
+            text
+        }
+    }
+
     /**
      * Imports a picked image into a [MessageImage] and queues it as a
      * pending attachment. Errors are surfaced through the existing
@@ -334,6 +539,9 @@ class ChatViewModel(
 
         val (provider, model) = result
 
+        // 80% 上下文自动摘要：可能写回会话的摘要状态，返回最新会话快照。
+        val effectiveConv = maybeSummarizeContext(conv, agent, model, provider)
+
         val aiMessageId = randomUuid()
         val aiMessage = Message(
             id = aiMessageId,
@@ -354,12 +562,21 @@ class ChatViewModel(
         currentGenerationJob = viewModelScope.launch {
             var hasFinished = false
             var currentContent = ""
-            var detectedFormat: String? = conv.reasoningFormat
+            var detectedFormat: String? = effectiveConv.reasoningFormat
             try {
-                val historyMessages = messageRepository.getByConversationId(conversationId)
+                val sentMessages = messageRepository.getByConversationId(conversationId)
                     .first()
                     .filter { it.status == MessageStatus.SENT }
-                    .takeLast(20)
+                val historyMessages = buildApiContextMessages(effectiveConv, sentMessages)
+                // 本次请求上下文的估算基数（usage 缺失时用于用量记账）
+                val sentContextEstimate = if (effectiveConv.contextTokens > 0L) {
+                    effectiveConv.contextTokens +
+                        sentMessages.filter { it.timestamp > effectiveConv.contextTokensAt }
+                            .sumOf { estimateTokens(it) }
+                } else {
+                    estimateTokens(agent.systemPrompt.orEmpty()) +
+                        historyMessages.sumOf { estimateTokens(it) }
+                }
                 apiRepository.streamChatCompletion(
                     provider = provider,
                     modelId = model.modelId,
@@ -375,7 +592,10 @@ class ChatViewModel(
                             is ChatStreamEvent.ReasoningDetected -> {
                                 if (detectedFormat == null) {
                                     detectedFormat = "reasoning_content"
-                                    conversationRepository.update(conv.copy(reasoningFormat = "reasoning_content"))
+                                    // 重新读取，避免覆盖 maybeSummarizeContext 写回的摘要状态
+                                    conversationRepository.getById(conversationId).first()?.let {
+                                        conversationRepository.update(it.copy(reasoningFormat = "reasoning_content"))
+                                    }
                                 }
                             }
                             is ChatStreamEvent.Content -> {
@@ -386,8 +606,11 @@ class ChatViewModel(
                                 hasFinished = true
                                 if (detectedFormat == null && currentContent.contains("<think")) {
                                     detectedFormat = "think_tag"
-                                    conversationRepository.update(conv.copy(reasoningFormat = "think_tag"))
+                                    conversationRepository.getById(conversationId).first()?.let {
+                                        conversationRepository.update(it.copy(reasoningFormat = "think_tag"))
+                                    }
                                 }
+                                updateContextTokens(conversationId, sentContextEstimate, currentContent, event.usage)
                                 typewriterState.completeSource()
                                 saveStreamResult(aiMessage, currentContent, conversationId, null)
                                 awaitTypewriterDone()
@@ -553,10 +776,18 @@ class ChatViewModel(
                 var currentContent = ""
                 var detectedFormat: String? = conv.reasoningFormat
                 try {
-                    val historyMessages = messageRepository.getByConversationId(message.conversationId)
+                    val sentMessages = messageRepository.getByConversationId(message.conversationId)
                         .first()
                         .filter { it.status == MessageStatus.SENT && it.id != messageId }
-                        .takeLast(20)
+                    val historyMessages = buildApiContextMessages(conv, sentMessages)
+                    val sentContextEstimate = if (conv.contextTokens > 0L) {
+                        conv.contextTokens +
+                            sentMessages.filter { it.timestamp > conv.contextTokensAt }
+                                .sumOf { estimateTokens(it) }
+                    } else {
+                        estimateTokens(currentAgent.systemPrompt.orEmpty()) +
+                            historyMessages.sumOf { estimateTokens(it) }
+                    }
                     apiRepository.streamChatCompletion(
                         provider = provider,
                         modelId = model.modelId,
@@ -572,7 +803,10 @@ class ChatViewModel(
                             is ChatStreamEvent.ReasoningDetected -> {
                                 if (detectedFormat == null) {
                                     detectedFormat = "reasoning_content"
-                                    conversationRepository.update(conv.copy(reasoningFormat = "reasoning_content"))
+                                    // 重新读取，避免覆盖会话上的其他并发写回字段
+                                    conversationRepository.getById(message.conversationId).first()?.let {
+                                        conversationRepository.update(it.copy(reasoningFormat = "reasoning_content"))
+                                    }
                                 }
                             }
                             is ChatStreamEvent.Content -> {
@@ -583,8 +817,11 @@ class ChatViewModel(
                                 hasFinished = true
                                 if (detectedFormat == null && currentContent.contains("<think")) {
                                     detectedFormat = "think_tag"
-                                    conversationRepository.update(conv.copy(reasoningFormat = "think_tag"))
+                                    conversationRepository.getById(message.conversationId).first()?.let {
+                                        conversationRepository.update(it.copy(reasoningFormat = "think_tag"))
+                                    }
                                 }
+                                updateContextTokens(message.conversationId, sentContextEstimate, currentContent, event.usage)
                                 typewriterState.completeSource()
                                 saveStreamResult(message, currentContent, message.conversationId, null)
                                 awaitTypewriterDone()
@@ -783,6 +1020,13 @@ class ChatViewModel(
     }
 
     companion object {
+        /** 兜底历史截断（模型未声明 context window 时仍然生效）。 */
+        private const val HISTORY_MAX_MESSAGES = 20
+        /** 自动摘要时保留原文的近期消息条数。 */
+        private const val SUMMARY_KEEP_COUNT = 10
+        /** 注入请求的折叠摘要 system 消息的占位 id。 */
+        private const val SUMMARY_MESSAGE_ID = "context-summary"
+
         fun provideFactory(
             messageRepository: MessageRepository,
             conversationRepository: ConversationRepository,

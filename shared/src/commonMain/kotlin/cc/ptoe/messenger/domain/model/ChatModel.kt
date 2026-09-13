@@ -22,5 +22,7 @@ data class ChatModel(
     val modelId: String,
     val displayName: String,
     val isEnabled: Boolean,
+    /** 上下文窗口（tokens）。0 = 未知/不限（服务商未提供元数据）。 */
+    val contextWindow: Long = 0,
     val createdAt: Long
 )

@@ -18,6 +18,7 @@ package cc.ptoe.messenger.data.remote.sse
 
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionChunkDto
+import cc.ptoe.messenger.data.remote.dto.UsageDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonArray
@@ -32,17 +33,23 @@ object ChatStreamParser {
     fun parseToEvents(jsonFlow: Flow<String>): Flow<ChatStreamEvent> = flow {
         var inThinkBlock = false
         var reasoningEmitted = false
+        // 用量统计块在 [DONE] 之前到达（choices 为空、只有 usage），先暂存，
+        // 随终止事件一起抛给调用方做上下文用量记账。
+        var lastUsage: UsageDto? = null
         jsonFlow.collect { json ->
             if (json == "[DONE]") {
                 if (inThinkBlock) {
                     emit(ChatStreamEvent.Content("</think>\n"))
                     inThinkBlock = false
                 }
-                emit(ChatStreamEvent.Done(null))
+                emit(ChatStreamEvent.Done(null, lastUsage))
                 return@collect
             }
             try {
                 val chunk = NetworkClient.json.decodeFromString<ChatCompletionChunkDto>(json)
+                if (chunk.usage != null) {
+                    lastUsage = chunk.usage
+                }
                 val choice = chunk.choices.firstOrNull()
                 if (choice != null) {
                     val reasoning = choice.delta.reasoningContent
@@ -74,7 +81,7 @@ object ChatStreamParser {
                             emit(ChatStreamEvent.Content("</think>\n"))
                             inThinkBlock = false
                         }
-                        emit(ChatStreamEvent.Done(finishReason))
+                        emit(ChatStreamEvent.Done(finishReason, lastUsage))
                     }
                 }
             } catch (e: IllegalArgumentException) {

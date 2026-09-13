@@ -58,6 +58,7 @@ class ApiRepositoryImpl : ApiRepository {
                     modelId = modelDto.id,
                     displayName = modelDto.id,
                     isEnabled = true,
+                    contextWindow = modelDto.contextWindow ?: 0L,
                     createdAt = System.currentTimeMillis()
                 )
             }

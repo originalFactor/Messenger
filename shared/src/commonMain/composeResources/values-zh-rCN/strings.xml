@@ -146,6 +146,8 @@
     <string name="chat_title_default">对话</string>
     <string name="chat_picture">[图片]</string>
     <string name="chat_select_conversation">选择一个对话开始聊天</string>
+    <string name="context_summarize_prompt">你是一个对话历史压缩器。请把下面的对话压缩成一份简洁的摘要，保留用户的请求与偏好、关键事实、已达成的决定以及未完成的任务。只输出摘要本身——不要开场白、不要引号——并使用与对话相同的语言。</string>
+    <string name="error_context_summarize_failed">上下文压缩失败：%1$s</string>
 
     <!-- Conversations -->
     <string name="conversations_all_agents">全部 Agent</string>

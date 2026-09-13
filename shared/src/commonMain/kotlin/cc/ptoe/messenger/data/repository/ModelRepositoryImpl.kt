@@ -100,6 +100,7 @@ class ModelRepositoryImpl(
             modelId = modelId,
             displayName = displayName,
             isEnabled = isEnabled,
+            contextWindow = contextWindow,
             createdAt = createdAt
         )
     }
@@ -111,6 +112,7 @@ class ModelRepositoryImpl(
             modelId = modelId,
             displayName = displayName,
             isEnabled = isEnabled,
+            contextWindow = contextWindow,
             createdAt = createdAt
         )
     }
