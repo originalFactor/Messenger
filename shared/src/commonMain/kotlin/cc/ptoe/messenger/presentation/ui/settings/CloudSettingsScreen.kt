@@ -211,12 +211,14 @@ fun CloudSettingsScreen(
     }
 
     if (showServerPage) {
-        // 子页面是页内状态切换（无导航栈条目），拦截系统返回，避免直接退出 Cloud 设置页。
-        BackHandler(enabled = true) { showServerPage = false }
-        CloudServerScreen(
-            onBackClick = { showServerPage = false },
-            viewModel = viewModel
-        )
+        // 子页面是页内状态切换（无导航栈条目），拦截系统返回，避免直接退出 Cloud 设置页；
+        // Android 上返回手势会带预测性动画（见 presentation/platform/BackHandler）。
+        BackHandler(enabled = true, onBack = { showServerPage = false }) {
+            CloudServerScreen(
+                onBackClick = { showServerPage = false },
+                viewModel = viewModel
+            )
+        }
         return
     }
 

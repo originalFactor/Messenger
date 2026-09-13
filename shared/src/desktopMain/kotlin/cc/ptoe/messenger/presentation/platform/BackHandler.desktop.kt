@@ -20,5 +20,10 @@ import androidx.compose.runtime.Composable
 
 /** 桌面端没有系统返回手势，无需拦截（返回靠页面上的返回按钮）。 */
 @Composable
-actual fun BackHandler(enabled: Boolean, onBack: () -> Unit) {
+actual fun BackHandler(
+    enabled: Boolean,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    content()
 }

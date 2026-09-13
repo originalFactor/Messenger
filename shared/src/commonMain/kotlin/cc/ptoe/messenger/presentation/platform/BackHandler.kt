@@ -21,6 +21,13 @@ import androidx.compose.runtime.Composable
 /**
  * 拦截系统返回事件（Android 返回键/手势）。用于页内状态切换的二级
  * 页面（无导航栈条目），否则系统返回会直接弹出当前路由。
+ *
+ * [content] 在支持的平台上会跟随预测性返回手势进度做系统风格的
+ * 缩放/圆角/位移动画（Material predictive back）。
  */
 @Composable
-expect fun BackHandler(enabled: Boolean = true, onBack: () -> Unit)
+expect fun BackHandler(
+    enabled: Boolean = true,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit
+)
