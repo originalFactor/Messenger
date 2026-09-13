@@ -33,6 +33,7 @@ import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
+import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -333,7 +334,7 @@ class MobileHttpServer : Service() {
                     put("id", conv.id)
                     put("title", conv.title)
                     put("agentId", conv.agentId)
-                    put("lastMessage", conv.lastMessage)
+                    put("lastMessage", conv.lastMessage?.let { stripThinkBlock(it) })
                     put("updatedAt", conv.updatedAt)
                     put("createdAt", conv.createdAt)
                 })

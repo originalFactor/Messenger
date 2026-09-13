@@ -110,4 +110,16 @@ class StripThinkBlockTest {
         val input = "${open} 这是第一行思考\n这是第二行思考\n这是第三行思考 ${close}\n\n你好！我是AI助手。"
         assertEquals("你好！我是AI助手。", stripThinkBlock(input))
     }
+
+    @Test
+    fun interleavedThinkBlock_midContent_stripped() {
+        val input = "正文1 ${open} 思考2 ${close} 正文2"
+        assertEquals("正文1  正文2", stripThinkBlock(input))
+    }
+
+    @Test
+    fun closedBlockThenStreamingUnclosedTail_stripped() {
+        val input = "${open} 思考1 ${close} 正文1 ${open} 思考2还没结束"
+        assertEquals("正文1", stripThinkBlock(input))
+    }
 }

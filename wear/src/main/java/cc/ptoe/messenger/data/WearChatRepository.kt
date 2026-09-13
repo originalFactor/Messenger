@@ -323,7 +323,7 @@ class WearChatRepository(
         val conversations = _conversationsCache.value.map { conversation ->
             if (conversation.id == conversationId) {
                 conversation.copy(
-                    lastMessage = preview,
+                    lastMessage = stripThinkForPreview(preview),
                     updatedAt = updatedAt
                 )
             } else {
@@ -331,6 +331,23 @@ class WearChatRepository(
             }
         }.sortedByDescending { it.updatedAt }
         _conversationsCache.value = conversations
+    }
+
+    /**
+     * 剥离思考块（think/thinking 标签包裹的内容），用于聊天列表预览。
+     * wear 模块不依赖 shared，这里保留与 shared 的
+     * `ThinkBlockUtils.stripThinkBlock` 相同的语义：移除所有已闭合块 + 末尾未闭合块。
+     */
+    private fun stripThinkForPreview(content: String): String {
+        val closed = Regex(
+            "<think(?:ing)?(?:\\s[^>]*)?>[\\s\\S]*?</think(?:ing)?>",
+            RegexOption.IGNORE_CASE,
+        )
+        val unclosedTail = Regex(
+            "<think(?:ing)?(?:\\s[^>]*)?>[\\s\\S]*$",
+            RegexOption.IGNORE_CASE,
+        )
+        return content.replace(closed, "").replace(unclosedTail, "").trim()
     }
 
     private fun updatePlaceholderContentInMemory(
