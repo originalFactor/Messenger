@@ -59,6 +59,8 @@ class ApiRepositoryImpl : ApiRepository {
                     displayName = modelDto.id,
                     isEnabled = true,
                     contextWindow = modelDto.contextWindow ?: 0L,
+                    inputRate = modelDto.inputRate,
+                    outputRate = modelDto.outputRate,
                     createdAt = System.currentTimeMillis()
                 )
             }

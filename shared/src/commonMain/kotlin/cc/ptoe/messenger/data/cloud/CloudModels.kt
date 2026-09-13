@@ -143,6 +143,9 @@ data class CloudModelDocument(
     val isEnabled: Boolean = false,
     /** 上下文窗口（tokens），0 = 未知/不限。旧服务端文档不含该键。 */
     val contextWindow: Long = 0,
+    /** 输入/输出倍率，0 = 免费；缺失 = 未知。旧服务端文档不含该键。 */
+    val inputRate: Double? = null,
+    val outputRate: Double? = null,
     val createdAt: Long = 0
 )
 

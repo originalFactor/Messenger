@@ -211,6 +211,8 @@
     <string name="providers_model_saved">Model saved</string>
     <string name="providers_model_list">Model list</string>
     <string name="providers_model_context_window">Context window: %1$s tokens</string>
+    <string name="providers_model_rates">Input rate ×%1$s, output rate ×%2$s</string>
+    <string name="providers_model_rates_free">Free</string>
     <string name="providers_manual_add_title">Add model manually</string>
     <string name="providers_model_id_label">Model ID</string>
     <string name="providers_model_id_placeholder">gpt-3.5-turbo</string>

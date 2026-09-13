@@ -47,3 +47,20 @@ fun formatContextWindow(tokens: Long): String {
     val millions = tokens / 1_000_000f
     return if (millions >= 1f) "${compact(millions)}M" else "${compact(tokens / 1_000f)}K"
 }
+
+/**
+ * 倍率展示：最多两位小数并去掉尾随 0（0.15 → "0.15"，1.0 → "1"，
+ * 0 → "0"）。避免浮点表示误差带来的长尾。
+ */
+fun formatRate(value: Double): String {
+    val scaled = kotlin.math.round(value * 100.0).toLong()
+    val sign = if (scaled < 0L) "-" else ""
+    val abs = kotlin.math.abs(scaled)
+    val whole = abs / 100L
+    val frac = abs % 100L
+    return when {
+        frac == 0L -> "$sign$whole"
+        frac % 10L == 0L -> "$sign$whole.${frac / 10L}"
+        else -> "$sign$whole.${frac.toString().padStart(2, '0')}"
+    }
+}

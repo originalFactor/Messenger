@@ -1208,6 +1208,8 @@ class CloudSyncRepository(
                     displayName = dto.id,
                     isEnabled = previous?.isEnabled ?: true,
                     contextWindow = dto.contextWindow ?: 0L,
+                    inputRate = dto.inputRate ?: previous?.inputRate,
+                    outputRate = dto.outputRate ?: previous?.outputRate,
                     createdAt = previous?.createdAt ?: System.currentTimeMillis()
                 )
             }
@@ -1485,7 +1487,16 @@ private fun ProviderEntity.toCloudRequest(models: List<ModelEntity>) = CloudProv
     baseUrl = baseUrl,
     apiKey = apiKey,
     models = models.map {
-        CloudModelRequest(it.id, it.modelId, it.displayName, it.isEnabled, it.contextWindow, it.createdAt)
+        CloudModelRequest(
+            id = it.id,
+            modelId = it.modelId,
+            displayName = it.displayName,
+            isEnabled = it.isEnabled,
+            contextWindow = it.contextWindow,
+            inputRate = it.inputRate,
+            outputRate = it.outputRate,
+            createdAt = it.createdAt
+        )
     },
     createdAt = createdAt,
     updatedAt = updatedAt
@@ -1572,7 +1583,17 @@ private fun AgentEntity.toDomain() = Agent(
 private fun CloudProviderDocument.toEntity() = ProviderEntity(id, name, baseUrl, apiKey, createdAt, updatedAt)
 
 private fun CloudModelDocument.toEntity(providerId: String) =
-    ModelEntity(id, providerId, modelId, displayName, isEnabled, contextWindow, createdAt)
+    ModelEntity(
+        id = id,
+        providerId = providerId,
+        modelId = modelId,
+        displayName = displayName,
+        isEnabled = isEnabled,
+        contextWindow = contextWindow,
+        inputRate = inputRate,
+        outputRate = outputRate,
+        createdAt = createdAt
+    )
 
 private fun CloudConversationDocument.toEntity() = ConversationEntity(
     id = id,

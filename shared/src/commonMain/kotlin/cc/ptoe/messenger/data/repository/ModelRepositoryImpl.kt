@@ -101,6 +101,8 @@ class ModelRepositoryImpl(
             displayName = displayName,
             isEnabled = isEnabled,
             contextWindow = contextWindow,
+            inputRate = inputRate,
+            outputRate = outputRate,
             createdAt = createdAt
         )
     }
@@ -113,6 +115,8 @@ class ModelRepositoryImpl(
             displayName = displayName,
             isEnabled = isEnabled,
             contextWindow = contextWindow,
+            inputRate = inputRate,
+            outputRate = outputRate,
             createdAt = createdAt
         )
     }

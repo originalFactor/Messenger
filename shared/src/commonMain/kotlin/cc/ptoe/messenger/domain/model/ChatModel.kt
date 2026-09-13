@@ -24,5 +24,8 @@ data class ChatModel(
     val isEnabled: Boolean,
     /** 上下文窗口（tokens）。0 = 未知/不限（服务商未提供元数据）。 */
     val contextWindow: Long = 0,
+    /** 输入/输出倍率。null = 未知（服务商未提供元数据），0 = 免费。 */
+    val inputRate: Double? = null,
+    val outputRate: Double? = null,
     val createdAt: Long
 )

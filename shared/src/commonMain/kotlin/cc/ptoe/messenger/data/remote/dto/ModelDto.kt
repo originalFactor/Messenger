@@ -26,5 +26,8 @@ data class ModelDto(
     @SerialName("created") val created: Long? = null,
     @SerialName("owned_by") val ownedBy: String? = null,
     /** Messenger 云端代理扩展字段：上下文窗口（tokens），0 = 不限。其他服务商通常不返回。 */
-    @SerialName("context_window") val contextWindow: Long? = null
+    @SerialName("context_window") val contextWindow: Long? = null,
+    /** Messenger 云端代理扩展字段：输入/输出倍率，0 = 免费。其他服务商通常不返回。 */
+    @SerialName("input_rate") val inputRate: Double? = null,
+    @SerialName("output_rate") val outputRate: Double? = null
 )

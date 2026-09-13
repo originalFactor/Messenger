@@ -141,6 +141,8 @@ internal data class CloudModelRequest(
     val displayName: String,
     val isEnabled: Boolean,
     val contextWindow: Long = 0,
+    val inputRate: Double? = null,
+    val outputRate: Double? = null,
     val createdAt: Long
 )
 

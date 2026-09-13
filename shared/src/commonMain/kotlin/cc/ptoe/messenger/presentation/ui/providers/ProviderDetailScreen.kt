@@ -91,6 +91,7 @@ import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.formatContextWindow
+import cc.ptoe.messenger.presentation.utils.formatRate
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ProviderDetailViewModel
 import cc.ptoe.messenger.presentation.viewmodel.SyncStatus
@@ -116,6 +117,8 @@ import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
 import cc.ptoe.messenger.generated.resources.providers_model_context_window
+import cc.ptoe.messenger.generated.resources.providers_model_rates
+import cc.ptoe.messenger.generated.resources.providers_model_rates_free
 import cc.ptoe.messenger.generated.resources.providers_model_list
 import cc.ptoe.messenger.generated.resources.providers_model_management
 import cc.ptoe.messenger.generated.resources.providers_model_saved
@@ -555,6 +558,7 @@ private fun ModelListItem(
                     modifier = Modifier.weight(1f, fill = false)
                 )
                 ContextWindowBadge(contextWindow = model.contextWindow)
+                RateBadge(inputRate = model.inputRate, outputRate = model.outputRate)
             }
             if (model.displayName != model.modelId) {
                 Text(
@@ -625,6 +629,39 @@ private fun ContextWindowBadge(contextWindow: Long) {
         shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.semantics { contentDescription = description }
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/**
+ * 模型倍率紧凑标签（×0.15 / ×0.6，输入/输出）。两者均为 0 时显示「免费」。
+ * 任一缺失（服务商未提供元数据）不显示。
+ */
+@Composable
+private fun RateBadge(inputRate: Double?, outputRate: Double?) {
+    if (inputRate == null || outputRate == null) return
+    val isFree = inputRate <= 0.0 && outputRate <= 0.0
+    val label = if (isFree) {
+        stringResource(Res.string.providers_model_rates_free)
+    } else {
+        "×${formatRate(inputRate)} / ×${formatRate(outputRate)}"
+    }
+    Spacer(modifier = Modifier.width(8.dp))
+    val description = if (isFree) {
+        stringResource(Res.string.providers_model_rates_free)
+    } else {
+        stringResource(Res.string.providers_model_rates, formatRate(inputRate), formatRate(outputRate))
+    }
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
         modifier = Modifier.semantics { contentDescription = description }
     ) {
         Text(
@@ -734,6 +771,7 @@ private fun SyncModelSelectionDialog(
                                 )
                             }
                             ContextWindowBadge(contextWindow = model.contextWindow)
+                            RateBadge(inputRate = model.inputRate, outputRate = model.outputRate)
                         }
                     }
                 }
