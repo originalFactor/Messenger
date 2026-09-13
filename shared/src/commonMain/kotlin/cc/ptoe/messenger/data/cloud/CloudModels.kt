@@ -245,3 +245,37 @@ data class CloudMarketAgentUpdate(
     val agent: CloudMarketAgent,
     val hasUpdate: Boolean = false
 )
+
+/** 卡密兑换前预览：卡内嵌创建时的套餐快照，未消费卡密。 */
+@Serializable
+data class CloudCardPreview(
+    val code: String = "",
+    val planName: String = "",
+    val quotaTokens: Long = 0,
+    val validityDays: Long = 0
+)
+
+@Serializable
+data class CloudCardPreviewResponse(val card: CloudCardPreview)
+
+/** 兑换记录 + 兑换后额度汇总（/api/console/redeem 响应）。 */
+@Serializable
+data class CloudRedeemRedemption(
+    val cardCode: String = "",
+    val planName: String = "",
+    val quotaTokens: Long = 0,
+    val validityDays: Long = 0,
+    val redeemedAt: Long = 0
+)
+
+@Serializable
+data class CloudQuotaSummary(
+    val balance: Long? = null,
+    val expiresAt: Long? = null
+)
+
+@Serializable
+data class CloudRedeemResponse(
+    val redemption: CloudRedeemRedemption,
+    val quota: CloudQuotaSummary? = null
+)

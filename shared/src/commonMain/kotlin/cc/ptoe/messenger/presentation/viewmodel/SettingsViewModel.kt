@@ -25,7 +25,9 @@ import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.cloud.CloudSyncResult
 import cc.ptoe.messenger.data.cloud.CloudSyncRepository
+import cc.ptoe.messenger.data.cloud.CloudCardPreview
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
+import cc.ptoe.messenger.data.cloud.CloudRedeemResponse
 import cc.ptoe.messenger.presentation.theme.ThemeMode
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -119,6 +121,26 @@ class SettingsViewModel(
             onResult(runCatching {
                 withContext(Dispatchers.IO) {
                     cloudSyncRepository.deleteAccount(currentPassword)
+                }
+            })
+        }
+    }
+
+    fun previewRedeemCard(code: String, onResult: (Result<CloudCardPreview>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                withContext(Dispatchers.IO) {
+                    cloudSyncRepository.previewRedeemCard(code)
+                }
+            })
+        }
+    }
+
+    fun redeemCard(code: String, onResult: (Result<CloudRedeemResponse>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                withContext(Dispatchers.IO) {
+                    cloudSyncRepository.redeemCard(code)
                 }
             })
         }

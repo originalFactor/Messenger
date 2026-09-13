@@ -54,6 +54,9 @@ internal data class PasswordChangeRequest(val currentPassword: String, val newPa
 internal data class AccountDeleteRequest(val currentPassword: String)
 
 @Serializable
+internal data class RedeemCodeRequest(val code: String)
+
+@Serializable
 internal data class UserResponse(val user: CloudUser)
 
 @Serializable
@@ -192,6 +195,12 @@ internal class CloudApiClient(appPreferences: AppPreferences) {
 
     suspend fun deleteAccount(url: String, body: AccountDeleteRequest): SuccessResponse =
         http.delete(url) { jsonBody(body) }.body()
+
+    suspend fun previewRedeemCard(url: String, body: RedeemCodeRequest): CloudCardPreviewResponse =
+        http.post(url) { jsonBody(body) }.body()
+
+    suspend fun redeemCard(url: String, body: RedeemCodeRequest): CloudRedeemResponse =
+        http.post(url) { jsonBody(body) }.body()
 
     suspend fun syncAgentsPage(url: String, since: Long, cursor: String?, limit: Int): CloudSyncAgentsPage =
         http.get(url) { syncParams(since, "agents", cursor, limit) }.body()

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Redeem
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WorkspacePremium
@@ -76,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
+import cc.ptoe.messenger.data.cloud.CloudCardPreview
 import cc.ptoe.messenger.data.cloud.CloudQuotaEntitlement
 import cc.ptoe.messenger.data.cloud.CloudSyncRepository
 import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
@@ -140,6 +142,22 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_sync_data_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_sync_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_upload_sync
+import cc.ptoe.messenger.generated.resources.cloud_redeem_action
+import cc.ptoe.messenger.generated.resources.cloud_redeem_checking
+import cc.ptoe.messenger.generated.resources.cloud_redeem_confirm_button
+import cc.ptoe.messenger.generated.resources.cloud_redeem_confirm_desc
+import cc.ptoe.messenger.generated.resources.cloud_redeem_confirm_title
+import cc.ptoe.messenger.generated.resources.cloud_redeem_days
+import cc.ptoe.messenger.generated.resources.cloud_redeem_desc
+import cc.ptoe.messenger.generated.resources.cloud_redeem_code_label
+import cc.ptoe.messenger.generated.resources.cloud_redeem_field_code
+import cc.ptoe.messenger.generated.resources.cloud_redeem_field_plan
+import cc.ptoe.messenger.generated.resources.cloud_redeem_field_quota
+import cc.ptoe.messenger.generated.resources.cloud_redeem_field_validity
+import cc.ptoe.messenger.generated.resources.cloud_redeem_redeeming
+import cc.ptoe.messenger.generated.resources.cloud_redeem_success
+import cc.ptoe.messenger.generated.resources.cloud_redeem_title
+import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.presentation.platform.BackHandler
@@ -170,6 +188,10 @@ fun CloudSettingsScreen(
     var deletePassword by remember { mutableStateOf("") }
     var pendingLogin by remember { mutableStateOf<CloudLoginOutcome?>(null) }
     var isBusy by remember { mutableStateOf(false) }
+    var redeemCode by remember { mutableStateOf("") }
+    var redeemChecking by remember { mutableStateOf(false) }
+    var redeemPreview by remember { mutableStateOf<CloudCardPreview?>(null) }
+    var redeeming by remember { mutableStateOf(false) }
 
     val loginSuccess = stringResource(Res.string.cloud_settings_login_success)
     val localDataUploaded = stringResource(Res.string.cloud_settings_local_data_uploaded)
@@ -447,6 +469,50 @@ fun CloudSettingsScreen(
                     }
 
                     CloudSectionCard(
+                        title = stringResource(Res.string.cloud_redeem_title),
+                        icon = Icons.Default.Redeem
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.cloud_redeem_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = redeemCode,
+                                onValueChange = { redeemCode = it },
+                                label = { Text(stringResource(Res.string.cloud_redeem_code_label)) },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                enabled = !redeemChecking && !redeeming
+                            )
+                            Button(
+                                onClick = {
+                                    redeemChecking = true
+                                    viewModel.previewRedeemCard(redeemCode) { result ->
+                                        redeemChecking = false
+                                        result.onSuccess { redeemPreview = it }
+                                            .onFailure { showMessage(it.message ?: operationFailed) }
+                                    }
+                                },
+                                enabled = !redeemChecking && !redeeming && redeemCode.isNotBlank()
+                            ) {
+                                Text(
+                                    if (redeemChecking) stringResource(Res.string.cloud_redeem_checking)
+                                    else stringResource(Res.string.cloud_redeem_action)
+                                )
+                            }
+                        }
+                        if (redeemChecking) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    CloudSectionCard(
                         title = stringResource(Res.string.cloud_settings_sync_data),
                         icon = Icons.Default.Sync
                     ) {
@@ -631,6 +697,81 @@ fun CloudSettingsScreen(
         )
     }
 
+    redeemPreview?.let { preview ->
+        AlertDialog(
+            onDismissRequest = { if (!redeeming) redeemPreview = null },
+            title = { Text(stringResource(Res.string.cloud_redeem_confirm_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = stringResource(Res.string.cloud_redeem_confirm_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    RedeemInfoRow(
+                        label = stringResource(Res.string.cloud_redeem_field_code),
+                        value = preview.code
+                    )
+                    RedeemInfoRow(
+                        label = stringResource(Res.string.cloud_redeem_field_plan),
+                        value = preview.planName
+                    )
+                    RedeemInfoRow(
+                        label = stringResource(Res.string.cloud_redeem_field_quota),
+                        value = "+" + formatQuota(preview.quotaTokens)
+                    )
+                    RedeemInfoRow(
+                        label = stringResource(Res.string.cloud_redeem_field_validity),
+                        value = stringResource(Res.string.cloud_redeem_days, preview.validityDays)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        redeeming = true
+                        viewModel.redeemCard(preview.code) { result ->
+                            redeeming = false
+                            result.onSuccess { response ->
+                                redeemPreview = null
+                                redeemCode = ""
+                                val redemption = response.redemption
+                                coroutineScope.launch {
+                                    val message = getString(
+                                        Res.string.cloud_redeem_success,
+                                        redemption.planName,
+                                        formatQuota(redemption.quotaTokens),
+                                        getString(Res.string.cloud_redeem_days, redemption.validityDays),
+                                        response.quota?.balance?.let(::formatQuota) ?: "—"
+                                    )
+                                    showMessage(message)
+                                }
+                            }.onFailure {
+                                // 与 web 端一致：失败时关闭确认框并提示错误（服务端错误文案为中文）。
+                                redeemPreview = null
+                                showMessage(it.message ?: operationFailed)
+                            }
+                        }
+                    },
+                    enabled = !redeeming
+                ) {
+                    Text(
+                        if (redeeming) stringResource(Res.string.cloud_redeem_redeeming)
+                        else stringResource(Res.string.cloud_redeem_confirm_button)
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { redeemPreview = null },
+                    enabled = !redeeming
+                ) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+            }
+        )
+    }
+
     pendingLogin?.let { outcome ->
         CloudSyncChoiceDialog(
             outcome = outcome,
@@ -728,6 +869,26 @@ private fun PlanEntitlementRow(entitlement: CloudQuotaEntitlement) {
                     ?: stringResource(Res.string.cloud_settings_plan_no_expiry)),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 兑换确认框中的单行信息（标签 + 值）。 */
+@Composable
+private fun RedeemInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }

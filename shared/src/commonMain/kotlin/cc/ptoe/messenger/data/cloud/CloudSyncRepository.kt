@@ -231,6 +231,29 @@ class CloudSyncRepository(
         appPreferences.clearCloudAccount(accountId)
     }
 
+    /** 兑换前查询卡密信息（套餐快照），不消费卡密。与 web 端 /api/console/cards/preview 一致。 */
+    suspend fun previewRedeemCard(code: String): CloudCardPreview = withContext(Dispatchers.IO) {
+        checkSignedIn()
+        val response = request {
+            apiClient.previewRedeemCard(endpoint("api/console/cards/preview"), RedeemCodeRequest(code.trim()))
+        }
+        response.card
+    }
+
+    /**
+     * 确认兑换卡密。成功后拉取一次 /api/auth/me 刷新本地用户（额度汇总），
+     * 使套餐卡片立即反映新到账的条目。
+     */
+    suspend fun redeemCard(code: String): CloudRedeemResponse = withContext(Dispatchers.IO) {
+        checkSignedIn()
+        val response = request {
+            apiClient.redeemCard(endpoint("api/console/redeem"), RedeemCodeRequest(code.trim()))
+        }
+        runCatching { refreshUser(updateLocalAvatar = false) }
+            .onFailure { logW(TAG, "Redeem quota refresh failed: ${it.message}") }
+        response
+    }
+
     suspend fun listMarketAgents(
         query: String,
         cursor: String? = null
