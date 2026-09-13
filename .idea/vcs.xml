@@ -4,6 +4,5 @@
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/llm-typewriter" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/server" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/server/vercel-blob-emu" vcs="Git" />
   </component>
 </project>

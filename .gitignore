@@ -18,6 +18,7 @@ local.properties
 /.kotlin
 /.trae
 /.workbuddy
+/.zcode
 
 # Keystore files
 *.jks
