@@ -36,3 +36,14 @@ fun formatTwoDecimals(value: Float): String {
     val oneDecimal = formatOneDecimal(value)
     return if (oneDecimal.length == 3) "${oneDecimal}0" else rounded.toString()
 }
+
+/**
+ * 上下文窗口 token 数的紧凑展示：272_000 → "272K"，1_000_000 → "1M"，
+ * 1_500_000 → "1.5M"。0 = 未知/不限，返回空串（调用方据此隐藏标签）。
+ */
+fun formatContextWindow(tokens: Long): String {
+    if (tokens <= 0L) return ""
+    fun compact(value: Float): String = formatOneDecimal(value).removeSuffix(".0")
+    val millions = tokens / 1_000_000f
+    return if (millions >= 1f) "${compact(millions)}M" else "${compact(tokens / 1_000f)}K"
+}

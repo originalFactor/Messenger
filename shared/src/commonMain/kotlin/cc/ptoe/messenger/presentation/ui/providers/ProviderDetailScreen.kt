@@ -56,6 +56,7 @@ import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,6 +74,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -86,6 +89,7 @@ import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.formatContextWindow
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ProviderDetailViewModel
 import cc.ptoe.messenger.presentation.viewmodel.SyncStatus
@@ -110,6 +114,7 @@ import cc.ptoe.messenger.generated.resources.providers_model_display_name_placeh
 import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
+import cc.ptoe.messenger.generated.resources.providers_model_context_window
 import cc.ptoe.messenger.generated.resources.providers_model_list
 import cc.ptoe.messenger.generated.resources.providers_model_management
 import cc.ptoe.messenger.generated.resources.providers_model_saved
@@ -539,13 +544,17 @@ private fun ModelListItem(
         Column(
             modifier = Modifier.weight(1f)
         ) {
-            Text(
-                text = model.displayName,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = model.displayName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                ContextWindowBadge(contextWindow = model.contextWindow)
+            }
             if (model.displayName != model.modelId) {
                 Text(
                     text = model.modelId,
@@ -599,6 +608,29 @@ private fun ModelListItem(
                 )
             }
         }
+    }
+}
+
+/**
+ * 模型上下文窗口紧凑标签（272K / 1M / 1.5M）。0 = 未知/不限，不显示。
+ */
+@Composable
+private fun ContextWindowBadge(contextWindow: Long) {
+    val label = formatContextWindow(contextWindow)
+    if (label.isEmpty()) return
+    Spacer(modifier = Modifier.width(8.dp))
+    val description = stringResource(Res.string.providers_model_context_window, label)
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.semantics { contentDescription = description }
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
     }
 }
 
@@ -700,6 +732,7 @@ private fun SyncModelSelectionDialog(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                            ContextWindowBadge(contextWindow = model.contextWindow)
                         }
                     }
                 }

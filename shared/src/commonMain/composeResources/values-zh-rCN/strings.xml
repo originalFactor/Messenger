@@ -209,6 +209,7 @@
     <string name="providers_selected_count">已选 %1$d 个</string>
     <string name="providers_model_saved">模型已保存</string>
     <string name="providers_model_list">模型列表</string>
+    <string name="providers_model_context_window">上下文窗口：%1$s tokens</string>
     <string name="providers_manual_add_title">手动添加模型</string>
     <string name="providers_model_id_label">模型 ID</string>
     <string name="providers_model_id_placeholder">gpt-3.5-turbo</string>
