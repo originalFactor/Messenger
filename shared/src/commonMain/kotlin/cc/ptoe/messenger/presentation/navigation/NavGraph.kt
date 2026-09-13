@@ -63,12 +63,18 @@ import cc.ptoe.messenger.di.AppContainerHolder
 @Composable
 fun NavGraph(
     navController: NavHostController,
+    sizeClass: WindowSizeClass,
     modifier: Modifier = Modifier
 ) {
+    val verticalTransitions = sizeClass != WindowSizeClass.Compact
     NavHost(
         navController = navController,
         startDestination = Screen.Conversations.route,
-        modifier = modifier
+        modifier = modifier,
+        enterTransition = navEnterTransition(verticalTransitions),
+        exitTransition = navExitTransition(verticalTransitions),
+        popEnterTransition = navPopEnterTransition(verticalTransitions),
+        popExitTransition = navPopExitTransition(verticalTransitions)
     ) {
         composable(Screen.Conversations.route) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {

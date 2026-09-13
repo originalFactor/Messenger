@@ -19,7 +19,6 @@ package cc.ptoe.messenger.presentation.platform
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -27,17 +26,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.CancellationException
 
 /**
  * Android actual：用 [PredictiveBackHandler] 接住预测性返回手势，让系统
- * 知道应用内返回正在被处理，并按 Material predictive back 规范驱动
- * [content] 跟手动画（缩至 90%、圆角增大、向手势起始边移动 16dp）。
- * 手势取消时立即弹回原状。
+ * 知道应用内返回正在被处理，并驱动 [content] 跟手「划出 + 渐淡」动画
+ * （整页向手势起始边划出、透明度随进度渐隐）。手势取消时立即弹回原状。
  */
 @Composable
 actual fun BackHandler(
@@ -48,8 +44,7 @@ actual fun BackHandler(
     // -1 = 左边缘起手，+1 = 右边缘起手，0 = 无手势进行中
     var swipeEdge by remember { mutableIntStateOf(0) }
     var backProgress by remember { mutableFloatStateOf(0f) }
-    val density = LocalDensity.current
-    val shiftPx = with(density) { 16.dp.toPx() }
+    var contentWidthPx by remember { mutableIntStateOf(0) }
 
     PredictiveBackHandler(enabled = enabled) { events ->
         try {
@@ -72,12 +67,10 @@ actual fun BackHandler(
     val progress = backProgress.coerceIn(0f, 1f)
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape((28f * progress).dp))
+            .onSizeChanged { contentWidthPx = it.width }
             .graphicsLayer {
-                scaleX = 1f - 0.1f * progress
-                scaleY = 1f - 0.1f * progress
-                translationX = swipeEdge * progress * shiftPx
-                shadowElevation = 8f * progress * density.density
+                alpha = 1f - progress
+                translationX = swipeEdge * progress * contentWidthPx
             }
     ) {
         content()

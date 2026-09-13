@@ -87,7 +87,7 @@ fun MainScaffold(
                             .padding(bottom = innerPadding.calculateBottomPadding())
                     ) {
                         Box(modifier = Modifier.fillMaxWidth()) {
-                            NavGraph(navController = navController)
+                            NavGraph(navController = navController, sizeClass = sizeClass)
                         }
                     }
                 }
@@ -113,7 +113,7 @@ fun MainScaffold(
                         )
                     }
                     Box(modifier = Modifier.fillMaxHeight().weight(1f)) {
-                        NavGraph(navController = navController)
+                        NavGraph(navController = navController, sizeClass = sizeClass)
                     }
                 }
             }

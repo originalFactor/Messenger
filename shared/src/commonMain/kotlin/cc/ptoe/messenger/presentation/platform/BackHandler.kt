@@ -23,7 +23,7 @@ import androidx.compose.runtime.Composable
  * 页面（无导航栈条目），否则系统返回会直接弹出当前路由。
  *
  * [content] 在支持的平台上会跟随预测性返回手势进度做系统风格的
- * 缩放/圆角/位移动画（Material predictive back）。
+ * 「划出 + 渐淡」动画（整页向手势起始边划出并渐隐）。
  */
 @Composable
 expect fun BackHandler(
