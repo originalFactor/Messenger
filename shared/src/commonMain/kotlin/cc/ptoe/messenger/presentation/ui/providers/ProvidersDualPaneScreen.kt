@@ -43,6 +43,7 @@ fun ProvidersDualPaneScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedProviderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedModelId by rememberSaveable { mutableStateOf<String?>(null) }
     var editProviderId by rememberSaveable { mutableStateOf<String?>(null) }
     var isEditing by rememberSaveable { mutableStateOf(false) }
 
@@ -65,6 +66,7 @@ fun ProvidersDualPaneScreen(
                 },
                 onProviderClick = { id ->
                     selectedProviderId = id
+                    selectedModelId = null
                     isEditing = false
                 }
             )
@@ -102,10 +104,19 @@ fun ProvidersDualPaneScreen(
                         }
                     )
                 }
+                selectedModelId != null -> key(selectedModelId) {
+                    ModelDetailScreen(
+                        modelId = selectedModelId!!,
+                        onBackClick = { selectedModelId = null }
+                    )
+                }
                 selectedProviderId != null -> key(selectedProviderId) {
                     ProviderDetailScreen(
                         providerId = selectedProviderId!!,
-                        onBackClick = { selectedProviderId = null }
+                        onBackClick = { selectedProviderId = null },
+                        onModelClick = { model ->
+                            selectedModelId = model.id
+                        }
                     )
                 }
                 else -> EmptyState(

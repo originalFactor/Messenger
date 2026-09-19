@@ -24,10 +24,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -44,10 +47,13 @@ import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationSettingsScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsScreen
+import cc.ptoe.messenger.presentation.ui.conversations.ModelPickerScreen
+import cc.ptoe.messenger.presentation.ui.conversations.ProviderPickerScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProviderDetailScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProviderEditScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersScreen
+import cc.ptoe.messenger.presentation.ui.providers.ModelDetailScreen
 import cc.ptoe.messenger.presentation.ui.settings.LicensesScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsScreen
@@ -59,6 +65,9 @@ import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.conversations_rename_title
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
+
+/** SavedState 结果回传 key：ModelPicker 选中模型 */
+private const val KEY_PICKED_MODEL_ID = "conversation_settings_picked_model_id"
 
 @Composable
 fun NavGraph(
@@ -128,6 +137,11 @@ fun NavGraph(
             )
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)
+                // 双栏布局下 AgentEditScreen 托管在 Agents 页面内，Picker 结果回传到本 entry
+                val savedStateHandle = backStackEntry.savedStateHandle
+                val pickedModelId by savedStateHandle
+                    .getStateFlow<String?>(KEY_PICKED_MODEL_ID, null)
+                    .collectAsStateWithLifecycle()
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
                     AgentsDualPaneScreen(
@@ -137,7 +151,12 @@ fun NavGraph(
                         },
                         onMarketClick = {
                             navController.navigate(Screen.AgentMarket.route)
-                        }
+                        },
+                        onPickProvider = { currentProviderId ->
+                            navController.navigate(Screen.ProviderPicker.createRoute(currentProviderId))
+                        },
+                        pickedModelId = pickedModelId,
+                        onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
                     )
                 } else {
                     // Phone: single-pane, push AgentEdit / AgentMarket on tap.
@@ -260,6 +279,22 @@ fun NavGraph(
             val providerId = backStackEntry.arguments?.read { getStringOrNull("providerId") } ?: ""
             ProviderDetailScreen(
                 providerId = providerId,
+                onBackClick = { navController.popBackStack() },
+                onModelClick = { model ->
+                    navController.navigate(Screen.ModelDetail.createRoute(model.id))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.ModelDetail.route,
+            arguments = listOf(
+                navArgument("modelId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val modelId = backStackEntry.arguments?.read { getStringOrNull("modelId") } ?: ""
+            ModelDetailScreen(
+                modelId = modelId,
                 onBackClick = { navController.popBackStack() }
             )
         }
@@ -275,10 +310,19 @@ fun NavGraph(
             )
         ) { backStackEntry ->
             val agentId = backStackEntry.arguments?.read { getStringOrNull("agentId") }
+            val savedStateHandle = backStackEntry.savedStateHandle
+            val pickedModelId by savedStateHandle
+                .getStateFlow<String?>(KEY_PICKED_MODEL_ID, null)
+                .collectAsStateWithLifecycle()
             AgentEditScreen(
                 agentId = agentId,
                 onBackClick = { navController.popBackStack() },
-                onSaved = { navController.popBackStack() }
+                onSaved = { navController.popBackStack() },
+                onPickProvider = { currentProviderId ->
+                    navController.navigate(Screen.ProviderPicker.createRoute(currentProviderId))
+                },
+                pickedModelId = pickedModelId,
+                onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
             )
         }
 
@@ -301,10 +345,69 @@ fun NavGraph(
             )
         ) { backStackEntry ->
             val conversationId = backStackEntry.arguments?.read { getStringOrNull("conversationId") } ?: ""
+            val savedStateHandle = backStackEntry.savedStateHandle
+            val pickedModelId by savedStateHandle
+                .getStateFlow<String?>(KEY_PICKED_MODEL_ID, null)
+                .collectAsStateWithLifecycle()
             ConversationSettingsScreen(
                 conversationId = conversationId,
                 onBackClick = { navController.popBackStack() },
-                onSaved = { navController.popBackStack() }
+                onSaved = { navController.popBackStack() },
+                onPickProvider = { currentProviderId ->
+                    navController.navigate(Screen.ProviderPicker.createRoute(currentProviderId))
+                },
+                pickedModelId = pickedModelId,
+                onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
+            )
+        }
+
+        composable(
+            route = Screen.ProviderPicker.route,
+            arguments = listOf(
+                navArgument("selectedProviderId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val selectedProviderId = backStackEntry.arguments?.read { getStringOrNull("selectedProviderId") }
+            ProviderPickerScreen(
+                selectedProviderId = selectedProviderId,
+                onBackClick = { navController.popBackStack() },
+                onProviderSelected = { providerId ->
+                    // 选中 Provider 后直接进入该 Provider 的模型选择页（二级联动），
+                    // 并把本页从返回栈移除，形成"设置页 → Provider 页 → Model 页"的连续流程
+                    navController.navigate(Screen.ModelPicker.createRoute(providerId)) {
+                        popUpTo(Screen.ProviderPicker.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(
+            route = Screen.ModelPicker.route,
+            arguments = listOf(
+                navArgument("providerId") { type = NavType.StringType },
+                navArgument("selectedModelId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val providerId = backStackEntry.arguments?.read { getStringOrNull("providerId") } ?: ""
+            val selectedModelId = backStackEntry.arguments?.read { getStringOrNull("selectedModelId") }
+            ModelPickerScreen(
+                providerId = providerId,
+                selectedModelId = selectedModelId,
+                onBackClick = { navController.popBackStack() },
+                onModelSelected = { modelId ->
+                    // 只回传选中的模型 ID；所属 Provider 由设置页/Agent 编辑页
+                    // 从模型数据反查并原子更新，避免回传二值引发状态竞态
+                    navController.previousBackStackEntry?.savedStateHandle?.set(KEY_PICKED_MODEL_ID, modelId)
+                    navController.popBackStack()
+                }
             )
         }
 

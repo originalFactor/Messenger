@@ -31,8 +31,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
@@ -57,9 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import cc.ptoe.messenger.domain.model.ChatModel
-import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.viewmodel.ConversationSettingsViewModel
@@ -68,13 +68,9 @@ import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_save
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_label
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_placeholder
-import cc.ptoe.messenger.generated.resources.agent_edit_model_label
-import cc.ptoe.messenger.generated.resources.agent_edit_provider_label
 import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_default
 import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_label
 import cc.ptoe.messenger.generated.resources.conversation_settings_agent_label
-import cc.ptoe.messenger.generated.resources.conversation_settings_no_model
-import cc.ptoe.messenger.generated.resources.conversation_settings_no_provider
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_desc
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_max_tokens
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_model
@@ -83,10 +79,10 @@ import cc.ptoe.messenger.generated.resources.conversation_settings_override_sect
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_temperature
 import cc.ptoe.messenger.generated.resources.conversation_settings_select_model
 import cc.ptoe.messenger.generated.resources.conversation_settings_select_provider
-import cc.ptoe.messenger.generated.resources.conversation_settings_select_provider_first
 import cc.ptoe.messenger.generated.resources.conversation_settings_temperature_value
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
 import cc.ptoe.messenger.generated.resources.conversation_settings_title_label
+import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
@@ -96,6 +92,9 @@ fun ConversationSettingsScreen(
     conversationId: String,
     onBackClick: () -> Unit,
     onSaved: () -> Unit,
+    onPickProvider: (String?) -> Unit = {},
+    pickedModelId: String? = null,
+    onPickedModelConsumed: () -> Unit = {},
     viewModel: ConversationSettingsViewModel = viewModel(
         factory = ConversationSettingsViewModel.provideFactory(
             conversationRepository = AppContainerHolder.instance.conversationRepository,
@@ -114,6 +113,15 @@ fun ConversationSettingsScreen(
     LaunchedEffect(uiState.isSaved) {
         if (uiState.isSaved) {
             onSaved()
+        }
+    }
+
+    LaunchedEffect(pickedModelId) {
+        val modelId = pickedModelId
+        if (modelId != null) {
+            // 原子应用：ViewModel 按模型反查所属 Provider 并一次更新，避免清空再设置的中间态
+            viewModel.onModelPicked(modelId)
+            onPickedModelConsumed()
         }
     }
 
@@ -189,17 +197,20 @@ fun ConversationSettingsScreen(
                 )
                 if (uiState.overrideModelEnabled) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    ProviderDropdown(
-                        providers = providers,
-                        selectedProviderId = uiState.selectedProviderId,
-                        onProviderChange = { viewModel.onProviderChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    ModelDropdown(
-                        models = models,
-                        selectedModelId = uiState.overrideModelId,
-                        enabled = uiState.selectedProviderId != null,
-                        onModelChange = { viewModel.onModelChange(it) }
+                    // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
+                    val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
+                    val selectedModel = models.find { it.id == uiState.overrideModelId }
+                    val subtitle = when {
+                        selectedModel != null && selectedProvider != null ->
+                            "${selectedProvider.name} · ${selectedModel.modelId}"
+                        selectedProvider != null -> selectedProvider.name
+                        else -> stringResource(Res.string.conversation_settings_select_provider)
+                    }
+                    ListItem(
+                        title = stringResource(Res.string.provider_model_picker_label),
+                        subtitle = subtitle,
+                        icon = Icons.Default.SmartToy,
+                        onClick = { onPickProvider(uiState.selectedProviderId) }
                     )
                 }
 
@@ -359,134 +370,6 @@ private fun ReasoningEffortOverrideDropdown(
                         expanded = false
                     }
                 )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ProviderDropdown(
-    providers: List<Provider>,
-    selectedProviderId: String?,
-    onProviderChange: (String?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedProvider = providers.find { it.id == selectedProviderId }
-    val displayText = selectedProvider?.name ?: stringResource(Res.string.conversation_settings_select_provider)
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it }
-    ) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = { },
-            readOnly = true,
-            label = { Text(stringResource(Res.string.agent_edit_provider_label)) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-            modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            if (providers.isEmpty()) {
-                Text(
-                    text = stringResource(Res.string.conversation_settings_no_provider),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp)
-                )
-            } else {
-                providers.forEach { provider ->
-                    DropdownMenuItem(
-                        text = { Text(provider.name) },
-                        onClick = {
-                            onProviderChange(provider.id)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModelDropdown(
-    models: List<ChatModel>,
-    selectedModelId: String?,
-    enabled: Boolean,
-    onModelChange: (String?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedModel = models.find { it.id == selectedModelId }
-    val displayText = selectedModel?.displayName ?: if (enabled) stringResource(Res.string.conversation_settings_select_model) else stringResource(Res.string.conversation_settings_select_provider_first)
-
-    ExposedDropdownMenuBox(
-        expanded = expanded && enabled,
-        onExpandedChange = { newExpanded ->
-            if (enabled) expanded = newExpanded
-        }
-    ) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = { },
-            readOnly = true,
-            enabled = enabled,
-            label = { Text(stringResource(Res.string.agent_edit_model_label)) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-            modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        )
-        ExposedDropdownMenu(
-            expanded = expanded && enabled,
-            onDismissRequest = { expanded = false }
-        ) {
-            if (models.isEmpty()) {
-                Text(
-                    text = stringResource(Res.string.conversation_settings_no_model),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp)
-                )
-            } else {
-                models.forEach { model ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = model.displayName,
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                if (model.displayName != model.modelId) {
-                                    Text(
-                                        text = model.modelId,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        },
-                        onClick = {
-                            onModelChange(model.id)
-                            expanded = false
-                        }
-                    )
-                }
             }
         }
     }

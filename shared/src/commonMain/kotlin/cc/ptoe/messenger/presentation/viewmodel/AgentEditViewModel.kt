@@ -128,6 +128,14 @@ class AgentEditViewModel(
      */
     private var loadJob: Job? = null
 
+    /**
+     * 已加载过的目标。从选择页返回等场景组合重建会再次调用 [loadAgent]（相同 id），
+     * 此时若重新读取数据库会覆盖用户尚未保存的编辑（如刚选的 defaultModelId），
+     * 因此对已加载过的相同目标直接跳过。
+     */
+    private var loadedTarget: String? = null
+    private var hasLoaded = false
+
     init {
         // 始终加载默认 Agent，用于非默认 Agent 的"跟随"展示
         viewModelScope.launch {
@@ -149,6 +157,13 @@ class AgentEditViewModel(
      * 不会重建）。
      */
     fun loadAgent(id: String?) {
+        // 同一目标已加载过则跳过：从选择页返回时组合重建会再次调用 loadAgent(相同 id)，
+        // 重新读取数据库会把表单中尚未保存的编辑（defaultModelId 等）覆盖回旧值
+        if (hasLoaded && loadedTarget == id) {
+            return
+        }
+        hasLoaded = true
+        loadedTarget = id
         loadJob?.cancel()
         currentAgentId = id
         if (id == null) {
@@ -156,33 +171,32 @@ class AgentEditViewModel(
             return
         }
         loadJob = viewModelScope.launch {
-            agentRepository.getById(id).collect { agent ->
-                if (agent != null) {
-                    val providerId = agent.defaultModelId?.let { modelId ->
-                        modelRepository.getById(modelId).first()?.providerId
-                    }
-                    _uiState.value = _uiState.value.copy(
-                        name = agent.name,
-                        avatar = agent.avatar,
-                        systemPrompt = agent.systemPrompt,
-                        defaultModelId = agent.defaultModelId,
-                        selectedProviderId = providerId,
-                        temperature = agent.temperature,
-                        topP = agent.topP,
-                        maxTokens = agent.maxTokens?.toString(),
-                        reasoningEffort = agent.reasoningEffort,
-                        isDefault = agent.isDefault,
-                        followDefaultSystemPrompt = agent.followDefaultSystemPrompt,
-                        followDefaultModel = agent.followDefaultModel,
-                        followDefaultTemperature = agent.followDefaultTemperature,
-                        followDefaultTopP = agent.followDefaultTopP,
-                        followDefaultMaxTokens = agent.followDefaultMaxTokens,
-                        followDefaultReasoningEffort = agent.followDefaultReasoningEffort,
-                        marketAgentId = agent.marketAgentId,
-                        marketAgentRole = agent.marketAgentRole,
-                        isEditing = true
-                    )
+            val agent = agentRepository.getById(id).first()
+            if (agent != null) {
+                val providerId = agent.defaultModelId?.let { modelId ->
+                    modelRepository.getById(modelId).first()?.providerId
                 }
+                _uiState.value = _uiState.value.copy(
+                    name = agent.name,
+                    avatar = agent.avatar,
+                    systemPrompt = agent.systemPrompt,
+                    defaultModelId = agent.defaultModelId,
+                    selectedProviderId = providerId,
+                    temperature = agent.temperature,
+                    topP = agent.topP,
+                    maxTokens = agent.maxTokens?.toString(),
+                    reasoningEffort = agent.reasoningEffort,
+                    isDefault = agent.isDefault,
+                    followDefaultSystemPrompt = agent.followDefaultSystemPrompt,
+                    followDefaultModel = agent.followDefaultModel,
+                    followDefaultTemperature = agent.followDefaultTemperature,
+                    followDefaultTopP = agent.followDefaultTopP,
+                    followDefaultMaxTokens = agent.followDefaultMaxTokens,
+                    followDefaultReasoningEffort = agent.followDefaultReasoningEffort,
+                    marketAgentId = agent.marketAgentId,
+                    marketAgentRole = agent.marketAgentRole,
+                    isEditing = true
+                )
             }
         }
     }
@@ -212,6 +226,20 @@ class AgentEditViewModel(
 
     fun onDefaultModelChange(modelId: String?) {
         _uiState.value = _uiState.value.copy(defaultModelId = modelId)
+    }
+
+    /**
+     * 模型选择页回传结果：按模型反查所属 Provider，并一次性原子更新
+     * provider + 默认模型，避免"先清空模型再设置"的中间态与竞态。
+     */
+    fun onModelPicked(modelId: String) {
+        viewModelScope.launch {
+            val model = modelRepository.getById(modelId).first() ?: return@launch
+            _uiState.value = _uiState.value.copy(
+                selectedProviderId = model.providerId,
+                defaultModelId = model.id
+            )
+        }
     }
 
     fun onTemperatureChange(temperature: Float) {

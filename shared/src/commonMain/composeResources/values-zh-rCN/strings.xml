@@ -183,6 +183,11 @@
     <string name="conversation_settings_select_provider">请选择 Provider</string>
     <string name="conversation_settings_select_provider_first">请先选择 Provider</string>
     <string name="conversation_settings_select_model">请选择模型</string>
+    <string name="conversation_settings_pick_provider_title">选择 Provider</string>
+    <string name="conversation_settings_pick_model_title">选择模型</string>
+    <string name="conversation_settings_search">搜索</string>
+    <string name="conversation_settings_search_empty">无匹配结果</string>
+    <string name="provider_model_picker_label">Provider 和模型</string>
 
     <!-- Providers -->
     <string name="providers_title">模型提供商</string>
@@ -222,6 +227,20 @@
     <string name="providers_select_models_title">选择要保存的模型</string>
     <string name="providers_view_models">查看模型</string>
     <string name="providers_select_to_view">选择一个 Provider 查看</string>
+    <string name="providers_model_detail_title">模型详情</string>
+    <string name="providers_model_context_window_label">上下文窗口（tokens）</string>
+    <string name="providers_model_context_window_hint">未知/不限</string>
+    <string name="providers_model_capabilities">模型能力</string>
+    <string name="providers_model_input_modalities">输入模态</string>
+    <string name="providers_model_output_modalities">输出模态</string>
+    <string name="providers_model_supports_tool_calling">工具调用</string>
+    <string name="providers_model_supports_thinking">思考</string>
+    <string name="providers_model_supports_json_output">JSON 输出</string>
+    <string name="providers_model_supports_temperature">Temperature 支持</string>
+    <string name="modality_text">文本</string>
+    <string name="modality_image">图像</string>
+    <string name="modality_audio">音频</string>
+    <string name="modality_video">视频</string>
 
     <!-- Settings -->
     <string name="settings_title">设置</string>

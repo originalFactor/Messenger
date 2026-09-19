@@ -130,6 +130,7 @@ fun ChatScreen(
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val needsModelSetup by viewModel.needsModelSetup.collectAsStateWithLifecycle()
     val streamingMessageId by viewModel.streamingMessageId.collectAsStateWithLifecycle()
+    val streamingContent by viewModel.streamingContent.collectAsStateWithLifecycle()
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
@@ -373,7 +374,7 @@ fun ChatScreen(
                                                         viewModel.retrySend(message.id)
                                                     }
                                                 },
-                                                typewriterState = viewModel.typewriterState,
+                                                streamingContent = streamingContent,
                                                 streamingMessageId = streamingMessageId,
                                                 modifier = Modifier.fillMaxWidth()
                                             )

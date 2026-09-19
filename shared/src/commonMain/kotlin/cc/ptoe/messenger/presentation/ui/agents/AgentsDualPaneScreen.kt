@@ -56,9 +56,13 @@ fun AgentsDualPaneScreen(
     onOpenAgentEdit: (String) -> Unit,
     onSelectCurrentAgent: (String) -> Unit,
     onMarketClick: () -> Unit,
+    onPickProvider: (String?) -> Unit = {},
+    pickedModelId: String? = null,
+    onPickedModelConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedAgentId by rememberSaveable { mutableStateOf<String?>(null) }
+    var creatingNewAgent by rememberSaveable { mutableStateOf(false) }
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
@@ -68,13 +72,15 @@ fun AgentsDualPaneScreen(
                 .width(360.dp)
         ) {
             AgentsScreen(
-                onAddClick = { selectedAgentId = null },
+                onAddClick = { creatingNewAgent = true },
                 onMarketClick = onMarketClick,
                 onEditClick = { id ->
+                    creatingNewAgent = false
                     selectedAgentId = id
                     onOpenAgentEdit(id)
                 },
                 onAgentClick = { id ->
+                    creatingNewAgent = false
                     onSelectCurrentAgent(id)
                     selectedAgentId = id
                 }
@@ -93,23 +99,40 @@ fun AgentsDualPaneScreen(
                 .fillMaxHeight()
                 .weight(1f)
         ) {
-            val agentId = selectedAgentId
-            if (agentId == null) {
-                EmptyState(
-                    icon = Icons.Default.SmartToy,
-                    message = stringResource(Res.string.agents_select_to_edit),
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                // 用 agentId 作 key，切换 Agent 时销毁旧 ViewModel 子树并重建，
-                // 否则 viewModel() 会按 composable 位置缓存第一次创建的 ViewModel，
-                // 导致双栏下点击任意 Agent 始终显示首个 Agent 的内容。
-                key(agentId) {
+            if (creatingNewAgent) {
+                // 新建 Agent：右栏打开空白编辑器，agentId = null。
+                key("new-agent") {
                     AgentEditScreen(
-                        agentId = agentId,
-                        onBackClick = { selectedAgentId = null },
-                        onSaved = { /* 保持在右栏，不清空 selectedAgentId */ }
+                        agentId = null,
+                        onBackClick = { creatingNewAgent = false },
+                        onSaved = { creatingNewAgent = false },
+                        onPickProvider = onPickProvider,
+                        pickedModelId = pickedModelId,
+                        onPickedModelConsumed = onPickedModelConsumed
                     )
+                }
+            } else {
+                val agentId = selectedAgentId
+                if (agentId == null) {
+                    EmptyState(
+                        icon = Icons.Default.SmartToy,
+                        message = stringResource(Res.string.agents_select_to_edit),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    // 用 agentId 作 key，切换 Agent 时销毁旧 ViewModel 子树并重建，
+                    // 否则 viewModel() 会按 composable 位置缓存第一次创建的 ViewModel，
+                    // 导致双栏下点击任意 Agent 始终显示首个 Agent 的内容。
+                    key(agentId) {
+                        AgentEditScreen(
+                            agentId = agentId,
+                            onBackClick = { selectedAgentId = null },
+                            onSaved = { /* 保持在右栏，不清空 selectedAgentId */ },
+                            onPickProvider = onPickProvider,
+                            pickedModelId = pickedModelId,
+                            onPickedModelConsumed = onPickedModelConsumed
+                        )
+                    }
                 }
             }
         }

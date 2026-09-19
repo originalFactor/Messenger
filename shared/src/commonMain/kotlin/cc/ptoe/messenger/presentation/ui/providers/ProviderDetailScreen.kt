@@ -138,11 +138,13 @@ import cc.ptoe.messenger.di.AppContainerHolder
 fun ProviderDetailScreen(
     providerId: String,
     onBackClick: () -> Unit,
+    onModelClick: (ChatModel) -> Unit = {},
     viewModel: ProviderDetailViewModel = viewModel(
         factory = ProviderDetailViewModel.provideFactory(
             providerRepository = AppContainerHolder.instance.providerRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
             apiRepository = AppContainerHolder.instance.apiRepository,
+            modelsDevRepository = AppContainerHolder.instance.modelsDevRepository,
             providerId = providerId
         )
     )
@@ -312,6 +314,8 @@ fun ProviderDetailScreen(
                                     onClick = {
                                         if (uiState.isMultiSelectMode) {
                                             viewModel.toggleModelSelection(model.id)
+                                        } else {
+                                            onModelClick(model)
                                         }
                                     },
                                     enableContextMenu = enableContextMenu,

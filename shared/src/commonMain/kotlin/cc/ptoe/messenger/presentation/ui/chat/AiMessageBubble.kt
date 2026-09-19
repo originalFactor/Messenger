@@ -51,16 +51,12 @@ import androidx.compose.ui.unit.sp
 import cc.ptoe.llmtypewriter.SpeedCurve
 import cc.ptoe.llmtypewriter.StreamingTypewriter
 import cc.ptoe.llmtypewriter.StreamingTypewriterState
-import cc.ptoe.llmtypewriter.TypewriterPhase
 import cc.ptoe.llmtypewriter.rememberMarkdownTypewriterRenderer
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flow
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_retry
 import cc.ptoe.messenger.generated.resources.chat_send_failed
@@ -75,11 +71,12 @@ fun AiMessageBubble(
     avatar: String? = null,
     onRetryClick: (() -> Unit)? = null,
     /**
-     * The shared typewriter state owned by the chat view model. When non-null
-     * and [message]'s id matches [streamingMessageId], the bubble animates
-     * progressively as the SSE stream feeds tokens into it.
+     * The streamed text owned by the chat view model. When non-null and
+     * [message]'s id matches [streamingMessageId], the bubble renders this
+     * text instantly as the SSE stream feeds tokens into it — no typewriter
+     * animation, every token paints as soon as it arrives.
      */
-    typewriterState: StreamingTypewriterState? = null,
+    streamingContent: String? = null,
     streamingMessageId: String? = null
 ) {
     val isError = message.status == MessageStatus.ERROR
@@ -102,9 +99,11 @@ fun AiMessageBubble(
         bottomEnd = 18.dp
     )
 
-    val isLiveStream = typewriterState != null &&
+    val isLiveStream = streamingContent != null &&
         streamingMessageId != null &&
         message.id == streamingMessageId
+    // 渲染内容：live 流式读 streamingContent（随 SSE token 即时增长），否则读已持久化内容
+    val textForRender = if (isLiveStream) streamingContent.orEmpty() else message.content
 
     Column(
         modifier = modifier
@@ -132,67 +131,31 @@ fun AiMessageBubble(
                         textColor = textColor,
                         onRetryClick = onRetryClick
                     )
-                } else if (message.content.isNotEmpty() || isLiveStream) {
-                    // Live stream OR a non-empty rendered message: use the
-                    // typewriter. The renderer is the markdown one so bold,
-                    // code fences and LaTeX render progressively (and instantly
-                    // for already-completed messages via baseDelayMs = 0).
-                    val state: StreamingTypewriterState
-                    val tokens: Flow<String>
-                    val baseDelayMs: Long
-                    val speedCurve: SpeedCurve
-                    val tapToSkip: Boolean
-                    if (isLiveStream) {
-                        // Drive the shared state from the view model; pass a
-                        // never-completing flow so the composable does not
-                        // call completeSource() and freeze the phase to Done
-                        // before all tokens have arrived.
-                        state = typewriterState
-                        tokens = remember { flow { awaitCancellation() } }
-                        baseDelayMs = 18L
-                        speedCurve = SpeedCurve.Natural
-                        tapToSkip = true
+                } else if (textForRender.isNotEmpty() || isLiveStream) {
+                    // token 即时绘制（无打字机动画）：live 流式内容读 streamingContent，
+                    // 结束后回退到已持久化的 message.content。状态预填充 + skipToEnd +
+                    // baseDelayMs=0 即立即渲染全文，且仅增长的尾部块随 token 重解析。
+                    if (textForRender.isEmpty() && isLiveStream) {
+                        // 尚未收到首个 token：显示三点输入指示
+                        TypingIndicator()
                     } else {
-                        // Static (already-streamed) message: per-message state
-                        // seeded SYNCHRONOUSLY with the persisted content and
-                        // skipped to the end. Seeding in `remember` (rather
-                        // than a LaunchedEffect) avoids a one-frame empty
-                        // render when the bubble switches from the live
-                        // typewriter to the static path — that empty frame is
-                        // the visible flicker on stream completion.
-                        state = remember(message.id, message.content) {
+                        val state = remember(message.id, textForRender) {
                             StreamingTypewriterState().apply {
-                                if (message.content.isNotEmpty()) {
-                                    appendToken(message.content)
+                                if (textForRender.isNotEmpty()) {
+                                    appendToken(textForRender)
                                     completeSource()
                                     skipToEnd()
                                 }
                             }
                         }
-                        tokens = emptyFlow()
-                        baseDelayMs = 0L
-                        speedCurve = SpeedCurve.Linear
-                        tapToSkip = false
-                    }
-                    // Before the live stream reveals its first character, show
-                    // the three-dot typing indicator instead of an empty bubble.
-                    // The check uses `phase` (flipped by appendToken from the
-                    // view model) so the placeholder disappears the moment the
-                    // first token arrives — no need for the typewriter's reveal
-                    // loop to be composing.
-                    val showTypingPlaceholder = isLiveStream &&
-                        state.phase == TypewriterPhase.Idle
-                    if (showTypingPlaceholder) {
-                        TypingIndicator()
-                    } else {
                         val renderer = rememberMarkdownTypewriterRenderer(state)
                         StreamingTypewriter(
-                            tokens = tokens,
+                            tokens = emptyFlow(),
                             state = state,
                             renderer = renderer,
-                            baseDelayMs = baseDelayMs,
-                            speedCurve = speedCurve,
-                            tapToSkip = tapToSkip
+                            baseDelayMs = 0L,
+                            speedCurve = SpeedCurve.Linear,
+                            tapToSkip = false
                         )
                     }
                 } else {

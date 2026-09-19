@@ -19,6 +19,7 @@ package cc.ptoe.messenger.data.repository
 import cc.ptoe.messenger.data.local.dao.ModelDao
 import cc.ptoe.messenger.data.local.entity.ModelEntity
 import cc.ptoe.messenger.domain.model.ChatModel
+import cc.ptoe.messenger.domain.model.ModelModality
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -103,6 +104,12 @@ class ModelRepositoryImpl(
             contextWindow = contextWindow,
             inputRate = inputRate,
             outputRate = outputRate,
+            inputModalities = ModelModality.fromCsv(inputModalities),
+            outputModalities = ModelModality.fromCsv(outputModalities),
+            supportsToolCalling = supportsToolCalling,
+            supportsThinking = supportsThinking,
+            supportsJsonOutput = supportsJsonOutput,
+            supportsTemperature = supportsTemperature,
             createdAt = createdAt
         )
     }
@@ -117,6 +124,12 @@ class ModelRepositoryImpl(
             contextWindow = contextWindow,
             inputRate = inputRate,
             outputRate = outputRate,
+            inputModalities = ModelModality.toCsv(inputModalities),
+            outputModalities = ModelModality.toCsv(outputModalities),
+            supportsToolCalling = supportsToolCalling,
+            supportsThinking = supportsThinking,
+            supportsJsonOutput = supportsJsonOutput,
+            supportsTemperature = supportsTemperature,
             createdAt = createdAt
         )
     }

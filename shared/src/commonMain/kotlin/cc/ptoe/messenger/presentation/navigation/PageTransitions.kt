@@ -28,7 +28,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.navigation.NavBackStackEntry
 
-private const val TRANSITION_DURATION_MS = 350
+private const val TRANSITION_DURATION_MS = 240
 
 /**
  * 页面相对位置（值越大越“靠后”）。切换页面时比较两个路由的顺序：

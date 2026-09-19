@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.Button
@@ -74,9 +75,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
-import cc.ptoe.messenger.domain.model.ChatModel
-import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
@@ -109,11 +109,7 @@ import cc.ptoe.messenger.generated.resources.agent_edit_get_update_title
 import cc.ptoe.messenger.generated.resources.agent_edit_market_section
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_label
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_placeholder
-import cc.ptoe.messenger.generated.resources.agent_edit_model_label
 import cc.ptoe.messenger.generated.resources.agent_edit_name_label
-import cc.ptoe.messenger.generated.resources.agent_edit_no_model
-import cc.ptoe.messenger.generated.resources.agent_edit_no_provider
-import cc.ptoe.messenger.generated.resources.agent_edit_provider_label
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_confirm
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_desc
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_failed
@@ -130,7 +126,6 @@ import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_label
 import cc.ptoe.messenger.generated.resources.agent_edit_remove_avatar
 import cc.ptoe.messenger.generated.resources.agent_edit_select_model
 import cc.ptoe.messenger.generated.resources.agent_edit_select_provider
-import cc.ptoe.messenger.generated.resources.agent_edit_select_provider_first
 import cc.ptoe.messenger.generated.resources.agent_edit_system_prompt_label
 import cc.ptoe.messenger.generated.resources.agent_edit_system_prompt_placeholder
 import cc.ptoe.messenger.generated.resources.agent_edit_temperature_label
@@ -144,6 +139,7 @@ import cc.ptoe.messenger.generated.resources.agent_edit_unpublish_title
 import cc.ptoe.messenger.generated.resources.agent_edit_unpublished_success
 import cc.ptoe.messenger.generated.resources.agent_edit_update_failed
 import cc.ptoe.messenger.generated.resources.agent_edit_updated_success
+import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
@@ -153,6 +149,9 @@ fun AgentEditScreen(
     agentId: String? = null,
     onBackClick: () -> Unit,
     onSaved: () -> Unit,
+    onPickProvider: (String?) -> Unit = {},
+    pickedModelId: String? = null,
+    onPickedModelConsumed: () -> Unit = {},
     viewModel: AgentEditViewModel = viewModel(
         factory = AgentEditViewModel.provideFactory(
             agentRepository = AppContainerHolder.instance.agentRepository,
@@ -210,6 +209,15 @@ fun AgentEditScreen(
     LaunchedEffect(uiState.isSaved) {
         if (uiState.isSaved) {
             onSaved()
+        }
+    }
+
+    LaunchedEffect(pickedModelId) {
+        val modelId = pickedModelId
+        if (modelId != null) {
+            // 原子应用：ViewModel 按模型反查所属 Provider 并一次更新，避免清空再设置的中间态
+            viewModel.onModelPicked(modelId)
+            onPickedModelConsumed()
         }
     }
 
@@ -370,17 +378,20 @@ fun AgentEditScreen(
                 }
                 val modelSectionEnabled = !showFollowToggles || !uiState.followDefaultModel
                 if (modelSectionEnabled) {
-                    ProviderDropdown(
-                        providers = providers,
-                        selectedProviderId = uiState.selectedProviderId,
-                        onProviderChange = { viewModel.onProviderChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    ModelDropdown(
-                        models = models,
-                        selectedModelId = uiState.defaultModelId,
-                        enabled = uiState.selectedProviderId != null,
-                        onModelChange = { viewModel.onDefaultModelChange(it) }
+                    // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
+                    val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
+                    val selectedModel = models.find { it.id == uiState.defaultModelId }
+                    val subtitle = when {
+                        selectedModel != null && selectedProvider != null ->
+                            "${selectedProvider.name} · ${selectedModel.modelId}"
+                        selectedProvider != null -> selectedProvider.name
+                        else -> stringResource(Res.string.agent_edit_select_provider)
+                    }
+                    ListItem(
+                        title = stringResource(Res.string.provider_model_picker_label),
+                        subtitle = subtitle,
+                        icon = Icons.Default.SmartToy,
+                        onClick = { onPickProvider(uiState.selectedProviderId) }
                     )
                 } else {
                     // 跟随默认 Agent：只读展示默认 Agent 的模型信息
@@ -654,133 +665,6 @@ private fun FollowedValueBox(
         label = { Text(label) },
         modifier = modifier.fillMaxWidth()
     )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ProviderDropdown(
-    providers: List<Provider>,
-    selectedProviderId: String?,
-    onProviderChange: (String?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedProvider = providers.find { it.id == selectedProviderId }
-    val displayText = selectedProvider?.name ?: stringResource(Res.string.agent_edit_select_provider)
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it }
-    ) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = { },
-            readOnly = true,
-            label = { Text(stringResource(Res.string.agent_edit_provider_label)) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-            modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
-                .fillMaxWidth()
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            if (providers.isEmpty()) {
-                Text(
-                    text = stringResource(Res.string.agent_edit_no_provider),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp)
-                )
-            } else {
-                providers.forEach { provider ->
-                    DropdownMenuItem(
-                        text = { Text(provider.name) },
-                        onClick = {
-                            onProviderChange(provider.id)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModelDropdown(
-    models: List<ChatModel>,
-    selectedModelId: String?,
-    enabled: Boolean,
-    onModelChange: (String?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedModel = models.find { it.id == selectedModelId }
-    val displayText = selectedModel?.displayName
-        ?: if (enabled) stringResource(Res.string.agent_edit_select_model) else stringResource(Res.string.agent_edit_select_provider_first)
-
-    ExposedDropdownMenuBox(
-        expanded = expanded && enabled,
-        onExpandedChange = { newExpanded ->
-            if (enabled) expanded = newExpanded
-        }
-    ) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = { },
-            readOnly = true,
-            enabled = enabled,
-            label = { Text(stringResource(Res.string.agent_edit_model_label)) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-            modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
-                .fillMaxWidth()
-        )
-        ExposedDropdownMenu(
-            expanded = expanded && enabled,
-            onDismissRequest = { expanded = false }
-        ) {
-            if (models.isEmpty()) {
-                Text(
-                    text = stringResource(Res.string.agent_edit_no_model),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp)
-                )
-            } else {
-                models.forEach { model ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = model.displayName,
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                if (model.displayName != model.modelId) {
-                                    Text(
-                                        text = model.modelId,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        },
-                        onClick = {
-                            onModelChange(model.id)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
 }
 
 private val reasoningEffortOptions = listOf(

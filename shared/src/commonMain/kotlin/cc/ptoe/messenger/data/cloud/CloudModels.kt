@@ -146,6 +146,13 @@ data class CloudModelDocument(
     /** 输入/输出倍率，0 = 免费；缺失 = 未知。旧服务端文档不含该键。 */
     val inputRate: Double? = null,
     val outputRate: Double? = null,
+    /** 输入/输出模态（逗号分隔的模态 code），默认仅文本。旧服务端文档不含这些键。 */
+    val inputModalities: String = "text",
+    val outputModalities: String = "text",
+    val supportsToolCalling: Boolean = false,
+    val supportsThinking: Boolean = false,
+    val supportsJsonOutput: Boolean = false,
+    val supportsTemperature: Boolean = false,
     val createdAt: Long = 0
 )
 

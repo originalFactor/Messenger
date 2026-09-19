@@ -23,8 +23,10 @@ import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.model.applyModelsDev
 import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -65,6 +67,7 @@ class ProviderDetailViewModel(
     private val providerRepository: ProviderRepository,
     private val modelRepository: ModelRepository,
     private val apiRepository: ApiRepository,
+    private val modelsDevRepository: ModelsDevRepository,
     providerId: String
 ) : ViewModel() {
 
@@ -206,7 +209,7 @@ class ProviderDetailViewModel(
                     displayName = displayName.ifBlank { modelId },
                     isEnabled = true,
                     createdAt = System.currentTimeMillis()
-                )
+                ).applyModelsDev(runCatching { modelsDevRepository.getMetadata(modelId) }.getOrNull())
                 modelRepository.insert(newModel)
             }
         }
@@ -282,6 +285,7 @@ class ProviderDetailViewModel(
             providerRepository: ProviderRepository,
             modelRepository: ModelRepository,
             apiRepository: ApiRepository,
+            modelsDevRepository: ModelsDevRepository,
             providerId: String
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -290,6 +294,7 @@ class ProviderDetailViewModel(
                     providerRepository,
                     modelRepository,
                     apiRepository,
+                    modelsDevRepository,
                     providerId
                 ) as T
             }

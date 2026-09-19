@@ -39,6 +39,10 @@ sealed class Screen(val route: String) {
         fun createRoute(providerId: String) = "provider_detail/$providerId"
     }
 
+    data object ModelDetail : Screen("model_detail/{modelId}") {
+        fun createRoute(modelId: String) = "model_detail/$modelId"
+    }
+
     data object AgentEdit : Screen("agent_edit?agentId={agentId}") {
         fun createRoute(agentId: String? = null) =
             if (agentId != null) "agent_edit?agentId=$agentId" else "agent_edit"
@@ -50,6 +54,16 @@ sealed class Screen(val route: String) {
 
     data object ConversationSettings : Screen("conversation_settings/{conversationId}") {
         fun createRoute(conversationId: String) = "conversation_settings/$conversationId"
+    }
+
+    data object ProviderPicker : Screen("provider_picker?selectedProviderId={selectedProviderId}") {
+        fun createRoute(selectedProviderId: String? = null) =
+            if (selectedProviderId != null) "provider_picker?selectedProviderId=$selectedProviderId" else "provider_picker"
+    }
+
+    data object ModelPicker : Screen("model_picker/{providerId}?selectedModelId={selectedModelId}") {
+        fun createRoute(providerId: String, selectedModelId: String? = null) =
+            if (selectedModelId != null) "model_picker/$providerId?selectedModelId=$selectedModelId" else "model_picker/$providerId"
     }
 
     data object Licenses : Screen("licenses")

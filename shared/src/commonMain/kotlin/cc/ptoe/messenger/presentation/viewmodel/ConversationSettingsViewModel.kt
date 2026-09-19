@@ -35,9 +35,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -80,9 +82,11 @@ class ConversationSettingsViewModel(
         )
 
     val modelsForSelectedProvider: StateFlow<List<ChatModel>> = _uiState
-        .flatMapLatest { state ->
-            state.selectedProviderId?.let { providerId ->
-                modelRepository.getEnabledByProviderId(providerId)
+        .map { it.selectedProviderId }
+        .distinctUntilChanged()
+        .flatMapLatest { providerId ->
+            providerId?.let { pid ->
+                modelRepository.getEnabledByProviderId(pid)
             } ?: flowOf(emptyList())
         }
         .stateIn(
@@ -156,6 +160,20 @@ class ConversationSettingsViewModel(
 
     fun onModelChange(modelId: String?) {
         _uiState.value = _uiState.value.copy(overrideModelId = modelId)
+    }
+
+    /**
+     * 模型选择页回传结果：按模型反查所属 Provider，并一次性原子更新
+     * provider + model，避免"先清空模型再设置"的中间态与竞态。
+     */
+    fun onModelPicked(modelId: String) {
+        viewModelScope.launch {
+            val model = modelRepository.getById(modelId).first() ?: return@launch
+            _uiState.value = _uiState.value.copy(
+                selectedProviderId = model.providerId,
+                overrideModelId = model.id
+            )
+        }
     }
 
     fun onOverrideModelChange(override: Boolean) {

@@ -18,6 +18,8 @@ package cc.ptoe.messenger.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.SQLiteConnection
 import cc.ptoe.messenger.data.local.dao.AgentDao
 import cc.ptoe.messenger.data.local.dao.ConversationDao
 import cc.ptoe.messenger.data.local.dao.MessageDao
@@ -37,7 +39,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -46,4 +48,33 @@ abstract class MessengerDatabase : RoomDatabase() {
     abstract fun agentDao(): AgentDao
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+
+    companion object {
+        /**
+         * v14：models 表新增模型能力字段（输入/输出模态、工具调用、思考、JSON 输出、temperature 支持）。
+         * 新增列须带默认值以满足 SQLite 对已有行的 NOT NULL 约束。
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN inputModalities TEXT NOT NULL DEFAULT 'text'"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN outputModalities TEXT NOT NULL DEFAULT 'text'"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN supportsToolCalling INTEGER NOT NULL DEFAULT 0"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN supportsThinking INTEGER NOT NULL DEFAULT 0"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN supportsJsonOutput INTEGER NOT NULL DEFAULT 0"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE models ADD COLUMN supportsTemperature INTEGER NOT NULL DEFAULT 0"
+                ).step()
+            }
+        }
+    }
 }

@@ -16,6 +16,11 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -157,6 +162,9 @@ import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.presentation.platform.BackHandler
+
+/** 与导航切换一致的过渡时长（见 PageTransitions.kt）。 */
+private const val TRANSITION_DURATION_MS = 350
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -557,7 +565,13 @@ fun CloudSettingsScreen(
         }
 
         // 实例地址子页：覆盖层 + 预测性返回（划出露出底层主页面）。
-        if (showServerPage) {
+        // 进入时从右侧滑入并渐显（与导航 push 的视觉方向一致）；退出动画
+        // 交给预测性返回手势驱动，避免与 AnimatedVisibility 退场动画叠加闪烁。
+        AnimatedVisibility(
+            visible = showServerPage,
+            enter = slideInHorizontally(tween(TRANSITION_DURATION_MS)) { it } + fadeIn(tween(TRANSITION_DURATION_MS)),
+            exit = ExitTransition.None
+        ) {
             BackHandler(enabled = true, onBack = { showServerPage = false }) {
                 CloudServerScreen(
                     onBackClick = { showServerPage = false },

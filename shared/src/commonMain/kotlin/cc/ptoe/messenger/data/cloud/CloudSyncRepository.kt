@@ -1495,6 +1495,12 @@ private fun ProviderEntity.toCloudRequest(models: List<ModelEntity>) = CloudProv
             contextWindow = it.contextWindow,
             inputRate = it.inputRate,
             outputRate = it.outputRate,
+            inputModalities = it.inputModalities,
+            outputModalities = it.outputModalities,
+            supportsToolCalling = it.supportsToolCalling,
+            supportsThinking = it.supportsThinking,
+            supportsJsonOutput = it.supportsJsonOutput,
+            supportsTemperature = it.supportsTemperature,
             createdAt = it.createdAt
         )
     },
@@ -1592,6 +1598,12 @@ private fun CloudModelDocument.toEntity(providerId: String) =
         contextWindow = contextWindow,
         inputRate = inputRate,
         outputRate = outputRate,
+        inputModalities = inputModalities,
+        outputModalities = outputModalities,
+        supportsToolCalling = supportsToolCalling,
+        supportsThinking = supportsThinking,
+        supportsJsonOutput = supportsJsonOutput,
+        supportsTemperature = supportsTemperature,
         createdAt = createdAt
     )
 

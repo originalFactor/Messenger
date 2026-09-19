@@ -184,6 +184,11 @@
     <string name="conversation_settings_select_provider">Select a Provider</string>
     <string name="conversation_settings_select_provider_first">Select a Provider first</string>
     <string name="conversation_settings_select_model">Select a model</string>
+    <string name="conversation_settings_pick_provider_title">Select Provider</string>
+    <string name="conversation_settings_pick_model_title">Select Model</string>
+    <string name="conversation_settings_search">Search</string>
+    <string name="conversation_settings_search_empty">No matching items</string>
+    <string name="provider_model_picker_label">Provider / Model</string>
 
     <!-- Providers -->
     <string name="providers_title">Model Providers</string>
@@ -223,6 +228,20 @@
     <string name="providers_select_models_title">Select models to save</string>
     <string name="providers_view_models">View models</string>
     <string name="providers_select_to_view">Select a Provider to view</string>
+    <string name="providers_model_detail_title">Model details</string>
+    <string name="providers_model_context_window_label">Context window (tokens)</string>
+    <string name="providers_model_context_window_hint">Unknown / unlimited</string>
+    <string name="providers_model_capabilities">Capabilities</string>
+    <string name="providers_model_input_modalities">Input modalities</string>
+    <string name="providers_model_output_modalities">Output modalities</string>
+    <string name="providers_model_supports_tool_calling">Tool calling</string>
+    <string name="providers_model_supports_thinking">Thinking</string>
+    <string name="providers_model_supports_json_output">JSON output</string>
+    <string name="providers_model_supports_temperature">Temperature support</string>
+    <string name="modality_text">Text</string>
+    <string name="modality_image">Image</string>
+    <string name="modality_audio">Audio</string>
+    <string name="modality_video">Video</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>

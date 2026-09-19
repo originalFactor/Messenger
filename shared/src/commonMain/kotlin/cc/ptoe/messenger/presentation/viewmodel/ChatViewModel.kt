@@ -16,7 +16,6 @@
 
 package cc.ptoe.messenger.presentation.viewmodel
 
-import androidx.compose.runtime.snapshotFlow
 import cc.ptoe.messenger.presentation.platform.PickedImage
 import cc.ptoe.messenger.presentation.platform.copyTextToClipboard
 import androidx.lifecycle.ViewModel
@@ -24,8 +23,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
-import cc.ptoe.llmtypewriter.StreamingTypewriterState
-import cc.ptoe.llmtypewriter.TypewriterPhase
 import cc.ptoe.messenger.data.local.ChatImageStore
 import cc.ptoe.messenger.data.remote.dto.UsageDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
@@ -152,15 +149,16 @@ class ChatViewModel(
     val isAttachingImage: StateFlow<Boolean> = _isAttachingImage.asStateFlow()
 
     /**
-     * The shared typewriter state driving the currently-streaming AI message bubble.
-     * Fed externally from SSE events in [generateResponse] / [retrySend]. Each
-     * new stream calls [StreamingTypewriterState.reset] before tokens start flowing.
+     * 正在流式的 AI 消息当前已收到的全部文本（token 即时绘制，无打字机动画）。
+     * 由 [generateResponse] / [retrySend] 的 SSE Content 事件逐 token 更新；
+     * 流式结束/停止后置 null，气泡退回渲染已持久化的 [Message.content]。
      */
-    val typewriterState: StreamingTypewriterState = StreamingTypewriterState()
+    private val _streamingContent = MutableStateFlow<String?>(null)
+    val streamingContent: StateFlow<String?> = _streamingContent.asStateFlow()
 
     /**
      * The id of the AI message that is currently being streamed. The chat bubble
-     * whose message id matches this value binds to [typewriterState] for live
+     * whose message id matches this value binds to [streamingContent] for live
      * rendering; other bubbles render their [Message.content] statically.
      */
     private val _streamingMessageId = MutableStateFlow<String?>(null)
@@ -553,9 +551,7 @@ class ChatViewModel(
         )
         messageRepository.insert(aiMessage)
 
-        // Bind the shared typewriter state to this message and reset the buffer
-        // so the new stream starts from a clean slate.
-        typewriterState.reset()
+        // Bind the live streamed content to this message before tokens arrive.
         _streamingMessageId.value = aiMessageId
         _isGenerating.value = true
 
@@ -600,7 +596,7 @@ class ChatViewModel(
                             }
                             is ChatStreamEvent.Content -> {
                                 currentContent += event.text
-                                typewriterState.appendToken(event.text)
+                                _streamingContent.value = currentContent
                             }
                             is ChatStreamEvent.Done -> {
                                 hasFinished = true
@@ -611,36 +607,35 @@ class ChatViewModel(
                                     }
                                 }
                                 updateContextTokens(conversationId, sentContextEstimate, currentContent, event.usage)
-                                typewriterState.completeSource()
                                 saveStreamResult(aiMessage, currentContent, conversationId, null)
-                                awaitTypewriterDone()
                                 if (currentContent.isNotBlank()) {
                                     awaitMessagePersisted(aiMessageId, currentContent)
                                 }
+                                _streamingContent.value = null
                                 _streamingMessageId.value = null
                                 _isGenerating.value = false
                             }
                             is ChatStreamEvent.Error -> {
                                 hasFinished = true
-                                typewriterState.stop()
                                 saveStreamResult(aiMessage, currentContent, conversationId, event.message)
                                 setError(event.message)
                                 if (currentContent.isNotBlank()) {
                                     awaitMessagePersisted(aiMessageId, currentContent)
                                 }
+                                _streamingContent.value = null
                                 _streamingMessageId.value = null
                                 _isGenerating.value = false
                             }
                         }
                     }
                 if (!hasFinished) {
-                    typewriterState.stop()
                     val errorMsg = getString(Res.string.error_api_no_valid_response)
                     saveStreamResult(aiMessage, currentContent, conversationId, errorMsg)
                     setError(errorMsg)
                     if (currentContent.isNotBlank()) {
                         awaitMessagePersisted(aiMessageId, currentContent)
                     }
+                    _streamingContent.value = null
                     _streamingMessageId.value = null
                     _isGenerating.value = false
                 }
@@ -649,13 +644,13 @@ class ChatViewModel(
                 if (hasFinished) {
                     return@launch
                 }
-                typewriterState.stop()
                 val errorMsg = e.message ?: getString(Res.string.error_unknown)
                 saveStreamResult(aiMessage, currentContent, conversationId, errorMsg)
                 setError(errorMsg)
                 if (currentContent.isNotBlank()) {
                     awaitMessagePersisted(aiMessageId, currentContent)
                 }
+                _streamingContent.value = null
                 _streamingMessageId.value = null
                 _isGenerating.value = false
             }
@@ -663,30 +658,11 @@ class ChatViewModel(
     }
 
     /**
-     * Waits for the shared typewriter to finish revealing its buffer (phase == Done)
-     * before the host unbinds [streamingMessageId] — otherwise the bubble jumps from
-     * partially-revealed text to the full static content (visible flicker). Bounded by
-     * a timeout in case the bubble is no longer composing (reveal loop cancelled) or
-     * the buffer is too large to flush in a reasonable window.
-     */
-    private suspend fun awaitTypewriterDone(timeoutMs: Long = 3000L) {
-        val flushed = withTimeoutOrNull(timeoutMs) {
-            snapshotFlow { typewriterState.phase }
-                .first { it == TypewriterPhase.Done || it == TypewriterPhase.Stopped }
-        }
-        if (flushed == null) {
-            // Reveal loop isn't running (bubble disposed) or buffer too large —
-            // force-flush so the subsequent static render matches the live view.
-            typewriterState.skipToEnd()
-        }
-    }
-
-    /**
      * Waits for [messages] to reflect the final persisted [content] for [messageId]
      * before the host unbinds [streamingMessageId]. Without this, the bubble switches
-     * from the live typewriter (which holds the streamed content in memory) to the
-     * static path while [Message.content] is still the stale empty value from the
-     * initial insert — the static path's `remember(message.id, message.content)`
+     * from the live [streamingContent] (which holds the streamed content in memory)
+     * to the static path while [Message.content] is still the stale empty value from
+     * the initial insert — the static path's `remember(message.id, message.content)`
      * then seeds an empty state, causing a one-frame empty render (visible flicker)
      * before the Room Flow re-emits with the persisted content. Bounded by a timeout
      * so a missing emission (e.g. [saveStreamResult] no-op on blank content) does
@@ -710,10 +686,8 @@ class ChatViewModel(
         _isGenerating.value = false
 
         viewModelScope.launch {
-            // Flush any pending typewriter buffer so the partial content is
-            // visible after the bubble switches to static rendering.
-            typewriterState.skipToEnd()
-            typewriterState.stop()
+            // 停止即时流式绘制：清空 streamingContent，气泡回退渲染持久化内容。
+            _streamingContent.value = null
             _streamingMessageId.value = null
 
             // Read from DB (not messages.value) so we observe the very latest
@@ -767,7 +741,7 @@ class ChatViewModel(
 
             val (provider, model) = result
 
-            typewriterState.reset()
+            // Bind the live streamed content to this message before tokens arrive.
             _streamingMessageId.value = messageId
             _isGenerating.value = true
 
@@ -811,7 +785,7 @@ class ChatViewModel(
                             }
                             is ChatStreamEvent.Content -> {
                                 currentContent += event.text
-                                typewriterState.appendToken(event.text)
+                                _streamingContent.value = currentContent
                             }
                             is ChatStreamEvent.Done -> {
                                 hasFinished = true
@@ -822,36 +796,35 @@ class ChatViewModel(
                                     }
                                 }
                                 updateContextTokens(message.conversationId, sentContextEstimate, currentContent, event.usage)
-                                typewriterState.completeSource()
                                 saveStreamResult(message, currentContent, message.conversationId, null)
-                                awaitTypewriterDone()
                                 if (currentContent.isNotBlank()) {
                                     awaitMessagePersisted(messageId, currentContent)
                                 }
+                                _streamingContent.value = null
                                 _streamingMessageId.value = null
                                 _isGenerating.value = false
                             }
                             is ChatStreamEvent.Error -> {
                                 hasFinished = true
-                                typewriterState.stop()
                                 saveStreamResult(message, currentContent, message.conversationId, event.message)
                                 setError(event.message)
                                 if (currentContent.isNotBlank()) {
                                     awaitMessagePersisted(messageId, currentContent)
                                 }
+                                _streamingContent.value = null
                                 _streamingMessageId.value = null
                                 _isGenerating.value = false
                             }
                         }
                     }
                     if (!hasFinished) {
-                        typewriterState.stop()
                         val errorMsg = getString(Res.string.error_api_no_valid_response)
                         saveStreamResult(message, currentContent, message.conversationId, errorMsg)
                         setError(errorMsg)
                         if (currentContent.isNotBlank()) {
                             awaitMessagePersisted(messageId, currentContent)
                         }
+                        _streamingContent.value = null
                         _streamingMessageId.value = null
                         _isGenerating.value = false
                     }
@@ -860,13 +833,13 @@ class ChatViewModel(
                     if (hasFinished) {
                         return@launch
                     }
-                    typewriterState.stop()
                     val errorMsg = e.message ?: getString(Res.string.error_unknown)
                     saveStreamResult(message, currentContent, message.conversationId, errorMsg)
                     setError(errorMsg)
                     if (currentContent.isNotBlank()) {
                         awaitMessagePersisted(messageId, currentContent)
                     }
+                    _streamingContent.value = null
                     _streamingMessageId.value = null
                     _isGenerating.value = false
                 }

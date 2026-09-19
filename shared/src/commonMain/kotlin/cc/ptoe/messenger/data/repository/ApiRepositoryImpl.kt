@@ -28,7 +28,9 @@ import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.model.applyModelsDev
 import cc.ptoe.messenger.domain.repository.ApiRepository
+import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.presentation.utils.extractThinkContent
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.statement.bodyAsText
@@ -44,13 +46,23 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-class ApiRepositoryImpl : ApiRepository {
+class ApiRepositoryImpl(
+    private val modelsDevRepository: ModelsDevRepository? = null
+) : ApiRepository {
 
     private fun openAiClient(provider: Provider) = OpenAiClient(provider.baseUrl, provider.apiKey)
 
     override suspend fun fetchModels(provider: Provider): List<ChatModel> {
         return try {
             val response = openAiClient(provider).getModels()
+            // 批量查询 models.dev 元数据，用于默认填充缺失的 context window/能力字段
+            val metadataByModelId = buildMap {
+                for (dto in response.data) {
+                    if (dto.id !in this) {
+                        this[dto.id] = runCatching { modelsDevRepository?.getMetadata(dto.id) }.getOrNull()
+                    }
+                }
+            }
             response.data.map { modelDto ->
                 ChatModel(
                     id = randomUuid(),
@@ -62,7 +74,7 @@ class ApiRepositoryImpl : ApiRepository {
                     inputRate = modelDto.inputRate,
                     outputRate = modelDto.outputRate,
                     createdAt = System.currentTimeMillis()
-                )
+                ).applyModelsDev(metadataByModelId[modelDto.id])
             }
         } catch (e: ResponseException) {
             throw ApiException(extractHttpErrorMessage(e), e)

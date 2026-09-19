@@ -27,5 +27,16 @@ data class ChatModel(
     /** 输入/输出倍率。null = 未知（服务商未提供元数据），0 = 免费。 */
     val inputRate: Double? = null,
     val outputRate: Double? = null,
+    /** 输入/输出模态。默认仅文本。 */
+    val inputModalities: Set<ModelModality> = setOf(ModelModality.TEXT),
+    val outputModalities: Set<ModelModality> = setOf(ModelModality.TEXT),
+    /** 是否支持工具调用（Function Calling / Tools）。 */
+    val supportsToolCalling: Boolean = false,
+    /** 是否支持思考/推理。 */
+    val supportsThinking: Boolean = false,
+    /** 是否支持 JSON 输出（Structured Output）。 */
+    val supportsJsonOutput: Boolean = false,
+    /** 是否支持 temperature 采样参数。默认不支持。 */
+    val supportsTemperature: Boolean = false,
     val createdAt: Long
 )

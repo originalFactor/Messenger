@@ -32,6 +32,7 @@ import cc.ptoe.messenger.data.repository.ConversationRepositoryImpl
 import cc.ptoe.messenger.data.repository.CurrentAgentRepositoryImpl
 import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
 import cc.ptoe.messenger.data.repository.ModelRepositoryImpl
+import cc.ptoe.messenger.data.repository.ModelsDevRepositoryImpl
 import cc.ptoe.messenger.data.repository.ProviderRepositoryImpl
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.randomUuid
@@ -43,6 +44,7 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +84,7 @@ class AppContainer(
     val database: MessengerDatabase = databaseBuilder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.IO)
+        .addMigrations(MessengerDatabase.MIGRATION_13_14)
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
 
@@ -137,7 +140,10 @@ class AppContainer(
             cloudSyncRepository.requestLocalChange("conversation", conversationId)
         }
 
-    val apiRepository: ApiRepository = ApiRepositoryImpl()
+    val modelsDevRepository: ModelsDevRepository =
+        ModelsDevRepositoryImpl(appDirs.filesDir)
+
+    val apiRepository: ApiRepository = ApiRepositoryImpl(modelsDevRepository)
 
     val currentAgentRepository: CurrentAgentRepository =
         CurrentAgentRepositoryImpl(appPreferences, agentRepository)
