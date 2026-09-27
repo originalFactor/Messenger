@@ -119,7 +119,8 @@ fun ChatScreen(
             apiRepository = AppContainerHolder.instance.apiRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
             providerRepository = AppContainerHolder.instance.providerRepository,
-            chatImageStore = AppContainerHolder.instance.chatImageStore
+            chatImageStore = AppContainerHolder.instance.chatImageStore,
+            conversationTitleGenerator = AppContainerHolder.instance.conversationTitleGenerator
         )
     )
 ) {

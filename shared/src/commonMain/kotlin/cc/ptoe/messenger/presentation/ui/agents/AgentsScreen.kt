@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.CursorDropdownMenu
@@ -90,6 +91,7 @@ import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.action_edit
 import cc.ptoe.messenger.generated.resources.action_more
 import cc.ptoe.messenger.generated.resources.agents_close_menu
+import cc.ptoe.messenger.generated.resources.agents_builtin_badge
 import cc.ptoe.messenger.generated.resources.agents_default_badge
 import cc.ptoe.messenger.generated.resources.agents_delete_batch_confirm
 import cc.ptoe.messenger.generated.resources.agents_delete_confirm
@@ -223,29 +225,38 @@ fun AgentsScreen(
                             .widthIn(max = 720.dp)
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
+                        val isBuiltin = item.agent.role == Agent.ROLE_TITLE
                         AgentListItem(
                             item = item,
                             isMultiSelectMode = uiState.isMultiSelectMode,
                             isMultiSelected = item.agent.id in uiState.selectedAgentIds,
                             enableContextMenu = enableContextMenu,
+                            isBuiltin = isBuiltin,
                             onClick = {
                                 if (uiState.isMultiSelectMode) {
-                                    if (!item.agent.isDefault) {
+                                    if (!item.agent.isDefault && !isBuiltin) {
                                         viewModel.toggleSelection(item.agent.id)
                                     }
+                                } else if (isBuiltin) {
+                                    // 内置标题智能体不可选为聊天对象，点击直接进入编辑。
+                                    onEditClick(item.agent.id)
                                 } else {
                                     onAgentClick(item.agent.id)
                                 }
                             },
-                            onLongClick = { viewModel.enterMultiSelectMode(item.agent.id) },
+                            onLongClick = {
+                                if (!isBuiltin) {
+                                    viewModel.enterMultiSelectMode(item.agent.id)
+                                }
+                            },
                             onEditClick = { onEditClick(item.agent.id) },
                             onCloneClick = { viewModel.cloneAgent(item.agent.id) },
                             onDeleteClick = {
-                                if (!item.agent.isDefault) {
+                                if (!item.agent.isDefault && !isBuiltin) {
                                     showDeleteDialog = item.agent.id
                                 }
                             },
-                            canDelete = !item.agent.isDefault
+                            canDelete = !item.agent.isDefault && !isBuiltin
                         )
                     }
                     }
@@ -300,7 +311,8 @@ private fun AgentListItem(
     modifier: Modifier = Modifier,
     isMultiSelectMode: Boolean = false,
     isMultiSelected: Boolean = false,
-    enableContextMenu: Boolean = false
+    enableContextMenu: Boolean = false,
+    isBuiltin: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
@@ -334,7 +346,7 @@ private fun AgentListItem(
             Checkbox(
                 checked = isMultiSelected,
                 onCheckedChange = null,
-                enabled = !item.agent.isDefault,
+                enabled = !item.agent.isDefault && !isBuiltin,
                 modifier = Modifier.padding(end = 8.dp)
             )
         }
@@ -360,6 +372,14 @@ private fun AgentListItem(
                         text = stringResource(Res.string.agents_default_badge),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (isBuiltin) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(Res.string.agents_builtin_badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
                     )
                 }
             }
@@ -395,13 +415,15 @@ private fun AgentListItem(
                             onEditClick()
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(Res.string.action_clone)) },
-                        onClick = {
-                            expanded = false
-                            onCloneClick()
-                        }
-                    )
+                    if (!isBuiltin) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.action_clone)) },
+                            onClick = {
+                                expanded = false
+                                onCloneClick()
+                            }
+                        )
+                    }
                     if (canDelete) {
                         DropdownMenuItem(
                             text = { Text(stringResource(Res.string.action_delete)) },
@@ -427,13 +449,15 @@ private fun AgentListItem(
                         onEditClick()
                     }
                 )
-                DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.action_clone)) },
-                    onClick = {
-                        contextMenuState.hide()
-                        onCloneClick()
-                    }
-                )
+                if (!isBuiltin) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.action_clone)) },
+                        onClick = {
+                            contextMenuState.hide()
+                            onCloneClick()
+                        }
+                    )
+                }
                 if (canDelete) {
                     DropdownMenuItem(
                         text = { Text(stringResource(Res.string.action_delete)) },

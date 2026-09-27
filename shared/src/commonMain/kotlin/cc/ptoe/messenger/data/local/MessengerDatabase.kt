@@ -39,7 +39,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -73,6 +73,18 @@ abstract class MessengerDatabase : RoomDatabase() {
                 ).step()
                 connection.prepare(
                     "ALTER TABLE models ADD COLUMN supportsTemperature INTEGER NOT NULL DEFAULT 0"
+                ).step()
+            }
+        }
+
+        /**
+         * v15：agents 表新增 role 角色列（chat=聊天 / title=标题生成），
+         * 支撑内置标题生成智能体（builtin-title-agent）。
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'chat'"
                 ).step()
             }
         }

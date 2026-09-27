@@ -46,6 +46,7 @@ import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
+import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -84,7 +85,7 @@ class AppContainer(
     val database: MessengerDatabase = databaseBuilder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.IO)
-        .addMigrations(MessengerDatabase.MIGRATION_13_14)
+        .addMigrations(MessengerDatabase.MIGRATION_13_14, MessengerDatabase.MIGRATION_14_15)
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
 
@@ -124,8 +125,15 @@ class AppContainer(
         agentDao = database.agentDao(),
         onChanged = { previous, current ->
             cloudSyncRepository.requestAgentAvatarChange(previous, current)
-            current?.let { cloudSyncRepository.requestLocalChange("agent", it.id) }
-                ?: previous?.let { cloudSyncRepository.requestLocalChange("agent", it.id, deleted = true) }
+            // 内置标题智能体不参与云同步（各设备本地自建）。
+            val builtinInvolved = current?.id == Agent.BUILTIN_TITLE_AGENT_ID ||
+                previous?.id == Agent.BUILTIN_TITLE_AGENT_ID
+            if (!builtinInvolved) {
+                current?.let { cloudSyncRepository.requestLocalChange("agent", it.id) }
+                    ?: previous?.let {
+                        cloudSyncRepository.requestLocalChange("agent", it.id, deleted = true)
+                    }
+            }
         },
         avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
     )
@@ -150,6 +158,17 @@ class AppContainer(
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** 首轮回复完成后的 LLM 会话标题生成（手机聊天流与 Wear 代处理流共用）。 */
+    val conversationTitleGenerator: ConversationTitleGenerator = ConversationTitleGenerator(
+        agentRepository = agentRepository,
+        conversationRepository = conversationRepository,
+        messageRepository = messageRepository,
+        modelRepository = modelRepository,
+        providerRepository = providerRepository,
+        apiRepository = apiRepository,
+        externalScope = applicationScope
+    )
+
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */
     fun initializeLocalAndCloudData() {
         applicationScope.launch {
@@ -160,6 +179,7 @@ class AppContainer(
                     cloudSyncRepository.requestLocalSync()
                 }
             }
+            ensureBuiltinTitleAgent()
             createDefaultAgentIfNeeded()
         }
     }
@@ -178,7 +198,19 @@ class AppContainer(
             appPreferences.clearAll()
             FileKit.deleteRecursively(appDirs.filesDir)
             FileKit.deleteRecursively(appDirs.cacheDir)
+            cloudSyncRepository.ensureBuiltinTitleAgent()
             createDefaultAgentIfNeededLocked()
+        }
+    }
+
+    /**
+     * 内置标题生成智能体的幂等种子（仅缺行时插入，不覆盖用户编辑）。
+     * 委托给 [CloudSyncRepository.ensureBuiltinTitleAgent]（fullSync 补种共用同一实现），
+     * 直接操作 DAO 绕过 repository，天然不触发云同步回调。
+     */
+    suspend fun ensureBuiltinTitleAgent() {
+        localDataMutex.withLock {
+            cloudSyncRepository.ensureBuiltinTitleAgent()
         }
     }
 

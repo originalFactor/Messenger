@@ -64,6 +64,8 @@ class AgentRepositoryImpl(
     }
 
     override suspend fun clone(id: String): Agent? {
+        // 内置标题智能体是功能型实体，不允许克隆
+        if (id == Agent.BUILTIN_TITLE_AGENT_ID) return null
         val source = agentDao.getById(id).first()?.toDomain() ?: return null
         val existingNames = agentDao.getAllEntities().map { it.name }.toSet()
         val now = System.currentTimeMillis()
@@ -96,7 +98,8 @@ class AgentRepositoryImpl(
     }
 
     override suspend fun delete(id: String) {
-        // 默认 Agent 不允许删除
+        // 默认 Agent 不允许删除；内置标题智能体同样不允许删除
+        if (id == Agent.BUILTIN_TITLE_AGENT_ID) return
         val agent = agentDao.getById(id).first()
         if (agent?.isDefault == true) return
         agentDao.delete(id)
@@ -124,6 +127,7 @@ class AgentRepositoryImpl(
             marketAgentId = marketAgentId,
             marketAgentVersion = marketAgentVersion,
             marketAgentRole = marketAgentRole,
+            role = role,
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -150,6 +154,7 @@ class AgentRepositoryImpl(
             marketAgentId = marketAgentId,
             marketAgentVersion = marketAgentVersion,
             marketAgentRole = marketAgentRole,
+            role = role,
             createdAt = createdAt,
             updatedAt = updatedAt
         )

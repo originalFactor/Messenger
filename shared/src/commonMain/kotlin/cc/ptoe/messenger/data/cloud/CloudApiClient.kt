@@ -19,6 +19,7 @@ package cc.ptoe.messenger.data.cloud
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.createPlatformHttpClient
+import cc.ptoe.messenger.domain.model.Agent
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.cookies.CookiesStorage
@@ -83,6 +84,7 @@ internal data class CloudAgentRequest(
     val marketAgentId: String? = null,
     val marketAgentVersion: Long? = null,
     val marketAgentRole: String? = null,
+    val role: String = Agent.ROLE_CHAT,
     val createdAt: Long,
     val updatedAt: Long
 )

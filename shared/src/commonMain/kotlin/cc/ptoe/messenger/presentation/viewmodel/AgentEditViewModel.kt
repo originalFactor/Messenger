@@ -58,6 +58,8 @@ data class AgentEditUiState(
     val maxTokens: String? = null,
     val reasoningEffort: String? = null,
     val isDefault: Boolean = false,
+    /** 内置标题生成等保留智能体：名称锁定、不可删除，且不显示跟随/市场区。 */
+    val isBuiltinTitle: Boolean = false,
     val followDefaultSystemPrompt: Boolean = false,
     val followDefaultModel: Boolean = false,
     val followDefaultTemperature: Boolean = false,
@@ -187,6 +189,7 @@ class AgentEditViewModel(
                     maxTokens = agent.maxTokens?.toString(),
                     reasoningEffort = agent.reasoningEffort,
                     isDefault = agent.isDefault,
+                    isBuiltinTitle = agent.role == Agent.ROLE_TITLE,
                     followDefaultSystemPrompt = agent.followDefaultSystemPrompt,
                     followDefaultModel = agent.followDefaultModel,
                     followDefaultTemperature = agent.followDefaultTemperature,

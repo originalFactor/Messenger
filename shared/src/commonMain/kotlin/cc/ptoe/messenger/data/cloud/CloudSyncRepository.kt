@@ -636,6 +636,7 @@ class CloudSyncRepository(
         if (database.messageDao().count() > 0) return true
 
         val agents = database.agentDao().getAllEntities()
+            .filter { it.id != Agent.BUILTIN_TITLE_AGENT_ID }
         if (agents.any { !it.isDefault || !it.isDefaultAgentBaseline() }) return true
 
         if (appPreferences.userAvatar.first() != null) return true
@@ -715,6 +716,7 @@ class CloudSyncRepository(
         val pending = appPreferences.cloudPendingUpserts(account.id)
         fun shouldPush(type: String, id: String) = !onlyPending || "$type:$id" in pending
         val agents = database.agentDao().getAllEntities()
+            .filter { it.id != Agent.BUILTIN_TITLE_AGENT_ID }
         val providers = database.providerDao().getAllEntities().filter { it.id != BUILTIN_PROVIDER_ID }
         val conversations = database.conversationDao().getAllEntities()
 
@@ -819,8 +821,9 @@ class CloudSyncRepository(
             appPreferences.setCurrentAgentId(null)
         }
         applyDelta(delta)
-        // fullSync 的 replaceLocal 会 deleteAll 连带清掉内置服务商，这里补种。
+        // fullSync 的 replaceLocal 会 deleteAll 连带清掉内置服务商与内置标题智能体，这里补种。
         ensureBuiltinProvider(account)
+        ensureBuiltinTitleAgent()
         val configuredServerUrl = serverUrl.first()
         cacheAgentAvatars(account.id, delta, configuredServerUrl)
         cacheLegacyAgentAvatars(account.id, configuredServerUrl)
@@ -961,6 +964,9 @@ class CloudSyncRepository(
 
     private suspend fun applyDelta(delta: CloudSyncResponse) {
         delta.agents.forEach { remote ->
+            // 内置标题智能体不参与云同步（本地自建，见 Agent.BUILTIN_TITLE_AGENT_ID），
+            // 防止远端墓碑误删本地内置行。
+            if (remote.id == Agent.BUILTIN_TITLE_AGENT_ID) return@forEach
             if (remote.deleted) {
                 database.conversationDao().deleteByAgentId(remote.id)
                 database.agentDao().delete(remote.id)
@@ -1229,6 +1235,40 @@ class CloudSyncRepository(
         database.providerDao().delete(BUILTIN_PROVIDER_ID)
     }
 
+    /**
+     * 内置标题生成智能体的幂等补种（仅缺行时插入，不覆盖用户编辑）。
+     * fullSync 的 replaceLocal 会 deleteAll 连带清掉它，与内置服务商同理在此补种；
+     * 首次安装由 AppContainer 在启动时调用同一逻辑。
+     */
+    suspend fun ensureBuiltinTitleAgent() {
+        val existing = database.agentDao().getById(Agent.BUILTIN_TITLE_AGENT_ID).first()
+        if (existing == null) {
+            val now = System.currentTimeMillis()
+            val builtin = Agent.builtinTitleAgent(now)
+            database.agentDao().insert(
+                AgentEntity(
+                    id = builtin.id,
+                    name = builtin.name,
+                    avatar = builtin.avatar,
+                    systemPrompt = builtin.systemPrompt,
+                    defaultModelId = builtin.defaultModelId,
+                    temperature = builtin.temperature,
+                    topP = builtin.topP,
+                    maxTokens = builtin.maxTokens,
+                    reasoningEffort = builtin.reasoningEffort,
+                    isDefault = builtin.isDefault,
+                    marketAgentId = builtin.marketAgentId,
+                    marketAgentVersion = builtin.marketAgentVersion,
+                    marketAgentRole = builtin.marketAgentRole,
+                    role = builtin.role,
+                    createdAt = builtin.createdAt,
+                    updatedAt = builtin.updatedAt
+                )
+            )
+            logI(TAG, "Seeded built-in title agent")
+        }
+    }
+
     private suspend fun refreshCachedUserAvatar(url: String?, avatarVersion: Long?) {
         val current = user.first() ?: return
         saveUser(current.copy(avatarUrl = url, avatarVersion = avatarVersion))
@@ -1460,6 +1500,7 @@ private fun AgentEntity.toCloudRequest() = CloudAgentRequest(
     marketAgentId = marketAgentId,
     marketAgentVersion = marketAgentVersion,
     marketAgentRole = marketAgentRole,
+    role = role,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1558,6 +1599,8 @@ private fun CloudAgentDocument.toEntity(avatar: String?) = AgentEntity(
     marketAgentId = marketAgentId,
     marketAgentVersion = marketAgentVersion,
     marketAgentRole = marketAgentRole,
+    // 旧版本服务端/客户端可能不带 role，兜底为普通聊天角色
+    role = role?.takeIf { it.isNotBlank() } ?: Agent.ROLE_CHAT,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1582,6 +1625,7 @@ private fun AgentEntity.toDomain() = Agent(
     marketAgentId = marketAgentId,
     marketAgentVersion = marketAgentVersion,
     marketAgentRole = marketAgentRole,
+    role = role,
     createdAt = createdAt,
     updatedAt = updatedAt
 )

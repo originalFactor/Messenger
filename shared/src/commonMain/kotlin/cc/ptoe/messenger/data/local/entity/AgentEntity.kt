@@ -18,6 +18,7 @@ package cc.ptoe.messenger.data.local.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import cc.ptoe.messenger.domain.model.Agent
 
 @Entity(tableName = "agents")
 data class AgentEntity(
@@ -40,6 +41,7 @@ data class AgentEntity(
     val marketAgentId: String? = null,
     val marketAgentVersion: Long? = null,
     val marketAgentRole: String? = null,
+    val role: String = Agent.ROLE_CHAT,
     val createdAt: Long,
     val updatedAt: Long
 )

@@ -309,6 +309,8 @@ class MobileHttpServer : Service() {
 
     private suspend fun handleSyncRequest(): JSONObject {
         val agents = app.agentRepository.getAll().first()
+            // 内置标题智能体是功能型实体，手表端不可见也不可选为聊天对象。
+            .filter { it.role != Agent.ROLE_TITLE }
             .sortedWith(compareByDescending<Agent> { it.isDefault }.thenBy { it.name.lowercase() })
         val conversations = app.conversationRepository.getAll().first()
             .sortedByDescending { it.updatedAt }

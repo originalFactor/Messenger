@@ -58,6 +58,7 @@
     <string name="agents_delete_confirm">Are you sure you want to delete this Agent?</string>
     <string name="agents_delete_batch_confirm">Are you sure you want to delete these %1$d Agents? The default Agent will not be deleted.</string>
     <string name="agents_default_badge">Default</string>
+    <string name="agents_builtin_badge">Built-in</string>
     <string name="agents_no_system_prompt">No system prompt</string>
     <string name="agents_model_label">Model: %1$s</string>
     <string name="agents_model_default">Default</string>

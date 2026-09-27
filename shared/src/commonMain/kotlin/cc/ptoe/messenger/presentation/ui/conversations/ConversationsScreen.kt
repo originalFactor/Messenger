@@ -123,6 +123,8 @@ fun ConversationsScreen(
     val showAllAgents by viewModel.showAllAgents.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy(Agent::id) }
+    // 可选为聊天对象的 Agent：内置标题生成等功能型角色不出现在选择器中。
+    val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
 
     var showAgentDropdown by remember { mutableStateOf(false) }
     var renameConversationId by remember { mutableStateOf<String?>(null) }
@@ -192,7 +194,7 @@ fun ConversationsScreen(
                                             showAgentDropdown = false
                                         }
                                     )
-                                    allAgents.forEach { agent ->
+                                    selectableAgents.forEach { agent ->
                                         DropdownMenuItem(
                                             text = { Text(text = agent.name) },
                                             onClick = {
@@ -326,8 +328,8 @@ fun ConversationsScreen(
             if (showAgentPicker) {
                 SingleChoiceDialog(
                     title = stringResource(Res.string.conversations_select_agent_title),
-                    items = allAgents,
-                    initialSelectedId = currentAgent?.id ?: allAgents.firstOrNull()?.id,
+                    items = selectableAgents,
+                    initialSelectedId = currentAgent?.id ?: selectableAgents.firstOrNull()?.id,
                     itemId = { it.id },
                     itemLabel = { it.name },
                     confirmButtonText = stringResource(Res.string.action_confirm),

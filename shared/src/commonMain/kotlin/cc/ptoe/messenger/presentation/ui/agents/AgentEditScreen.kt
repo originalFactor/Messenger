@@ -167,8 +167,8 @@ fun AgentEditScreen(
     val models by viewModel.modelsForSelectedProvider.collectAsStateWithLifecycle(initialValue = emptyList())
     val cloudUser by AppContainerHolder.instance.cloudSyncRepository.user.collectAsStateWithLifecycle(initialValue = null)
 
-    // 非默认 Agent 才显示"跟随默认 Agent"开关
-    val showFollowToggles = !uiState.isDefault
+    // 非默认、非内置保留 Agent 才显示"跟随默认 Agent"开关
+    val showFollowToggles = !uiState.isDefault && !uiState.isBuiltinTitle
 
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -334,7 +334,7 @@ fun AgentEditScreen(
                         }
                     },
                     singleLine = true,
-                    enabled = !uiState.isDefault, // 默认 Agent 名称不允许修改（保持"默认 Agent"标识）
+                    enabled = !uiState.isDefault && !uiState.isBuiltinTitle, // 默认/内置 Agent 名称不允许修改（保持系统标识）
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -493,7 +493,7 @@ fun AgentEditScreen(
                     onEffortChange = { viewModel.onReasoningEffortChange(it) }
                 )
 
-                if (cloudUser != null && uiState.isEditing && !uiState.isDefault) {
+                if (cloudUser != null && uiState.isEditing && !uiState.isDefault && !uiState.isBuiltinTitle) {
                     Spacer(modifier = Modifier.height(24.dp))
                     SectionHeader(title = stringResource(Res.string.agent_edit_market_section))
                     Spacer(modifier = Modifier.height(8.dp))

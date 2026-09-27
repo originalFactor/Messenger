@@ -168,6 +168,14 @@ class MobileWearChatHandler(private val app: AppContainer) {
                                     reasoningFormat = detectedFormat ?: conversation.reasoningFormat
                                 )
                             )
+                            if (currentContent.isNotBlank()) {
+                                // 首轮回复完成 → 与手机端一致地为未命名对话生成标题
+                                app.conversationTitleGenerator.launchGenerateIfNeeded(
+                                    conversationId,
+                                    activeModel.first,
+                                    activeModel.second
+                                )
+                            }
                             frame("chat_done") {
                                 put("content", currentContent)
                                 put("userMessageId", userMessage.id)
@@ -288,7 +296,8 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 app.agentRepository.getById(agentId).first()
             } else {
                 app.agentRepository.getAll().first().firstOrNull { it.isDefault }
-                    ?: app.agentRepository.getAll().first().firstOrNull()
+                    ?: app.agentRepository.getAll().first()
+                        .firstOrNull { it.role != Agent.ROLE_TITLE }
             } ?: throw IllegalStateException("No agents available on phone.")
 
             val now = System.currentTimeMillis()
