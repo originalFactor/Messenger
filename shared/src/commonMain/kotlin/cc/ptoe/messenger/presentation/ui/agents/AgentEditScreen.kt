@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Update
@@ -78,8 +79,10 @@ import kotlinx.coroutines.launch
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
+import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
+import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.presentation.platform.copyAvatarToInternal
 import cc.ptoe.messenger.presentation.platform.deleteAvatarFile
 import cc.ptoe.messenger.presentation.platform.rememberAvatarImagePicker
@@ -88,6 +91,7 @@ import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_cancel
+import cc.ptoe.messenger.generated.resources.action_confirm
 import cc.ptoe.messenger.generated.resources.action_push
 import cc.ptoe.messenger.generated.resources.action_save
 import cc.ptoe.messenger.generated.resources.action_unpublish
@@ -123,6 +127,12 @@ import cc.ptoe.messenger.generated.resources.agent_edit_push_update
 import cc.ptoe.messenger.generated.resources.agent_edit_pushed_success
 import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_default
 import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_label
+import cc.ptoe.messenger.generated.resources.agent_edit_role_chat
+import cc.ptoe.messenger.generated.resources.agent_edit_role_default
+import cc.ptoe.messenger.generated.resources.agent_edit_role_label
+import cc.ptoe.messenger.generated.resources.agent_edit_role_locked
+import cc.ptoe.messenger.generated.resources.agent_edit_role_select_title
+import cc.ptoe.messenger.generated.resources.agent_edit_role_title
 import cc.ptoe.messenger.generated.resources.agent_edit_remove_avatar
 import cc.ptoe.messenger.generated.resources.agent_edit_select_model
 import cc.ptoe.messenger.generated.resources.agent_edit_select_provider
@@ -167,11 +177,32 @@ fun AgentEditScreen(
     val models by viewModel.modelsForSelectedProvider.collectAsStateWithLifecycle(initialValue = emptyList())
     val cloudUser by AppContainerHolder.instance.cloudSyncRepository.user.collectAsStateWithLifecycle(initialValue = null)
 
-    // 非默认、非内置保留 Agent 才显示"跟随默认 Agent"开关
-    val showFollowToggles = !uiState.isDefault && !uiState.isBuiltinTitle
+    // 非默认、非标题生成器才显示"跟随默认 Agent"开关
+    val showFollowToggles = !uiState.isDefault && uiState.role != Agent.ROLE_TITLE
+
+    // 角色选择器：默认与标题生成器为单持有角色，持有者的选择器锁定，
+    // 只能由其他 Agent 认领该角色后自动转移（原持有者回退为普通 Agent）。
+    val roleLocked = uiState.isDefault || uiState.role == Agent.ROLE_TITLE
+    val persistedRoleOption = when {
+        uiState.isDefault -> AgentEditViewModel.ROLE_OPTION_DEFAULT
+        uiState.role == Agent.ROLE_TITLE -> AgentEditViewModel.ROLE_OPTION_TITLE
+        else -> AgentEditViewModel.ROLE_OPTION_CHAT
+    }
+    val displayRoleOption = when (uiState.pendingRole) {
+        AgentEditViewModel.ROLE_OPTION_DEFAULT -> AgentEditViewModel.ROLE_OPTION_DEFAULT
+        AgentEditViewModel.ROLE_OPTION_TITLE -> AgentEditViewModel.ROLE_OPTION_TITLE
+        AgentEditViewModel.ROLE_OPTION_CHAT -> AgentEditViewModel.ROLE_OPTION_CHAT
+        else -> persistedRoleOption
+    }
+    val displayRoleLabel = when (displayRoleOption) {
+        AgentEditViewModel.ROLE_OPTION_DEFAULT -> stringResource(Res.string.agent_edit_role_default)
+        AgentEditViewModel.ROLE_OPTION_TITLE -> stringResource(Res.string.agent_edit_role_title)
+        else -> stringResource(Res.string.agent_edit_role_chat)
+    }
 
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showRolePicker by remember { mutableStateOf(false) }
     var showPublishDialog by remember { mutableStateOf(false) }
     var showPushDialog by remember { mutableStateOf(false) }
     var showUnpublishDialog by remember { mutableStateOf(false) }
@@ -334,8 +365,26 @@ fun AgentEditScreen(
                         }
                     },
                     singleLine = true,
-                    enabled = !uiState.isDefault && !uiState.isBuiltinTitle, // 默认/内置 Agent 名称不允许修改（保持系统标识）
+                    enabled = !uiState.isDefault, // 默认 Agent 名称不允许修改（保持"默认 Agent"标识）
                     modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 角色（普通 / 默认 / 标题生成器）
+                ListItem(
+                    title = stringResource(Res.string.agent_edit_role_label),
+                    subtitle = if (roleLocked) {
+                        stringResource(Res.string.agent_edit_role_locked)
+                    } else {
+                        displayRoleLabel
+                    },
+                    icon = Icons.Default.Person,
+                    titleColor = if (roleLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurface,
+                    onClick = if (roleLocked) null else {
+                        { showRolePicker = true }
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -493,7 +542,7 @@ fun AgentEditScreen(
                     onEffortChange = { viewModel.onReasoningEffortChange(it) }
                 )
 
-                if (cloudUser != null && uiState.isEditing && !uiState.isDefault && !uiState.isBuiltinTitle) {
+                if (cloudUser != null && uiState.isEditing && !uiState.isDefault) {
                     Spacer(modifier = Modifier.height(24.dp))
                     SectionHeader(title = stringResource(Res.string.agent_edit_market_section))
                     Spacer(modifier = Modifier.height(8.dp))
@@ -553,6 +602,28 @@ fun AgentEditScreen(
                 }
             }
         }
+    }
+
+    if (showRolePicker) {
+        val roleOptions = listOf(
+            AgentEditViewModel.ROLE_OPTION_CHAT to stringResource(Res.string.agent_edit_role_chat),
+            AgentEditViewModel.ROLE_OPTION_DEFAULT to stringResource(Res.string.agent_edit_role_default),
+            AgentEditViewModel.ROLE_OPTION_TITLE to stringResource(Res.string.agent_edit_role_title)
+        )
+        SingleChoiceDialog(
+            title = stringResource(Res.string.agent_edit_role_select_title),
+            items = roleOptions,
+            initialSelectedId = displayRoleOption,
+            itemId = { it.first },
+            itemLabel = { it.second },
+            confirmButtonText = stringResource(Res.string.action_confirm),
+            dismissButtonText = stringResource(Res.string.action_cancel),
+            onConfirm = { selected ->
+                showRolePicker = false
+                selected?.let { viewModel.onRoleSelected(it.first) }
+            },
+            onDismiss = { showRolePicker = false }
+        )
     }
 
     if (showPublishDialog) {

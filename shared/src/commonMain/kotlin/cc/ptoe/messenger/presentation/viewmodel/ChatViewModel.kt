@@ -610,8 +610,13 @@ class ChatViewModel(
                                 saveStreamResult(aiMessage, currentContent, conversationId, null)
                                 if (currentContent.isNotBlank()) {
                                     awaitMessagePersisted(aiMessageId, currentContent)
-                                    // 首轮回复完成 → 由内置标题智能体为未命名对话生成标题
-                                    conversationTitleGenerator.launchGenerateIfNeeded(conversationId, provider, model)
+                                    // 首轮回复完成 → 由标题生成器为未命名对话生成标题；
+                                    // 失败正常提示（回退截断标题由生成器内部处理）
+                                    conversationTitleGenerator.launchGenerateIfNeeded(
+                                        conversationId, provider, model
+                                    ) { message ->
+                                        setError(message)
+                                    }
                                 }
                                 _streamingContent.value = null
                                 _streamingMessageId.value = null
@@ -804,7 +809,9 @@ class ChatViewModel(
                                     // 首次成功回复（重试路径）同样触发生成标题
                                     conversationTitleGenerator.launchGenerateIfNeeded(
                                         message.conversationId, provider, model
-                                    )
+                                    ) { titleError ->
+                                        setError(titleError)
+                                    }
                                 }
                                 _streamingContent.value = null
                                 _streamingMessageId.value = null

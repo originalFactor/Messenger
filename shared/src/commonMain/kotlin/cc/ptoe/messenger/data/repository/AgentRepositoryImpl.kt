@@ -74,6 +74,7 @@ class AgentRepositoryImpl(
             name = uniqueCloneName(source.name, existingNames),
             avatar = copyAvatar(source.avatar),
             isDefault = false,
+            role = Agent.ROLE_CHAT,
             marketAgentId = null,
             marketAgentVersion = null,
             marketAgentRole = null,
@@ -98,10 +99,12 @@ class AgentRepositoryImpl(
     }
 
     override suspend fun delete(id: String) {
-        // 默认 Agent 不允许删除；内置标题智能体同样不允许删除
+        // 内置 Agent 不可删除；默认 Agent 与标题生成器角色持有者不可直接删除，
+        // 只能由其他 Agent 接管角色后再删除。
         if (id == Agent.BUILTIN_TITLE_AGENT_ID) return
         val agent = agentDao.getById(id).first()
         if (agent?.isDefault == true) return
+        if (agent?.role == Agent.ROLE_TITLE) return
         agentDao.delete(id)
         onChanged(agent?.toDomain(), null)
     }

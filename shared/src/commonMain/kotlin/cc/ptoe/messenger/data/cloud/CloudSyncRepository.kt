@@ -968,6 +968,9 @@ class CloudSyncRepository(
             // 防止远端墓碑误删本地内置行。
             if (remote.id == Agent.BUILTIN_TITLE_AGENT_ID) return@forEach
             if (remote.deleted) {
+                // 标题生成器持有者不可被远端墓碑删除（与本地删除守卫一致）。
+                val local = database.agentDao().getById(remote.id).first()
+                if (local?.role == Agent.ROLE_TITLE) return@forEach
                 database.conversationDao().deleteByAgentId(remote.id)
                 database.agentDao().delete(remote.id)
             } else {
@@ -978,6 +981,12 @@ class CloudSyncRepository(
                     database.agentDao().getAllEntities()
                         .filter { it.isDefault && it.id != remote.id }
                         .forEach { database.agentDao().insert(it.copy(isDefault = false)) }
+                }
+                // 标题生成器角色单持有：远端新的持有者到达时，本地旧持有者回退为普通 Agent。
+                if (remote.role == Agent.ROLE_TITLE) {
+                    database.agentDao().getAllEntities()
+                        .filter { it.role == Agent.ROLE_TITLE && it.id != remote.id }
+                        .forEach { database.agentDao().insert(it.copy(role = Agent.ROLE_CHAT)) }
                 }
                 // Keep an uncached URL only as a retry marker; AgentAvatar never renders it.
                 database.agentDao().insert(remote.toEntity(existingAvatar ?: remote.avatarUrl))
@@ -1236,37 +1245,38 @@ class CloudSyncRepository(
     }
 
     /**
-     * 内置标题生成智能体的幂等补种（仅缺行时插入，不覆盖用户编辑）。
-     * fullSync 的 replaceLocal 会 deleteAll 连带清掉它，与内置服务商同理在此补种；
-     * 首次安装由 AppContainer 在启动时调用同一逻辑。
+     * 内置标题生成智能体的幂等补种：仅在【既没有内置行、也没有任何标题角色
+     * 持有者】时插入。用户把标题生成器转移给普通 Agent 后（原内置行回退为
+     * 普通角色），fullSync 的 replaceLocal 不会把内置行带回来；本地一个持有
+     * 值都没有时（离线首装、或云端没有持有者）才补种，保证标题能力始终可用。
      */
     suspend fun ensureBuiltinTitleAgent() {
-        val existing = database.agentDao().getById(Agent.BUILTIN_TITLE_AGENT_ID).first()
-        if (existing == null) {
-            val now = System.currentTimeMillis()
-            val builtin = Agent.builtinTitleAgent(now)
-            database.agentDao().insert(
-                AgentEntity(
-                    id = builtin.id,
-                    name = builtin.name,
-                    avatar = builtin.avatar,
-                    systemPrompt = builtin.systemPrompt,
-                    defaultModelId = builtin.defaultModelId,
-                    temperature = builtin.temperature,
-                    topP = builtin.topP,
-                    maxTokens = builtin.maxTokens,
-                    reasoningEffort = builtin.reasoningEffort,
-                    isDefault = builtin.isDefault,
-                    marketAgentId = builtin.marketAgentId,
-                    marketAgentVersion = builtin.marketAgentVersion,
-                    marketAgentRole = builtin.marketAgentRole,
-                    role = builtin.role,
-                    createdAt = builtin.createdAt,
-                    updatedAt = builtin.updatedAt
-                )
+        val agents = database.agentDao().getAllEntities()
+        if (agents.any { it.id == Agent.BUILTIN_TITLE_AGENT_ID }) return
+        if (agents.any { it.role == Agent.ROLE_TITLE }) return
+        val now = System.currentTimeMillis()
+        val builtin = Agent.builtinTitleAgent(now)
+        database.agentDao().insert(
+            AgentEntity(
+                id = builtin.id,
+                name = builtin.name,
+                avatar = builtin.avatar,
+                systemPrompt = builtin.systemPrompt,
+                defaultModelId = builtin.defaultModelId,
+                temperature = builtin.temperature,
+                topP = builtin.topP,
+                maxTokens = builtin.maxTokens,
+                reasoningEffort = builtin.reasoningEffort,
+                isDefault = builtin.isDefault,
+                marketAgentId = builtin.marketAgentId,
+                marketAgentVersion = builtin.marketAgentVersion,
+                marketAgentRole = builtin.marketAgentRole,
+                role = builtin.role,
+                createdAt = builtin.createdAt,
+                updatedAt = builtin.updatedAt
             )
-            logI(TAG, "Seeded built-in title agent")
-        }
+        )
+        logI(TAG, "Seeded built-in title agent")
     }
 
     private suspend fun refreshCachedUserAvatar(url: String?, avatarVersion: Long?) {

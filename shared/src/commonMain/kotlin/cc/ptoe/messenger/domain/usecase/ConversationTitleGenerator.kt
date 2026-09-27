@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.domain.usecase
 
+import cc.ptoe.messenger.data.util.logW
+import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Message
@@ -28,20 +30,26 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
-import cc.ptoe.messenger.data.util.randomUuid
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.error_title_generate_failed
+import cc.ptoe.messenger.generated.resources.error_title_generate_failed_detail
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.jetbrains.compose.resources.getString
 
 /**
- * 首轮回复完成后为「未命名」对话生成标题：
- * 优先使用内置标题智能体（[Agent.BUILTIN_TITLE_AGENT_ID]）自带的模型配置，
- * 未配置时回退到调用方传入的当轮聊天 (provider, model)。
+ * 首轮回复完成后为「未命名」对话生成标题。标题生成器是持有
+ * [Agent.ROLE_TITLE] 角色的 Agent（内置种子或被用户转移角色的普通
+ * Agent）：优先使用它自带的模型配置，未配置时回退到调用方传入的
+ * 当轮聊天 (provider, model)。
  *
- * 标题属装饰性输出：任何失败都静默回退为截断首条消息，不向 UI 报错。
+ * 失败时通过 [launchGenerateIfNeeded] 的 onError 正常提示（同时附日志），
+ * 并且始终回退为截断首条消息作为标题。
  */
 class ConversationTitleGenerator(
     private val agentRepository: AgentRepository,
@@ -58,19 +66,23 @@ class ConversationTitleGenerator(
     /**
      * Fire-and-forget 入口：在 [externalScope] 上执行（聊天页退出不中断），
      * 内部用 [Mutex] 串行化，避免同一会话的多次 Done 事件并发写标题。
+     * [onError] 在生成失败（含空结果）时收到已本地化的提示文案；
+     * 回退截断标题仍会照常写回。
      */
     fun launchGenerateIfNeeded(
         conversationId: String,
         fallbackProvider: Provider?,
-        fallbackModel: ChatModel?
+        fallbackModel: ChatModel?,
+        onError: (String) -> Unit = {}
     ) {
         externalScope.launch {
             mutex.withLock {
                 runCatching {
-                    generateIfNeeded(conversationId, fallbackProvider, fallbackModel)
+                    generateIfNeeded(conversationId, fallbackProvider, fallbackModel, onError)
                 }.onFailure {
-                    // 失败回退截断标题已在 generateIfNeeded 内处理；这里的异常
-                    // 只可能是回退写库本身失败，静默放弃即可。
+                    if (it is CancellationException) throw it
+                    // 走到这里说明连回退写库都失败了，只能放弃本次标题生成。
+                    logW(TAG, "Title generation failed entirely", it)
                 }
             }
         }
@@ -79,7 +91,8 @@ class ConversationTitleGenerator(
     private suspend fun generateIfNeeded(
         conversationId: String,
         fallbackProvider: Provider?,
-        fallbackModel: ChatModel?
+        fallbackModel: ChatModel?,
+        onError: (String) -> Unit
     ) {
         val conversation = conversationRepository.getById(conversationId).first() ?: return
         if (!isUntitledConversation(conversation.title)) return
@@ -90,8 +103,8 @@ class ConversationTitleGenerator(
         val firstAssistant = messages
             .firstOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() } ?: return
 
-        val titleAgent = agentRepository
-            .getById(Agent.BUILTIN_TITLE_AGENT_ID).first() ?: return
+        val titleAgent = agentRepository.getAll().first()
+            .firstOrNull { it.role == Agent.ROLE_TITLE } ?: return
         val (provider, model) = resolveTitleAgentModel(titleAgent)
             ?: run {
                 val fallbackModelId = fallbackModel ?: return
@@ -104,31 +117,45 @@ class ConversationTitleGenerator(
             append("Assistant: ").appendLine(firstAssistant.content.take(TRANSCRIPT_MAX_CHARS))
         }
 
-        val generated = runCatching {
-            apiRepository.createChatCompletion(
-                provider = provider,
-                modelId = model.modelId,
-                messages = listOf(
-                    Message(
-                        id = randomUuid(),
-                        conversationId = "",
-                        role = MessageRole.USER,
-                        content = transcript,
-                        timestamp = System.currentTimeMillis(),
-                        status = MessageStatus.SENT
-                    )
-                ),
-                systemPrompt = titleAgent.systemPrompt,
-                temperature = titleAgent.temperature,
-                topP = titleAgent.topP,
-                maxTokens = titleAgent.maxTokens,
-                reasoningEffort = null,
-                reasoningFormat = null
-            ).content
-        }.getOrNull()?.let { sanitizeGeneratedTitle(it) }
+        var apiErrorDetail: String? = null
+        val generated = try {
+            sanitizeGeneratedTitle(
+                apiRepository.createChatCompletion(
+                    provider = provider,
+                    modelId = model.modelId,
+                    messages = listOf(
+                        Message(
+                            id = randomUuid(),
+                            conversationId = "",
+                            role = MessageRole.USER,
+                            content = transcript,
+                            timestamp = System.currentTimeMillis(),
+                            status = MessageStatus.SENT
+                        )
+                    ),
+                    systemPrompt = titleAgent.systemPrompt,
+                    temperature = titleAgent.temperature,
+                    topP = titleAgent.topP,
+                    maxTokens = titleAgent.maxTokens,
+                    reasoningEffort = null,
+                    reasoningFormat = null
+                ).content
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logW(TAG, "LLM title generation failed", e)
+            apiErrorDetail = e.message?.takeIf { it.isNotBlank() }
+            null
+        }
 
-        val title = generated?.takeIf { it.isNotBlank() }
-            ?: sanitizeGeneratedTitle(firstUser.content)
+        // 生成失败（异常或空结果）→ 正常提示错误，同时回退为截断首条消息。
+        val title = generated?.takeIf { it.isNotBlank() } ?: run {
+            apiErrorDetail?.let { detail ->
+                onError(getString(Res.string.error_title_generate_failed_detail, detail))
+            } ?: onError(getString(Res.string.error_title_generate_failed))
+            sanitizeGeneratedTitle(firstUser.content)
+        }
         if (title.isBlank()) return
 
         // 写回前重读：用户可能刚手动改名，摘要流程也可能刚写回会话行，
@@ -138,7 +165,7 @@ class ConversationTitleGenerator(
         conversationRepository.update(latest.copy(title = title))
     }
 
-    /** 内置标题智能体自配模型（含 Provider）解析；未配置或解析失败返回 null。 */
+    /** 标题生成器自配模型（含 Provider）解析；未配置或解析失败返回 null。 */
     private suspend fun resolveTitleAgentModel(agent: Agent): Pair<Provider, ChatModel>? {
         val modelId = agent.defaultModelId ?: return null
         val model = modelRepository.getById(modelId).first() ?: return null
@@ -147,6 +174,7 @@ class ConversationTitleGenerator(
     }
 
     companion object {
+        private const val TAG = "TitleGenerator"
         private const val TRANSCRIPT_MAX_CHARS = 2000
 
         /**

@@ -102,6 +102,7 @@ import cc.ptoe.messenger.generated.resources.agents_model_default
 import cc.ptoe.messenger.generated.resources.agents_model_label
 import cc.ptoe.messenger.generated.resources.agents_new_agent
 import cc.ptoe.messenger.generated.resources.agents_no_system_prompt
+import cc.ptoe.messenger.generated.resources.agents_title_badge
 import cc.ptoe.messenger.generated.resources.agents_title
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -225,38 +226,40 @@ fun AgentsScreen(
                             .widthIn(max = 720.dp)
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
-                        val isBuiltin = item.agent.role == Agent.ROLE_TITLE
+                        val isBuiltin = item.agent.id == Agent.BUILTIN_TITLE_AGENT_ID
+                        val isTitleAgent = item.agent.role == Agent.ROLE_TITLE
                         AgentListItem(
                             item = item,
                             isMultiSelectMode = uiState.isMultiSelectMode,
                             isMultiSelected = item.agent.id in uiState.selectedAgentIds,
                             enableContextMenu = enableContextMenu,
                             isBuiltin = isBuiltin,
+                            isTitleAgent = isTitleAgent,
                             onClick = {
                                 if (uiState.isMultiSelectMode) {
-                                    if (!item.agent.isDefault && !isBuiltin) {
+                                    if (!item.agent.isDefault && !isTitleAgent && !isBuiltin) {
                                         viewModel.toggleSelection(item.agent.id)
                                     }
-                                } else if (isBuiltin) {
-                                    // 内置标题智能体不可选为聊天对象，点击直接进入编辑。
+                                } else if (isTitleAgent) {
+                                    // 标题生成器不可选为聊天对象，点击直接进入编辑。
                                     onEditClick(item.agent.id)
                                 } else {
                                     onAgentClick(item.agent.id)
                                 }
                             },
                             onLongClick = {
-                                if (!isBuiltin) {
+                                if (!isTitleAgent && !isBuiltin) {
                                     viewModel.enterMultiSelectMode(item.agent.id)
                                 }
                             },
                             onEditClick = { onEditClick(item.agent.id) },
                             onCloneClick = { viewModel.cloneAgent(item.agent.id) },
                             onDeleteClick = {
-                                if (!item.agent.isDefault && !isBuiltin) {
+                                if (!item.agent.isDefault && !isTitleAgent && !isBuiltin) {
                                     showDeleteDialog = item.agent.id
                                 }
                             },
-                            canDelete = !item.agent.isDefault && !isBuiltin
+                            canDelete = !item.agent.isDefault && !isTitleAgent && !isBuiltin
                         )
                     }
                     }
@@ -312,7 +315,8 @@ private fun AgentListItem(
     isMultiSelectMode: Boolean = false,
     isMultiSelected: Boolean = false,
     enableContextMenu: Boolean = false,
-    isBuiltin: Boolean = false
+    isBuiltin: Boolean = false,
+    isTitleAgent: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
@@ -346,7 +350,7 @@ private fun AgentListItem(
             Checkbox(
                 checked = isMultiSelected,
                 onCheckedChange = null,
-                enabled = !item.agent.isDefault && !isBuiltin,
+                enabled = !item.agent.isDefault && !isTitleAgent && !isBuiltin,
                 modifier = Modifier.padding(end = 8.dp)
             )
         }
@@ -380,6 +384,14 @@ private fun AgentListItem(
                         text = stringResource(Res.string.agents_builtin_badge),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+                if (isTitleAgent) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(Res.string.agents_title_badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary
                     )
                 }
             }

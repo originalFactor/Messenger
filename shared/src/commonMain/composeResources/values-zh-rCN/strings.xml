@@ -56,9 +56,10 @@
     <string name="agents_empty_message">暂无 Agent\n创建你的第一个 Agent 吧</string>
     <string name="agents_delete_title">删除 Agent</string>
     <string name="agents_delete_confirm">确定要删除这个 Agent 吗？</string>
-    <string name="agents_delete_batch_confirm">确认删除 %1$d 个 Agent？默认 Agent 不会被删除。</string>
+    <string name="agents_delete_batch_confirm">确认删除 %1$d 个 Agent？默认 Agent 和标题生成器不会被删除。</string>
     <string name="agents_default_badge">默认</string>
     <string name="agents_builtin_badge">内置</string>
+    <string name="agents_title_badge">标题生成器</string>
     <string name="agents_no_system_prompt">无系统提示词</string>
     <string name="agents_model_label">模型: %1$s</string>
     <string name="agents_model_default">默认</string>
@@ -96,6 +97,12 @@
     <string name="agent_edit_title_default">默认 Agent</string>
     <string name="agent_edit_title_edit">编辑 Agent</string>
     <string name="agent_edit_title_new">新建 Agent</string>
+    <string name="agent_edit_role_label">角色</string>
+    <string name="agent_edit_role_chat">普通 Agent</string>
+    <string name="agent_edit_role_default">默认 Agent</string>
+    <string name="agent_edit_role_title">标题生成器</string>
+    <string name="agent_edit_role_select_title">选择角色</string>
+    <string name="agent_edit_role_locked">已锁定：在其他 Agent 上设置该角色即可转移，原持有者自动回退为普通 Agent。</string>
     <string name="agent_edit_change_avatar">更换头像</string>
     <string name="agent_edit_follow_system_prompt">系统提示词跟随默认 Agent</string>
     <string name="agent_edit_follow_model">模型跟随默认 Agent</string>
@@ -355,6 +362,8 @@
     <string name="datetime_pattern_other_year">yyyy年M月d日</string>
 
     <!-- Errors / Validation -->
+    <string name="error_title_generate_failed">标题生成失败，已回退为截断标题</string>
+    <string name="error_title_generate_failed_detail">标题生成失败：%1$s</string>
     <string name="error_name_required">名称不能为空</string>
     <string name="error_agent_not_found">Agent 不存在</string>
     <string name="error_save_agent_first">Save the Agent before checking updates.</string>

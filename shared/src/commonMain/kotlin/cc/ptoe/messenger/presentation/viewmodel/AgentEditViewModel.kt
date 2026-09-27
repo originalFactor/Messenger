@@ -58,8 +58,14 @@ data class AgentEditUiState(
     val maxTokens: String? = null,
     val reasoningEffort: String? = null,
     val isDefault: Boolean = false,
-    /** 内置标题生成等保留智能体：名称锁定、不可删除，且不显示跟随/市场区。 */
-    val isBuiltinTitle: Boolean = false,
+    /** 持久化的功能角色：chat=普通 / title=标题生成器（默认角色由 [isDefault] 表达）。 */
+    val role: String = Agent.ROLE_CHAT,
+    /**
+     * 角色选择器的待生效选项（"chat" / "default" / "title"）。
+     * 默认与标题生成器为单持有角色：save 时新持有者落库、旧持有者自动
+     * 回退为普通 Agent。null 表示本次未改动角色。
+     */
+    val pendingRole: String? = null,
     val followDefaultSystemPrompt: Boolean = false,
     val followDefaultModel: Boolean = false,
     val followDefaultTemperature: Boolean = false,
@@ -189,7 +195,8 @@ class AgentEditViewModel(
                     maxTokens = agent.maxTokens?.toString(),
                     reasoningEffort = agent.reasoningEffort,
                     isDefault = agent.isDefault,
-                    isBuiltinTitle = agent.role == Agent.ROLE_TITLE,
+                    role = agent.role,
+                    pendingRole = null,
                     followDefaultSystemPrompt = agent.followDefaultSystemPrompt,
                     followDefaultModel = agent.followDefaultModel,
                     followDefaultTemperature = agent.followDefaultTemperature,
@@ -285,6 +292,11 @@ class AgentEditViewModel(
         _uiState.value = _uiState.value.copy(followDefaultReasoningEffort = follow)
     }
 
+    /** 角色选择器确认（"chat" / "default" / "title"），save 时生效并转移单持有角色。 */
+    fun onRoleSelected(option: String) {
+        _uiState.value = _uiState.value.copy(pendingRole = option)
+    }
+
     fun save(): Boolean {
         val currentState = _uiState.value
         var hasError = false
@@ -308,11 +320,33 @@ class AgentEditViewModel(
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val maxTokensInt = currentState.maxTokens?.toIntOrNull()
+            val claimDefault = currentState.pendingRole == ROLE_OPTION_DEFAULT
+            val claimTitle = currentState.pendingRole == Agent.ROLE_TITLE
+
+            // 单持有角色转移：新持有者生效前，旧持有者自动回退为普通 Agent
+            //（对默认 Agent 同理，保证「恰好一个默认/恰好一个标题生成器」不变量）。
+            suspend fun demotePreviousHolders(excludeId: String) {
+                if (claimDefault) {
+                    agentRepository.getDefaultAgent().first()
+                        ?.takeIf { it.id != excludeId }
+                        ?.let { oldDefault ->
+                            agentRepository.update(oldDefault.copy(isDefault = false, updatedAt = now))
+                        }
+                }
+                if (claimTitle) {
+                    agentRepository.getAll().first()
+                        .firstOrNull { it.role == Agent.ROLE_TITLE && it.id != excludeId }
+                        ?.let { oldHolder ->
+                            agentRepository.update(oldHolder.copy(role = Agent.ROLE_CHAT, updatedAt = now))
+                        }
+                }
+            }
 
             val editingId = currentAgentId
             if (editingId != null) {
                 val existing = agentRepository.getById(editingId).first()
                 if (existing != null) {
+                    demotePreviousHolders(existing.id)
                     val updatedAgent = existing.copy(
                         name = currentState.name.trim(),
                         avatar = currentState.avatar,
@@ -328,12 +362,15 @@ class AgentEditViewModel(
                         followDefaultTopP = currentState.followDefaultTopP,
                         followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                         followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
+                        isDefault = existing.isDefault || claimDefault,
+                        role = if (claimTitle) Agent.ROLE_TITLE else existing.role,
                         updatedAt = now
                     )
                     agentRepository.update(updatedAgent)
                     _uiState.value = _uiState.value.copy(isSaved = true)
                 }
             } else {
+                demotePreviousHolders(excludeId = "")
                 val newAgent = Agent(
                     id = randomUuid(),
                     name = currentState.name.trim(),
@@ -344,7 +381,8 @@ class AgentEditViewModel(
                     topP = currentState.topP,
                     maxTokens = maxTokensInt,
                     reasoningEffort = currentState.reasoningEffort,
-                    isDefault = false,
+                    isDefault = claimDefault,
+                    role = if (claimTitle) Agent.ROLE_TITLE else Agent.ROLE_CHAT,
                     followDefaultSystemPrompt = currentState.followDefaultSystemPrompt,
                     followDefaultModel = currentState.followDefaultModel,
                     followDefaultTemperature = currentState.followDefaultTemperature,
@@ -434,6 +472,15 @@ class AgentEditViewModel(
     }
 
     companion object {
+        /** 角色选择器选项：普通 Agent（值与 [Agent.ROLE_CHAT] 一致，无转移效果）。 */
+        const val ROLE_OPTION_CHAT = Agent.ROLE_CHAT
+
+        /** 角色选择器选项：默认 Agent（单持有，对应 isDefault）。 */
+        const val ROLE_OPTION_DEFAULT = "default"
+
+        /** 角色选择器选项：标题生成器（值与 [Agent.ROLE_TITLE] 一致，单持有）。 */
+        const val ROLE_OPTION_TITLE = Agent.ROLE_TITLE
+
         fun provideFactory(
             agentRepository: AgentRepository,
             modelRepository: ModelRepository,
