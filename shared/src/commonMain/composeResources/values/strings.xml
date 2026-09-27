@@ -111,6 +111,7 @@
     <string name="agent_edit_follow_temperature">Follow default Agent Temperature</string>
     <string name="agent_edit_follow_max_tokens">Follow default Agent Max Tokens</string>
     <string name="agent_edit_follow_reasoning_effort">Follow default Agent Reasoning effort</string>
+    <string name="agent_edit_enable_tools">Enable built-in tools</string>
     <string name="agent_edit_reasoning_effort_label">Reasoning effort</string>
     <string name="agent_edit_reasoning_effort_default">Default</string>
     <string name="agent_edit_published_success">Published to Agent Market</string>
@@ -361,6 +362,23 @@
     <string name="datetime_yesterday">Yesterday</string>
     <string name="datetime_pattern_same_year">MMM d</string>
     <string name="datetime_pattern_other_year">MMM d, yyyy</string>
+
+    <!-- Built-in tools (terminal) -->
+    <string name="tool_confirm_title">Run terminal command</string>
+    <string name="tool_confirm_message">The model wants to run the following command:</string>
+    <string name="tool_confirm_allow">Allow</string>
+    <string name="tool_confirm_deny">Deny</string>
+    <string name="tool_denied_result">The user denied this command.</string>
+    <string name="tool_interrupted_result">Execution was interrupted.</string>
+    <string name="tool_unknown_tool">Unknown tool: %1$s</string>
+    <string name="tool_name_terminal">Terminal</string>
+    <string name="tool_card_running">Running…</string>
+    <string name="tool_card_success">Done</string>
+    <string name="tool_card_failed">Failed</string>
+    <string name="tool_card_result_label">Result</string>
+    <string name="tool_mode_manual">Tool execution: manual confirm</string>
+    <string name="tool_mode_auto">Tool execution: auto</string>
+    <string name="error_tool_rounds_exceeded">Tool call rounds exceeded the limit</string>
 
     <!-- Errors / Validation -->
     <string name="error_title_generate_failed">Title generation failed; fell back to a truncated title</string>

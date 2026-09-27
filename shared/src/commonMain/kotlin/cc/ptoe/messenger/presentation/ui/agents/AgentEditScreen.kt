@@ -149,6 +149,7 @@ import cc.ptoe.messenger.generated.resources.agent_edit_unpublish_title
 import cc.ptoe.messenger.generated.resources.agent_edit_unpublished_success
 import cc.ptoe.messenger.generated.resources.agent_edit_update_failed
 import cc.ptoe.messenger.generated.resources.agent_edit_updated_success
+import cc.ptoe.messenger.generated.resources.agent_edit_enable_tools
 import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -541,6 +542,16 @@ fun AgentEditScreen(
                     enabled = reasoningEnabled,
                     onEffortChange = { viewModel.onReasoningEffortChange(it) }
                 )
+
+                // 工具开关：仅普通/默认 Agent 暴露（标题生成智能体是后台功能角色）
+                if (uiState.role != Agent.ROLE_TITLE) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    FollowToggleRow(
+                        label = stringResource(Res.string.agent_edit_enable_tools),
+                        checked = uiState.toolsEnabled,
+                        onCheckedChange = { viewModel.onToolsEnabledChange(it) }
+                    )
+                }
 
                 if (cloudUser != null && uiState.isEditing && !uiState.isDefault) {
                     Spacer(modifier = Modifier.height(24.dp))

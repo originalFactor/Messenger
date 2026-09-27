@@ -131,6 +131,7 @@ class AgentRepositoryImpl(
             marketAgentVersion = marketAgentVersion,
             marketAgentRole = marketAgentRole,
             role = role,
+            toolsEnabled = toolsEnabled,
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -158,6 +159,7 @@ class AgentRepositoryImpl(
             marketAgentVersion = marketAgentVersion,
             marketAgentRole = marketAgentRole,
             role = role,
+            toolsEnabled = toolsEnabled,
             createdAt = createdAt,
             updatedAt = updatedAt
         )

@@ -1511,6 +1511,7 @@ private fun AgentEntity.toCloudRequest() = CloudAgentRequest(
     marketAgentVersion = marketAgentVersion,
     marketAgentRole = marketAgentRole,
     role = role,
+    toolsEnabled = toolsEnabled,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1611,6 +1612,7 @@ private fun CloudAgentDocument.toEntity(avatar: String?) = AgentEntity(
     marketAgentRole = marketAgentRole,
     // 旧版本服务端/客户端可能不带 role，兜底为普通聊天角色
     role = role?.takeIf { it.isNotBlank() } ?: Agent.ROLE_CHAT,
+    toolsEnabled = toolsEnabled,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1636,6 +1638,7 @@ private fun AgentEntity.toDomain() = Agent(
     marketAgentVersion = marketAgentVersion,
     marketAgentRole = marketAgentRole,
     role = role,
+    toolsEnabled = toolsEnabled,
     createdAt = createdAt,
     updatedAt = updatedAt
 )

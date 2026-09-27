@@ -37,12 +37,25 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         val CLOUD_SESSION_HOST = stringPreferencesKey("cloud_session_host")
         val CLOUD_USER = stringPreferencesKey("cloud_user")
         val CLOUD_AI_API_KEY = stringPreferencesKey("cloud_ai_api_key")
+        /** 内置工具执行确认模式：false=手动确认（默认），true=自动执行。 */
+        val TOOL_AUTO_CONFIRM = booleanPreferencesKey("tool_auto_confirm")
     }
 
     val defaultAgentInitialized: Flow<Boolean> = dataStore.data
         .map { preferences ->
             preferences[PreferencesKeys.DEFAULT_AGENT_INITIALIZED] ?: false
         }
+
+    val toolAutoConfirm: Flow<Boolean> = dataStore.data
+        .map { preferences ->
+            preferences[PreferencesKeys.TOOL_AUTO_CONFIRM] ?: false
+        }
+
+    suspend fun setToolAutoConfirm(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.TOOL_AUTO_CONFIRM] = enabled
+        }
+    }
 
     suspend fun setDefaultAgentInitialized(initialized: Boolean) {
         dataStore.edit { preferences ->

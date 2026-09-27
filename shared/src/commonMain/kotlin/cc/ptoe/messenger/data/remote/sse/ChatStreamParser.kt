@@ -30,19 +30,27 @@ import kotlinx.serialization.json.jsonPrimitive
 
 object ChatStreamParser {
 
+    /** 流式工具调用片段的累积器：id/name 随首块到达，arguments 跨块拼接。 */
+    private class ToolCallAccumulator {
+        var callId: String? = null
+        var name: String? = null
+        val arguments = StringBuilder()
+    }
+
     fun parseToEvents(jsonFlow: Flow<String>): Flow<ChatStreamEvent> = flow {
         var inThinkBlock = false
         var reasoningEmitted = false
         // 用量统计块在 [DONE] 之前到达（choices 为空、只有 usage），先暂存，
         // 随终止事件一起抛给调用方做上下文用量记账。
         var lastUsage: UsageDto? = null
+        val toolCallAccumulators = linkedMapOf<Int, ToolCallAccumulator>()
         jsonFlow.collect { json ->
             if (json == "[DONE]") {
                 if (inThinkBlock) {
                     emit(ChatStreamEvent.Content("</think>\n"))
                     inThinkBlock = false
                 }
-                emit(ChatStreamEvent.Done(null, lastUsage))
+                emit(ChatStreamEvent.Done(null, lastUsage, accumulatedToolCalls(toolCallAccumulators)))
                 return@collect
             }
             try {
@@ -80,13 +88,22 @@ object ChatStreamParser {
                             }
                         }
                     }
+                    choice.delta.toolCalls?.forEach { fragment ->
+                        val index = fragment.index ?: 0
+                        val acc = toolCallAccumulators.getOrPut(index) { ToolCallAccumulator() }
+                        if (fragment.id != null) {
+                            acc.callId = fragment.id
+                        }
+                        fragment.function?.name?.takeIf { it.isNotEmpty() }?.let { acc.name = it }
+                        fragment.function?.arguments?.let { acc.arguments.append(it) }
+                    }
                     val finishReason = choice.finishReason
                     if (finishReason != null) {
                         if (inThinkBlock) {
                             emit(ChatStreamEvent.Content("</think>\n"))
                             inThinkBlock = false
                         }
-                        emit(ChatStreamEvent.Done(finishReason, lastUsage))
+                        emit(ChatStreamEvent.Done(finishReason, lastUsage, accumulatedToolCalls(toolCallAccumulators)))
                     }
                 }
             } catch (e: IllegalArgumentException) {
@@ -130,6 +147,25 @@ object ChatStreamParser {
                 }
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * 把按 index 累积的工具调用片段汇总为完整调用列表。name 从未到达的碎片视为
+     * 残缺数据直接丢弃；个别服务商不发 id 时回退为按 index 合成的稳定 ID，
+     * 保证 tool_call_id 往返成立。
+     */
+    private fun accumulatedToolCalls(
+        accumulators: LinkedHashMap<Int, ToolCallAccumulator>
+    ): List<ToolCallData> {
+        if (accumulators.isEmpty()) return emptyList()
+        return accumulators.entries.sortedBy { it.key }.mapNotNull { (index, acc) ->
+            val name = acc.name ?: return@mapNotNull null
+            ToolCallData(
+                callId = acc.callId ?: "call_$index",
+                name = name,
+                arguments = acc.arguments.toString()
+            )
         }
     }
 

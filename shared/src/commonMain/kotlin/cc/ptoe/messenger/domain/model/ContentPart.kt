@@ -27,6 +27,27 @@ sealed class ContentPart {
     data class Text(val text: String) : ContentPart()
 
     data class Image(val image: MessageImage) : ContentPart()
+
+    /**
+     * assistant 消息上的工具调用记录（[MessageRole.TOOL] 的配对请求来源）。
+     * [arguments] 是模型给出的原始 JSON 参数字符串。
+     */
+    data class ToolCall(
+        val callId: String,
+        val name: String,
+        val arguments: String
+    ) : ContentPart()
+
+    /**
+     * role=TOOL 结果消息上的执行结果；请求时回显为 `role:"tool"` +
+     * `tool_call_id`。 [isError] 仅用于 UI 状态着色，请求侧不区分。
+     */
+    data class ToolResult(
+        val callId: String,
+        val name: String,
+        val output: String,
+        val isError: Boolean = false
+    ) : ContentPart()
 }
 
 /**

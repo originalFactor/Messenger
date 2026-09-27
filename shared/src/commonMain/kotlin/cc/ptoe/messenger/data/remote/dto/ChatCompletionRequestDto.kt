@@ -37,5 +37,6 @@ data class ChatCompletionRequestDto(
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     @SerialName("thinking") val thinking: ThinkingDto? = null,
+    @SerialName("tools") val tools: List<ToolSpecDto>? = null,
     @SerialName("stream") val stream: Boolean = false
 )

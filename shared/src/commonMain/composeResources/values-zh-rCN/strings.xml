@@ -111,6 +111,7 @@
     <string name="agent_edit_follow_temperature">Temperature 跟随默认 Agent</string>
     <string name="agent_edit_follow_max_tokens">Max Tokens 跟随默认 Agent</string>
     <string name="agent_edit_follow_reasoning_effort">推理强度跟随默认 Agent</string>
+    <string name="agent_edit_enable_tools">启用内置工具</string>
     <string name="agent_edit_reasoning_effort_label">推理强度</string>
     <string name="agent_edit_published_success">已发布到 Agent 市场</string>
     <string name="agent_edit_publish_failed">发布失败</string>
@@ -360,6 +361,23 @@
     <string name="datetime_yesterday">昨天</string>
     <string name="datetime_pattern_same_year">M月d日</string>
     <string name="datetime_pattern_other_year">yyyy年M月d日</string>
+
+    <!-- 内置工具（终端） -->
+    <string name="tool_confirm_title">执行终端命令</string>
+    <string name="tool_confirm_message">模型请求执行以下命令：</string>
+    <string name="tool_confirm_allow">允许</string>
+    <string name="tool_confirm_deny">拒绝</string>
+    <string name="tool_denied_result">用户拒绝执行该命令。</string>
+    <string name="tool_interrupted_result">执行已被中断。</string>
+    <string name="tool_unknown_tool">未知工具：%1$s</string>
+    <string name="tool_name_terminal">终端</string>
+    <string name="tool_card_running">运行中…</string>
+    <string name="tool_card_success">已完成</string>
+    <string name="tool_card_failed">执行失败</string>
+    <string name="tool_card_result_label">结果</string>
+    <string name="tool_mode_manual">工具执行：手动确认</string>
+    <string name="tool_mode_auto">工具执行：自动</string>
+    <string name="error_tool_rounds_exceeded">工具调用轮数超出上限</string>
 
     <!-- Errors / Validation -->
     <string name="error_title_generate_failed">标题生成失败，已回退为截断标题</string>

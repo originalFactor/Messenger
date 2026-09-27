@@ -24,5 +24,7 @@ import kotlinx.serialization.json.JsonElement
 data class ChatDeltaDto(
     @SerialName("role") val role: String? = null,
     @SerialName("content") val content: JsonElement? = null,
-    @SerialName("reasoning_content") val reasoningContent: String? = null
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
+    /** 流式工具调用增量片段：首块携带 id/name，arguments 跨块拼接。 */
+    @SerialName("tool_calls") val toolCalls: List<ToolCallDto>? = null
 )

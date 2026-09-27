@@ -66,6 +66,19 @@ object ContentPartCodec {
             dataUri = image.dataUri,
             localPath = image.localPath
         )
+        is ContentPart.ToolCall -> StoredContentPart(
+            type = "tool_call",
+            callId = callId,
+            name = name,
+            arguments = arguments
+        )
+        is ContentPart.ToolResult -> StoredContentPart(
+            type = "tool_result",
+            callId = callId,
+            name = name,
+            output = output,
+            isError = isError
+        )
     }
 
     private fun StoredContentPart.toDomain(): ContentPart? = when (type) {
@@ -73,6 +86,14 @@ object ContentPartCodec {
         "image" -> {
             if (dataUri.isNullOrEmpty() || localPath.isNullOrEmpty()) null
             else ContentPart.Image(MessageImage(dataUri = dataUri, localPath = localPath))
+        }
+        "tool_call" -> {
+            if (callId.isNullOrEmpty() || name.isNullOrEmpty()) null
+            else ContentPart.ToolCall(callId = callId, name = name, arguments = arguments ?: "")
+        }
+        "tool_result" -> {
+            if (callId.isNullOrEmpty() || name.isNullOrEmpty()) null
+            else ContentPart.ToolResult(callId = callId, name = name, output = output ?: "", isError = isError)
         }
         else -> null
     }
@@ -87,6 +108,11 @@ object ContentPartCodec {
         val type: String,
         val text: String? = null,
         val dataUri: String? = null,
-        val localPath: String? = null
+        val localPath: String? = null,
+        val callId: String? = null,
+        val name: String? = null,
+        val arguments: String? = null,
+        val output: String? = null,
+        val isError: Boolean = false
     )
 }

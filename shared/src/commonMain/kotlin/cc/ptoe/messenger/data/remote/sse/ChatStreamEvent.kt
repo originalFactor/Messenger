@@ -23,7 +23,13 @@ sealed class ChatStreamEvent {
     data class Done(
         val finishReason: String?,
         /** 流式响应携带的 token 用量（prompt/completion）；服务商不支持时为 null。 */
-        val usage: UsageDto? = null
+        val usage: UsageDto? = null,
+        /**
+         * 本轮流式响应累积完成的工具调用（finish_reason 为 "tool_calls" 时非空）。
+         * 注意现有解析器在 finish_reason 块和 [DONE] 各发一次 Done，两次都会携带
+         * 相同的工具调用列表 — 调用方以收集结束后的最终事件为准，不会重复执行。
+         */
+        val toolCalls: List<ToolCallData> = emptyList()
     ) : ChatStreamEvent()
     data class Error(val message: String) : ChatStreamEvent()
     /**
@@ -33,3 +39,11 @@ sealed class ChatStreamEvent {
      */
     data object ReasoningDetected : ChatStreamEvent()
 }
+
+/** 一轮流式响应中累积完成的工具调用。 */
+data class ToolCallData(
+    val callId: String,
+    val name: String,
+    /** 原始 JSON 参数字符串（尚未解析）。 */
+    val arguments: String
+)

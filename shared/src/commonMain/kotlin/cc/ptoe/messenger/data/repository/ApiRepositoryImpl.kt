@@ -20,6 +20,10 @@ import cc.ptoe.messenger.data.remote.api.OpenAiClient
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.dto.ChatMessageDto
 import cc.ptoe.messenger.data.remote.dto.ThinkingDto
+import cc.ptoe.messenger.data.remote.dto.ToolCallDto
+import cc.ptoe.messenger.data.remote.dto.ToolCallFunctionDto
+import cc.ptoe.messenger.data.remote.dto.ToolSpecDto
+import cc.ptoe.messenger.data.remote.dto.ToolSpecFunctionDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.ChatStreamParser
 import cc.ptoe.messenger.data.util.randomUuid
@@ -31,13 +35,16 @@ import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.model.applyModelsDev
 import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
+import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.presentation.utils.extractThinkContent
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -92,7 +99,8 @@ class ApiRepositoryImpl(
         topP: Float,
         maxTokens: Int?,
         reasoningEffort: String?,
-        reasoningFormat: String?
+        reasoningFormat: String?,
+        tools: List<ChatTool>?
     ): Flow<ChatStreamEvent> = flow {
         try {
             val requestMessages = buildRequestMessages(messages, systemPrompt, reasoningFormat)
@@ -105,6 +113,7 @@ class ApiRepositoryImpl(
                 maxTokens = maxTokens,
                 reasoningEffort = effort,
                 thinking = thinking,
+                tools = tools?.map { it.toToolSpecDto() },
                 stream = true
             )
             val sseFlow = openAiClient(provider).createChatCompletionStream(request)
@@ -176,12 +185,36 @@ class ApiRepositoryImpl(
     }
 
     /**
+     * Translate the domain [ChatTool] into the request `tools` entry. The
+     * JSON Schema parameters string is parsed here so [ChatTool] itself
+     * stays a plain string carrier.
+     */
+    private fun ChatTool.toToolSpecDto(): ToolSpecDto = ToolSpecDto(
+        type = "function",
+        function = ToolSpecFunctionDto(
+            name = name,
+            description = description,
+            parameters = try {
+                Json.parseToJsonElement(parametersJson)
+            } catch (_: Exception) {
+                buildJsonObject { }
+            }
+        )
+    )
+
+    /**
      * Build the request payload for the chat completion API.
      *
      * Pure-text messages are sent as a `content` string (the legacy
      * shape that every provider accepts). Multimodal messages are sent
      * as a `content` array using the OpenAI image_url / text parts so
      * vision-capable models can read the bitmap.
+     *
+     * Tool turns round-trip the persisted parts: an assistant message
+     * carrying [ContentPart.ToolCall] parts is re-sent as an
+     * assistant message with `tool_calls`, and a [MessageRole.TOOL]
+     * message becomes a `role:"tool"` message with `tool_call_id` —
+     * OpenAI rejects histories where these pairs are broken.
      *
      * The role string is converted here so the DTO stays independent of
      * the domain enum.
@@ -203,8 +236,46 @@ class ApiRepositoryImpl(
                 MessageRole.TOOL -> "tool"
             }
             val parts = message.parts
+            if (role == "tool") {
+                val toolResult = parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull()
+                result.add(ChatMessageDto(
+                    role = "tool",
+                    content = JsonPrimitive(toolResult?.output ?: message.content),
+                    toolCallId = toolResult?.callId ?: ""
+                ))
+                return@forEach
+            }
+            val assistantToolCalls = if (role == "assistant") {
+                parts.filterIsInstance<ContentPart.ToolCall>()
+            } else {
+                emptyList()
+            }
             if (message.hasImages && parts.any { it is ContentPart.Image }) {
                 result.add(ChatMessageDto(role = role, content = buildMultipartContent(parts)))
+            } else if (assistantToolCalls.isNotEmpty()) {
+                // 工具调用轮：文本（可能为空）与 tool_calls 一起回显。
+                val text = if (parts.isNotEmpty()) {
+                    parts.filterIsInstance<ContentPart.Text>().joinToString("\n") { it.text }
+                } else {
+                    message.content
+                }
+                val (reasoning, mainContent) = if (reasoningFormat == "reasoning_content" || reasoningFormat == null) {
+                    extractThinkContent(text)
+                } else {
+                    null to text
+                }
+                result.add(ChatMessageDto(
+                    role = role,
+                    content = if (mainContent.isEmpty()) JsonNull else JsonPrimitive(mainContent),
+                    reasoningContent = reasoning,
+                    toolCalls = assistantToolCalls.map {
+                        ToolCallDto(
+                            id = it.callId,
+                            type = "function",
+                            function = ToolCallFunctionDto(name = it.name, arguments = it.arguments)
+                        )
+                    }
+                ))
             } else {
                 // Text-only path: fall back to the legacy `content` string
                 // so providers that don't accept arrays (or that mirror
@@ -256,6 +327,8 @@ class ApiRepositoryImpl(
                         put("url", JsonPrimitive(part.image.dataUri))
                     })
                 })
+                // 工具调用/结果不走 multipart 分支（上面已单独处理），此处仅为穷尽。
+                is ContentPart.ToolCall, is ContentPart.ToolResult -> {}
             }
         }
     }

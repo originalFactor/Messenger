@@ -19,6 +19,7 @@ package cc.ptoe.messenger.domain.repository
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import kotlinx.coroutines.flow.Flow
 
@@ -26,6 +27,10 @@ interface ApiRepository {
 
     suspend fun fetchModels(provider: Provider): List<ChatModel>
 
+    /**
+     * [tools] 非空时以 `tools` 数组随请求发送（OpenAI function calling）；
+     * 模型发起的工具调用通过 [ChatStreamEvent.Done.toolCalls] 返回。
+     */
     fun streamChatCompletion(
         provider: Provider,
         modelId: String,
@@ -35,7 +40,8 @@ interface ApiRepository {
         topP: Float,
         maxTokens: Int?,
         reasoningEffort: String? = null,
-        reasoningFormat: String? = null
+        reasoningFormat: String? = null,
+        tools: List<ChatTool>? = null
     ): Flow<ChatStreamEvent>
 
     suspend fun createChatCompletion(

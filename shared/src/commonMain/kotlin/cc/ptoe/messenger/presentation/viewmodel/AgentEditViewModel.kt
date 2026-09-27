@@ -72,6 +72,8 @@ data class AgentEditUiState(
     val followDefaultTopP: Boolean = false,
     val followDefaultMaxTokens: Boolean = false,
     val followDefaultReasoningEffort: Boolean = false,
+    /** 是否随请求向模型声明内置工具（仅平台注册了工具时实际生效）。 */
+    val toolsEnabled: Boolean = false,
     val defaultAgent: Agent? = null,
     val nameError: String? = null,
     val isEditing: Boolean = false,
@@ -203,6 +205,7 @@ class AgentEditViewModel(
                     followDefaultTopP = agent.followDefaultTopP,
                     followDefaultMaxTokens = agent.followDefaultMaxTokens,
                     followDefaultReasoningEffort = agent.followDefaultReasoningEffort,
+                    toolsEnabled = agent.toolsEnabled,
                     marketAgentId = agent.marketAgentId,
                     marketAgentRole = agent.marketAgentRole,
                     isEditing = true
@@ -292,6 +295,10 @@ class AgentEditViewModel(
         _uiState.value = _uiState.value.copy(followDefaultReasoningEffort = follow)
     }
 
+    fun onToolsEnabledChange(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(toolsEnabled = enabled)
+    }
+
     /** 角色选择器确认（"chat" / "default" / "title"），save 时生效并转移单持有角色。 */
     fun onRoleSelected(option: String) {
         _uiState.value = _uiState.value.copy(pendingRole = option)
@@ -362,6 +369,7 @@ class AgentEditViewModel(
                         followDefaultTopP = currentState.followDefaultTopP,
                         followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                         followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
+                        toolsEnabled = currentState.toolsEnabled,
                         isDefault = existing.isDefault || claimDefault,
                         role = if (claimTitle) Agent.ROLE_TITLE else existing.role,
                         updatedAt = now
@@ -389,6 +397,7 @@ class AgentEditViewModel(
                     followDefaultTopP = currentState.followDefaultTopP,
                     followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                     followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
+                    toolsEnabled = currentState.toolsEnabled,
                     createdAt = now,
                     updatedAt = now
                 )
@@ -466,6 +475,7 @@ class AgentEditViewModel(
                 followDefaultTopP = currentState.followDefaultTopP,
                 followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                 followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
+                toolsEnabled = currentState.toolsEnabled,
                 updatedAt = System.currentTimeMillis()
             )
         )

@@ -33,8 +33,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -74,6 +76,8 @@ import cc.ptoe.messenger.generated.resources.chat_add_image
 import cc.ptoe.messenger.generated.resources.chat_image_description_hint
 import cc.ptoe.messenger.generated.resources.chat_message_hint
 import cc.ptoe.messenger.generated.resources.chat_remove_image
+import cc.ptoe.messenger.generated.resources.tool_mode_auto
+import cc.ptoe.messenger.generated.resources.tool_mode_manual
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -100,6 +104,12 @@ fun ChatInputBar(
     isAttachingImage: Boolean = false,
     onAddClick: () -> Unit = {},
     onRemoveImage: (MessageImage) -> Unit = {},
+    /**
+     * 工具执行确认模式；null 表示当前会话不涉及工具（不展示切换按钮）。
+     * false=手动确认（默认），true=自动执行。
+     */
+    toolAutoConfirm: Boolean? = null,
+    onToolModeToggle: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -170,6 +180,26 @@ fun ChatInputBar(
                         imageVector = Icons.Default.Add,
                         contentDescription = stringResource(Res.string.chat_add_image),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 工具执行模式切换（手动确认 / 自动执行），仅当 Agent 开启工具时展示
+            if (toolAutoConfirm != null) {
+                IconButton(
+                    onClick = onToolModeToggle,
+                    modifier = Modifier
+                        .padding(end = 4.dp)
+                        .size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = if (toolAutoConfirm) Icons.Default.Bolt else Icons.Default.TouchApp,
+                        contentDescription = stringResource(
+                            if (toolAutoConfirm) Res.string.tool_mode_auto
+                            else Res.string.tool_mode_manual
+                        ),
+                        tint = if (toolAutoConfirm) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

@@ -90,6 +90,8 @@ data class CloudAgentDocument(
     val marketAgentRole: String? = null,
     /** 旧版本服务端/客户端可能不带该字段（null），拉取侧兜底为 ROLE_CHAT。 */
     val role: String? = null,
+    /** 工具开关；旧版本服务端/客户端可能不带该字段，缺省 false。 */
+    val toolsEnabled: Boolean = false,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
     val version: Long = 0,

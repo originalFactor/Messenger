@@ -47,6 +47,8 @@ import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
+import cc.ptoe.messenger.domain.tool.ChatTool
+import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -85,7 +87,7 @@ class AppContainer(
     val database: MessengerDatabase = databaseBuilder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.IO)
-        .addMigrations(MessengerDatabase.MIGRATION_13_14, MessengerDatabase.MIGRATION_14_15)
+        .addMigrations(MessengerDatabase.MIGRATION_13_14, MessengerDatabase.MIGRATION_14_15, MessengerDatabase.MIGRATION_15_16)
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
 
@@ -96,6 +98,9 @@ class AppContainer(
 
     val appPreferences = AppPreferences(dataStore)
     val themePreferences = ThemePreferences(dataStore)
+
+    /** 平台内置工具注册表：桌面为 [终端]，Android 暂为空（不发 tools）。 */
+    val builtinTools: List<ChatTool> = createBuiltinChatTools()
 
     val chatRepository: ChatRepository = ChatRepositoryImpl()
 

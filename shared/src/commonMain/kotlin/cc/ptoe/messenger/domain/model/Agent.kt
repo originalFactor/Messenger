@@ -37,6 +37,8 @@ data class Agent(
     val marketAgentVersion: Long? = null,
     val marketAgentRole: String? = null,
     val role: String = ROLE_CHAT,
+    /** 是否随请求向模型声明内置工具（终端等；仅当平台注册了工具时生效）。 */
+    val toolsEnabled: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 ) {

@@ -39,5 +39,9 @@ data class ChatMessageDto(
      * compatible with future part types.
      */
     @SerialName("content") val content: JsonElement = JsonPrimitive(""),
-    @SerialName("reasoning_content") val reasoningContent: String? = null
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
+    /** 出站：assistant 历史回显中的工具调用；入站：非流式响应的完整工具调用。 */
+    @SerialName("tool_calls") val toolCalls: List<ToolCallDto>? = null,
+    /** 出站：role=tool 消息对应的调用 ID。 */
+    @SerialName("tool_call_id") val toolCallId: String? = null
 )

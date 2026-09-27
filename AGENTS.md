@@ -96,15 +96,20 @@ Messenger/
 │       │       │   │   ├── Message.kt
 │       │       │   │   ├── MessageRole.kt
 │       │       │   │   └── Provider.kt
-│       │       │   └── repository/     # Repository interfaces
-│       │       │       ├── AgentRepository.kt
-│       │       │       ├── ApiRepository.kt
-│       │       │       ├── ChatRepository.kt
-│       │       │       ├── ConversationRepository.kt
-│       │       │       ├── CurrentAgentRepository.kt
-│       │       │       ├── MessageRepository.kt
-│       │       │       ├── ModelRepository.kt
-│       │       │       └── ProviderRepository.kt
+│       │       │   ├── repository/     # Repository interfaces
+│       │       │   │   ├── AgentRepository.kt
+│       │       │   │   ├── ApiRepository.kt
+│       │       │   │   ├── ChatRepository.kt
+│       │       │   │   ├── ConversationRepository.kt
+│       │       │   │   ├── CurrentAgentRepository.kt
+│       │       │   │   ├── MessageRepository.kt
+│       │       │   │   ├── ModelRepository.kt
+│       │       │   │   └── ProviderRepository.kt
+│       │       │   └── tool/           # Built-in tool-calling domain (OpenAI function calling)
+│       │       │       ├── ChatTool.kt        # Tool interface + ToolExecutionResult
+│       │       │       ├── TerminalTool.kt    # Built-in terminal tool (schema / args parsing / output truncation)
+│       │       │       ├── ShellExecutor.kt   # expect: platform shell execution (PowerShell on Windows, /bin/sh elsewhere)
+│       │       │       └── PlatformTools.kt   # expect: platform tool registry (desktop=[TerminalTool], Android=[])
 │       │       └── presentation/
 │       │           ├── navigation/     # Navigation Compose setup
 │       │           │   ├── BottomLevelRoutes.kt
@@ -126,6 +131,7 @@ Messenger/
 │       │           │   │   ├── ChatInputBar.kt
 │       │           │   │   ├── ChatScreen.kt
 │       │           │   │   ├── MessageActionMenu.kt
+│       │           │   │   ├── ToolCallCards.kt   # ToolGroupItem + ToolCallCard (tool turn rendering)
 │       │           │   │   └── UserMessageBubble.kt
 │       │           │   ├── components/
 │       │           │   │   ├── AgentAvatar.kt
@@ -184,6 +190,10 @@ Messenger/
 │       │       │   └── wear/           # Phone-side Wear bridge (HTTP server + WebSocket sync)
 │       │       │       ├── MobileHttpServer.kt
 │       │       │       └── MobileWearSyncManager.kt
+│       │       ├── domain/
+│       │       │   └── tool/
+│       │       │       ├── ShellExecutor.android.kt   # Unsupported placeholder (Android registers no tools yet)
+│       │       │       └── PlatformTools.android.kt   # Empty tool registry
 │       │       └── presentation/
 │       │           ├── platform/
 │       │           │   ├── ImagePicker.android.kt
@@ -201,6 +211,10 @@ Messenger/
 │       │       │   └── util/
 │       │       │       ├── Logger.desktop.kt
 │       │       │       └── Uuid.desktopMain.kt
+│       │       ├── domain/
+│       │       │   └── tool/
+│       │       │       ├── ShellExecutor.desktop.kt   # PowerShell (Windows, UTF-8 forced) / /bin/sh; timeout + tail-truncation
+│       │       │       └── PlatformTools.desktop.kt   # Registers TerminalTool
 │       │       └── presentation/
 │       │           ├── platform/
 │       │           │   ├── ImagePicker.desktop.kt        # FileDialog-based
@@ -210,6 +224,9 @@ Messenger/
 │       └── commonTest/
 │           └── kotlin/cc/ptoe/messenger/
 │               ├── ExampleUnitTest.kt
+│               ├── data/local/ContentPartCodecToolTest.kt
+│               ├── data/remote/sse/ChatStreamParserToolCallTest.kt
+│               ├── domain/tool/TerminalToolTest.kt
 │               └── presentation/utils/StripThinkBlockTest.kt
 ├── androidApp/                 # Android application shell (com.android.application)
 │   ├── build.gradle.kts        # AGP 9 built-in Kotlin + kotlin.compose + kotlin.serialization
@@ -344,7 +361,7 @@ The project uses a manual dependency injection approach via an `AppContainer`:
   - `AgentEntity` - AI agent configurations
   - `ConversationEntity` - Chat conversations
   - `MessageEntity` - Chat messages (`partsJson` column stores multimodal `ContentPart` payloads)
-- Database version: 15 (with `fallbackToDestructiveMigration`). v12 added `ModelEntity.contextWindow` and the conversation auto-summary columns (`ConversationEntity.contextSummary` / `contextSummaryUntil` / `contextTokens` / `contextTokensAt`); v13 added `ModelEntity.inputRate` / `outputRate` (null = provider metadata unknown, 0 = free); v14 added the `ModelEntity` capability columns (`inputModalities` / `outputModalities` / `supportsToolCalling` / `supportsThinking` / `supportsJsonOutput` / `supportsTemperature`); v15 added `AgentEntity.role` (`TEXT NOT NULL DEFAULT 'chat'`)
+- Database version: 16 (with `fallbackToDestructiveMigration`). v12 added `ModelEntity.contextWindow` and the conversation auto-summary columns (`ConversationEntity.contextSummary` / `contextSummaryUntil` / `contextTokens` / `contextTokensAt`); v13 added `ModelEntity.inputRate` / `outputRate` (null = provider metadata unknown, 0 = free); v14 added the `ModelEntity` capability columns (`inputModalities` / `outputModalities` / `supportsToolCalling` / `supportsThinking` / `supportsJsonOutput` / `supportsTemperature`); v15 added `AgentEntity.role` (`TEXT NOT NULL DEFAULT 'chat'`); v16 added `AgentEntity.toolsEnabled` (`INTEGER NOT NULL DEFAULT 0`)
 - Room compiler is registered per-target via KSP in `shared/build.gradle.kts`: `add("kspAndroid", libs.androidx.room.compiler)` + `add("kspDesktop", libs.androidx.room.compiler)`
 
 ### Navigation
@@ -429,6 +446,15 @@ The project uses a manual dependency injection approach via an `AppContainer`:
 - The **title generator holder** (found by `role == ROLE_TITLE`, not by fixed ID) powers LLM conversation titles. To guarantee one always exists, the built-in seed agent (`Agent.BUILTIN_TITLE_AGENT_ID = "builtin-title-agent"`, display name "标题生成" hardcoded like "默认 Agent" — baselines compare literals, no localization) is seeded **only when no title-role holder exists at all** via `CloudSyncRepository.ensureBuiltinTitleAgent()` — called from `AppContainer.initializeLocalAndCloudData()` at startup (offline included), after every full-sync `replaceLocal`, and from `clearAllDataAndReinit()`. Once the user transfers the title role to a regular Agent, the built-in row is not re-seeded (the synced holder takes over). The built-in agent itself never participates in cloud sync (push/pull/`hasLocalData` exclusions replicate the builtin cloud provider pattern), and `applyDelta` additionally demotes other local title holders when a synced title-role agent arrives and protects the local holder from remote delete tombstones
 - **UI protection**: `AgentRepositoryImpl.delete` blocks deleting the built-in ID, the default agent, and the title-role holder (roles move only by transfer, so nothing is lost); `clone` resets `role` to chat. `AgentsScreen` shows a `agents_builtin_badge` ("内置"/"Built-in") badge on the built-in agent and a `agents_title_badge` ("标题生成器"/"Title Generator") badge on the holder; title-role agents open the editor on tap (never switchAgent), and Clone/Delete/long-press multi-select are hidden or disabled for the default, the built-in, and the holder. `AgentEditScreen` locks the name only for the default agent, hides the follow-default toggles for the title holder (the generator always uses its own system prompt/model), and hides the Agent Market section for the default agent. All "Select Agent" pickers (mobile switch dialogs, Wear new-chat) filter out title-role agents (`ConversationsScreen` `selectableAgents`, `MobileHttpServer.handleSyncRequest`)
 - **Title generation flow**: the send-time naive truncation title was removed. On the first non-blank stream `Done` (mobile `ChatViewModel.generateResponse` + `retrySend`, and the phone-side Wear handler alike), `ConversationTitleGenerator.launchGenerateIfNeeded` (fire-and-forget on the app scope, Mutex-serialized) runs when the conversation is still "untitled" (blank / "新对话" / "New Chat"): it calls non-stream `createChatCompletion` with the holder's systemPrompt and its own model (falling back to the chat turn's provider/model pair), strips think blocks / wrapping quotes / newlines and caps length (pure helpers unit-tested in `ConversationTitleGeneratorTest`), and re-reads the conversation before writing (never clobbers a manual rename or concurrent summary state). On failure (API exception or empty result) it **surfaces a localized error** (`error_title_generate_failed` / `error_title_generate_failed_detail`, shown as the chat snackbar via the `onError` callback) **and still falls back** to truncating the first user message; the Wear path passes no callback (logs only)
+
+### Tool calling (function calling) and the built-in terminal tool
+
+- The full OpenAI tool-calling protocol is wired end-to-end: `ChatCompletionRequestDto` carries a `tools` array (`ToolSpecDto`, built from the domain `ChatTool` interface in `domain/tool/`), `ChatMessageDto`/`ChatDeltaDto` carry `tool_calls` / `tool_call_id`, and `ChatStreamParser.parseToEvents` accumulates streaming `delta.tool_calls` fragments by `index` (id/name from the first fragment, arguments concatenated across chunks) and delivers the completed list on `ChatStreamEvent.Done.toolCalls`. Note the parser emits one `Done` on the `finish_reason` chunk and a second on `[DONE]` — both carry the same accumulated calls, so the ViewModel guards tool-turn persistence with a per-round flag. `ApiRepository.streamChatCompletion` takes an optional `tools: List<ChatTool>?` (title generation / auto-summarization are unaffected)
+- **Built-in terminal tool**: `domain/tool/TerminalTool.kt` (function name `terminal`, single `command` string argument) executes via the expect/actual `executeShellCommand` (`domain/tool/ShellExecutor.kt`): the desktop actual runs Windows PowerShell (`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass`, with a `[Console]::OutputEncoding=UTF8` preamble so CJK locales don't mojibake) or `/bin/sh -c` on macOS/Linux, with 60s timeout (process destroyed on timeout/cancel), merged stdout/stderr, bounded memory drain (~1MB rolling tail), and output truncation to the last 10k chars (`TerminalTool.truncateOutput`). The Android actual is an unsupported placeholder and `PlatformTools.android.kt` registers an EMPTY tool list — Android requests send no `tools` array (Android tool behavior is intentionally deferred). `AppContainer.builtinTools` holds the platform registry
+- **Agent-level switch**: `Agent.toolsEnabled` (DB v16 column, default false) toggled in `AgentEditScreen` advanced settings (hidden for the title-role holder), mirrored through cloud sync end-to-end (`CloudAgentDocument`/`CloudAgentRequest` + server `agentSchema`/`AgentDoc`/`AgentUpsertInput`/`upsertAgent`, pull-side default false). A request carries `tools` when the agent toggle is on AND the platform registry is non-empty — `supportsToolCalling` metadata is deliberately NOT a gate (models.dev metadata missing → false would silently disable the feature; unsupported providers surface a visible API error instead)
+- **Agent loop** (`ChatViewModel.launchChatTurn`, shared by `generateResponse` and `retrySend` after de-duplicating their previously identical stream loops): on a `Done` with tool calls the round's text + `ContentPart.ToolCall` parts persist as a NEW assistant row; each call is then confirmed (manual mode: `pendingToolConfirmation` StateFlow + CompletableDeferred → `ToolConfirmDialog` in ChatScreen; denial returns the localized "user denied" text to the model as the tool result) and executed, persisting a `role=TOOL` row (first as `SENDING` = "running" card, then updated with the result; cancellation mid-run writes an interrupted marker via `NonCancellable`). The loop rebuilds context and continues until a final text round (which lands in the original placeholder row and triggers title generation) or `MAX_TOOL_ROUNDS` (10), which fails the turn with `error_tool_rounds_exceeded`. Unknown tool names and malformed arguments are returned to the model as error results for self-correction
+- **Persistence**: tool turns round-trip through `partsJson` with NO Room schema change — `ContentPart` gained `ToolCall(callId, name, arguments)` and `ToolResult(callId, name, output, isError)` subtypes encoded by `ContentPartCodec` as `"tool_call"` / `"tool_result"` part types (older clients drop unknown types; the server treats `partsJson` as an opaque string, so cloud sync carries them verbatim). `buildRequestMessages` re-sends an assistant row with ToolCall parts as an assistant message with `tool_calls`, and a TOOL row as `role:"tool"` + `tool_call_id`; `buildApiContextMessages` drops leading orphan TOOL messages after its takeLast trim (OpenAI rejects unpaired tool messages)
+- **UI**: `ChatScreen.buildChatItems` merges an assistant tool-call row with its following TOOL rows into a `ChatListItem.ToolGroupItem` rendered by `ToolCallCards.kt` (collapsible cards: tool name + status badge, monospace command preview, monospace output; running/error/success states). The chat input bar shows a manual/auto toggle button (TouchApp/Bolt icons) on the LEFT of the text field when the current agent has tools enabled and the platform registers tools; the mode is stored globally in DataStore (`AppPreferences.toolAutoConfirm`, default manual). The Wear chat pipeline (`MobileWearChatHandler`) bypasses ChatViewModel and does NOT execute tools
 
 ### Chat bubble rendering (mobile)
 

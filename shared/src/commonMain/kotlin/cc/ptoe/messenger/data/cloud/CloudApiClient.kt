@@ -85,6 +85,7 @@ internal data class CloudAgentRequest(
     val marketAgentVersion: Long? = null,
     val marketAgentRole: String? = null,
     val role: String = Agent.ROLE_CHAT,
+    val toolsEnabled: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 )

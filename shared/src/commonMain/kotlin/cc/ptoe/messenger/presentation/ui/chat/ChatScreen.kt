@@ -70,11 +70,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
@@ -99,6 +101,10 @@ import cc.ptoe.messenger.generated.resources.chat_no_model_title
 import cc.ptoe.messenger.generated.resources.chat_start_hint
 import cc.ptoe.messenger.generated.resources.chat_title_default
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
+import cc.ptoe.messenger.generated.resources.tool_confirm_allow
+import cc.ptoe.messenger.generated.resources.tool_confirm_deny
+import cc.ptoe.messenger.generated.resources.tool_confirm_message
+import cc.ptoe.messenger.generated.resources.tool_confirm_title
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -120,7 +126,9 @@ fun ChatScreen(
             modelRepository = AppContainerHolder.instance.modelRepository,
             providerRepository = AppContainerHolder.instance.providerRepository,
             chatImageStore = AppContainerHolder.instance.chatImageStore,
-            conversationTitleGenerator = AppContainerHolder.instance.conversationTitleGenerator
+            conversationTitleGenerator = AppContainerHolder.instance.conversationTitleGenerator,
+            appPreferences = AppContainerHolder.instance.appPreferences,
+            builtinTools = AppContainerHolder.instance.builtinTools
         )
     )
 ) {
@@ -134,6 +142,8 @@ fun ChatScreen(
     val streamingContent by viewModel.streamingContent.collectAsStateWithLifecycle()
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
+    val pendingToolConfirmation by viewModel.pendingToolConfirmation.collectAsStateWithLifecycle()
+    val toolAutoConfirm by viewModel.toolAutoConfirm.collectAsStateWithLifecycle()
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -283,7 +293,14 @@ fun ChatScreen(
                     onAddClick = {
                         pickImageLauncher.launch()
                     },
-                    onRemoveImage = { viewModel.removePendingImage(it) }
+                    onRemoveImage = { viewModel.removePendingImage(it) },
+                    // 工具模式按钮：仅当前 Agent 开启工具且平台注册了工具时展示
+                    toolAutoConfirm = if (viewModel.toolsAvailable && agent?.toolsEnabled == true) {
+                        toolAutoConfirm
+                    } else {
+                        null
+                    },
+                    onToolModeToggle = { viewModel.setToolAutoConfirm(!toolAutoConfirm) }
                 )
             }
         },
@@ -318,12 +335,20 @@ fun ChatScreen(
                             when (item) {
                                 is ChatListItem.DateSeparator -> "date_${item.id}"
                                 is ChatListItem.MessageItem -> "msg_${item.message.id}"
+                                is ChatListItem.ToolGroupItem ->
+                                    "tool_${item.assistant?.id ?: item.toolMessages.firstOrNull()?.id}"
                             }
                         }
                     ) { item ->
                         when (item) {
                             is ChatListItem.DateSeparator -> {
                                 DateSeparator(timestamp = item.timestamp)
+                            }
+                            is ChatListItem.ToolGroupItem -> {
+                                ToolGroupItem(
+                                    assistant = item.assistant,
+                                    toolMessages = item.toolMessages
+                                )
                             }
                             is ChatListItem.MessageItem -> {
                                 val message = item.message
@@ -457,11 +482,46 @@ fun ChatScreen(
             }
         )
     }
+
+    // 工具执行手动确认框（拒绝也会作为结果回传给模型，必须显式二选一）
+    pendingToolConfirmation?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.confirmToolExecution(false) },
+            title = { Text(stringResource(Res.string.tool_confirm_title)) },
+            text = {
+                Column {
+                    Text(stringResource(Res.string.tool_confirm_message))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = pending.command,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmToolExecution(true) }) {
+                    Text(stringResource(Res.string.tool_confirm_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.confirmToolExecution(false) }) {
+                    Text(stringResource(Res.string.tool_confirm_deny))
+                }
+            }
+        )
+    }
     }
 }
 
 /**
- * 聊天列表项：日期分隔符或消息
+ * 聊天列表项：日期分隔符、消息或工具调用组
  */
 private sealed class ChatListItem {
     data class DateSeparator(
@@ -473,28 +533,59 @@ private sealed class ChatListItem {
         val message: Message,
         val isLastInGroup: Boolean
     ) : ChatListItem()
+
+    /** assistant 工具轮（含 ToolCall parts）+ 紧随的 TOOL 结果行合并渲染。 */
+    data class ToolGroupItem(
+        val assistant: Message?,
+        val toolMessages: List<Message>
+    ) : ChatListItem()
 }
 
 /**
- * 构建聊天列表项：在每天首条消息前插入日期分隔符（Google Messages 风格）
- * 同时计算每条消息是否为同发送者组内的最后一条（用于气泡尾巴样式）
+ * 构建聊天列表项：在每天首条消息前插入日期分隔符（Google Messages 风格），
+ * 同时计算每条消息是否为同发送者组内的最后一条（用于气泡尾巴样式）。
+ * assistant 工具轮消息与其 TOOL 结果行合并为一个 [ChatListItem.ToolGroupItem]，
+ * 孤儿 TOOL 行（历史异常）也以工具组兜底渲染而不是静默丢弃。
  */
 private fun buildChatItems(messages: List<Message>): List<ChatListItem> {
     if (messages.isEmpty()) return emptyList()
 
     val items = mutableListOf<ChatListItem>()
     var lastDay: Long? = null
+    var index = 0
 
-    messages.forEachIndexed { index, message ->
+    while (index < messages.size) {
+        val message = messages[index]
         // 日期分隔符
         if (lastDay == null || !DateTimeUtils.isSameDay(lastDay, message.timestamp)) {
             items.add(ChatListItem.DateSeparator(id = message.id, timestamp = message.timestamp))
             lastDay = message.timestamp
         }
-        // 是否为组内最后一条：下一条不存在或角色不同
-        val isLastInGroup = index == messages.lastIndex ||
-            messages[index + 1].role != message.role
-        items.add(ChatListItem.MessageItem(message = message, isLastInGroup = isLastInGroup))
+        when {
+            message.role == MessageRole.ASSISTANT &&
+                message.parts.any { it is ContentPart.ToolCall } -> {
+                // 收编紧随其后的连续 TOOL 结果行
+                val toolMessages = mutableListOf<Message>()
+                var cursor = index + 1
+                while (cursor < messages.size && messages[cursor].role == MessageRole.TOOL) {
+                    toolMessages.add(messages[cursor])
+                    cursor++
+                }
+                items.add(ChatListItem.ToolGroupItem(assistant = message, toolMessages = toolMessages))
+                index = cursor
+            }
+            message.role == MessageRole.TOOL -> {
+                items.add(ChatListItem.ToolGroupItem(assistant = null, toolMessages = listOf(message)))
+                index++
+            }
+            else -> {
+                // 是否为组内最后一条：下一条不存在或角色不同
+                val isLastInGroup = index == messages.lastIndex ||
+                    messages[index + 1].role != message.role
+                items.add(ChatListItem.MessageItem(message = message, isLastInGroup = isLastInGroup))
+                index++
+            }
+        }
     }
 
     return items
