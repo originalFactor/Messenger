@@ -18,7 +18,7 @@ Messenger is a Material 3 designed LLM chat application for Android, focused on 
 ```
 Messenger/
 ├── .github/workflows/          # GitHub Actions CI/CD (split into 6 files)
-│   ├── build-android.yml       # Reusable workflow: androidApp release APK
+│   ├── build-android.yml       # Reusable workflow: androidApp ABI release APKs
 │   ├── build-wear.yml          # Reusable workflow: wear release APK
 │   ├── build-desktop.yml       # Reusable workflow: Desktop MSI distribution
 │   ├── build-all.yml           # Reusable aggregator: 3 explicit parallel jobs calling build-*.yml
@@ -106,10 +106,11 @@ Messenger/
 │       │       │   │   ├── ModelRepository.kt
 │       │       │   │   └── ProviderRepository.kt
 │       │       │   └── tool/           # Built-in tool-calling domain (OpenAI function calling)
-│       │       │       ├── ChatTool.kt        # Tool interface + ToolExecutionResult
-│       │       │       ├── TerminalTool.kt    # Built-in terminal tool (schema / args parsing / output truncation)
-│       │       │       ├── ShellExecutor.kt   # expect: platform shell execution (PowerShell on Windows, /bin/sh elsewhere)
-│       │       │       └── PlatformTools.kt   # expect: platform tool registry (desktop=[TerminalTool], Android=[])
+│       │       │       ├── ChatTool.kt          # Tool interface + ToolExecutionResult
+│       │       │       ├── TerminalTool.kt      # Built-in terminal tool (schema / args parsing / output truncation)
+│       │       │       ├── ShellExecutor.kt     # expect: platform shell execution
+│       │       │       ├── RuntimePathPolicy.kt # Archive/symlink path validation
+│       │       │       └── PlatformTools.kt     # expect: platform tool registry
 │       │       └── presentation/
 │       │           ├── navigation/     # Navigation Compose setup
 │       │           │   ├── BottomLevelRoutes.kt
@@ -192,8 +193,8 @@ Messenger/
 │       │       │       └── MobileWearSyncManager.kt
 │       │       ├── domain/
 │       │       │   └── tool/
-│       │       │       ├── ShellExecutor.android.kt   # Unsupported placeholder (Android registers no tools yet)
-│       │       │       └── PlatformTools.android.kt   # Empty tool registry
+│       │       │       ├── ShellExecutor.android.kt   # App-private pinned Termux bootstrap runtime
+│       │       │       └── PlatformTools.android.kt   # Registers TerminalTool
 │       │       └── presentation/
 │       │           ├── platform/
 │       │           │   ├── ImagePicker.android.kt
@@ -449,8 +450,7 @@ The project uses a manual dependency injection approach via an `AppContainer`:
 
 ### Tool calling (function calling) and the built-in terminal tool
 
-- The full OpenAI tool-calling protocol is wired end-to-end: `ChatCompletionRequestDto` carries a `tools` array (`ToolSpecDto`, built from the domain `ChatTool` interface in `domain/tool/`), `ChatMessageDto`/`ChatDeltaDto` carry `tool_calls` / `tool_call_id`, and `ChatStreamParser.parseToEvents` accumulates streaming `delta.tool_calls` fragments by `index` (id/name from the first fragment, arguments concatenated across chunks) and delivers the completed list on `ChatStreamEvent.Done.toolCalls`. Note the parser emits one `Done` on the `finish_reason` chunk and a second on `[DONE]` — both carry the same accumulated calls, so the ViewModel guards tool-turn persistence with a per-round flag. `ApiRepository.streamChatCompletion` takes an optional `tools: List<ChatTool>?` (title generation / auto-summarization are unaffected)
-- **Built-in terminal tool**: `domain/tool/TerminalTool.kt` (function name `terminal`, single `command` string argument) executes via the expect/actual `executeShellCommand` (`domain/tool/ShellExecutor.kt`): the desktop actual runs Windows PowerShell (`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass`, with a `[Console]::OutputEncoding=UTF8` preamble so CJK locales don't mojibake) or `/bin/sh -c` on macOS/Linux, with 60s timeout (process destroyed on timeout/cancel), merged stdout/stderr, bounded memory drain (~1MB rolling tail), and output truncation to the last 10k chars (`TerminalTool.truncateOutput`). The Android actual is an unsupported placeholder and `PlatformTools.android.kt` registers an EMPTY tool list — Android requests send no `tools` array (Android tool behavior is intentionally deferred). `AppContainer.builtinTools` holds the platform registry
+- **Built-in terminal tool**: `domain/tool/TerminalTool.kt` (function name `terminal`, single `command` string argument) executes via the expect/actual `executeShellCommand` (`domain/tool/ShellExecutor.kt`). Desktop uses Windows PowerShell (UTF-8) or `/bin/sh`; Android extracts a pinned, SHA-256-verified Termux bootstrap from the ABI-specific APK asset into `filesDir/agent-runtime`, validates archive paths and symlink graphs, and executes with a clean environment from an app-private workspace. Android installation is lazy, serialized, atomic, and reuses a valid version marker; commands have the existing 60-second timeout, bounded output drain, and 10,000-character tool-result truncation.
 - **Agent-level switch**: `Agent.toolsEnabled` (DB v16 column, default false) toggled in `AgentEditScreen` advanced settings (hidden for the title-role holder), mirrored through cloud sync end-to-end (`CloudAgentDocument`/`CloudAgentRequest` + server `agentSchema`/`AgentDoc`/`AgentUpsertInput`/`upsertAgent`, pull-side default false). A request carries `tools` when the agent toggle is on AND the platform registry is non-empty — `supportsToolCalling` metadata is deliberately NOT a gate (models.dev metadata missing → false would silently disable the feature; unsupported providers surface a visible API error instead)
 - **Agent loop** (`ChatViewModel.launchChatTurn`, shared by `generateResponse` and `retrySend` after de-duplicating their previously identical stream loops): on a `Done` with tool calls the round's text + `ContentPart.ToolCall` parts persist as a NEW assistant row; each call is then confirmed (manual mode: `pendingToolConfirmation` StateFlow + CompletableDeferred → `ToolConfirmDialog` in ChatScreen; denial returns the localized "user denied" text to the model as the tool result) and executed, persisting a `role=TOOL` row (first as `SENDING` = "running" card, then updated with the result; cancellation mid-run writes an interrupted marker via `NonCancellable`). The loop rebuilds context and continues until a final text round (which lands in the original placeholder row and triggers title generation) or `MAX_TOOL_ROUNDS` (10), which fails the turn with `error_tool_rounds_exceeded`. Unknown tool names and malformed arguments are returned to the model as error results for self-correction
 - **Persistence**: tool turns round-trip through `partsJson` with NO Room schema change — `ContentPart` gained `ToolCall(callId, name, arguments)` and `ToolResult(callId, name, output, isError)` subtypes encoded by `ContentPartCodec` as `"tool_call"` / `"tool_result"` part types (older clients drop unknown types; the server treats `partsJson` as an opaque string, so cloud sync carries them verbatim). `buildRequestMessages` re-sends an assistant row with ToolCall parts as an assistant message with `tool_calls`, and a TOOL row as `role:"tool"` + `tool_call_id`; `buildApiContextMessages` drops leading orphan TOOL messages after its takeLast trim (OpenAI rejects unpaired tool messages)
@@ -591,6 +591,12 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
 ./gradlew :desktopApp:packageReleaseDeb   # Linux
 ```
 
+### Android agent runtime
+
+Android debug and release variants package one pinned Termux bootstrap per ABI at build time. `androidApp:assembleDebug` and `androidApp:assembleRelease` produce ABI-specific APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`; each variant downloads the expected archive and verifies its SHA-256 before packaging it under `assets/agent-runtime/bootstrap.zip`.
+
+At runtime, the terminal tool lazily extracts the matching asset into the app-private `filesDir/agent-runtime` directory. Extraction rejects absolute, traversal, duplicate, overwriting, dangling, and cyclic paths; the completed runtime is published atomically and recorded with a version/ABI/hash marker. Commands run from an app-private workspace with a restricted environment and never use a separate Termux installation. The agent's tools setting and the per-command confirmation dialog remain required before execution.
+
 ### Local Development
 
 1. Create a `local.properties` file with `sdk.dir=/path/to/android/sdk`
@@ -697,7 +703,7 @@ GitHub Actions CI/CD is split into 6 workflow files under `.github/workflows/`, 
   - `build-desktop.yml` runs on `windows-latest` (pwsh + `.\gradlew.bat`, required for MSI packaging), builds `:desktopApp:packageReleaseMsi`, and uploads `desktop-msi` (unsigned).
 - **`build-all.yml` (aggregator)**: Reusable workflow triggered via `workflow_call`. Declares three explicit jobs (`build-android`, `build-wear`, `build-desktop`) with no `needs` between them, so they run in parallel — each calls its corresponding `build-<target>.yml` via `uses:` with `secrets: inherit`. (GitHub Actions does not support `strategy.matrix` on jobs that call reusable workflows via `uses:`, so the three calls are written out explicitly instead of generated from a matrix.)
 - **`ci.yml` (Push/PR CI)**: Triggered on push to `main` and PRs to `main`, but only when project code or build dependencies change. The `paths` filter (applied identically to both `push` and `pull_request`) includes: `shared/**`, `androidApp/**`, `desktopApp/**`, `wear/**`, `llm-typewriter/**`, root `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties`, `gradle/libs.versions.toml`, `gradle/wrapper/**`, `gradlew` / `gradlew.bat`, and `.github/workflows/**`. Documentation (`README.md`, `AGENTS.md`), `server/**`, `specs/**`, `LICENSE`, `logo.*`, `.idea/**`, `.gitmodules`, `licenserc.toml`, etc. do NOT trigger CI. A single `build-all` job calls `./.github/workflows/build-all.yml` with `secrets: inherit`.
-- **`release.yml` (Tag-triggered Release CI)**: Triggered only on `v*` tags. A `build-all` job calls `./.github/workflows/build-all.yml` (three parallel builds), then a `release` job (`needs: build-all`, runs on `ubuntu-latest`) downloads all three artifacts (androidApp APK, wear APK, desktop MSI) and creates a GitHub Release via `softprops/action-gh-release@v2` with `generate_release_notes: true`, attaching all three binaries.
+- **`release.yml` (Tag-triggered Release CI)**: Triggered only on `v*` tags. A `build-all` job calls `./.github/workflows/build-all.yml` (three parallel builds), then a `release` job (`needs: build-all`, runs on `ubuntu-latest`) downloads the Android ABI APKs, Wear APK, and desktop MSI and creates a GitHub Release via `softprops/action-gh-release@v2` with `generate_release_notes: true`.
 - **Caching**: `gradle/actions/setup-gradle@v4` with `cache-read-only: ${{ github.ref != 'refs/heads/main' }}` (PR builds only read cache, main pushes write it) and `gradle-home-cache-cleanup: true`; plus a dedicated `~/.konan` Kotlin/Native compiler cache keyed on `*.gradle.kts` / `libs.versions.toml` hashes.
 - **Signing**: Keystore is materialized from the `KEYSTORE_BASE64` secret into `keyring/messenger-release.jks` (only on push builds, not PRs) inside the androidApp and wear build workflows; `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` secrets feed the signing config. Desktop MSI is unsigned.
 
@@ -744,6 +750,6 @@ Write clear, concise commit messages describing what was changed and why. Push o
 - [ci.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/ci.yml) - Push/PR CI: calls build-all.yml
 - [release.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/release.yml) - Tag-triggered (v*) Release CI: calls build-all.yml + GitHub Release
 - [build-all.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-all.yml) - Reusable aggregator: matrix-parallel call of the 3 build workflows
-- [build-android.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-android.yml) - Reusable workflow: androidApp release APK
+- [build-android.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-android.yml) - Reusable workflow: androidApp ABI release APKs
 - [build-wear.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-wear.yml) - Reusable workflow: wear release APK
 - [build-desktop.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-desktop.yml) - Reusable workflow: Desktop MSI distribution

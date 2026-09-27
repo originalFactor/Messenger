@@ -99,7 +99,7 @@ class AppContainer(
     val appPreferences = AppPreferences(dataStore)
     val themePreferences = ThemePreferences(dataStore)
 
-    /** 平台内置工具注册表：桌面为 [终端]，Android 暂为空（不发 tools）。 */
+    /** Platform built-in tools: desktop and Android both register the terminal tool. */
     val builtinTools: List<ChatTool> = createBuiltinChatTools()
 
     val chatRepository: ChatRepository = ChatRepositoryImpl()

@@ -88,8 +88,8 @@ jobs:
         shell: bash
         run: ./gradlew :androidApp:assembleRelease
 
-      - name: Upload androidApp release artifact
+      - name: Upload androidApp release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: androidApp-release
-          path: androidApp/build/outputs/apk/release/androidApp-release.apk
+          path: androidApp/build/outputs/apk/*/release/androidApp-*-release.apk

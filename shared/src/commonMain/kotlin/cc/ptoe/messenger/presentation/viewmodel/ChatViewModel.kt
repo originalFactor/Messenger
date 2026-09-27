@@ -196,8 +196,11 @@ class ChatViewModel(
             initialValue = false
         )
 
-    /** 平台是否注册了内置工具（决定输入栏是否展示模式切换按钮）。 */
+    /** Platform has registered at least one built-in tool. */
     val toolsAvailable: Boolean get() = builtinTools.isNotEmpty()
+
+    /** True when at least one registered tool can run without explicit approval. */
+    val toolsCanAutoConfirm: Boolean get() = builtinTools.any { !it.requiresUserConfirmation }
 
     /** 等待用户确认的工具调用（手动模式下非空时 ChatScreen 弹确认框）。 */
     data class PendingToolConfirmation(
@@ -844,7 +847,7 @@ class ChatViewModel(
         }
         for (call in calls) {
             val tool = toolsByName[call.name]
-            val allowed = if (toolAutoConfirm.value || tool == null) {
+            val allowed = if (tool == null || (!tool.requiresUserConfirmation && toolAutoConfirm.value)) {
                 true
             } else {
                 awaitToolConfirmation(call)

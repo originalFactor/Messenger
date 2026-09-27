@@ -365,6 +365,7 @@
     <!-- 内置工具（终端） -->
     <string name="tool_confirm_title">执行终端命令</string>
     <string name="tool_confirm_message">模型请求执行以下命令：</string>
+    <string name="tool_confirm_scope">此命令将在 Messenger 的应用私有工作区中启动。</string>
     <string name="tool_confirm_allow">允许</string>
     <string name="tool_confirm_deny">拒绝</string>
     <string name="tool_denied_result">用户拒绝执行该命令。</string>

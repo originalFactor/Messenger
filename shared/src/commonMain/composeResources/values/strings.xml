@@ -366,6 +366,7 @@
     <!-- Built-in tools (terminal) -->
     <string name="tool_confirm_title">Run terminal command</string>
     <string name="tool_confirm_message">The model wants to run the following command:</string>
+    <string name="tool_confirm_scope">This command starts in Messenger's private workspace.</string>
     <string name="tool_confirm_allow">Allow</string>
     <string name="tool_confirm_deny">Deny</string>
     <string name="tool_denied_result">The user denied this command.</string>

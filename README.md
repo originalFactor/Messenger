@@ -57,6 +57,7 @@ Key highlights:
 - **Chat anywhere** — Works on your phone, tablet, Wear OS watch, and desktop (JVM)
 - **Bring your own key** — Use API keys from your preferred AI providers, no middleman
 - **Custom AI agents** — Create and switch between different AI personas and assistants
+- **Built-in terminal tool** — Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
 - **Multiple providers** — Connect to various OpenAI-compatible model providers in one app
 - **Streaming responses** — SSE streaming with progressive Markdown and inline / display LaTeX math rendering (powered by RaTeX)
 - **Modern design** — Clean Material 3 interface that's easy on the eyes, with adaptive layouts (bottom nav on phones, navigation rail + dual-pane on tablet/desktop)
@@ -104,11 +105,12 @@ To get a local copy up and running, follow these simple steps.
    ```
 4. Build the debug APK / Desktop app
    ```sh
-   ./gradlew :androidApp:assembleDebug     # Android phone/tablet
+   ./gradlew :androidApp:assembleDebug     # ABI-specific arm64-v8a/armeabi-v7a/x86/x86_64 APKs
    ./gradlew :wear:assembleDebug           # Wear OS companion
    ./gradlew :desktopApp:run               # Desktop (JVM)
    ```
-5. For release builds, place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+   Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
+   Android release builds produce the same four ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
 6. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
    git remote set-url origin ECSDevs/Messenger
@@ -123,7 +125,8 @@ To get a local copy up and running, follow these simple steps.
 2. Add your API key from your preferred AI provider
 3. Pick a model and start chatting
 4. Create custom agents for different tasks
-5. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
+5. Enable **Tools** for an agent when terminal access is needed. In manual mode, Messenger asks for confirmation before each command; Android runs accepted commands only from its app-private workspace.
+6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.
 

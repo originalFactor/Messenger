@@ -33,10 +33,10 @@ class TerminalTool(
     override val name: String = TOOL_NAME
 
     override val description: String =
-        "Run a command in the system terminal and return its combined output and exit code. " +
-            "On Windows the command runs in Windows PowerShell; on macOS/Linux it runs in /bin/sh. " +
-            "Use it to inspect files, run scripts, or gather system information when asked. " +
-            "The working directory is the user home directory."
+        "Run one command in Messenger's isolated app-private workspace and return its combined output and exit code. " +
+            "Use it to inspect files, create files, or run scripts when asked. The working directory is fixed to the workspace."
+
+    override val requiresUserConfirmation: Boolean = true
 
     override val parametersJson: String =
         """{"type":"object","properties":{"command":{"type":"string",""" +

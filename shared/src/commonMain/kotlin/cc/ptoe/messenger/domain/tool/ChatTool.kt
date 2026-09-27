@@ -28,7 +28,10 @@ interface ChatTool {
     /** Natural-language description the model uses to decide when to call the tool. */
     val description: String
 
-    /** JSON Schema object (as a JSON string) describing the accepted arguments. */
+    /** Shell-like tools remain behind an explicit approval gate. */
+    val requiresUserConfirmation: Boolean get() = false
+
+    /** JSON Schema object (as a JSON string) describing accepted arguments. */
     val parametersJson: String
 
     /**

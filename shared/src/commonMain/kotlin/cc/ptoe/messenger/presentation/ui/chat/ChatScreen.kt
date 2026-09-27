@@ -103,8 +103,9 @@ import cc.ptoe.messenger.generated.resources.chat_title_default
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
 import cc.ptoe.messenger.generated.resources.tool_confirm_allow
 import cc.ptoe.messenger.generated.resources.tool_confirm_deny
-import cc.ptoe.messenger.generated.resources.tool_confirm_message
 import cc.ptoe.messenger.generated.resources.tool_confirm_title
+import cc.ptoe.messenger.generated.resources.tool_confirm_message
+import cc.ptoe.messenger.generated.resources.tool_confirm_scope
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -294,8 +295,12 @@ fun ChatScreen(
                         pickImageLauncher.launch()
                     },
                     onRemoveImage = { viewModel.removePendingImage(it) },
-                    // 工具模式按钮：仅当前 Agent 开启工具且平台注册了工具时展示
-                    toolAutoConfirm = if (viewModel.toolsAvailable && agent?.toolsEnabled == true) {
+                    // Only tools that explicitly support unattended execution expose this mode.
+                    toolAutoConfirm = if (
+                        viewModel.toolsAvailable &&
+                        viewModel.toolsCanAutoConfirm &&
+                        agent?.toolsEnabled == true
+                    ) {
                         toolAutoConfirm
                     } else {
                         null
@@ -491,7 +496,11 @@ fun ChatScreen(
             text = {
                 Column {
                     Text(stringResource(Res.string.tool_confirm_message))
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(Res.string.tool_confirm_scope),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = pending.command,
                         style = MaterialTheme.typography.bodySmall,
