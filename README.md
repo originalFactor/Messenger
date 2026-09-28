@@ -125,7 +125,7 @@ To get a local copy up and running, follow these simple steps.
 2. Add your API key from your preferred AI provider
 3. Pick a model and start chatting
 4. Create custom agents for different tasks
-5. Enable **Tools** for an agent when terminal access is needed. In manual mode, Messenger asks for confirmation before each command; Android runs accepted commands only from its app-private workspace.
+5. Enable **Tools** for an agent when terminal access is needed. Terminal commands are deliberately read-only: shell operators, interpreters, redirection, absolute paths, and path traversal are rejected. In manual mode, Messenger asks for confirmation before each tool call; use the explicit workspace edit/create tools for file changes.
 6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.

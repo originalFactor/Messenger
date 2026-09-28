@@ -651,8 +651,8 @@ class ChatViewModel(
         excludeTargetFromHistory: Boolean = false
     ) {
         currentGenerationJob = viewModelScope.launch {
-            var hasFinished = false
             var detectedFormat = initialDetectedFormat
+            var hasFinished = false
             var currentContent = ""
             try {
                 // 请求是否携带内置 tools：Agent 开关打开且平台注册了工具即发送
@@ -673,6 +673,7 @@ class ChatViewModel(
                 var turnComplete = false
                 while (!turnComplete) {
                     round++
+                    hasFinished = false
                     // 本轮是否为工具调用轮（Done 事件写回；一轮流会因 finish_reason
                     // 块与 [DONE] 各发一次 Done，须防重复处理）
                     var toolRoundCalls: List<ToolCallData>? = null
@@ -718,6 +719,7 @@ class ChatViewModel(
                                 _streamingContent.value = currentContent
                             }
                             is ChatStreamEvent.Done -> {
+                                if (hasFinished) return@collect
                                 hasFinished = true
                                 if (detectedFormat == null && currentContent.contains("<think")) {
                                     detectedFormat = "think_tag"
@@ -813,9 +815,6 @@ class ChatViewModel(
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                if (hasFinished) {
-                    return@launch
-                }
                 val errorMsg = e.message ?: getString(Res.string.error_unknown)
                 saveStreamResult(targetMessage, currentContent, conversationId, errorMsg)
                 setError(errorMsg)

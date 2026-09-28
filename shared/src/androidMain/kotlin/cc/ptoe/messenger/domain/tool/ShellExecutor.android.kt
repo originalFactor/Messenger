@@ -28,11 +28,13 @@ import java.util.regex.PatternSyntaxException
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.TimeUnit
 
 /** Installed, app-private Termux bootstrap and workspace paths. */
 private data class AndroidRuntimePaths(
@@ -74,40 +76,47 @@ private object AndroidShellRuntime {
             )
         }
 
-        val processRef = arrayOfNulls<Process>(1)
         val result = try {
-            withTimeoutOrNull(timeoutMs) {
-                withContext(Dispatchers.IO) {
-                    val process = startProcess(runtime, command)
-                    processRef[0] = process
+            withContext(Dispatchers.IO) {
+                val process = startProcess(runtime, command)
+                try {
                     coroutineScope {
                         val stdout = async { drain(process.inputStream) }
                         val stderr = async { drain(process.errorStream) }
-                        val exitCode = process.waitFor()
-                        val output = buildString {
-                            append(stdout.await())
-                            val error = stderr.await()
-                            if (error.isNotEmpty()) {
-                                if (isNotEmpty()) append('\n')
-                                append(error)
+                        val exited = runInterruptible { process.waitFor(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS) }
+                        if (!exited) {
+                            terminate(process)
+                            runCatching { process.inputStream.close() }
+                            runCatching { process.errorStream.close() }
+                            stdout.cancelAndJoin()
+                            stderr.cancelAndJoin()
+                            ShellResult(
+                                output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.",
+                                exitCode = -1
+                            )
+                        } else {
+                            val output = buildString {
+                                append(stdout.await())
+                                val error = stderr.await()
+                                if (error.isNotEmpty()) {
+                                    if (isNotEmpty()) append('\n')
+                                    append(error)
+                                }
                             }
+                            ShellResult(output = output, exitCode = process.exitValue())
                         }
-                        ShellResult(output = output, exitCode = exitCode)
                     }
+                } finally {
+                    terminate(process)
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             ShellResult(output = "Failed to execute Android shell command: ${e.message ?: "exec failed"}", exitCode = -1)
-        } finally {
-            processRef[0]?.let(::terminate)
         }
 
-        return result ?: ShellResult(
-            output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.",
-            exitCode = -1
-        )
+        return result
     }
 
     private fun ensureInstalled(): AndroidRuntimePaths {
@@ -308,8 +317,10 @@ private object AndroidShellRuntime {
     private fun terminate(process: Process) {
         if (!process.isAlive) return
         process.destroy()
-        runCatching { process.waitFor() }
-        if (process.isAlive) process.destroyForcibly()
+        if (!runCatching { process.waitFor(250L, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
+            process.destroyForcibly()
+            runCatching { process.waitFor(2L, TimeUnit.SECONDS) }
+        }
     }
 
     private fun supportedAbi(): String? = Build.SUPPORTED_ABIS.firstNotNullOfOrNull {

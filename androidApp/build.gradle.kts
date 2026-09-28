@@ -53,10 +53,20 @@ abstract class DownloadBootstrapTask : DefaultTask() {
     @TaskAction
     fun download() {
         val outputDir = outputDirectory.get().asFile
-        val archive = outputDir.resolve("agent-runtime/bootstrap.zip")
         outputDir.mkdirs()
-        archive.parentFile.mkdirs()
-        val temporary = archive.parentFile.resolve("bootstrap.zip.part")
+        val archiveDir = outputDir.resolve("agent-runtime")
+        archiveDir.mkdirs()
+        val archive = archiveDir.resolve("bootstrap.zip")
+        val temporary = archiveDir.resolve("bootstrap.zip.part")
+        if (temporary.exists()) temporary.delete()
+        val legacyArchive = outputDir.resolve("bootstrap.zip")
+        if (legacyArchive.exists()) legacyArchive.delete()
+        if (archive.isFile && sha256(archive) == expectedSha256.get()) {
+            logger.lifecycle("Reusing verified Termux bootstrap ${abi.get()} (${archive.length()} bytes, SHA-256 ${expectedSha256.get()})")
+            return
+        }
+        archive.delete()
+        archiveDir.mkdirs()
         var lastFailure: Exception? = null
         try {
         synchronized(downloadLock) {
@@ -117,6 +127,19 @@ abstract class DownloadBootstrapTask : DefaultTask() {
         } finally {
             if (temporary.exists()) temporary.delete()
         }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 }
 
@@ -225,6 +248,7 @@ androidComponents {
 // exclude from the root build.gradle.kts as a safety net.
 dependencies {
     implementation(project(":shared"))
+    implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)

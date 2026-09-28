@@ -19,6 +19,7 @@ local.properties
 /.trae
 /.workbuddy
 /.zcode
+/.zcodeignore
 
 # Keystore files
 *.jks

@@ -22,9 +22,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The built-in terminal tool. Runs one shell command and returns its combined
- * output and exit code. Platform shell selection lives in the platform
- * `executeShellCommand` actual.
+ * The built-in terminal tool. Runs one read-only inspection command in the
+ * app-private workspace. File mutation is exposed separately through the
+ * consent-gated workspace edit/create tools.
  */
 class TerminalTool(
     private val timeoutMs: Long = DEFAULT_TIMEOUT_MS
@@ -33,14 +33,14 @@ class TerminalTool(
     override val name: String = TOOL_NAME
 
     override val description: String =
-        "Run one command in Messenger's isolated app-private workspace and return its combined output and exit code. " +
-            "Use it to inspect files, create files, or run scripts when asked. The working directory is fixed to the workspace."
+        "Run one read-only inspection command in Messenger's isolated app-private workspace and return its combined output and exit code. " +
+            "Do not use shell operators, interpreters, redirection, or commands that modify files. File changes use the workspace edit/create tools."
 
     override val requiresUserConfirmation: Boolean = true
 
     override val parametersJson: String =
         """{"type":"object","properties":{"command":{"type":"string",""" +
-            """"description":"The terminal command to execute"}},"required":["command"]}"""
+            """"description":"One read-only inspection command to execute"}},"required":["command"]}"""
 
     override suspend fun execute(argumentsJson: String): ToolExecutionResult {
         val command = parseCommand(argumentsJson)
@@ -48,8 +48,11 @@ class TerminalTool(
                 output = "Invalid arguments: expected a JSON object with a string \"command\" field.",
                 isError = true
             )
-        if (command.isBlank()) {
-            return ToolExecutionResult(output = "Invalid arguments: command is empty.", isError = true)
+        ShellCommandPolicy.rejectionReason(command)?.let { reason ->
+            return ToolExecutionResult(
+                output = "Command rejected: $reason. File changes use the workspace edit/create tools.",
+                isError = true
+            )
         }
         val result = executeShellCommand(command, timeoutMs)
         val exitNote = if (result.exitCode == 0) "Exit code: 0" else "Exit code: ${result.exitCode} (command failed)"
