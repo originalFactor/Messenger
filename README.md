@@ -105,12 +105,12 @@ To get a local copy up and running, follow these simple steps.
    ```
 4. Build the debug APK / Desktop app
    ```sh
-   ./gradlew :androidApp:assembleDebug     # ABI-specific arm64-v8a/armeabi-v7a/x86/x86_64 APKs
+   ./gradlew :androidApp:assembleDebug     # ABI-specific arm64-v8a/armeabi-v7a/x86_64 APKs
    ./gradlew :wear:assembleDebug           # Wear OS companion
    ./gradlew :desktopApp:run               # Desktop (JVM)
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
-   Android release builds produce the same four ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+   Android release builds produce the same three ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
 6. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
    git remote set-url origin ECSDevs/Messenger

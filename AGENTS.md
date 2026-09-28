@@ -598,7 +598,7 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
 
 ### Android agent runtime
 
-Android debug and release variants package one pinned Termux bootstrap per ABI at build time. `androidApp:assembleDebug` and `androidApp:assembleRelease` produce ABI-specific APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`; each variant downloads the expected archive and verifies its SHA-256 before packaging it under `assets/agent-runtime/bootstrap.zip`.
+Android debug and release variants package one pinned Termux bootstrap per ABI at build time. `androidApp:assembleDebug` and `androidApp:assembleRelease` produce ABI-specific APKs for `arm64-v8a`, `armeabi-v7a`, and `x86_64`; each variant downloads the expected archive and verifies its SHA-256 before packaging it under `assets/agent-runtime/bootstrap.zip`.
 
 At runtime, terminal execution lazily extracts the matching asset into the app-private `filesDir/agent-runtime` directory. Extraction rejects absolute, traversal, duplicate, overwriting, dangling, and cyclic paths; the completed runtime is atomically published and recorded with a version/ABI/hash marker. Commands start in an app-private workspace with a restricted environment and a 60-second timeout. The terminal accepts only approved read-only commands; shell composition, interpreters, redirection, absolute paths, and traversal are rejected. Workspace `edit`/`create` operations are separate and confirmation-gated. Manual confirmation is the default; the chat tool-mode toggle can enable automatic execution for the registered tools.
 

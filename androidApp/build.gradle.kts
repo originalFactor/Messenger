@@ -36,7 +36,6 @@ private val bootstrapRelease = "bootstrap-2026.09.27-r1%2Bapt.android-7"
 private val bootstrapSpecs = listOf(
     BootstrapSpec("arm64V8a", "arm64-v8a", "bootstrap-aarch64.zip", "9ddc32921187c85b04556bf56c6cce94e00b813ecd9299959a2d9b7c33386994"),
     BootstrapSpec("armeabiV7a", "armeabi-v7a", "bootstrap-arm.zip", "3c856821189c658446ef2a527d264ac9848772d0cae1aa318ecab16315ef732d"),
-    BootstrapSpec("x86", "x86", "bootstrap-i686.zip", "100ab4fa85cb90459cb83771602f88007c3296f25098de656979f063e162abd2"),
     BootstrapSpec("x86_64", "x86_64", "bootstrap-x86_64.zip", "d8abd8714f8aab19ce923202e647d09b137b0ea34edc25a57b9fb93db6b1c00e")
 )
 
@@ -173,10 +172,6 @@ android {
         create("armeabiV7a") {
             dimension = "runtimeAbi"
             ndk { abiFilters += "armeabi-v7a" }
-        }
-        create("x86") {
-            dimension = "runtimeAbi"
-            ndk { abiFilters += "x86" }
         }
         create("x86_64") {
             dimension = "runtimeAbi"
