@@ -16,4 +16,4 @@
 
 package cc.ptoe.messenger.domain.tool
 
-actual fun createBuiltinChatTools(): List<ChatTool> = listOf(TerminalTool())
+actual fun createBuiltinChatTools(): List<ChatTool> = listOf(TerminalTool()) + WorkspaceTool.all

@@ -106,11 +106,13 @@ Messenger/
 │       │       │   │   ├── ModelRepository.kt
 │       │       │   │   └── ProviderRepository.kt
 │       │       │   └── tool/           # Built-in tool-calling domain (OpenAI function calling)
-│       │       │       ├── ChatTool.kt          # Tool interface + ToolExecutionResult
-│       │       │       ├── TerminalTool.kt      # Built-in terminal tool (schema / args parsing / output truncation)
-│       │       │       ├── ShellExecutor.kt     # expect: platform shell execution
-│       │       │       ├── RuntimePathPolicy.kt # Archive/symlink path validation
-│       │       │       └── PlatformTools.kt     # expect: platform tool registry
+│       │       │       │   ├── ChatTool.kt          # Tool interface + ToolExecutionResult
+│       │       │       │   ├── TerminalTool.kt       # Built-in terminal tool (schema / args parsing / output truncation)
+│       │       │       │   ├── ShellExecutor.kt      # expect: platform shell execution
+│       │       │       │   ├── WorkspaceOperation.kt  # Shared workspace operations contract
+│       │       │       │   ├── WorkspaceTool.kt       # Bounded glob/grep/read/edit/create tools
+│       │       │       │   ├── RuntimePathPolicy.kt   # Bootstrap archive and symlink path policy
+│       │       │       │   └── PlatformTools.kt       # expect: platform tool registry
 │       │       └── presentation/
 │       │           ├── navigation/     # Navigation Compose setup
 │       │           │   ├── BottomLevelRoutes.kt
@@ -194,7 +196,7 @@ Messenger/
 │       │       ├── domain/
 │       │       │   └── tool/
 │       │       │       ├── ShellExecutor.android.kt   # App-private pinned Termux bootstrap runtime
-│       │       │       └── PlatformTools.android.kt   # Registers TerminalTool
+│       │       │       └── PlatformTools.android.kt   # Registers TerminalTool + WorkspaceTool
 │       │       └── presentation/
 │       │           ├── platform/
 │       │           │   ├── ImagePicker.android.kt
@@ -214,8 +216,9 @@ Messenger/
 │       │       │       └── Uuid.desktopMain.kt
 │       │       ├── domain/
 │       │       │   └── tool/
-│       │       │       ├── ShellExecutor.desktop.kt   # PowerShell (Windows, UTF-8 forced) / /bin/sh; timeout + tail-truncation
-│       │       │       └── PlatformTools.desktop.kt   # Registers TerminalTool
+│       │       │       ├── ShellExecutor.desktop.kt   # PowerShell (Windows, UTF-8) / /bin/sh; timeout + tail-truncation
+│       │       │       ├── PlatformTools.desktop.kt   # Registers TerminalTool + WorkspaceTool
+│       │       │       └── WorkspaceTools.desktop.kt  # Desktop workspace file operations
 │       │       └── presentation/
 │       │           ├── platform/
 │       │           │   ├── ImagePicker.desktop.kt        # FileDialog-based
@@ -227,6 +230,8 @@ Messenger/
 │               ├── ExampleUnitTest.kt
 │               ├── data/local/ContentPartCodecToolTest.kt
 │               ├── data/remote/sse/ChatStreamParserToolCallTest.kt
+│               ├── domain/tool/WorkspaceToolTest.kt
+│               ├── domain/tool/RuntimePathPolicyTest.kt
 │               ├── domain/tool/TerminalToolTest.kt
 │               └── presentation/utils/StripThinkBlockTest.kt
 ├── androidApp/                 # Android application shell (com.android.application)
@@ -450,9 +455,9 @@ The project uses a manual dependency injection approach via an `AppContainer`:
 
 ### Tool calling (function calling) and the built-in terminal tool
 
-- **Built-in terminal tool**: `domain/tool/TerminalTool.kt` (function name `terminal`, single `command` string argument) executes via the expect/actual `executeShellCommand` (`domain/tool/ShellExecutor.kt`). Desktop uses Windows PowerShell (UTF-8) or `/bin/sh`; Android extracts a pinned, SHA-256-verified Termux bootstrap from the ABI-specific APK asset into `filesDir/agent-runtime`, validates archive paths and symlink graphs, and executes with a clean environment from an app-private workspace. Android installation is lazy, serialized, atomic, and reuses a valid version marker; commands have the existing 60-second timeout, bounded output drain, and 10,000-character tool-result truncation.
+- **Built-in terminal and workspace tools**: `domain/tool/TerminalTool.kt` (function name `terminal`, single `command` string argument) runs through the expect/actual `executeShellCommand` (`domain/tool/ShellExecutor.kt`). Desktop uses Windows PowerShell (UTF-8) or `/bin/sh`; Android installs a pinned, SHA-256-verified Termux bootstrap from the ABI-specific APK asset into `filesDir/agent-runtime`, validates archive paths and symlink graphs, and starts commands with a clean environment from an app-private workspace. Installation is lazy, serialized, atomic, and marker-validated; commands have a 60-second timeout, bounded output drain, and 10,000-character tool-result truncation. Shared `WorkspaceTool` operations provide bounded glob/grep/read and consent-gated edit/create against the app-private workspace on Android and Desktop.
 - **Agent-level switch**: `Agent.toolsEnabled` (DB v16 column, default false) toggled in `AgentEditScreen` advanced settings (hidden for the title-role holder), mirrored through cloud sync end-to-end (`CloudAgentDocument`/`CloudAgentRequest` + server `agentSchema`/`AgentDoc`/`AgentUpsertInput`/`upsertAgent`, pull-side default false). A request carries `tools` when the agent toggle is on AND the platform registry is non-empty — `supportsToolCalling` metadata is deliberately NOT a gate (models.dev metadata missing → false would silently disable the feature; unsupported providers surface a visible API error instead)
-- **Agent loop** (`ChatViewModel.launchChatTurn`, shared by `generateResponse` and `retrySend` after de-duplicating their previously identical stream loops): on a `Done` with tool calls the round's text + `ContentPart.ToolCall` parts persist as a NEW assistant row; each call is then confirmed (manual mode: `pendingToolConfirmation` StateFlow + CompletableDeferred → `ToolConfirmDialog` in ChatScreen; denial returns the localized "user denied" text to the model as the tool result) and executed, persisting a `role=TOOL` row (first as `SENDING` = "running" card, then updated with the result; cancellation mid-run writes an interrupted marker via `NonCancellable`). The loop rebuilds context and continues until a final text round (which lands in the original placeholder row and triggers title generation) or `MAX_TOOL_ROUNDS` (10), which fails the turn with `error_tool_rounds_exceeded`. Unknown tool names and malformed arguments are returned to the model as error results for self-correction
+- **Agent loop** (`ChatViewModel.launchChatTurn`, shared by `generateResponse` and `retrySend` after de-duplicating their previously identical stream loops): on a `Done` with tool calls the round's text + `ContentPart.ToolCall` parts persist as a NEW assistant row; each call is then confirmed when its tool requires consent (manual confirmation → `pendingToolConfirmation` StateFlow + CompletableDeferred → `ToolConfirmDialog` in ChatScreen; denial returns the localized denial text to the model as the tool result) and executed, persisting a `role=TOOL` row (first as `SENDING` = "running" card, then updated with the result; cancellation mid-run writes an interrupted marker via `NonCancellable`). The loop rebuilds context and continues until a final text round (which lands in the original placeholder row and triggers title generation) or `MAX_TOOL_ROUNDS` (10), which fails the turn with `error_tool_rounds_exceeded`. Unknown tool names and malformed arguments are returned to the model as error results for self-correction
 - **Persistence**: tool turns round-trip through `partsJson` with NO Room schema change — `ContentPart` gained `ToolCall(callId, name, arguments)` and `ToolResult(callId, name, output, isError)` subtypes encoded by `ContentPartCodec` as `"tool_call"` / `"tool_result"` part types (older clients drop unknown types; the server treats `partsJson` as an opaque string, so cloud sync carries them verbatim). `buildRequestMessages` re-sends an assistant row with ToolCall parts as an assistant message with `tool_calls`, and a TOOL row as `role:"tool"` + `tool_call_id`; `buildApiContextMessages` drops leading orphan TOOL messages after its takeLast trim (OpenAI rejects unpaired tool messages)
 - **UI**: `ChatScreen.buildChatItems` merges an assistant tool-call row with its following TOOL rows into a `ChatListItem.ToolGroupItem` rendered by `ToolCallCards.kt` (collapsible cards: tool name + status badge, monospace command preview, monospace output; running/error/success states). The chat input bar shows a manual/auto toggle button (TouchApp/Bolt icons) on the LEFT of the text field when the current agent has tools enabled and the platform registers tools; the mode is stored globally in DataStore (`AppPreferences.toolAutoConfirm`, default manual). The Wear chat pipeline (`MobileWearChatHandler`) bypasses ChatViewModel and does NOT execute tools
 
@@ -595,7 +600,7 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
 
 Android debug and release variants package one pinned Termux bootstrap per ABI at build time. `androidApp:assembleDebug` and `androidApp:assembleRelease` produce ABI-specific APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`; each variant downloads the expected archive and verifies its SHA-256 before packaging it under `assets/agent-runtime/bootstrap.zip`.
 
-At runtime, the terminal tool lazily extracts the matching asset into the app-private `filesDir/agent-runtime` directory. Extraction rejects absolute, traversal, duplicate, overwriting, dangling, and cyclic paths; the completed runtime is published atomically and recorded with a version/ABI/hash marker. Commands run from an app-private workspace with a restricted environment and never use a separate Termux installation. The agent's tools setting and the per-command confirmation dialog remain required before execution.
+At runtime, terminal execution lazily extracts the matching asset into the app-private `filesDir/agent-runtime` directory. Extraction rejects absolute, traversal, duplicate, overwriting, dangling, and cyclic paths; the completed runtime is atomically published and recorded with a version/ABI/hash marker. Commands start in an app-private workspace with a restricted environment; the terminal tool still requires per-command confirmation, and workspace `edit`/`create` operations are confirmation-gated as well.
 
 ### Local Development
 

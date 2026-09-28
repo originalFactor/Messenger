@@ -10,5 +10,5 @@
 
 package cc.ptoe.messenger.domain.tool
 
-/** Android's shell tool uses the pinned app-private bootstrap runtime. */
-actual fun createBuiltinChatTools(): List<ChatTool> = listOf(TerminalTool())
+/** Android provides a consent-gated shell plus workspace-confined file tools. */
+actual fun createBuiltinChatTools(): List<ChatTool> = listOf(TerminalTool()) + WorkspaceTool.all

@@ -17,8 +17,7 @@
 package cc.ptoe.messenger.domain.tool
 
 /**
- * Platform-built-in chat tools. Desktop registers the terminal tool;
- * Android registers nothing for now (agents with tools enabled simply send
- * no `tools` array there).
+ * Platform-built-in chat tools. Both desktop and Android register the
+ * consent-gated terminal plus bounded app-private workspace file tools.
  */
 expect fun createBuiltinChatTools(): List<ChatTool>
