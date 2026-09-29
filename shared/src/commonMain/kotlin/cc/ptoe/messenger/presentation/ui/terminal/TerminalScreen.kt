@@ -96,8 +96,8 @@ import org.jetbrains.compose.resources.stringResource
 
 /**
  * 用户手动操作的内置终端。每条命令独立执行并流式回显输出；cd 的目录
- * 落点跨命令保持。运行时与 Agent 的 terminal 工具共用（Android 为打包的
- * Termux bootstrap），但不做只读策略过滤。
+ * 落点跨命令保持。运行时与 Agent 的 terminal 工具共用（Android 为系统 shell
+ * /system/bin/sh），但不做只读策略过滤。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

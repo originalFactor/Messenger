@@ -273,9 +273,9 @@
     <!-- 终端 -->
     <string name="settings_advanced">高级</string>
     <string name="settings_terminal">终端</string>
-    <string name="settings_terminal_desc">在应用沙盒内使用内置 Termux 运行时</string>
+    <string name="settings_terminal_desc">在应用沙盒内使用内置 shell 环境</string>
     <string name="terminal_title">终端</string>
-    <string name="terminal_preparing_runtime">正在准备终端运行时…</string>
+    <string name="terminal_preparing_runtime">正在准备终端…</string>
     <string name="terminal_runtime_failed">终端运行时不可用:%1$s</string>
     <string name="terminal_retry">重试</string>
     <string name="terminal_input_hint">输入命令</string>

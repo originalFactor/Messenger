@@ -34,7 +34,8 @@ import kotlinx.coroutines.launch
 /**
  * 用户手动操作的内置终端（设置 → 终端）。与 Agent 的只读 terminal 工具不同，
  * 这里的命令由用户逐条输入、无策略过滤；运行时仍是同一个应用私有 shell
- * （Android 为打包的 Termux bootstrap）。每条命令独立起进程，目录通过解析
+ * （Android 为系统 shell /system/bin/sh——Android 10+ 的 SELinux W^X 禁止
+ * targetSdk 29+ 应用执行应用数据目录内的二进制，无法使用打包的运行时）。每条命令独立起进程，目录通过解析
  * cd 命令的 pwd 回显跨次保持。
  */
 class TerminalViewModel : ViewModel() {
@@ -85,7 +86,7 @@ class TerminalViewModel : ViewModel() {
         prepareRuntime()
     }
 
-    /** 预热平台 shell 运行时（Android 首次会解包 bootstrap）；失败可重试。 */
+    /** 预热平台 shell 工作区（同时清理旧运行时残留）；失败可重试。 */
     fun prepareRuntime() {
         _runtimeState.value = RuntimeState.Loading
         _runtimeError.value = ""

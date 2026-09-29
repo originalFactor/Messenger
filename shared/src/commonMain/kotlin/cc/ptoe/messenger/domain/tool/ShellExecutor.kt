@@ -24,11 +24,12 @@ data class ShellResult(
 )
 
 /**
- * Executes a shell command on the host platform: the app-private pinned
- * Termux bootstrap on Android, Windows PowerShell on Windows and /bin/sh on
- * other desktop platforms. [timeoutMs] bounds the whole execution; the
- * process is destroyed when the timeout fires or the caller's coroutine is
- * cancelled.
+ * Executes a shell command on the host platform: the system shell
+ * /system/bin/sh on Android (SELinux W^X forbids targetSdk-29+ apps from
+ * exec()ing binaries in app data, so no bundled runtime is possible),
+ * Windows PowerShell on Windows and /bin/sh on other desktop platforms.
+ * [timeoutMs] bounds the whole execution; the process is destroyed when the
+ * timeout fires or the caller's coroutine is cancelled.
  *
  * [workingDir] overrides the process working directory (null = the platform
  * workspace returned by [ensureShellRuntime]); a missing directory falls
@@ -44,8 +45,8 @@ expect suspend fun executeShellCommand(
 ): ShellResult
 
 /**
- * Makes sure the platform shell runtime is installed (Android extracts the
- * pinned Termux bootstrap on first use) and returns its default workspace
- * path. Throws when the runtime cannot be installed.
+ * Makes sure the platform shell workspace exists (Android also cleans up
+ * leftovers of the removed bootstrap runtime) and returns its path. Throws
+ * when the workspace cannot be created.
  */
 expect suspend fun ensureShellRuntime(): String

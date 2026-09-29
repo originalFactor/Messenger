@@ -274,9 +274,9 @@
     <!-- Terminal -->
     <string name="settings_advanced">Advanced</string>
     <string name="settings_terminal">Terminal</string>
-    <string name="settings_terminal_desc">Use the built-in Termux runtime inside the app sandbox</string>
+    <string name="settings_terminal_desc">Use the built-in shell inside the app sandbox</string>
     <string name="terminal_title">Terminal</string>
-    <string name="terminal_preparing_runtime">Preparing the terminal runtime…</string>
+    <string name="terminal_preparing_runtime">Preparing the terminal…</string>
     <string name="terminal_runtime_failed">Terminal runtime unavailable: %1$s</string>
     <string name="terminal_retry">Retry</string>
     <string name="terminal_input_hint">Enter a command</string>
