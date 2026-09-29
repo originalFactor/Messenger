@@ -49,6 +49,21 @@ interface ShellRuntimeBridge {
 
     /** Whether the companion app is installed (cheap PackageManager check). */
     fun isInstalled(): Boolean
+
+    // Workspace-confined file operations. The workspace lives in the
+    // companion's own data directory (own UID), so the main app reaches it
+    // only through these calls.
+    suspend fun workspaceGlob(pattern: String, maxResults: Int): ToolExecutionResult
+    suspend fun workspaceGrep(
+        pattern: String,
+        path: String,
+        fileGlob: String?,
+        caseSensitive: Boolean,
+        maxResults: Int
+    ): ToolExecutionResult
+    suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult
+    suspend fun workspaceEdit(path: String, oldText: String, newText: String, replaceAll: Boolean): ToolExecutionResult
+    suspend fun workspaceCreate(path: String, content: String, overwrite: Boolean): ToolExecutionResult
 }
 
 /** androidApp registers the AIDL client here during application startup. */

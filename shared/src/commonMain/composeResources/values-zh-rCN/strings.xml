@@ -280,7 +280,6 @@
     <string name="terminal_retry">重试</string>
     <string name="terminal_not_installed">未安装 Messenger Runtime 伴随应用,终端与 Agent 工具不可用。</string>
     <string name="terminal_runtime_termux">已连接 Messenger Runtime(完整 Termux 环境)</string>
-    <string name="terminal_runtime_system">使用系统 shell。安装 Messenger Runtime APK 可获得完整 Termux 环境。</string>
     <string name="terminal_input_hint">输入命令</string>
     <string name="terminal_empty_hint">输入命令并执行。cd 切换的目录会跨命令保持。</string>
     <string name="terminal_exit_code">退出码 %1$d</string>

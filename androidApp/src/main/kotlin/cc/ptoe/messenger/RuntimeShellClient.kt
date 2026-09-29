@@ -23,8 +23,10 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import cc.ptoe.messenger.domain.tool.ShellResult
 import cc.ptoe.messenger.domain.tool.ShellRuntimeBridge
+import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import cc.ptoe.messenger.runtime.IShellCallback
 import cc.ptoe.messenger.runtime.IShellService
+import cc.ptoe.messenger.runtime.ToolResult
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -47,6 +49,39 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     private val active = AtomicBoolean(false)
 
     override fun isActive(): Boolean = active.get()
+
+    override suspend fun workspaceGlob(pattern: String, maxResults: Int): ToolExecutionResult =
+        workspaceCall { it.workspaceGlob(pattern, maxResults) }
+
+    override suspend fun workspaceGrep(
+        pattern: String,
+        path: String,
+        fileGlob: String?,
+        caseSensitive: Boolean,
+        maxResults: Int
+    ): ToolExecutionResult = workspaceCall {
+        it.workspaceGrep(pattern, path, fileGlob, caseSensitive, maxResults)
+    }
+
+    override suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult =
+        workspaceCall { it.workspaceRead(path, startLine, maxLines) }
+
+    override suspend fun workspaceEdit(
+        path: String,
+        oldText: String,
+        newText: String,
+        replaceAll: Boolean
+    ): ToolExecutionResult = workspaceCall { it.workspaceEdit(path, oldText, newText, replaceAll) }
+
+    override suspend fun workspaceCreate(path: String, content: String, overwrite: Boolean): ToolExecutionResult =
+        workspaceCall { it.workspaceCreate(path, content, overwrite) }
+
+    private suspend fun workspaceCall(call: (IShellService) -> ToolResult?): ToolExecutionResult =
+        withContext(Dispatchers.IO) {
+            val result = withService { service -> call(service) }
+                ?: ToolResult(output = "Messenger Runtime companion app is not available.", isError = true)
+            ToolExecutionResult(output = result.output, isError = result.isError)
+        }
 
     override fun isInstalled(): Boolean = try {
         context.packageManager.getPackageInfo(RUNTIME_PACKAGE, 0)

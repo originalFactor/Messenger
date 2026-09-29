@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    sharedUserId puts the main app in the same UID (and shared app-data
-    directory) as the cc.ptoe.messenger.runtime companion app, whose
-    targetSdk-28 process hosts the Termux bootstrap in the legacy SELinux
-    domain. NOTE: adding/removing this attribute changes the app's UID, so
-    an existing install cannot update in place — uninstall first.
+    The optional cc.ptoe.messenger.runtime companion app (targetSdk 28, own
+    UID) hosts the Termux bootstrap in the legacy untrusted_app_27 SELinux
+    domain and brokers shell + workspace file operations over AIDL.
+    Deliberately NOT sharedUserId: PackageManager derives the shared user's
+    seInfo from the highest targetSdk member at install time, which would
+    pull the companion's process into the modern domain where W^X blocks
+    execution (install-order dependent).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:sharedUserId="cc.ptoe.messenger">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -33,6 +34,10 @@
     <queries>
         <package android:name="cc.ptoe.messenger.runtime" />
     </queries>
+
+    <!-- Signature-protected shell runtime hosted by the companion app. -->
+    <uses-permission android:name="cc.ptoe.messenger.runtime.permission.SHELL" />
+
 
 
     <application

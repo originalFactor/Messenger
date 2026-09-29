@@ -281,7 +281,6 @@
     <string name="terminal_retry">Retry</string>
     <string name="terminal_not_installed">The Messenger Runtime companion app is not installed. Install it to enable the terminal and Agent tools.</string>
     <string name="terminal_runtime_termux">Connected to Messenger Runtime (full Termux environment)</string>
-    <string name="terminal_runtime_system">Using the system shell. Install the Messenger Runtime APK for the full Termux environment.</string>
     <string name="terminal_input_hint">Enter a command</string>
     <string name="terminal_empty_hint">Type a command and press send. The working directory persists across cd commands.</string>
     <string name="terminal_exit_code">Exit code %1$d</string>

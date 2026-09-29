@@ -1,18 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Companion shell-runtime app. targetSdk 28 keeps its process in the
-     legacy untrusted_app_27 SELinux domain (execute/execute_no_trans on
-     app_data_file intact), and sharedUserId puts it in the same UID as the
-     main Messenger app so it can host the Termux bootstrap and execute
-     commands for the main app over AIDL. Distributed alongside the main
-     APK; the main app falls back to the system shell without it. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:sharedUserId="cc.ptoe.messenger">
+<!-- Companion shell-runtime app. Its own UID + targetSdk 28 keep the
+     process in the legacy untrusted_app_27 SELinux domain (execute/
+     execute_no_trans on app_data_file intact), where it hosts the Termux
+     bootstrap, its workspace, and serves commands + workspace file
+     operations to the main Messenger app over AIDL. Deliberately NOT
+     sharedUserId: PackageManager derives an app's SELinux seInfo from the
+     HIGHEST targetSdk in its shared user at install time, so sharing a UID
+     with the targetSdk-36 main app put this process into the modern
+     untrusted_app domain where W^X blocks execution (install-order
+     dependent). Distributed alongside the main APK; without it the main
+     app disables the agent tools and the terminal. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The runtime resolves the main app's context (createPackageContext)
-         to host the workspace in the shared app data directory. -->
-    <queries>
-        <package android:name="cc.ptoe.messenger" />
-    </queries>
+    <!-- Signature-level: only builds signed with the same key (the main
+         app) may bind to the shell service. -->
+    <permission
+        android:name="cc.ptoe.messenger.runtime.permission.SHELL"
+        android:protectionLevel="signature" />
 
     <application
         android:label="Messenger Runtime"
@@ -20,7 +24,8 @@
 
         <service
             android:name="cc.ptoe.messenger.runtime.ShellService"
-            android:exported="true" />
+            android:exported="true"
+            android:permission="cc.ptoe.messenger.runtime.permission.SHELL" />
 
         <!-- Manual probe surface: runs uname/id/ls through the runtime so the
              SELinux domain behavior can be verified without the main app. -->

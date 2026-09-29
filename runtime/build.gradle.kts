@@ -154,7 +154,7 @@ android {
 
     defaultConfig {
         applicationId = "cc.ptoe.messenger.runtime"
-        minSdk = 30
+        minSdk = 28
         // targetSdk 28 keeps this app's process in the legacy untrusted_app_27
         // SELinux domain, which retains execute/execute_no_trans on
         // app_data_file. That is what allows executing the extracted Termux

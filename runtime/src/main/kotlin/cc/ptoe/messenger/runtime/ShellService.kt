@@ -18,9 +18,8 @@ package cc.ptoe.messenger.runtime
 
 import android.app.Service
 import android.content.Intent
-import android.os.Binder
+import android.content.pm.PackageManager
 import android.os.IBinder
-import android.os.Process
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -30,12 +29,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
- * AIDL facade over [TermuxRuntime]. The main Messenger app (same shared UID)
- * binds to this service and routes shell commands here so they execute in
- * this app's legacy SELinux domain. Callers sharing any other UID are
- * rejected — the UID check is the entire permission model.
+ * AIDL facade over [TermuxRuntime]. The main Messenger app binds to this
+ * service and routes shell commands + workspace file operations here so
+ * they execute in this app's legacy SELinux domain. Binding requires the
+ * signature-level [PERMISSION] (only same-key builds can hold it); every
+ * call re-checks it defensively.
  */
 class ShellService : Service() {
 
@@ -44,8 +45,8 @@ class ShellService : Service() {
 
     private val binder = object : IShellService.Stub() {
         override fun ensureRuntime(requestId: Int, callback: IShellCallback) {
-            if (!isSameUid()) {
-                android.util.Log.w(TAG, "ensureRuntime rejected: callingUid=${Binder.getCallingUid()} myUid=${Process.myUid()}")
+            if (!isCallerAllowed()) {
+                android.util.Log.w(TAG, "ensureRuntime rejected: caller lacks $PERMISSION")
                 return
             }
             android.util.Log.i(TAG, "ensureRuntime($requestId) start")
@@ -70,8 +71,8 @@ class ShellService : Service() {
             timeoutMs: Long,
             callback: IShellCallback
         ) {
-            if (!isSameUid()) {
-                android.util.Log.w(TAG, "submit rejected: callingUid=${Binder.getCallingUid()} myUid=${Process.myUid()}")
+            if (!isCallerAllowed()) {
+                android.util.Log.w(TAG, "submit rejected: caller lacks $PERMISSION")
                 return
             }
             val job = scope.launch {
@@ -101,16 +102,55 @@ class ShellService : Service() {
         override fun cancel(requestId: Int) {
             active.remove(requestId)?.cancel()
         }
+
+        override fun workspaceGlob(pattern: String?, maxResults: Int): ToolResult? = ifCallerAllowed {
+            runBlocking { TermuxRuntime.workspaceGlob(applicationContext, pattern.orEmpty(), maxResults) }
+        }
+
+        override fun workspaceGrep(
+            pattern: String?,
+            path: String?,
+            fileGlob: String?,
+            caseSensitive: Boolean,
+            maxResults: Int
+        ): ToolResult? = ifCallerAllowed {
+            runBlocking {
+                TermuxRuntime.workspaceGrep(applicationContext, pattern.orEmpty(), path.orEmpty(), fileGlob, caseSensitive, maxResults)
+            }
+        }
+
+        override fun workspaceRead(path: String?, startLine: Int, maxLines: Int): ToolResult? = ifCallerAllowed {
+            runBlocking { TermuxRuntime.workspaceRead(applicationContext, path.orEmpty(), startLine, maxLines) }
+        }
+
+        override fun workspaceEdit(
+            path: String?,
+            oldText: String?,
+            newText: String?,
+            replaceAll: Boolean
+        ): ToolResult? = ifCallerAllowed {
+            runBlocking {
+                TermuxRuntime.workspaceEdit(applicationContext, path.orEmpty(), oldText.orEmpty(), newText.orEmpty(), replaceAll)
+            }
+        }
+
+        override fun workspaceCreate(path: String?, content: String?, overwrite: Boolean): ToolResult? = ifCallerAllowed {
+            runBlocking { TermuxRuntime.workspaceCreate(applicationContext, path.orEmpty(), content.orEmpty(), overwrite) }
+        }
     }
 
-    /** Only the main app (same shared UID) may drive the shell. */
-    private fun isSameUid(): Boolean = Binder.getCallingUid() == Process.myUid()
+    /** Only holders of the signature permission (the main app) may call in. */
+    private fun isCallerAllowed(): Boolean =
+        checkCallingPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED
+
+    private fun ifCallerAllowed(block: () -> ToolResult): ToolResult =
+        if (isCallerAllowed()) block() else ToolResult("Caller is not permitted to use the shell runtime.", isError = true)
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onCreate() {
         super.onCreate()
-        android.util.Log.i(TAG, "service created, uid=${Process.myUid()}")
+        android.util.Log.i(TAG, "service created")
     }
 
     override fun onDestroy() {
@@ -120,5 +160,6 @@ class ShellService : Service() {
 
     private companion object {
         const val TAG = "ShellRT"
+        const val PERMISSION = "cc.ptoe.messenger.runtime.permission.SHELL"
     }
 }

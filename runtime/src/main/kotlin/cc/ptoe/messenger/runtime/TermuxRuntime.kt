@@ -48,18 +48,17 @@ data class RuntimeShellResult(
 
 /**
  * Installs and executes the pinned Termux bootstrap. Lives in the companion
- * runtime app whose targetSdk-28 process keeps the legacy untrusted_app_27
- * SELinux domain (execute/execute_no_trans on app_data_file intact), which is
- * what allows executing binaries extracted into app data — the main app's
- * targetSdk-29+ domain is blocked by the Android 10+ W^X rule.
+ * runtime app whose OWN UID + targetSdk 28 keep the process in the legacy
+ * untrusted_app_27 SELinux domain (execute/execute_no_trans on
+ * app_data_file intact) — the main app's targetSdk-29+ domain is blocked by
+ * the Android 10+ W^X rule, and a sharedUserId with the main app would pull
+ * this process into it too (PackageManager derives the shared user's seInfo
+ * from the highest targetSdk member at install time).
  *
- * The runtime and workspace live in the MAIN app's files dir
- * (cc.ptoe.messenger — same shared UID) so the main app's workspace file
- * tools and shell commands operate on the same directory.
+ * The runtime and workspace live in THIS app's files dir; the main app
+ * reaches the workspace only through the AIDL workspace operations.
  */
 internal object TermuxRuntime {
-    const val MAIN_PACKAGE = "cc.ptoe.messenger"
-
     private const val ASSET_NAME = "agent-runtime/bootstrap.zip"
     private const val VERSION = "bootstrap-2026.09.27-r1+apt.android-7"
     private const val MARKER_NAME = ".messenger-runtime.properties"
@@ -73,15 +72,45 @@ internal object TermuxRuntime {
 
     private class RuntimePaths(val prefix: File, val workspace: File, val shell: File)
 
-    private fun baseDir(context: Context): File =
-        File(mainAppContext(context).filesDir, "agent-runtime")
+    private fun baseDir(context: Context): File = File(context.filesDir, "agent-runtime")
 
-    private fun mainAppContext(context: Context): Context =
-        context.createPackageContext(MAIN_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
+    /** Workspace root (created on demand; no bootstrap install required). */
+    fun workspace(context: Context): File =
+        File(baseDir(context), "workspace").apply { mkdirs() }
 
     suspend fun ensureWorkspace(context: Context): String = withContext(Dispatchers.IO) {
         installMutex.withLock { ensureInstalled(context) }.workspace.absolutePath
     }
+
+    suspend fun workspaceGlob(context: Context, pattern: String, maxResults: Int): ToolResult =
+        withContext(Dispatchers.IO) { WorkspaceOps.glob(workspace(context), pattern, maxResults) }
+
+    suspend fun workspaceGrep(
+        context: Context,
+        pattern: String,
+        path: String,
+        fileGlob: String?,
+        caseSensitive: Boolean,
+        maxResults: Int
+    ): ToolResult = withContext(Dispatchers.IO) {
+        WorkspaceOps.grep(workspace(context), pattern, path, fileGlob, caseSensitive, maxResults)
+    }
+
+    suspend fun workspaceRead(context: Context, path: String, startLine: Int, maxLines: Int): ToolResult =
+        withContext(Dispatchers.IO) { WorkspaceOps.read(workspace(context), path, startLine, maxLines) }
+
+    suspend fun workspaceEdit(
+        context: Context,
+        path: String,
+        oldText: String,
+        newText: String,
+        replaceAll: Boolean
+    ): ToolResult = withContext(Dispatchers.IO) {
+        WorkspaceOps.edit(workspace(context), path, oldText, newText, replaceAll)
+    }
+
+    suspend fun workspaceCreate(context: Context, path: String, content: String, overwrite: Boolean): ToolResult =
+        withContext(Dispatchers.IO) { WorkspaceOps.create(workspace(context), path, content, overwrite) }
 
     suspend fun execute(
         context: Context,
@@ -150,9 +179,8 @@ internal object TermuxRuntime {
             ?: error("This device ABI is not supported by the packaged runtime.")
         val base = baseDir(context)
         val prefix = File(base, "runtime-$abi")
-        val workspace = File(base, "workspace")
+        val workspace = workspace(context)
         if (isValid(prefix, abi)) {
-            workspace.mkdirs()
             return RuntimePaths(prefix, workspace, File(prefix, "bin/sh"))
         }
 
