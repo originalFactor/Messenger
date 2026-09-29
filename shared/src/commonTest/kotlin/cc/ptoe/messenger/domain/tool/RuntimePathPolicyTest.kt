@@ -12,6 +12,7 @@ package cc.ptoe.messenger.domain.tool
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -23,6 +24,57 @@ class RuntimePathPolicyTest {
         assertNull(RuntimePathPolicy.normalizeArchivePath("/absolute"))
         assertNull(RuntimePathPolicy.normalizeArchivePath("C:/absolute"))
         assertEquals("bin/sh", RuntimePathPolicy.normalizeArchivePath("./bin/sh"))
+    }
+
+    @Test
+    fun `accepts symlinks pointing at directories`() {
+        // 真实 bootstrap 形状：lib/terminfo → ../share/terminfo，
+        // share/terminfo 是目录（由其下的 terminfo 文件隐含）。
+        val links = listOf(
+            RuntimePathPolicy.BootstrapSymlink("bin/sh", "bin/busybox"),
+            RuntimePathPolicy.BootstrapSymlink("lib/terminfo", "share/terminfo")
+        )
+        val regular = setOf("bin/busybox", "share/terminfo/x/xterm-256color")
+        val directories = setOf("bin", "share", "share/terminfo", "share/terminfo/x")
+        RuntimePathPolicy.validateBootstrapLinks(links, regular, directories)
+    }
+
+    @Test
+    fun `rejects dangling targets and cycles and overwrites`() {
+        val regular = setOf("bin/busybox")
+        val directories = setOf("bin")
+
+        val dangling = listOf(RuntimePathPolicy.BootstrapSymlink("lib/terminfo", "share/missing"))
+        val danglingError = assertFailsWith<IllegalStateException> {
+            RuntimePathPolicy.validateBootstrapLinks(dangling, regular, directories)
+        }
+        assertTrue("Dangling bootstrap symlink: lib/terminfo" in danglingError.message ?: "")
+
+        val cycle = listOf(
+            RuntimePathPolicy.BootstrapSymlink("a/b", "c/d"),
+            RuntimePathPolicy.BootstrapSymlink("c/d", "a/b")
+        )
+        val cycleError = assertFailsWith<IllegalStateException> {
+            RuntimePathPolicy.validateBootstrapLinks(cycle, regular, directories)
+        }
+        assertTrue("Cyclic bootstrap symlink" in cycleError.message ?: "")
+
+        val overwrite = listOf(RuntimePathPolicy.BootstrapSymlink("bin/busybox", "bin/busybox"))
+        assertTrue(
+            "Symlink overwrites archive file" in (assertFailsWith<IllegalStateException> {
+                RuntimePathPolicy.validateBootstrapLinks(overwrite, regular, directories)
+            }.message ?: "")
+        )
+
+        val duplicate = listOf(
+            RuntimePathPolicy.BootstrapSymlink("bin/sh", "bin/busybox"),
+            RuntimePathPolicy.BootstrapSymlink("bin/sh", "bin/busybox")
+        )
+        assertTrue(
+            "duplicate symlink records" in (assertFailsWith<IllegalStateException> {
+                RuntimePathPolicy.validateBootstrapLinks(duplicate, regular, directories)
+            }.message ?: "")
+        )
     }
 
     @Test

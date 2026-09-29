@@ -52,6 +52,42 @@ internal object RuntimePathPolicy {
         }.joinToString("/").ifEmpty { "." }
     }
 
+    /** A normalized SYMLINKS.txt record: link path and its normalized target. */
+    data class BootstrapSymlink(val link: String, val target: String)
+
+    /**
+     * Validates the bootstrap archive's symlink table. Link paths must not
+     * overwrite regular files, and every target must resolve to a regular
+     * file, another symlink, or a directory — [directories] holds explicit
+     * archive directory entries plus the ancestors of regular files, because
+     * a link like lib/terminfo legally points at the share/terminfo
+     * directory. Symlink chains must terminate without cycles or dangling
+     * ends. Throws IllegalStateException describing the first violation.
+     */
+    fun validateBootstrapLinks(
+        links: List<BootstrapSymlink>,
+        regularFiles: Set<String>,
+        directories: Set<String>
+    ) {
+        val byLink = links.associateBy { it.link }
+        check(byLink.size == links.size) { "Bootstrap archive contains duplicate symlink records" }
+        links.forEach { link ->
+            check(link.link !in regularFiles) { "Symlink overwrites archive file: ${link.link}" }
+            check(link.link !in directories) { "Symlink overwrites archive directory: ${link.link}" }
+            check(
+                link.target in regularFiles || link.target in byLink || link.target in directories
+            ) { "Dangling bootstrap symlink: ${link.link}" }
+        }
+        fun visit(path: String, seen: MutableSet<String>) {
+            if (path in regularFiles || path in directories) return
+            check(seen.add(path)) { "Cyclic bootstrap symlink: $path" }
+            val next = byLink[path] ?: error("Dangling bootstrap symlink: $path")
+            visit(next.target, seen)
+            seen.remove(path)
+        }
+        links.forEach { link -> visit(link.link, linkedSetOf()) }
+    }
+
     fun isWithinWorkspace(path: String, workspace: String): Boolean {
         val normalizedPath = normalizeRelative(path.removePrefix("/"), rejectParent = false) ?: return false
         val normalizedWorkspace = normalizeRelative(workspace.removePrefix("/"), rejectParent = false) ?: return false

@@ -171,6 +171,7 @@ private object AndroidShellRuntime {
     private fun extractBootstrap(input: InputStream, staging: File, abi: String) {
         staging.mkdirs()
         val regularFiles = linkedSetOf<String>()
+        val archiveDirectories = linkedSetOf<String>()
         val seenEntries = linkedSetOf<String>()
         val symlinkBytes = ByteArrayOutputStream()
         var totalBytes = 0L
@@ -204,6 +205,8 @@ private object AndroidShellRuntime {
                     if (path.startsWith("bin/") || path.startsWith("libexec/")) {
                         output.setExecutable(true, false)
                     }
+                } else {
+                    archiveDirectories.add(path)
                 }
                 zip.closeEntry()
             }
@@ -213,15 +216,10 @@ private object AndroidShellRuntime {
         check(links.isNotEmpty()) { "Bootstrap archive has no symlink records" }
         check(links.any { it.link == "bin/sh" }) { "Bootstrap archive has no bin/sh symlink" }
         val regular = regularFiles.filter { it != SYMLINKS_NAME }.toSet()
-        val linkPaths = links.map { it.link }.toSet()
-        check(linkPaths.size == links.size) { "Bootstrap archive contains duplicate symlink records" }
-        links.forEach { link ->
-            check(link.link !in regular) { "Symlink overwrites archive file: ${link.link}" }
-            check(link.target in regular || link.target in linkPaths) {
-                "Dangling bootstrap symlink: ${link.link}"
-            }
-        }
-        validateSymlinkGraph(links.associateBy { it.link }, regular)
+        // 符号链接可以合法地指向目录（如 lib/terminfo → ../share/terminfo），
+        // 目录集合 = 显式目录条目 + 普通文件路径的全部祖先目录。
+        val directories = archiveDirectories + regularFiles.flatMap { ancestorDirectories(it) }
+        RuntimePathPolicy.validateBootstrapLinks(links, regular, directories)
         links.forEach { link ->
             val linkFile = File(staging, link.link)
             linkFile.parentFile?.mkdirs()
@@ -234,9 +232,13 @@ private object AndroidShellRuntime {
         }
     }
 
-    private data class BootstrapLink(val target: String, val link: String)
+    /** 除根以外的全部祖先目录，例如 a/b/c → [a, a/b]。 */
+    private fun ancestorDirectories(path: String): List<String> {
+        val parts = path.split('/')
+        return (1 until parts.size).map { index -> parts.take(index).joinToString("/") }
+    }
 
-    private fun parseSymlinks(contents: String): List<BootstrapLink> = contents.lineSequence()
+    private fun parseSymlinks(contents: String): List<RuntimePathPolicy.BootstrapSymlink> = contents.lineSequence()
         .map { it.trimEnd('\r') }
         .filter { it.isNotBlank() }
         .map { line ->
@@ -249,20 +251,9 @@ private object AndroidShellRuntime {
             val normalizedTarget = RuntimePathPolicy.resolveSymlinkTarget(target, normalizedLink)
                 ?: error("Unsafe symlink target: $target")
             check(normalizedTarget.isNotEmpty()) { "Empty symlink target" }
-            BootstrapLink(normalizedTarget, normalizedLink)
+            RuntimePathPolicy.BootstrapSymlink(link = normalizedLink, target = normalizedTarget)
         }
         .toList()
-
-    private fun validateSymlinkGraph(links: Map<String, BootstrapLink>, regular: Set<String>) {
-        fun visit(path: String, seen: MutableSet<String>) {
-            if (path in regular) return
-            check(seen.add(path)) { "Cyclic bootstrap symlink: $path" }
-            val next = links[path] ?: error("Dangling bootstrap symlink: $path")
-            visit(next.target, seen)
-            seen.remove(path)
-        }
-        links.keys.forEach { visit(it, linkedSetOf()) }
-    }
 
     private fun writeMarker(prefix: File, abi: String) {
         val properties = Properties()
