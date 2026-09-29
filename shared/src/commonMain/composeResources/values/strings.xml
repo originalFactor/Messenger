@@ -271,6 +271,24 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_version_unknown">Unknown</string>
 
+    <!-- Terminal -->
+    <string name="settings_advanced">Advanced</string>
+    <string name="settings_terminal">Terminal</string>
+    <string name="settings_terminal_desc">Use the built-in Termux runtime inside the app sandbox</string>
+    <string name="terminal_title">Terminal</string>
+    <string name="terminal_preparing_runtime">Preparing the terminal runtime…</string>
+    <string name="terminal_runtime_failed">Terminal runtime unavailable: %1$s</string>
+    <string name="terminal_retry">Retry</string>
+    <string name="terminal_input_hint">Enter a command</string>
+    <string name="terminal_empty_hint">Type a command and press send. The working directory persists across cd commands.</string>
+    <string name="terminal_exit_code">Exit code %1$d</string>
+    <string name="terminal_terminated">Command terminated</string>
+    <string name="terminal_timeout">Command timed out and was terminated</string>
+    <string name="terminal_history">Command history</string>
+    <string name="terminal_clear">Clear screen</string>
+    <string name="terminal_send">Send command</string>
+    <string name="terminal_stop">Stop command</string>
+
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>
     <string name="cloud_server_title">Server address</string>

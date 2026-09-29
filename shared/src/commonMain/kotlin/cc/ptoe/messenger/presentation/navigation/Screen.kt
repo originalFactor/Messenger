@@ -67,4 +67,5 @@ sealed class Screen(val route: String) {
     }
 
     data object Licenses : Screen("licenses")
+    data object Terminal : Screen("terminal")
 }

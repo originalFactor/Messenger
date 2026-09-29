@@ -60,13 +60,21 @@ private object AndroidShellRuntime {
 
     private val installMutex = Mutex()
 
+    /** Installs (or validates) the runtime; serialized with concurrent tool calls. */
+    suspend fun ensureInstalledOnce(): AndroidRuntimePaths = installMutex.withLock { ensureInstalled() }
+
     suspend fun workspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
         withContext(Dispatchers.IO) {
             val paths = installMutex.withLock { ensureInstalled() }
             WorkspaceFileOperations(paths.workspace).execute(operation)
         }
 
-    suspend fun execute(command: String, timeoutMs: Long): ShellResult {
+    suspend fun execute(
+        command: String,
+        timeoutMs: Long,
+        workingDir: String?,
+        onOutput: ((String) -> Unit)?
+    ): ShellResult {
         val runtime = try {
             installMutex.withLock { ensureInstalled() }
         } catch (e: Exception) {
@@ -78,11 +86,11 @@ private object AndroidShellRuntime {
 
         val result = try {
             withContext(Dispatchers.IO) {
-                val process = startProcess(runtime, command)
+                val process = startProcess(runtime, command, workingDir)
                 try {
                     coroutineScope {
-                        val stdout = async { drain(process.inputStream) }
-                        val stderr = async { drain(process.errorStream) }
+                        val stdout = async { drain(process.inputStream, onOutput) }
+                        val stderr = async { drain(process.errorStream, onOutput) }
                         val exited = runInterruptible { process.waitFor(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS) }
                         if (!exited) {
                             terminate(process)
@@ -92,7 +100,8 @@ private object AndroidShellRuntime {
                             stderr.cancelAndJoin()
                             ShellResult(
                                 output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.",
-                                exitCode = -1
+                                exitCode = -1,
+                                timedOut = true
                             )
                         } else {
                             val output = buildString {
@@ -276,15 +285,16 @@ private object AndroidShellRuntime {
         }.getOrDefault(false)
     }
 
-    private fun startProcess(runtime: AndroidRuntimePaths, command: String): Process {
+    private fun startProcess(runtime: AndroidRuntimePaths, command: String, workingDir: String?): Process {
+        val directory = workingDir?.let { File(it) }?.takeIf { it.isDirectory } ?: runtime.workspace
         val builder = ProcessBuilder(runtime.shell.absolutePath, "-c", command)
-            .directory(runtime.workspace)
+            .directory(directory)
         val environment = builder.environment()
         environment.clear()
         environment["PREFIX"] = runtime.prefix.absolutePath
         environment["TERMUX_PREFIX"] = runtime.prefix.absolutePath
         environment["HOME"] = runtime.workspace.absolutePath
-        environment["PWD"] = runtime.workspace.absolutePath
+        environment["PWD"] = directory.absolutePath
         environment["TMPDIR"] = File(runtime.workspace, "tmp").apply { mkdirs() }.absolutePath
         environment["PATH"] = File(runtime.prefix, "bin").absolutePath
         environment["LD_LIBRARY_PATH"] = File(runtime.prefix, "lib").absolutePath
@@ -296,13 +306,15 @@ private object AndroidShellRuntime {
         return builder.start()
     }
 
-    private fun drain(input: InputStream): String {
+    private fun drain(input: InputStream, onOutput: ((String) -> Unit)?): String {
         val bytes = ByteArrayOutputStream()
         input.use { stream ->
             val buffer = ByteArray(16 * 1024)
             while (true) {
                 val count = stream.read(buffer)
                 if (count < 0) break
+                val chunk = String(buffer, 0, count, StandardCharsets.UTF_8)
+                onOutput?.invoke(chunk)
                 bytes.write(buffer, 0, count)
                 if (bytes.size() > MAX_OUTPUT_BYTES) {
                     val current = bytes.toByteArray()
@@ -360,8 +372,17 @@ private object AndroidShellRuntime {
     }
 }
 
-actual suspend fun executeShellCommand(command: String, timeoutMs: Long): ShellResult =
-    AndroidShellRuntime.execute(command, timeoutMs)
+actual suspend fun executeShellCommand(
+    command: String,
+    timeoutMs: Long,
+    workingDir: String?,
+    onOutput: ((String) -> Unit)?
+): ShellResult = AndroidShellRuntime.execute(command, timeoutMs, workingDir, onOutput)
+
+actual suspend fun ensureShellRuntime(): String {
+    val runtime = withContext(Dispatchers.IO) { AndroidShellRuntime.ensureInstalledOnce() }
+    return runtime.workspace.absolutePath
+}
 
 internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
     AndroidShellRuntime.workspaceOperation(operation)

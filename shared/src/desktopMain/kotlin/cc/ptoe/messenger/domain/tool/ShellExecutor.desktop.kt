@@ -29,14 +29,19 @@ import java.util.concurrent.atomic.AtomicReference
  * preamble forces PowerShell's [Console]::OutputEncoding to UTF-8 so CJK
  * locales don't mojibake through the legacy OEM codepage.
  */
-actual suspend fun executeShellCommand(command: String, timeoutMs: Long): ShellResult {
+actual suspend fun executeShellCommand(
+    command: String,
+    timeoutMs: Long,
+    workingDir: String?,
+    onOutput: ((String) -> Unit)?
+): ShellResult {
     val processRef = AtomicReference<Process?>(null)
     val result = try {
         withTimeoutOrNull(timeoutMs) {
             withContext(Dispatchers.IO) {
-                val process = startProcess(command)
+                val process = startProcess(command, workingDir)
                 processRef.set(process)
-                ShellResult(output = drainOutput(process), exitCode = process.waitFor())
+                ShellResult(output = drainOutput(process, onOutput), exitCode = process.waitFor())
             }
         }
     } catch (e: Exception) {
@@ -47,10 +52,16 @@ actual suspend fun executeShellCommand(command: String, timeoutMs: Long): ShellR
         processRef.get()?.destroyForcibly()
     }
     return result
-        ?: ShellResult(output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.", exitCode = -1)
+        ?: ShellResult(
+            output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.",
+            exitCode = -1,
+            timedOut = true
+        )
 }
 
-private fun startProcess(command: String): Process {
+actual suspend fun ensureShellRuntime(): String = agentWorkspace.canonicalFile.absolutePath
+
+private fun startProcess(command: String, workingDir: String?): Process {
     val isWindows = System.getProperty("os.name")?.lowercase()?.contains("windows") == true
     val builder = if (isWindows) {
         ProcessBuilder(
@@ -60,17 +71,22 @@ private fun startProcess(command: String): Process {
     } else {
         ProcessBuilder("/bin/sh", "-c", command)
     }
+    if (workingDir != null) {
+        val directory = java.io.File(workingDir)
+        if (directory.isDirectory) builder.directory(directory)
+    }
     return builder.redirectErrorStream(true).start()
 }
 
 /** 读取合并后的输出直到 EOF；内存预算超限时丢弃头部，只保留滚动尾部。 */
-private fun drainOutput(process: Process): String {
+private fun drainOutput(process: Process, onOutput: ((String) -> Unit)?): String {
     val sb = StringBuilder()
     val buffer = CharArray(8192)
     InputStreamReader(process.inputStream, Charsets.UTF_8).use { reader ->
         while (true) {
             val n = reader.read(buffer)
             if (n < 0) break
+            onOutput?.invoke(String(buffer, 0, n))
             sb.append(buffer, 0, n)
             if (sb.length > 1_100_000) {
                 sb.delete(0, sb.length - 1_000_000)

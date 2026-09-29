@@ -21,7 +21,7 @@ import java.util.regex.PatternSyntaxException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private val agentWorkspace: File by lazy {
+internal val agentWorkspace: File by lazy {
     File(System.getProperty("user.home"), ".messenger/agent-runtime/workspace").apply { mkdirs() }
 }
 

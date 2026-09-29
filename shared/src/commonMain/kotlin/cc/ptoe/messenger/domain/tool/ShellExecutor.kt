@@ -19,13 +19,33 @@ package cc.ptoe.messenger.domain.tool
 /** Combined stdout/stderr text and the shell process exit code. */
 data class ShellResult(
     val output: String,
-    val exitCode: Int
+    val exitCode: Int,
+    val timedOut: Boolean = false
 )
 
 /**
- * Executes a shell command on the host platform: Windows PowerShell on
- * Windows, /bin/sh on other desktop platforms. [timeoutMs] bounds the whole
- * execution; the process is destroyed when the timeout fires or the caller's
- * coroutine is cancelled.
+ * Executes a shell command on the host platform: the app-private pinned
+ * Termux bootstrap on Android, Windows PowerShell on Windows and /bin/sh on
+ * other desktop platforms. [timeoutMs] bounds the whole execution; the
+ * process is destroyed when the timeout fires or the caller's coroutine is
+ * cancelled.
+ *
+ * [workingDir] overrides the process working directory (null = the platform
+ * workspace returned by [ensureShellRuntime]); a missing directory falls
+ * back to the platform workspace. [onOutput] receives incremental merged
+ * output chunks as they arrive, in addition to the final [ShellResult.output]
+ * (null = collect only).
  */
-expect suspend fun executeShellCommand(command: String, timeoutMs: Long): ShellResult
+expect suspend fun executeShellCommand(
+    command: String,
+    timeoutMs: Long,
+    workingDir: String?,
+    onOutput: ((String) -> Unit)?
+): ShellResult
+
+/**
+ * Makes sure the platform shell runtime is installed (Android extracts the
+ * pinned Termux bootstrap on first use) and returns its default workspace
+ * path. Throws when the runtime cannot be installed.
+ */
+expect suspend fun ensureShellRuntime(): String

@@ -54,7 +54,7 @@ class TerminalTool(
                 isError = true
             )
         }
-        val result = executeShellCommand(command, timeoutMs)
+        val result = executeShellCommand(command, timeoutMs, workingDir = null, onOutput = null)
         val exitNote = if (result.exitCode == 0) "Exit code: 0" else "Exit code: ${result.exitCode} (command failed)"
         return ToolExecutionResult(
             output = "$exitNote\n${truncateOutput(result.output)}",

@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -76,6 +77,7 @@ import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_change_avatar
 import cc.ptoe.messenger.generated.resources.agent_edit_remove_avatar
 import cc.ptoe.messenger.generated.resources.settings_about
+import cc.ptoe.messenger.generated.resources.settings_advanced
 import cc.ptoe.messenger.generated.resources.settings_appearance
 import cc.ptoe.messenger.generated.resources.settings_avatar_desc
 import cc.ptoe.messenger.generated.resources.settings_clear_data
@@ -95,6 +97,8 @@ import cc.ptoe.messenger.generated.resources.settings_theme_dark
 import cc.ptoe.messenger.generated.resources.settings_theme_light
 import cc.ptoe.messenger.generated.resources.settings_theme_system
 import cc.ptoe.messenger.generated.resources.settings_title
+import cc.ptoe.messenger.generated.resources.settings_terminal
+import cc.ptoe.messenger.generated.resources.settings_terminal_desc
 import cc.ptoe.messenger.generated.resources.settings_version
 import cc.ptoe.messenger.generated.resources.settings_version_unknown
 import org.jetbrains.compose.resources.getString
@@ -107,6 +111,7 @@ fun SettingsScreen(
     onProvidersClick: () -> Unit,
     onLicensesClick: () -> Unit,
     onCloudSettingsClick: () -> Unit,
+    onTerminalClick: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.provideFactory(
             themePreferences = AppContainerHolder.instance.themePreferences,
@@ -272,6 +277,18 @@ fun SettingsScreen(
                     subtitleColor = MaterialTheme.colorScheme.error,
                     iconColor = MaterialTheme.colorScheme.error,
                     onClick = { showClearDataDialog = true }
+                )
+            }
+
+            item {
+                SectionHeader(title = stringResource(Res.string.settings_advanced))
+            }
+            item {
+                ListItem(
+                    title = stringResource(Res.string.settings_terminal),
+                    subtitle = stringResource(Res.string.settings_terminal_desc),
+                    icon = Icons.Default.Terminal,
+                    onClick = onTerminalClick
                 )
             }
 
