@@ -25,6 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 
 @Composable
@@ -35,12 +37,23 @@ actual fun platformDynamicColorScheme(darkTheme: Boolean): ColorScheme? {
 }
 
 @Composable
-actual fun PlatformThemeSideEffects(darkTheme: Boolean) {
+actual fun PlatformThemeSideEffects(
+    darkTheme: Boolean,
+    navigationBarColor: Color
+) {
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            // Three-button navigation devices may add a dark scrim when the
+            // navigation bar is transparent. Use the active surface color so
+            // the system area continues the app background instead.
+            window.navigationBarColor = navigationBarColor.toArgb()
+            window.isNavigationBarContrastEnforced = false
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
         }
     }
 }

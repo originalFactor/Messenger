@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -58,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -101,7 +103,7 @@ import cc.ptoe.messenger.generated.resources.conversations_title
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ConversationsScreen(
     onConversationClick: (String) -> Unit,
@@ -140,6 +142,7 @@ fun ConversationsScreen(
 
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             topBar = {
                 if (uiState.isMultiSelectMode) {
                     MultiSelectTopBar(
@@ -166,7 +169,7 @@ fun ConversationsScreen(
                         }
                     )
                 } else {
-                    TopAppBar(
+                    androidx.compose.material3.LargeFlexibleTopAppBar(
                         title = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -205,7 +208,12 @@ fun ConversationsScreen(
                                     }
                                 }
                             }
-                        }
+                        },
+                        colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier.statusBarsPadding()
                     )
                 }
             },
@@ -398,6 +406,8 @@ private fun ConversationListItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.medium)
             .background(backgroundColor)
             .hoverable(interactionSource)
             .combinedClickable(
@@ -410,7 +420,7 @@ private fun ConversationListItem(
                 if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
                 else Modifier
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isMultiSelectMode) {

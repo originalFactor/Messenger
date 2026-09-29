@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -66,6 +67,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -107,7 +109,7 @@ import cc.ptoe.messenger.generated.resources.agents_title
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AgentsScreen(
     onAddClick: () -> Unit,
@@ -136,6 +138,7 @@ fun AgentsScreen(
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
         Scaffold(
+            contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             topBar = {
                 if (uiState.isMultiSelectMode) {
                     MultiSelectTopBar(
@@ -154,8 +157,9 @@ fun AgentsScreen(
                         }
                     )
                 } else {
-                    TopAppBar(
-                        title = { Text(text = stringResource(Res.string.agents_title)) }
+                    androidx.compose.material3.LargeFlexibleTopAppBar(
+                        title = { Text(text = stringResource(Res.string.agents_title)) },
+                        modifier = Modifier.statusBarsPadding()
                     )
                 }
             },
@@ -331,6 +335,8 @@ private fun AgentListItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.medium)
             .background(backgroundColor)
             .hoverable(interactionSource)
             .combinedClickable(
@@ -343,7 +349,7 @@ private fun AgentListItem(
                 if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
                 else Modifier
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isMultiSelectMode) {

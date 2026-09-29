@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.presentation.ui.components
 
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
@@ -37,6 +38,8 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.presentation.navigation.Screen
 import cc.ptoe.messenger.generated.resources.Res
@@ -80,9 +83,15 @@ sealed class BottomNavItem(
 @Composable
 fun BottomNavBar(
     currentRoute: String?,
-    onItemClick: (BottomNavItem) -> Unit
+    onItemClick: (BottomNavItem) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    NavigationBar {
+    NavigationBar(
+        modifier = modifier.clip(MaterialTheme.shapes.extraLarge),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 0.dp,
+        windowInsets = WindowInsets(0, 0, 0, 0)
+    ) {
         BottomNavItem.items.forEach { item ->
             NavigationBarItem(
                 selected = currentRoute == item.screen.route,
@@ -121,7 +130,8 @@ fun NavigationRailBar(
 ) {
     NavigationRail(
         modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface
     ) {
         Spacer(modifier = Modifier.height(8.dp))
         BottomNavItem.items.forEach { item ->

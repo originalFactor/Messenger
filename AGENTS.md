@@ -602,6 +602,11 @@ Android debug and release variants package one pinned Termux bootstrap per ABI a
 
 At runtime, terminal execution lazily extracts the matching asset into the app-private `filesDir/agent-runtime` directory. Extraction rejects absolute, traversal, duplicate, overwriting, dangling, and cyclic paths; the completed runtime is atomically published and recorded with a version/ABI/hash marker. Commands start in an app-private workspace with a restricted environment and a 60-second timeout. The terminal accepts only approved read-only commands; shell composition, interpreters, redirection, absolute paths, and traversal are rejected. Workspace `edit`/`create` operations are separate and confirmation-gated. Manual confirmation is the default; the chat tool-mode toggle can enable automatic execution for the registered tools.
 
+AGP's `CANNOT_BUILD_SELECTED_TARGET_ABI` sync diagnostic is suppressed in
+`gradle.properties` because some transitive Android native libraries publish
+only ARM variants while the app intentionally retains an `x86_64` flavor for
+emulator builds.
+
 ### Local Development
 
 1. Create a `local.properties` file with `sdk.dir=/path/to/android/sdk`

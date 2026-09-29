@@ -18,12 +18,15 @@ package cc.ptoe.messenger.presentation.ui.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -64,7 +67,11 @@ fun MainScaffold(
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
         val sizeClass = windowSizeClassFor(maxWidth)
 
         when (sizeClass) {
@@ -72,23 +79,41 @@ fun MainScaffold(
                 // Mobile phone: bottom NavigationBar (existing behavior).
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    // The bottom navigation wrapper owns the system navigation inset;
+                    // child screens own their top app-bar insets.
+                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     bottomBar = {
                         if (showTopLevelNav) {
-                            BottomNavBar(
-                                currentRoute = currentDestination.route,
-                                onItemClick = onItemClick
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .padding(horizontal = 12.dp)
+                                    .navigationBarsPadding()
+                            ) {
+                                BottomNavBar(
+                                    currentRoute = currentDestination.route,
+                                    onItemClick = onItemClick,
+                                    // The transparent wrapper owns the system inset. Keeping it
+                                    // out of NavigationBar prevents its dark surface from growing
+                                    // into the gesture/navigation area.
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                 ) { innerPadding ->
-                    Column(
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(bottom = innerPadding.calculateBottomPadding())
+                            .padding(innerPadding)
+                            .consumeWindowInsets(innerPadding)
                     ) {
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            NavGraph(navController = navController, sizeClass = sizeClass)
-                        }
+                        NavGraph(
+                            navController = navController,
+                            sizeClass = sizeClass,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
             }
@@ -98,12 +123,16 @@ fun MainScaffold(
                 Row(modifier = Modifier.fillMaxSize()) {
                     if (showTopLevelNav) {
                         Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.fillMaxHeight()
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = MaterialTheme.shapes.large,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .padding(12.dp)
                         ) {
                             NavigationRailBar(
                                 currentRoute = currentDestination.route,
-                                onItemClick = onItemClick
+                                onItemClick = onItemClick,
+                                modifier = Modifier.padding(vertical = 8.dp)
                             )
                         }
                         VerticalDivider(

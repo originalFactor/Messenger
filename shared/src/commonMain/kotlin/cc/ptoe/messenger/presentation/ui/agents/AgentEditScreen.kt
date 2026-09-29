@@ -18,6 +18,7 @@ package cc.ptoe.messenger.presentation.ui.agents
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -99,11 +102,6 @@ import cc.ptoe.messenger.generated.resources.action_update
 import cc.ptoe.messenger.generated.resources.agent_edit_advanced_settings
 import cc.ptoe.messenger.generated.resources.agent_edit_already_up_to_date
 import cc.ptoe.messenger.generated.resources.agent_edit_change_avatar
-import cc.ptoe.messenger.generated.resources.agent_edit_follow_max_tokens
-import cc.ptoe.messenger.generated.resources.agent_edit_follow_model
-import cc.ptoe.messenger.generated.resources.agent_edit_follow_reasoning_effort
-import cc.ptoe.messenger.generated.resources.agent_edit_follow_system_prompt
-import cc.ptoe.messenger.generated.resources.agent_edit_follow_temperature
 import cc.ptoe.messenger.generated.resources.agent_edit_followed_model_label
 import cc.ptoe.messenger.generated.resources.agent_edit_followed_model_value
 import cc.ptoe.messenger.generated.resources.agent_edit_get_update
@@ -138,6 +136,8 @@ import cc.ptoe.messenger.generated.resources.agent_edit_select_model
 import cc.ptoe.messenger.generated.resources.agent_edit_select_provider
 import cc.ptoe.messenger.generated.resources.agent_edit_system_prompt_label
 import cc.ptoe.messenger.generated.resources.agent_edit_system_prompt_placeholder
+import cc.ptoe.messenger.generated.resources.agent_edit_takeover_active
+import cc.ptoe.messenger.generated.resources.agent_edit_takeover_hint
 import cc.ptoe.messenger.generated.resources.agent_edit_temperature_label
 import cc.ptoe.messenger.generated.resources.agent_edit_title_default
 import cc.ptoe.messenger.generated.resources.agent_edit_title_edit
@@ -178,7 +178,7 @@ fun AgentEditScreen(
     val models by viewModel.modelsForSelectedProvider.collectAsStateWithLifecycle(initialValue = emptyList())
     val cloudUser by AppContainerHolder.instance.cloudSyncRepository.user.collectAsStateWithLifecycle(initialValue = null)
 
-    // 非默认、非标题生成器才显示"跟随默认 Agent"开关
+    // 非默认、非标题生成器才允许接管默认 Agent 的配置
     val showFollowToggles = !uiState.isDefault && uiState.role != Agent.ROLE_TITLE
 
     // 角色选择器：默认与标题生成器为单持有角色，持有者的选择器锁定，
@@ -390,65 +390,59 @@ fun AgentEditScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 系统提示词
-                if (showFollowToggles) {
-                    FollowToggleRow(
-                        label = stringResource(Res.string.agent_edit_follow_system_prompt),
-                        checked = uiState.followDefaultSystemPrompt,
-                        onCheckedChange = { viewModel.onFollowSystemPromptChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 val systemPromptValue = if (showFollowToggles && uiState.followDefaultSystemPrompt) {
                     uiState.defaultAgent?.systemPrompt ?: ""
                 } else {
                     uiState.systemPrompt
                 }
-                OutlinedTextField(
-                    value = systemPromptValue,
-                    onValueChange = { viewModel.onSystemPromptChange(it) },
-                    label = { Text(stringResource(Res.string.agent_edit_system_prompt_label)) },
-                    placeholder = { Text(stringResource(Res.string.agent_edit_system_prompt_placeholder)) },
-                    minLines = 3,
-                    maxLines = 8,
-                    enabled = !showFollowToggles || !uiState.followDefaultSystemPrompt,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                FollowableTarget(
+                    enabled = showFollowToggles,
+                    followed = uiState.followDefaultSystemPrompt,
+                    onFollowChange = viewModel::onFollowSystemPromptChange
+                ) {
+                    OutlinedTextField(
+                        value = systemPromptValue,
+                        onValueChange = { viewModel.onSystemPromptChange(it) },
+                        label = { Text(stringResource(Res.string.agent_edit_system_prompt_label)) },
+                        placeholder = { Text(stringResource(Res.string.agent_edit_system_prompt_placeholder)) },
+                        minLines = 3,
+                        maxLines = 8,
+                        enabled = !showFollowToggles || !uiState.followDefaultSystemPrompt,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Provider + Model
-                if (showFollowToggles) {
-                    FollowToggleRow(
-                        label = stringResource(Res.string.agent_edit_follow_model),
-                        checked = uiState.followDefaultModel,
-                        onCheckedChange = { viewModel.onFollowModelChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 val modelSectionEnabled = !showFollowToggles || !uiState.followDefaultModel
-                if (modelSectionEnabled) {
-                    // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
-                    val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
-                    val selectedModel = models.find { it.id == uiState.defaultModelId }
-                    val subtitle = when {
-                        selectedModel != null && selectedProvider != null ->
-                            "${selectedProvider.name} · ${selectedModel.modelId}"
-                        selectedProvider != null -> selectedProvider.name
-                        else -> stringResource(Res.string.agent_edit_select_provider)
+                FollowableTarget(
+                    enabled = showFollowToggles,
+                    followed = uiState.followDefaultModel,
+                    onFollowChange = viewModel::onFollowModelChange
+                ) {
+                    if (modelSectionEnabled) {
+                        // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
+                        val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
+                        val selectedModel = models.find { it.id == uiState.defaultModelId }
+                        val subtitle = when {
+                            selectedModel != null && selectedProvider != null ->
+                                "${selectedProvider.name} · ${selectedModel.modelId}"
+                            selectedProvider != null -> selectedProvider.name
+                            else -> stringResource(Res.string.agent_edit_select_provider)
+                        }
+                        ListItem(
+                            title = stringResource(Res.string.provider_model_picker_label),
+                            subtitle = subtitle,
+                            icon = Icons.Default.SmartToy,
+                            onClick = { onPickProvider(uiState.selectedProviderId) }
+                        )
+                    } else {
+                        // 跟随默认 Agent：只读展示默认 Agent 的模型信息
+                        FollowedValueBox(
+                            label = stringResource(Res.string.agent_edit_followed_model_label),
+                            value = stringResource(Res.string.agent_edit_followed_model_value)
+                        )
                     }
-                    ListItem(
-                        title = stringResource(Res.string.provider_model_picker_label),
-                        subtitle = subtitle,
-                        icon = Icons.Default.SmartToy,
-                        onClick = { onPickProvider(uiState.selectedProviderId) }
-                    )
-                } else {
-                    // 跟随默认 Agent：只读展示默认 Agent 的模型信息
-                    FollowedValueBox(
-                        label = stringResource(Res.string.agent_edit_followed_model_label),
-                        value = stringResource(Res.string.agent_edit_followed_model_value)
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -457,96 +451,89 @@ fun AgentEditScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Temperature
-                if (showFollowToggles) {
-                    FollowToggleRow(
-                        label = stringResource(Res.string.agent_edit_follow_temperature),
-                        checked = uiState.followDefaultTemperature,
-                        onCheckedChange = { viewModel.onFollowTemperatureChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
                 val tempEnabled = !showFollowToggles || !uiState.followDefaultTemperature
                 val tempValue = if (showFollowToggles && uiState.followDefaultTemperature) {
                     uiState.defaultAgent?.temperature ?: uiState.temperature
                 } else {
                     uiState.temperature
                 }
-                Text(
-                    text = stringResource(Res.string.agent_edit_temperature_label, formatOneDecimal(tempValue)),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (tempEnabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                Slider(
-                    value = tempValue,
-                    onValueChange = { viewModel.onTemperatureChange(it) },
-                    enabled = tempEnabled,
-                    valueRange = 0f..2f,
-                    steps = 19,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
+                FollowableTarget(
+                    enabled = showFollowToggles,
+                    followed = uiState.followDefaultTemperature,
+                    onFollowChange = viewModel::onFollowTemperatureChange
+                ) {
+                    Column {
+                        Text(
+                            text = stringResource(Res.string.agent_edit_temperature_label, formatOneDecimal(tempValue)),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (tempEnabled) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                        Slider(
+                            value = tempValue,
+                            onValueChange = { viewModel.onTemperatureChange(it) },
+                            enabled = tempEnabled,
+                            valueRange = 0f..2f,
+                            steps = 19,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Max Tokens
-                if (showFollowToggles) {
-                    FollowToggleRow(
-                        label = stringResource(Res.string.agent_edit_follow_max_tokens),
-                        checked = uiState.followDefaultMaxTokens,
-                        onCheckedChange = { viewModel.onFollowMaxTokensChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 val maxTokensEnabled = !showFollowToggles || !uiState.followDefaultMaxTokens
                 val maxTokensValue = if (showFollowToggles && uiState.followDefaultMaxTokens) {
                     uiState.defaultAgent?.maxTokens?.toString() ?: ""
                 } else {
                     uiState.maxTokens ?: ""
                 }
-                OutlinedTextField(
-                    value = maxTokensValue,
-                    onValueChange = { value ->
-                        viewModel.onMaxTokensChange(value.ifBlank { null })
-                    },
-                    label = { Text(stringResource(Res.string.agent_edit_max_tokens_label)) },
-                    placeholder = { Text(stringResource(Res.string.agent_edit_max_tokens_placeholder)) },
-                    singleLine = true,
-                    enabled = maxTokensEnabled,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                )
+                FollowableTarget(
+                    enabled = showFollowToggles,
+                    followed = uiState.followDefaultMaxTokens,
+                    onFollowChange = viewModel::onFollowMaxTokensChange
+                ) {
+                    OutlinedTextField(
+                        value = maxTokensValue,
+                        onValueChange = { value ->
+                            viewModel.onMaxTokensChange(value.ifBlank { null })
+                        },
+                        label = { Text(stringResource(Res.string.agent_edit_max_tokens_label)) },
+                        placeholder = { Text(stringResource(Res.string.agent_edit_max_tokens_placeholder)) },
+                        singleLine = true,
+                        enabled = maxTokensEnabled,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Reasoning Effort
-                if (showFollowToggles) {
-                    FollowToggleRow(
-                        label = stringResource(Res.string.agent_edit_follow_reasoning_effort),
-                        checked = uiState.followDefaultReasoningEffort,
-                        onCheckedChange = { viewModel.onFollowReasoningEffortChange(it) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 val reasoningEnabled = !showFollowToggles || !uiState.followDefaultReasoningEffort
                 val reasoningValue = if (showFollowToggles && uiState.followDefaultReasoningEffort) {
                     uiState.defaultAgent?.reasoningEffort
                 } else {
                     uiState.reasoningEffort
                 }
-                ReasoningEffortDropdown(
-                    selectedEffort = reasoningValue,
-                    enabled = reasoningEnabled,
-                    onEffortChange = { viewModel.onReasoningEffortChange(it) }
-                )
+                FollowableTarget(
+                    enabled = showFollowToggles,
+                    followed = uiState.followDefaultReasoningEffort,
+                    onFollowChange = viewModel::onFollowReasoningEffortChange
+                ) {
+                    ReasoningEffortDropdown(
+                        selectedEffort = reasoningValue,
+                        enabled = reasoningEnabled,
+                        onEffortChange = { viewModel.onReasoningEffortChange(it) }
+                    )
+                }
 
                 // 工具开关：仅普通/默认 Agent 暴露（标题生成智能体是后台功能角色）
                 if (uiState.role != Agent.ROLE_TITLE) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    FollowToggleRow(
+                    SettingToggleRow(
                         label = stringResource(Res.string.agent_edit_enable_tools),
                         checked = uiState.toolsEnabled,
                         onCheckedChange = { viewModel.onToolsEnabledChange(it) }
@@ -708,7 +695,7 @@ fun AgentEditScreen(
 }
 
 @Composable
-private fun FollowToggleRow(
+private fun SettingToggleRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
@@ -730,6 +717,86 @@ private fun FollowToggleRow(
             checked = checked,
             onCheckedChange = onCheckedChange
         )
+    }
+}
+
+/**
+ * A configurable target whose value can be taken over from the default Agent.
+ * Swipe right to take over the default value and swipe left to restore the
+ * editable value. When taken over, the target is deliberately masked so the
+ * ownership of the value is clear and the child cannot be edited accidentally.
+ */
+@Composable
+private fun FollowableTarget(
+    enabled: Boolean,
+    followed: Boolean,
+    onFollowChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val takeoverActive = enabled && followed
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(enabled) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        totalDrag += dragAmount
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        if (enabled) {
+                            when {
+                                totalDrag >= 48f -> onFollowChange(true)
+                                totalDrag <= -48f -> onFollowChange(false)
+                            }
+                        }
+                        totalDrag = 0f
+                    },
+                    onDragCancel = { totalDrag = 0f }
+                )
+            }
+    ) {
+        content()
+        if (takeoverActive) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(Res.string.agent_edit_takeover_active),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(Res.string.agent_edit_takeover_hint),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -811,4 +878,3 @@ private fun ReasoningEffortDropdown(
         }
     }
 }
-

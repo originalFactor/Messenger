@@ -69,10 +69,10 @@ fun UserMessageBubble(
 
     // Google Messages 风格：仅当组内最后一条消息时显示尾巴（右下角小尖角）
     val bubbleShape = RoundedCornerShape(
-        topStart = 18.dp,
-        topEnd = 18.dp,
-        bottomStart = 18.dp,
-        bottomEnd = if (isLastInGroup) 4.dp else 18.dp
+        topStart = 22.dp,
+        topEnd = 22.dp,
+        bottomStart = 22.dp,
+        bottomEnd = if (isLastInGroup) 6.dp else 22.dp
     )
 
     val imageParts = message.parts.filterIsInstance<ContentPart.Image>()

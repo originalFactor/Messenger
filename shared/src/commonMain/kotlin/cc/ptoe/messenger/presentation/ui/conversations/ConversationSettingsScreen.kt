@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.conversations
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,12 +28,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
@@ -43,7 +47,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -55,6 +58,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,11 +77,9 @@ import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_default
 import cc.ptoe.messenger.generated.resources.agent_edit_reasoning_effort_label
 import cc.ptoe.messenger.generated.resources.conversation_settings_agent_label
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_desc
-import cc.ptoe.messenger.generated.resources.conversation_settings_override_max_tokens
-import cc.ptoe.messenger.generated.resources.conversation_settings_override_model
-import cc.ptoe.messenger.generated.resources.conversation_settings_override_reasoning_effort
 import cc.ptoe.messenger.generated.resources.conversation_settings_override_section
-import cc.ptoe.messenger.generated.resources.conversation_settings_override_temperature
+import cc.ptoe.messenger.generated.resources.conversation_settings_override_active
+import cc.ptoe.messenger.generated.resources.conversation_settings_override_hint
 import cc.ptoe.messenger.generated.resources.conversation_settings_select_model
 import cc.ptoe.messenger.generated.resources.conversation_settings_select_provider
 import cc.ptoe.messenger.generated.resources.conversation_settings_temperature_value
@@ -188,73 +191,77 @@ fun ConversationSettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // 模型覆盖
-                OverrideToggleRow(
-                    label = stringResource(Res.string.conversation_settings_override_model),
-                    checked = uiState.overrideModelEnabled,
-                    onCheckedChange = { checked ->
-                        viewModel.onOverrideModelChange(checked)
-                    }
-                )
-                if (uiState.overrideModelEnabled) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
-                    val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
-                    val selectedModel = models.find { it.id == uiState.overrideModelId }
-                    val subtitle = when {
-                        selectedModel != null && selectedProvider != null ->
-                            "${selectedProvider.name} · ${selectedModel.modelId}"
-                        selectedProvider != null -> selectedProvider.name
-                        else -> stringResource(Res.string.conversation_settings_select_provider)
-                    }
+                val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
+                val selectedModel = models.find { it.id == uiState.overrideModelId }
+                val modelSubtitle = when {
+                    selectedModel != null && selectedProvider != null ->
+                        "${selectedProvider.name} · ${selectedModel.modelId}"
+                    selectedProvider != null -> selectedProvider.name
+                    else -> stringResource(Res.string.conversation_settings_select_provider)
+                }
+                SwipeOverrideTarget(
+                    enabled = uiState.overrideModelEnabled,
+                    onEnabledChange = viewModel::onOverrideModelChange
+                ) {
                     ListItem(
                         title = stringResource(Res.string.provider_model_picker_label),
-                        subtitle = subtitle,
+                        subtitle = modelSubtitle,
                         icon = Icons.Default.SmartToy,
-                        onClick = { onPickProvider(uiState.selectedProviderId) }
+                        onClick = if (uiState.overrideModelEnabled) {
+                            { onPickProvider(uiState.selectedProviderId) }
+                        } else null
                     )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Temperature 覆盖
-                OverrideToggleRow(
-                    label = stringResource(Res.string.conversation_settings_override_temperature),
-                    checked = uiState.overrideTemperatureEnabled,
-                    onCheckedChange = { checked ->
-                        viewModel.onOverrideTemperatureChange(checked, agent?.temperature)
+                val tempValue = if (uiState.overrideTemperatureEnabled) {
+                    uiState.overrideTemperatureValue ?: agent?.temperature ?: 0.7f
+                } else {
+                    agent?.temperature ?: 0.7f
+                }
+                SwipeOverrideTarget(
+                    enabled = uiState.overrideTemperatureEnabled,
+                    onEnabledChange = { enabled ->
+                        viewModel.onOverrideTemperatureChange(enabled, agent?.temperature)
                     }
-                )
-                if (uiState.overrideTemperatureEnabled) {
-                    val tempValue = uiState.overrideTemperatureValue ?: 0.7f
-                    Text(
-                        text = stringResource(Res.string.conversation_settings_temperature_value, formatOneDecimal(tempValue)),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                    Slider(
-                        value = tempValue,
-                        onValueChange = { viewModel.onTemperatureChange(it) },
-                        valueRange = 0f..2f,
-                        steps = 19,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
+                ) {
+                    Column {
+                        Text(
+                            text = stringResource(Res.string.conversation_settings_temperature_value, formatOneDecimal(tempValue)),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                        Slider(
+                            value = tempValue,
+                            onValueChange = { viewModel.onTemperatureChange(it) },
+                            enabled = uiState.overrideTemperatureEnabled,
+                            valueRange = 0f..2f,
+                            steps = 19,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Reasoning Effort 覆盖
-                OverrideToggleRow(
-                    label = stringResource(Res.string.conversation_settings_override_reasoning_effort),
-                    checked = uiState.overrideReasoningEffortEnabled,
-                    onCheckedChange = { checked ->
-                        viewModel.onOverrideReasoningEffortChange(checked, agent?.reasoningEffort)
+                val reasoningValue = if (uiState.overrideReasoningEffortEnabled) {
+                    uiState.overrideReasoningEffortValue
+                } else {
+                    agent?.reasoningEffort
+                }
+                SwipeOverrideTarget(
+                    enabled = uiState.overrideReasoningEffortEnabled,
+                    onEnabledChange = { enabled ->
+                        viewModel.onOverrideReasoningEffortChange(enabled, agent?.reasoningEffort)
                     }
-                )
-                if (uiState.overrideReasoningEffortEnabled) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                ) {
                     ReasoningEffortOverrideDropdown(
-                        selectedEffort = uiState.overrideReasoningEffortValue,
+                        selectedEffort = reasoningValue,
+                        enabled = uiState.overrideReasoningEffortEnabled,
                         onEffortChange = { viewModel.onReasoningEffortChange(it) }
                     )
                 }
@@ -262,23 +269,25 @@ fun ConversationSettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Max Tokens 覆盖
-                OverrideToggleRow(
-                    label = stringResource(Res.string.conversation_settings_override_max_tokens),
-                    checked = uiState.overrideMaxTokensEnabled,
-                    onCheckedChange = { checked ->
-                        viewModel.onOverrideMaxTokensChange(checked, agent?.maxTokens)
+                SwipeOverrideTarget(
+                    enabled = uiState.overrideMaxTokensEnabled,
+                    onEnabledChange = { enabled ->
+                        viewModel.onOverrideMaxTokensChange(enabled, agent?.maxTokens)
                     }
-                )
-                if (uiState.overrideMaxTokensEnabled) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                ) {
                     OutlinedTextField(
-                        value = uiState.overrideMaxTokensValue?.toString() ?: "",
+                        value = (if (uiState.overrideMaxTokensEnabled) {
+                            uiState.overrideMaxTokensValue
+                        } else {
+                            agent?.maxTokens
+                        })?.toString() ?: "",
                         onValueChange = { value ->
                             viewModel.onMaxTokensChange(value.toIntOrNull())
                         },
                         label = { Text(stringResource(Res.string.agent_edit_max_tokens_label)) },
                         placeholder = { Text(stringResource(Res.string.agent_edit_max_tokens_placeholder)) },
                         singleLine = true,
+                        enabled = uiState.overrideMaxTokensEnabled,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -291,28 +300,72 @@ fun ConversationSettingsScreen(
 }
 
 @Composable
-private fun OverrideToggleRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+private fun SwipeOverrideTarget(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
 ) {
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .pointerInput(enabled) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        totalDrag += dragAmount
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        when {
+                            totalDrag >= 48f -> onEnabledChange(true)
+                            totalDrag <= -48f -> onEnabledChange(false)
+                        }
+                        totalDrag = 0f
+                    },
+                    onDragCancel = { totalDrag = 0f }
+                )
+            }
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange
-        )
+        content()
+        if (!enabled) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(Res.string.conversation_settings_override_active),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(Res.string.conversation_settings_override_hint),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -332,6 +385,7 @@ private val reasoningEffortOptions = listOf(
 @Composable
 private fun ReasoningEffortOverrideDropdown(
     selectedEffort: String?,
+    enabled: Boolean,
     onEffortChange: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -340,17 +394,18 @@ private fun ReasoningEffortOverrideDropdown(
         ?: stringResource(Res.string.agent_edit_reasoning_effort_default)
 
     ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
+        expanded = expanded && enabled,
+        onExpandedChange = { if (enabled) expanded = it },
         modifier = modifier
     ) {
         OutlinedTextField(
             value = displayText,
             onValueChange = { },
             readOnly = true,
+            enabled = enabled,
             label = { Text(stringResource(Res.string.agent_edit_reasoning_effort_label)) },
             trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded && enabled)
             },
             colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
             modifier = Modifier
@@ -359,7 +414,7 @@ private fun ReasoningEffortOverrideDropdown(
                 .padding(horizontal = 16.dp)
         )
         ExposedDropdownMenu(
-            expanded = expanded,
+            expanded = expanded && enabled,
             onDismissRequest = { expanded = false }
         ) {
             reasoningEffortOptions.forEach { (value, label) ->

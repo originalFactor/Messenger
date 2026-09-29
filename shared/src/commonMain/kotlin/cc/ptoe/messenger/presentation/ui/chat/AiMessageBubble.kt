@@ -83,7 +83,7 @@ fun AiMessageBubble(
     val bubbleColor = if (isError) {
         MaterialTheme.colorScheme.errorContainer
     } else {
-        MaterialTheme.colorScheme.surfaceContainerHighest
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
     val textColor = if (isError) {
         MaterialTheme.colorScheme.onErrorContainer

@@ -18,11 +18,15 @@ package cc.ptoe.messenger.presentation.theme
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 
 @Composable
 actual fun platformDynamicColorScheme(darkTheme: Boolean): ColorScheme? = null
 
 @Composable
-actual fun PlatformThemeSideEffects(darkTheme: Boolean) {
+actual fun PlatformThemeSideEffects(
+    darkTheme: Boolean,
+    navigationBarColor: Color
+) {
     // Desktop windows have no system status bar to tint.
 }
