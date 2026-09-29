@@ -48,6 +48,13 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
 
     override fun isActive(): Boolean = active.get()
 
+    override fun isInstalled(): Boolean = try {
+        context.packageManager.getPackageInfo(RUNTIME_PACKAGE, 0)
+        true
+    } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+        false
+    }
+
     override suspend fun ensureRuntime(): String? = withContext(Dispatchers.IO) {
         android.util.Log.i(TAG, "ensureRuntime: begin")
         active.set(false)

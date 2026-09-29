@@ -21,9 +21,9 @@ package cc.ptoe.messenger.domain.tool
  * Messenger Runtime companion app, whose legacy untrusted_app_27 SELinux
  * domain retains the execute/execute_no_trans rights on app data that the
  * main app's targetSdk-29+ domain lost to the Android 10+ W^X rule.
- * androidApp registers an AIDL-backed implementation at startup; when it is
- * absent or unavailable (companion app not installed), ShellExecutor falls
- * back to the in-process system shell.
+ * androidApp registers an AIDL-backed implementation at startup. There is
+ * deliberately NO fallback shell: without the companion the terminal shows
+ * a not-installed state and Android registers no agent tools.
  */
 interface ShellRuntimeBridge {
     /**
@@ -46,6 +46,9 @@ interface ShellRuntimeBridge {
 
     /** True after a successful [ensureRuntime] — commands will route here. */
     fun isActive(): Boolean
+
+    /** Whether the companion app is installed (cheap PackageManager check). */
+    fun isInstalled(): Boolean
 }
 
 /** androidApp registers the AIDL client here during application startup. */

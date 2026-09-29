@@ -10,5 +10,12 @@
 
 package cc.ptoe.messenger.domain.tool
 
-/** Android provides a consent-gated shell plus workspace-confined file tools. */
-actual fun createBuiltinChatTools(): List<ChatTool> = listOf(TerminalTool()) + WorkspaceTool.all
+/**
+ * Android tools require the companion runtime app: without it there is no
+ * way to execute the terminal tool (W^X) and the workspace tools would run
+ * against a workspace no shell can reach. Empty list disables the whole
+ * agent-tools feature until the companion is installed.
+ */
+actual fun createBuiltinChatTools(): List<ChatTool> =
+    if (ShellRuntimeRegistry.bridge?.isInstalled() == true) listOf(TerminalTool()) + WorkspaceTool.all
+    else emptyList()

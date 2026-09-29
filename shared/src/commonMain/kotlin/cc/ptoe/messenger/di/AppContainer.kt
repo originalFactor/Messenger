@@ -100,7 +100,9 @@ class AppContainer(
     val themePreferences = ThemePreferences(dataStore)
 
     /** Platform built-in tools: desktop and Android both register the terminal tool. */
-    val builtinTools: List<ChatTool> = createBuiltinChatTools()
+    // Re-evaluated on access: Android's tool set depends on whether the
+    // companion runtime app is installed (may change during a session).
+    val builtinTools: List<ChatTool> get() = createBuiltinChatTools()
 
     val chatRepository: ChatRepository = ChatRepositoryImpl()
 

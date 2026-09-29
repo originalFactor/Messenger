@@ -23,6 +23,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.tool.ensureShellRuntime
 import cc.ptoe.messenger.domain.tool.isEnhancedShellRuntimeActive
+import cc.ptoe.messenger.domain.tool.isShellRuntimeAvailable
 import cc.ptoe.messenger.domain.tool.executeShellCommand
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -60,7 +61,7 @@ class TerminalViewModel : ViewModel() {
         data class RuntimeMode(val enhanced: Boolean) : TerminalEntry
     }
 
-    enum class RuntimeState { Loading, Ready, Failed }
+    enum class RuntimeState { Loading, Ready, Failed, NotInstalled }
 
     private val _transcript = MutableStateFlow<List<TerminalEntry>>(emptyList())
     val transcript: StateFlow<List<TerminalEntry>> = _transcript.asStateFlow()
@@ -96,6 +97,10 @@ class TerminalViewModel : ViewModel() {
         _runtimeError.value = ""
         viewModelScope.launch {
             try {
+                if (!isShellRuntimeAvailable()) {
+                    _runtimeState.value = RuntimeState.NotInstalled
+                    return@launch
+                }
                 val workspace = ensureShellRuntime()
                 _cwd.value = workspace
                 val enhanced = isEnhancedShellRuntimeActive()

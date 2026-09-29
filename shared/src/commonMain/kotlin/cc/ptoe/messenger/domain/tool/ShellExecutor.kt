@@ -24,12 +24,11 @@ data class ShellResult(
 )
 
 /**
- * Executes a shell command on the host platform: the system shell
- * /system/bin/sh on Android (SELinux W^X forbids targetSdk-29+ apps from
- * exec()ing binaries in app data, so no bundled runtime is possible),
- * Windows PowerShell on Windows and /bin/sh on other desktop platforms.
- * [timeoutMs] bounds the whole execution; the process is destroyed when the
- * timeout fires or the caller's coroutine is cancelled.
+ * Executes a shell command on the host platform: Android routes through the
+ * targetSdk-28 companion runtime app (the only way to exec binaries in app
+ * data under Android 10+ W^X), desktop uses Windows PowerShell on Windows
+ * and /bin/sh elsewhere. [timeoutMs] bounds the whole execution; the process
+ * is destroyed when the timeout fires or the caller's coroutine is cancelled.
  *
  * [workingDir] overrides the process working directory (null = the platform
  * workspace returned by [ensureShellRuntime]); a missing directory falls
@@ -52,8 +51,14 @@ expect suspend fun executeShellCommand(
 expect suspend fun ensureShellRuntime(): String
 
 /**
- * Whether shell commands currently route through the enhanced companion
- * runtime (Android: the targetSdk-28 Messenger Runtime app) instead of the
- * in-process system shell.
+ * Whether shell commands currently route through the companion runtime
+ * (Android: the targetSdk-28 Messenger Runtime app).
  */
 expect fun isEnhancedShellRuntimeActive(): Boolean
+
+/**
+ * Whether a shell runtime exists on this platform at all. Android: the
+ * companion runtime app is installed — without it the terminal and the
+ * agent tools are disabled. Desktop: always true.
+ */
+expect fun isShellRuntimeAvailable(): Boolean

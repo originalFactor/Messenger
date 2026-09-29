@@ -84,6 +84,7 @@ import cc.ptoe.messenger.generated.resources.terminal_exit_code
 import cc.ptoe.messenger.generated.resources.terminal_history
 import cc.ptoe.messenger.generated.resources.terminal_input_hint
 import cc.ptoe.messenger.generated.resources.terminal_preparing_runtime
+import cc.ptoe.messenger.generated.resources.terminal_not_installed
 import cc.ptoe.messenger.generated.resources.terminal_retry
 import cc.ptoe.messenger.generated.resources.terminal_runtime_system
 import cc.ptoe.messenger.generated.resources.terminal_runtime_termux
@@ -172,6 +173,20 @@ fun TerminalScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                TerminalViewModel.RuntimeState.NotInstalled -> TerminalStatePane {
+                    Text(
+                        text = stringResource(Res.string.terminal_not_installed),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = viewModel::prepareRuntime) {
+                        Text(text = stringResource(Res.string.terminal_retry))
+                    }
                 }
 
                 TerminalViewModel.RuntimeState.Failed -> TerminalStatePane {

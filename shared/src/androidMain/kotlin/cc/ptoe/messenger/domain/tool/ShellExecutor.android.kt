@@ -17,156 +17,16 @@
 package cc.ptoe.messenger.domain.tool
 
 import cc.ptoe.messenger.presentation.platform.AndroidContextHolder
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
-
-/**
- * Executes shell commands with Android's system shell (/system/bin/sh —
- * mksh + toybox applets). Android 10+ SELinux W^X forbids targetSdk-29+
- * apps from exec()ing binaries inside app data, so a bundled Termux
- * bootstrap could never run here; the system shell keeps the same
- * contract: commands start in the app-private workspace (filesDir/
- * agent-runtime/workspace) with a clean environment, and leftovers of the
- * previous per-ABI bootstrap extraction are cleaned up on first use.
- */
-private object SystemShellRuntime {
-    private const val MAX_OUTPUT_BYTES = 1_000_000
-    private const val RUNTIME_BASE = "agent-runtime"
-
-    suspend fun workspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
-        withContext(Dispatchers.IO) {
-            WorkspaceFileOperations(workspace()).execute(operation)
-        }
-
-    /** Workspace path for the terminal screen's pre-warm; also triggers cleanup. */
-    suspend fun ensureWorkspace(): String = withContext(Dispatchers.IO) { workspace().absolutePath }
-
-    suspend fun execute(
-        command: String,
-        timeoutMs: Long,
-        workingDir: String?,
-        onOutput: ((String) -> Unit)?
-    ): ShellResult {
-        val result = try {
-            withContext(Dispatchers.IO) {
-                val workspace = workspace()
-                val directory = workingDir?.let(::File)?.takeIf { it.isDirectory } ?: workspace
-                val process = startProcess(command, directory, workspace)
-                try {
-                    coroutineScope {
-                        val stdout = async { drain(process.inputStream, onOutput) }
-                        val stderr = async { drain(process.errorStream, onOutput) }
-                        val exited = runInterruptible { process.waitFor(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS) }
-                        if (!exited) {
-                            terminate(process)
-                            runCatching { process.inputStream.close() }
-                            runCatching { process.errorStream.close() }
-                            stdout.cancelAndJoin()
-                            stderr.cancelAndJoin()
-                            ShellResult(
-                                output = "Command timed out after ${timeoutMs / 1000} seconds and was terminated.",
-                                exitCode = -1,
-                                timedOut = true
-                            )
-                        } else {
-                            val output = buildString {
-                                append(stdout.await())
-                                val error = stderr.await()
-                                if (error.isNotEmpty()) {
-                                    if (isNotEmpty()) append('\n')
-                                    append(error)
-                                }
-                            }
-                            ShellResult(output = output, exitCode = process.exitValue())
-                        }
-                    }
-                } finally {
-                    terminate(process)
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            ShellResult(output = "Failed to execute Android shell command: ${e.message ?: "exec failed"}", exitCode = -1)
-        }
-
-        return result
-    }
-
-    /** App-private workspace; also removes leftovers of the unusable bootstrap runtime. */
-    private fun workspace(): File {
-        val base = File(AndroidContextHolder.appContext.filesDir, RUNTIME_BASE)
-        val workspace = File(base, "workspace").apply { mkdirs() }
-        runCatching {
-            base.listFiles()?.forEach { child ->
-                if (child.isDirectory && child.name.startsWith("runtime-")) {
-                    child.deleteRecursively()
-                }
-            }
-        }
-        return workspace
-    }
-
-    private fun startProcess(command: String, directory: File, workspace: File): Process {
-        val builder = ProcessBuilder("/system/bin/sh", "-c", command)
-            .directory(directory)
-        val environment = builder.environment()
-        environment.clear()
-        environment["HOME"] = workspace.absolutePath
-        environment["PWD"] = directory.absolutePath
-        environment["TMPDIR"] = File(workspace, "tmp").apply { mkdirs() }.absolutePath
-        environment["PATH"] = "/system/bin"
-        environment["SHELL"] = "/system/bin/sh"
-        environment["LANG"] = "C.UTF-8"
-        environment["TERM"] = "xterm-256color"
-        return builder.start()
-    }
-
-    private fun drain(input: InputStream, onOutput: ((String) -> Unit)?): String {
-        val bytes = ByteArrayOutputStream()
-        input.use { stream ->
-            val buffer = ByteArray(16 * 1024)
-            while (true) {
-                val count = stream.read(buffer)
-                if (count < 0) break
-                val chunk = String(buffer, 0, count, StandardCharsets.UTF_8)
-                onOutput?.invoke(chunk)
-                bytes.write(buffer, 0, count)
-                if (bytes.size() > MAX_OUTPUT_BYTES) {
-                    val current = bytes.toByteArray()
-                    bytes.reset()
-                    bytes.write(current, current.size - MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES)
-                }
-            }
-        }
-        return bytes.toString(StandardCharsets.UTF_8.name())
-    }
-
-    private fun terminate(process: Process) {
-        if (!process.isAlive) return
-        process.destroy()
-        if (!runCatching { process.waitFor(250L, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
-            process.destroyForcibly()
-            runCatching { process.waitFor(2L, TimeUnit.SECONDS) }
-        }
-    }
-}
 
 @Volatile
 private var enhancedRuntimeActive = false
@@ -177,31 +37,34 @@ actual suspend fun executeShellCommand(
     workingDir: String?,
     onOutput: ((String) -> Unit)?
 ): ShellResult {
-    // Companion runtime first (legacy SELinux domain can exec app data);
-    // fall back to the in-process system shell when it is not installed.
+    // Shell execution exists ONLY through the companion runtime (its legacy
+    // SELinux domain can exec app data; the main app's cannot). Defensive
+    // error result — agent tools are disabled and the terminal screen gates
+    // on availability, so this branch should not be reached.
     val bridge = ShellRuntimeRegistry.bridge
-    if (bridge != null) {
-        bridge.execute(command, timeoutMs, workingDir, onOutput)?.let { return it }
-    }
-    return SystemShellRuntime.execute(command, timeoutMs, workingDir, onOutput)
+        ?: return ShellResult(output = "Messenger Runtime companion app is not installed.", exitCode = -1)
+    return bridge.execute(command, timeoutMs, workingDir, onOutput)
+        ?: ShellResult(output = "Messenger Runtime companion app is not available.", exitCode = -1)
 }
 
 actual suspend fun ensureShellRuntime(): String {
     val bridge = ShellRuntimeRegistry.bridge
-    if (bridge != null) {
-        bridge.ensureRuntime()?.let { path ->
-            enhancedRuntimeActive = true
-            return path
-        }
-    }
-    enhancedRuntimeActive = false
-    return SystemShellRuntime.ensureWorkspace()
+        ?: throw IllegalStateException("Messenger Runtime companion app is not installed.")
+    return bridge.ensureRuntime()
+        ?: throw IllegalStateException("Messenger Runtime companion app is not available.")
 }
 
 actual fun isEnhancedShellRuntimeActive(): Boolean = enhancedRuntimeActive
 
+actual fun isShellRuntimeAvailable(): Boolean = ShellRuntimeRegistry.bridge?.isInstalled() == true
+
+/** Shared workspace root for main-app file tools (the companion's shell runs here too). */
+private object AgentWorkspace {
+    fun path(): File = File(AndroidContextHolder.appContext.filesDir, "agent-runtime/workspace").apply { mkdirs() }
+}
+
 internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
-    SystemShellRuntime.workspaceOperation(operation)
+    withContext(Dispatchers.IO) { WorkspaceFileOperations(AgentWorkspace.path()).execute(operation) }
 
 private class WorkspaceFileOperations(private val root: File) {
     private val maxFileBytes = 4L * 1024 * 1024
