@@ -274,11 +274,13 @@
     <!-- Terminal -->
     <string name="settings_advanced">Advanced</string>
     <string name="settings_terminal">Terminal</string>
-    <string name="settings_terminal_desc">Use the built-in shell inside the app sandbox</string>
+    <string name="settings_terminal_desc">Built-in terminal. Install the Messenger Runtime APK for the full Termux environment</string>
     <string name="terminal_title">Terminal</string>
     <string name="terminal_preparing_runtime">Preparing the terminal…</string>
     <string name="terminal_runtime_failed">Terminal runtime unavailable: %1$s</string>
     <string name="terminal_retry">Retry</string>
+    <string name="terminal_runtime_termux">Connected to Messenger Runtime (full Termux environment)</string>
+    <string name="terminal_runtime_system">Using the system shell. Install the Messenger Runtime APK for the full Termux environment.</string>
     <string name="terminal_input_hint">Enter a command</string>
     <string name="terminal_empty_hint">Type a command and press send. The working directory persists across cd commands.</string>
     <string name="terminal_exit_code">Exit code %1$d</string>

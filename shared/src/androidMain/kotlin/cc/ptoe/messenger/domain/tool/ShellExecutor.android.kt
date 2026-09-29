@@ -45,7 +45,7 @@ import kotlinx.coroutines.withContext
  * agent-runtime/workspace) with a clean environment, and leftovers of the
  * previous per-ABI bootstrap extraction are cleaned up on first use.
  */
-private object AndroidShellRuntime {
+private object SystemShellRuntime {
     private const val MAX_OUTPUT_BYTES = 1_000_000
     private const val RUNTIME_BASE = "agent-runtime"
 
@@ -168,17 +168,40 @@ private object AndroidShellRuntime {
     }
 }
 
+@Volatile
+private var enhancedRuntimeActive = false
+
 actual suspend fun executeShellCommand(
     command: String,
     timeoutMs: Long,
     workingDir: String?,
     onOutput: ((String) -> Unit)?
-): ShellResult = AndroidShellRuntime.execute(command, timeoutMs, workingDir, onOutput)
+): ShellResult {
+    // Companion runtime first (legacy SELinux domain can exec app data);
+    // fall back to the in-process system shell when it is not installed.
+    val bridge = ShellRuntimeRegistry.bridge
+    if (bridge != null) {
+        bridge.execute(command, timeoutMs, workingDir, onOutput)?.let { return it }
+    }
+    return SystemShellRuntime.execute(command, timeoutMs, workingDir, onOutput)
+}
 
-actual suspend fun ensureShellRuntime(): String = AndroidShellRuntime.ensureWorkspace()
+actual suspend fun ensureShellRuntime(): String {
+    val bridge = ShellRuntimeRegistry.bridge
+    if (bridge != null) {
+        bridge.ensureRuntime()?.let { path ->
+            enhancedRuntimeActive = true
+            return path
+        }
+    }
+    enhancedRuntimeActive = false
+    return SystemShellRuntime.ensureWorkspace()
+}
+
+actual fun isEnhancedShellRuntimeActive(): Boolean = enhancedRuntimeActive
 
 internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
-    AndroidShellRuntime.workspaceOperation(operation)
+    SystemShellRuntime.workspaceOperation(operation)
 
 private class WorkspaceFileOperations(private val root: File) {
     private val maxFileBytes = 4L * 1024 * 1024

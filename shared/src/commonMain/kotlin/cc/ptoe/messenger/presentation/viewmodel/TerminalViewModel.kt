@@ -22,6 +22,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.tool.ensureShellRuntime
+import cc.ptoe.messenger.domain.tool.isEnhancedShellRuntimeActive
 import cc.ptoe.messenger.domain.tool.executeShellCommand
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -54,6 +55,9 @@ class TerminalViewModel : ViewModel() {
         data object TimedOut : TerminalEntry
 
         data class Info(val text: String) : TerminalEntry
+
+        /** Which shell runtime commands execute in (companion Termux app vs system shell). */
+        data class RuntimeMode(val enhanced: Boolean) : TerminalEntry
     }
 
     enum class RuntimeState { Loading, Ready, Failed }
@@ -94,9 +98,15 @@ class TerminalViewModel : ViewModel() {
             try {
                 val workspace = ensureShellRuntime()
                 _cwd.value = workspace
+                val enhanced = isEnhancedShellRuntimeActive()
                 _transcript.update { current ->
-                    if (current.any { it is TerminalEntry.Info }) current
-                    else current + TerminalEntry.Info(workspace)
+                    if (current.any { it is TerminalEntry.Info }) {
+                        current.map { entry ->
+                            if (entry is TerminalEntry.RuntimeMode) TerminalEntry.RuntimeMode(enhanced) else entry
+                        }
+                    } else {
+                        current + TerminalEntry.Info(workspace) + TerminalEntry.RuntimeMode(enhanced)
+                    }
                 }
                 _runtimeState.value = RuntimeState.Ready
             } catch (e: CancellationException) {

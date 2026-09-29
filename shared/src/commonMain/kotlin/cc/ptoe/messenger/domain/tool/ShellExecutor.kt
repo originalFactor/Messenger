@@ -50,3 +50,10 @@ expect suspend fun executeShellCommand(
  * when the workspace cannot be created.
  */
 expect suspend fun ensureShellRuntime(): String
+
+/**
+ * Whether shell commands currently route through the enhanced companion
+ * runtime (Android: the targetSdk-28 Messenger Runtime app) instead of the
+ * in-process system shell.
+ */
+expect fun isEnhancedShellRuntimeActive(): Boolean

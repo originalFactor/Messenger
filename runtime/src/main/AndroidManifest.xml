@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Companion shell-runtime app. targetSdk 28 keeps its process in the
+     legacy untrusted_app_27 SELinux domain (execute/execute_no_trans on
+     app_data_file intact), and sharedUserId puts it in the same UID as the
+     main Messenger app so it can host the Termux bootstrap and execute
+     commands for the main app over AIDL. Distributed alongside the main
+     APK; the main app falls back to the system shell without it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sharedUserId="cc.ptoe.messenger">
+
+    <!-- The runtime resolves the main app's context (createPackageContext)
+         to host the workspace in the shared app data directory. -->
+    <queries>
+        <package android:name="cc.ptoe.messenger" />
+    </queries>
+
+    <application
+        android:label="Messenger Runtime"
+        android:allowBackup="false">
+
+        <service
+            android:name="cc.ptoe.messenger.runtime.ShellService"
+            android:exported="true" />
+
+        <!-- Manual probe surface: runs uname/id/ls through the runtime so the
+             SELinux domain behavior can be verified without the main app. -->
+        <activity
+            android:name="cc.ptoe.messenger.runtime.RuntimeTestActivity"
+            android:exported="true"
+            android:label="Messenger Runtime Test">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

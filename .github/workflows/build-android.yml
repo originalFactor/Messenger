@@ -79,17 +79,23 @@ jobs:
           mkdir -p keyring
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > keyring/messenger-release.jks
 
-      - name: Build androidApp release APK
+      - name: Build androidApp and runtime release APKs
         env:
           VERSION_CODE: ${{ env.VERSION_CODE }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         shell: bash
-        run: ./gradlew :androidApp:assembleRelease
+        run: ./gradlew :androidApp:assembleRelease :runtime:assembleRelease
 
       - name: Upload androidApp release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: androidApp-release
           path: androidApp/build/outputs/apk/*/release/androidApp-*-release.apk
+
+      - name: Upload runtime release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-release
+          path: runtime/build/outputs/apk/*/release/runtime-*-release.apk

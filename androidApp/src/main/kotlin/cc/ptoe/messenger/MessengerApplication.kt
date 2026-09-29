@@ -24,6 +24,7 @@ import cc.ptoe.messenger.data.wear.MobileHttpServer
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.di.AppDirs
+import cc.ptoe.messenger.domain.tool.ShellRuntimeRegistry
 import cc.ptoe.messenger.presentation.platform.AndroidContextHolder
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
@@ -35,6 +36,10 @@ class MessengerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidContextHolder.appContext = applicationContext
+        // Optional companion runtime app (targetSdk 28, shared UID) hosts the
+        // Termux bootstrap in its legacy SELinux domain; shell commands route
+        // there when installed and fall back to the system shell otherwise.
+        ShellRuntimeRegistry.bridge = RuntimeShellClient(applicationContext)
         val container = AppContainer(
             appDirs = AppDirs(
                 filesDir = filesDir.absolutePath.toPath(),

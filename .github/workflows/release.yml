@@ -43,6 +43,12 @@ jobs:
           name: wear-release
           path: artifacts/wear
 
+      - name: Download runtime release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-release
+          path: artifacts/runtime
+
       - name: Download Desktop artifact
         uses: actions/download-artifact@v4
         with:
@@ -62,5 +68,6 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/androidApp/**/*.apk
+            artifacts/runtime/**/*.apk
             artifacts/wear/wear-release.apk
             artifacts/desktop-msi/*.msi

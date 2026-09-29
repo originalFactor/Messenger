@@ -85,6 +85,8 @@ import cc.ptoe.messenger.generated.resources.terminal_history
 import cc.ptoe.messenger.generated.resources.terminal_input_hint
 import cc.ptoe.messenger.generated.resources.terminal_preparing_runtime
 import cc.ptoe.messenger.generated.resources.terminal_retry
+import cc.ptoe.messenger.generated.resources.terminal_runtime_system
+import cc.ptoe.messenger.generated.resources.terminal_runtime_termux
 import cc.ptoe.messenger.generated.resources.terminal_runtime_failed
 import cc.ptoe.messenger.generated.resources.terminal_send
 import cc.ptoe.messenger.generated.resources.terminal_stop
@@ -299,6 +301,14 @@ private fun TerminalEntryRow(entry: TerminalViewModel.TerminalEntry) {
 
         is TerminalViewModel.TerminalEntry.Info -> Text(
             text = entry.text,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        is TerminalViewModel.TerminalEntry.RuntimeMode -> Text(
+            text = if (entry.enhanced) stringResource(Res.string.terminal_runtime_termux)
+            else stringResource(Res.string.terminal_runtime_system),
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth()

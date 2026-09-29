@@ -61,6 +61,8 @@ actual suspend fun executeShellCommand(
 
 actual suspend fun ensureShellRuntime(): String = agentWorkspace.canonicalFile.absolutePath
 
+actual fun isEnhancedShellRuntimeActive(): Boolean = false
+
 private fun startProcess(command: String, workingDir: String?): Process {
     val isWindows = System.getProperty("os.name")?.lowercase()?.contains("windows") == true
     val builder = if (isWindows) {
