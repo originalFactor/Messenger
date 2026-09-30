@@ -22,17 +22,10 @@ package cc.ptoe.messenger.domain.tool
  * domain retains the execute/execute_no_trans rights on app data that the
  * main app's targetSdk-29+ domain lost to the Android 10+ W^X rule.
  * androidApp registers an AIDL-backed implementation at startup. There is
- * deliberately NO fallback shell: without the companion the terminal shows
- * a not-installed state and Android registers no agent tools.
+ * deliberately NO fallback shell: without the companion the terminal app
+ * cannot be launched and Android registers no agent tools.
  */
 interface ShellRuntimeBridge {
-    /**
-     * Prepares the runtime (installs the bootstrap if needed). Returns the
-     * workspace path, or null when the runtime is unavailable — the caller
-     * then falls back to the system shell.
-     */
-    suspend fun ensureRuntime(): String?
-
     /**
      * Executes a command and returns the result, or null when the runtime is
      * unavailable (caller falls back). Output chunks stream via [onOutput].
@@ -43,9 +36,6 @@ interface ShellRuntimeBridge {
         workingDir: String?,
         onOutput: ((String) -> Unit)?
     ): ShellResult?
-
-    /** True after a successful [ensureRuntime] — commands will route here. */
-    fun isActive(): Boolean
 
     /** Whether the companion app is installed (cheap PackageManager check). */
     fun isInstalled(): Boolean
@@ -71,3 +61,12 @@ object ShellRuntimeRegistry {
     @Volatile
     var bridge: ShellRuntimeBridge? = null
 }
+
+/**
+ * Application ID of the companion runtime app: the AIDL service host and the
+ * Termux-style terminal app the Settings screen opens.
+ */
+const val RUNTIME_PACKAGE = "cc.ptoe.messenger.runtime"
+
+/** Fully-qualified name of the companion's terminal screen. */
+const val RUNTIME_TERMINAL_ACTIVITY = "$RUNTIME_PACKAGE.TerminalActivity"

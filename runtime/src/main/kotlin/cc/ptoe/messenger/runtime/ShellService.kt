@@ -44,26 +44,6 @@ class ShellService : Service() {
     private val active = ConcurrentHashMap<Int, Job>()
 
     private val binder = object : IShellService.Stub() {
-        override fun ensureRuntime(requestId: Int, callback: IShellCallback) {
-            if (!isCallerAllowed()) {
-                android.util.Log.w(TAG, "ensureRuntime rejected: caller lacks $PERMISSION")
-                return
-            }
-            android.util.Log.i(TAG, "ensureRuntime($requestId) start")
-            scope.launch {
-                try {
-                    val workspace = TermuxRuntime.ensureWorkspace(applicationContext)
-                    android.util.Log.i(TAG, "ensureRuntime($requestId) ok: $workspace")
-                    callback.onFinished(requestId, 0, workspace, false)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    android.util.Log.w(TAG, "ensureRuntime($requestId) failed", e)
-                    runCatching { callback.onFinished(requestId, -1, e.message ?: "runtime init failed", false) }
-                }
-            }
-        }
-
         override fun submit(
             requestId: Int,
             command: String,

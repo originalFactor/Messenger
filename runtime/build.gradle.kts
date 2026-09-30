@@ -151,6 +151,9 @@ android {
     compileSdk {
         version = release(37)
     }
+    // Pinned, as everywhere else in this repo: the vendored PTY JNI
+    // (src/main/cpp) is built per ABI flavor with CMake.
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "cc.ptoe.messenger.runtime"
@@ -211,6 +214,21 @@ android {
         aidl = true
     }
 
+    lint {
+        // targetSdk 28 is deliberate here (legacy untrusted_app_27 SELinux
+        // domain — see the comment above), so the Google Play target-API
+        // requirement cannot apply to this companion app: without the
+        // exception lintVital fails every release build.
+        disable += "ExpiredTargetSdkVersion"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -239,4 +257,6 @@ androidComponents {
 
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
+    // The vendored Termux terminal emulator annotates its APIs.
+    implementation(libs.androidx.annotation)
 }

@@ -58,7 +58,7 @@ import cc.ptoe.messenger.presentation.ui.settings.LicensesScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsScreen
 import cc.ptoe.messenger.presentation.ui.settings.CloudSettingsScreen
-import cc.ptoe.messenger.presentation.ui.terminal.TerminalScreen
+import cc.ptoe.messenger.presentation.ui.settings.LicensesScreen
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ConversationsViewModel
@@ -217,8 +217,7 @@ fun NavGraph(
                         onLicensesClick = {
                             navController.navigate(Screen.Licenses.route)
                         },
-                        onCloudSettingsClick = { navController.navigate(Screen.CloudSettings.route) },
-                        onTerminalClick = { navController.navigate(Screen.Terminal.route) }
+                        onCloudSettingsClick = { navController.navigate(Screen.CloudSettings.route) }
                     )
                 }
             }
@@ -415,12 +414,6 @@ fun NavGraph(
 
         composable(Screen.Licenses.route) {
             LicensesScreen(
-                onBackClick = { navController.popBackStack() }
-            )
-        }
-
-        composable(Screen.Terminal.route) {
-            TerminalScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

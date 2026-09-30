@@ -16,11 +16,6 @@
 
 package cc.ptoe.messenger.domain.tool
 
-import kotlinx.coroutines.Dispatchers
-
-@Volatile
-private var enhancedRuntimeActive = false
-
 actual suspend fun executeShellCommand(
     command: String,
     timeoutMs: Long,
@@ -29,27 +24,13 @@ actual suspend fun executeShellCommand(
 ): ShellResult {
     // Shell execution exists ONLY through the companion runtime (its legacy
     // SELinux domain can exec app data; the main app's cannot). Defensive
-    // error result — agent tools are disabled and the terminal screen gates
-    // on availability, so this branch should not be reached.
+    // error result — the agent tools are only registered when the companion
+    // is installed, so this branch should not be reached.
     val bridge = ShellRuntimeRegistry.bridge
         ?: return ShellResult(output = "Messenger Runtime companion app is not installed.", exitCode = -1)
     return bridge.execute(command, timeoutMs, workingDir, onOutput)
         ?: ShellResult(output = "Messenger Runtime companion app is not available.", exitCode = -1)
 }
-
-actual suspend fun ensureShellRuntime(): String {
-    val bridge = ShellRuntimeRegistry.bridge
-        ?: throw IllegalStateException("Messenger Runtime companion app is not installed.")
-    return bridge.ensureRuntime()?.also {
-        enhancedRuntimeActive = true
-    } ?: throw IllegalStateException("Messenger Runtime companion app is not available.")
-}
-
-actual fun isEnhancedShellRuntimeActive(): Boolean = enhancedRuntimeActive
-
-actual fun isShellRuntimeAvailable(): Boolean = ShellRuntimeRegistry.bridge?.isInstalled() == true
-
-
 
 internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult {
     // The workspace lives in the companion runtime app's own data directory;

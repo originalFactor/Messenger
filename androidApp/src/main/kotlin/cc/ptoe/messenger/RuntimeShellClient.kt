@@ -21,13 +21,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
 import cc.ptoe.messenger.domain.tool.ShellResult
 import cc.ptoe.messenger.domain.tool.ShellRuntimeBridge
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import cc.ptoe.messenger.runtime.IShellCallback
 import cc.ptoe.messenger.runtime.IShellService
 import cc.ptoe.messenger.runtime.ToolResult
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -36,19 +36,127 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * AIDL client for the Messenger Runtime companion app (targetSdk 28, shared
- * UID). Binding to its [cc.ptoe.messenger.runtime.ShellService] routes shell
- * commands into the companion's legacy SELinux domain where executing the
- * extracted Termux bootstrap is permitted. Every method returns null (or
- * completes null) when the companion is absent — callers fall back to the
- * in-process system shell.
+ * AIDL client for the Messenger Runtime companion app (targetSdk 28). Shell
+ * commands + workspace file operations execute in the companion's legacy
+ * SELinux domain; the companion's own terminal UI (TerminalActivity) is opened
+ * with an explicit intent instead of being driven from here. The binder
+ * connection is held for the app lifetime; every call returns null when the
+ * companion is absent — the terminal reports a not-installed state and the
+ * agent tools are disabled.
  */
 class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
 
     private val requestIds = AtomicInteger(1)
-    private val active = AtomicBoolean(false)
 
-    override fun isActive(): Boolean = active.get()
+    override fun isInstalled(): Boolean = try {
+        context.packageManager.getPackageInfo(RUNTIME_PACKAGE, 0)
+        true
+    } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+        false
+    }
+
+    // ---------------------------------------------------------------------
+    // Persistent binding (session + streaming need a live connection)
+    // ---------------------------------------------------------------------
+
+    private val connectLock = Any()
+    private var cached: IShellService? = null
+    private var connectLatch: CompletableDeferred<IShellService?>? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = IShellService.Stub.asInterface(binder)
+            synchronized(connectLock) {
+                cached = service
+                connectLatch?.complete(service)
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            synchronized(connectLock) {
+                cached = null
+                connectLatch = null
+            }
+        }
+
+        override fun onBindingDied(name: ComponentName?) {
+            // The framework cleans up the dead binding; the next call re-binds.
+            synchronized(connectLock) {
+                cached = null
+                connectLatch = null
+            }
+        }
+    }
+
+    private suspend fun service(): IShellService? = withContext(Dispatchers.IO) {
+        synchronized(connectLock) { cached }?.let { return@withContext it }
+        val latch = synchronized(connectLock) {
+            connectLatch ?: CompletableDeferred<IShellService?>().also {
+                connectLatch = it
+                val intent = Intent().setClassName(RUNTIME_PACKAGE, "$RUNTIME_PACKAGE.ShellService")
+                val bound = runCatching {
+                    context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+                }.getOrDefault(false)
+                if (!bound) {
+                    connectLatch = null
+                    it.complete(null)
+                }
+            }
+        }
+        withTimeoutOrNull(CONNECT_TIMEOUT_MS) { latch.await() }
+    }
+
+    // ---------------------------------------------------------------------
+    // One-shot execution (agent terminal tool)
+    // ---------------------------------------------------------------------
+
+    override suspend fun execute(
+        command: String,
+        timeoutMs: Long,
+        workingDir: String?,
+        onOutput: ((String) -> Unit)?
+    ): ShellResult? = withContext(Dispatchers.IO) {
+        val service = service() ?: return@withContext null
+        val id = requestIds.getAndIncrement()
+        val finished = CompletableDeferred<ShellResult>()
+        val streamed = StringBuilder()
+        val callback = object : IShellCallback.Stub() {
+            override fun onOutput(requestId: Int, chunk: String?) {
+                if (requestId != id || chunk == null) return
+                synchronized(streamed) { streamed.append(chunk) }
+                onOutput?.invoke(chunk)
+            }
+
+            override fun onFinished(requestId: Int, exitCode: Int, output: String?, timedOut: Boolean) {
+                if (requestId != id) return
+                val merged = synchronized(streamed) { streamed.toString() }
+                finished.complete(
+                    ShellResult(
+                        output = merged.ifEmpty { output.orEmpty() },
+                        exitCode = exitCode,
+                        timedOut = timedOut
+                    )
+                )
+            }
+        }
+        try {
+            withTimeoutOrNull(timeoutMs + COMPLETION_GRACE_MS) {
+                service.submit(id, command, workingDir, timeoutMs, callback)
+                finished.await()
+            } ?: ShellResult(
+                output = "Runtime request timed out after ${(timeoutMs + COMPLETION_GRACE_MS) / 1000} seconds.",
+                exitCode = -1,
+                timedOut = true
+            )
+        } catch (e: CancellationException) {
+            runCatching { service.cancel(id) }
+            throw e
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Workspace file operations
+    // ---------------------------------------------------------------------
 
     override suspend fun workspaceGlob(pattern: String, maxResults: Int): ToolExecutionResult =
         workspaceCall { it.workspaceGlob(pattern, maxResults) }
@@ -83,101 +191,13 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
             ToolExecutionResult(output = result.output, isError = result.isError)
         }
 
-    override fun isInstalled(): Boolean = try {
-        context.packageManager.getPackageInfo(RUNTIME_PACKAGE, 0)
-        true
-    } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
-        false
-    }
-
-    override suspend fun ensureRuntime(): String? = withContext(Dispatchers.IO) {
-        android.util.Log.i(TAG, "ensureRuntime: begin")
-        active.set(false)
-        // The binding must stay alive for the WHOLE exchange: unbinding early
-        // turns the companion process into a cached app and the freezer
-        // suspends it mid-extraction (do_freezer_trap).
-        withService { service ->
-            val id = requestIds.getAndIncrement()
-            val finished = CompletableDeferred<String?>()
-            val callback = object : IShellCallback.Stub() {
-                override fun onOutput(requestId: Int, chunk: String?) = Unit
-                override fun onFinished(requestId: Int, exitCode: Int, output: String?, timedOut: Boolean) {
-                    if (requestId != id) return
-                    if (exitCode == 0 && output != null) {
-                        active.set(true)
-                        finished.complete(output)
-                    } else {
-                        finished.complete(null)
-                    }
-                }
-            }
-            try {
-                withTimeoutOrNull(ENSURE_TIMEOUT_MS) {
-                    service.ensureRuntime(id, callback)
-                    android.util.Log.i(TAG, "ensureRuntime: submitted id=$id, awaiting")
-                    finished.await()
-                }.also { if (it == null) android.util.Log.i(TAG, "ensureRuntime: timed out or failed") }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "ensureRuntime: exception", e)
-                null
-            }
-        }
-    }
-
-    override suspend fun execute(
-        command: String,
-        timeoutMs: Long,
-        workingDir: String?,
-        onOutput: ((String) -> Unit)?
-    ): ShellResult? = withContext(Dispatchers.IO) {
-        withService { service ->
-        val id = requestIds.getAndIncrement()
-        val finished = CompletableDeferred<ShellResult>()
-        val streamed = StringBuilder()
-        val callback = object : IShellCallback.Stub() {
-            override fun onOutput(requestId: Int, chunk: String?) {
-                if (requestId != id || chunk == null) return
-                synchronized(streamed) { streamed.append(chunk) }
-                onOutput?.invoke(chunk)
-            }
-
-            override fun onFinished(requestId: Int, exitCode: Int, output: String?, timedOut: Boolean) {
-                if (requestId != id) return
-                val merged = synchronized(streamed) { streamed.toString() }
-                finished.complete(
-                    ShellResult(
-                        output = merged.ifEmpty { output.orEmpty() },
-                        exitCode = exitCode,
-                        timedOut = timedOut
-                    )
-                )
-            }
-        }
-        try {
-            withTimeoutOrNull(timeoutMs + COMPLETION_GRACE_MS) {
-                service.submit(id, command, workingDir, timeoutMs, callback)
-                finished.await()
-            } ?: ShellResult(
-                output = "Runtime request timed out after ${(timeoutMs + COMPLETION_GRACE_MS) / 1000} seconds.",
-                exitCode = -1,
-                timedOut = true
-            )
-        } catch (e: CancellationException) {
-            // Caller stopped the command: tell the service to kill the process.
-            runCatching { service.cancel(id) }
-            throw e
-        }
-        }
-    }
-
-    private suspend fun <T> withService(block: suspend (IShellService) -> T?): T? {
+    /** One-shot operations bind transiently (no session state to preserve). */
+    private suspend fun <T> withService(block: (IShellService) -> T?): T? {
         val latch = CompletableDeferred<IShellService?>()
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 val service = IShellService.Stub.asInterface(binder)
-                if (service != null) latch.complete(service) else latch.complete(null)
+                latch.complete(service)
             }
 
             override fun onServiceDisconnected(name: ComponentName?) = Unit
@@ -189,7 +209,6 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
             android.util.Log.w(TAG, "bindService threw", e)
             false
         }
-        android.util.Log.i(TAG, "bindService -> $bound")
         if (!bound) return null
         try {
             val service = withTimeoutOrNull(CONNECT_TIMEOUT_MS) { latch.await() } ?: return null
@@ -201,9 +220,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
 
     private companion object {
         const val TAG = "ShellRT"
-        const val RUNTIME_PACKAGE = "cc.ptoe.messenger.runtime"
         const val CONNECT_TIMEOUT_MS = 5_000L
-        const val ENSURE_TIMEOUT_MS = 120_000L
         const val COMPLETION_GRACE_MS = 15_000L
     }
 }

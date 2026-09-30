@@ -9,7 +9,11 @@
      with the targetSdk-36 main app put this process into the modern
      untrusted_app domain where W^X blocks execution (install-order
      dependent). Distributed alongside the main APK; without it the main
-     app disables the agent tools and the terminal. -->
+     app disables the agent tools and the terminal.
+
+     The app is also the Termux-style terminal UI: TerminalActivity is the
+     launcher, and the main app opens it from 设置 → 高级 → 终端 with an
+     explicit component intent. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Signature-level: only builds signed with the same key (the main
@@ -18,25 +22,30 @@
         android:name="cc.ptoe.messenger.runtime.permission.SHELL"
         android:protectionLevel="signature" />
 
+    <!-- The shell (apt, curl, ping) needs real network sockets; without this
+         the app uid lacks the inet group and every socket open is denied. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="Messenger Runtime"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:theme="@style/Theme.MessengerRuntime">
 
-        <service
-            android:name="cc.ptoe.messenger.runtime.ShellService"
-            android:exported="true"
-            android:permission="cc.ptoe.messenger.runtime.permission.SHELL" />
-
-        <!-- Manual probe surface: runs uname/id/ls through the runtime so the
-             SELinux domain behavior can be verified without the main app. -->
         <activity
-            android:name="cc.ptoe.messenger.runtime.RuntimeTestActivity"
+            android:name="cc.ptoe.messenger.runtime.TerminalActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden"
             android:exported="true"
-            android:label="Messenger Runtime Test">
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name="cc.ptoe.messenger.runtime.ShellService"
+            android:exported="true"
+            android:permission="cc.ptoe.messenger.runtime.permission.SHELL" />
     </application>
 </manifest>

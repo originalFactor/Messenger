@@ -62,6 +62,20 @@ fun copyAvatarToInternal(sourcePath: String, subdir: String): String? {
     }
 }
 
+/**
+ * Whether this platform ships the Messenger Runtime terminal app (the
+ * Termux-style interactive shell app, a separate APK on Android). Desktop has
+ * no such app, so the Settings terminal entry is hidden there.
+ */
+expect val runtimeTerminalSupported: Boolean
+
+/**
+ * Opens the Messenger Runtime terminal app's terminal screen. Returns false
+ * when the companion app is not installed, so the caller can tell the user
+ * where to get it instead of failing silently.
+ */
+expect fun openRuntimeTerminal(): Boolean
+
 /** Deletes a previously stored avatar file, if it exists. */
 fun deleteAvatarFile(path: String?) {
     if (path.isNullOrBlank()) return

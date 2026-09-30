@@ -63,7 +63,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.presentation.platform.appVersionName
 import cc.ptoe.messenger.presentation.platform.copyAvatarToInternal
 import cc.ptoe.messenger.presentation.platform.deleteAvatarFile
+import cc.ptoe.messenger.presentation.platform.openRuntimeTerminal
 import cc.ptoe.messenger.presentation.platform.rememberAvatarImagePicker
+import cc.ptoe.messenger.presentation.platform.runtimeTerminalSupported
 import cc.ptoe.messenger.presentation.platform.showPlatformToast
 import cc.ptoe.messenger.presentation.theme.ThemeMode
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
@@ -99,6 +101,7 @@ import cc.ptoe.messenger.generated.resources.settings_theme_system
 import cc.ptoe.messenger.generated.resources.settings_title
 import cc.ptoe.messenger.generated.resources.settings_terminal
 import cc.ptoe.messenger.generated.resources.settings_terminal_desc
+import cc.ptoe.messenger.generated.resources.terminal_not_installed
 import cc.ptoe.messenger.generated.resources.settings_version
 import cc.ptoe.messenger.generated.resources.settings_version_unknown
 import org.jetbrains.compose.resources.getString
@@ -111,7 +114,6 @@ fun SettingsScreen(
     onProvidersClick: () -> Unit,
     onLicensesClick: () -> Unit,
     onCloudSettingsClick: () -> Unit,
-    onTerminalClick: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.provideFactory(
             themePreferences = AppContainerHolder.instance.themePreferences,
@@ -129,6 +131,7 @@ fun SettingsScreen(
 
     var showThemeDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
+    val terminalNotInstalledMessage = stringResource(Res.string.terminal_not_installed)
 
     LaunchedEffect(cloudSyncError) {
         cloudSyncError?.let { showPlatformToast(it) }
@@ -283,13 +286,21 @@ fun SettingsScreen(
             item {
                 SectionHeader(title = stringResource(Res.string.settings_advanced))
             }
-            item {
-                ListItem(
-                    title = stringResource(Res.string.settings_terminal),
-                    subtitle = stringResource(Res.string.settings_terminal_desc),
-                    icon = Icons.Default.Terminal,
-                    onClick = onTerminalClick
-                )
+            // 终端由伴随的 Messenger Runtime 应用提供(Termux 风格的交互式 shell),
+            // 这里只负责拉起它的 TerminalActivity;未安装时提示安装。
+            if (runtimeTerminalSupported) {
+                item {
+                    ListItem(
+                        title = stringResource(Res.string.settings_terminal),
+                        subtitle = stringResource(Res.string.settings_terminal_desc),
+                        icon = Icons.Default.Terminal,
+                        onClick = {
+                            if (!openRuntimeTerminal()) {
+                                showPlatformToast(terminalNotInstalledMessage)
+                            }
+                        }
+                    )
+                }
             }
 
             item {

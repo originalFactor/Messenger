@@ -273,22 +273,8 @@
     <!-- 终端 -->
     <string name="settings_advanced">高级</string>
     <string name="settings_terminal">终端</string>
-    <string name="settings_terminal_desc">内置终端。安装 Messenger Runtime APK 可获得完整 Termux 环境</string>
-    <string name="terminal_title">终端</string>
-    <string name="terminal_preparing_runtime">正在准备终端…</string>
-    <string name="terminal_runtime_failed">终端运行时不可用:%1$s</string>
-    <string name="terminal_retry">重试</string>
-    <string name="terminal_not_installed">未安装 Messenger Runtime 伴随应用,终端与 Agent 工具不可用。</string>
-    <string name="terminal_runtime_termux">已连接 Messenger Runtime(完整 Termux 环境)</string>
-    <string name="terminal_input_hint">输入命令</string>
-    <string name="terminal_empty_hint">输入命令并执行。cd 切换的目录会跨命令保持。</string>
-    <string name="terminal_exit_code">退出码 %1$d</string>
-    <string name="terminal_terminated">命令已终止</string>
-    <string name="terminal_timeout">命令超时,已被强制结束</string>
-    <string name="terminal_history">命令历史</string>
-    <string name="terminal_clear">清屏</string>
-    <string name="terminal_send">执行命令</string>
-    <string name="terminal_stop">终止命令</string>
+    <string name="settings_terminal_desc">打开 Messenger Runtime 应用:在伴随 runtime 中运行的 Termux 风格交互式 shell</string>
+    <string name="terminal_not_installed">未安装 Messenger Runtime 伴随应用,无法打开终端,Agent 工具也不可用。</string>
 
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>

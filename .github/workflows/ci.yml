@@ -23,6 +23,7 @@ on:
       - androidApp/**
       - desktopApp/**
       - wear/**
+      - runtime/**
       - llm-typewriter/**
       - build.gradle.kts
       - settings.gradle.kts
@@ -40,6 +41,7 @@ on:
       - androidApp/**
       - desktopApp/**
       - wear/**
+      - runtime/**
       - llm-typewriter/**
       - build.gradle.kts
       - settings.gradle.kts

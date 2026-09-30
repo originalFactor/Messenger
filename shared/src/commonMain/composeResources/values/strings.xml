@@ -271,25 +271,11 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_version_unknown">Unknown</string>
 
-    <!-- Terminal -->
+    <!-- Advanced / terminal (terminal UI lives in the companion runtime app) -->
     <string name="settings_advanced">Advanced</string>
     <string name="settings_terminal">Terminal</string>
-    <string name="settings_terminal_desc">Built-in terminal. Install the Messenger Runtime APK for the full Termux environment</string>
-    <string name="terminal_title">Terminal</string>
-    <string name="terminal_preparing_runtime">Preparing the terminal…</string>
-    <string name="terminal_runtime_failed">Terminal runtime unavailable: %1$s</string>
-    <string name="terminal_retry">Retry</string>
-    <string name="terminal_not_installed">The Messenger Runtime companion app is not installed. Install it to enable the terminal and Agent tools.</string>
-    <string name="terminal_runtime_termux">Connected to Messenger Runtime (full Termux environment)</string>
-    <string name="terminal_input_hint">Enter a command</string>
-    <string name="terminal_empty_hint">Type a command and press send. The working directory persists across cd commands.</string>
-    <string name="terminal_exit_code">Exit code %1$d</string>
-    <string name="terminal_terminated">Command terminated</string>
-    <string name="terminal_timeout">Command timed out and was terminated</string>
-    <string name="terminal_history">Command history</string>
-    <string name="terminal_clear">Clear screen</string>
-    <string name="terminal_send">Send command</string>
-    <string name="terminal_stop">Stop command</string>
+    <string name="settings_terminal_desc">Opens the Messenger Runtime app: a Termux-style interactive shell on the companion's own runtime</string>
+    <string name="terminal_not_installed">The Messenger Runtime companion app is not installed. Install it to open the terminal and enable Agent tools.</string>
 
     <!-- Cloud Settings -->
     <string name="cloud_settings_title">Messenger Cloud</string>

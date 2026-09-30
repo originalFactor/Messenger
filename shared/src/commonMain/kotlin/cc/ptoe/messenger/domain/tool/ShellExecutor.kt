@@ -30,11 +30,10 @@ data class ShellResult(
  * and /bin/sh elsewhere. [timeoutMs] bounds the whole execution; the process
  * is destroyed when the timeout fires or the caller's coroutine is cancelled.
  *
- * [workingDir] overrides the process working directory (null = the platform
- * workspace returned by [ensureShellRuntime]); a missing directory falls
- * back to the platform workspace. [onOutput] receives incremental merged
- * output chunks as they arrive, in addition to the final [ShellResult.output]
- * (null = collect only).
+ * [workingDir] overrides the process working directory (Android: the
+ * companion runtime's workspace); a missing directory falls back to it.
+ * [onOutput] receives incremental merged output chunks as they arrive, in
+ * addition to the final [ShellResult.output] (null = collect only).
  */
 expect suspend fun executeShellCommand(
     command: String,
@@ -42,23 +41,3 @@ expect suspend fun executeShellCommand(
     workingDir: String?,
     onOutput: ((String) -> Unit)?
 ): ShellResult
-
-/**
- * Makes sure the platform shell workspace exists (Android also cleans up
- * leftovers of the removed bootstrap runtime) and returns its path. Throws
- * when the workspace cannot be created.
- */
-expect suspend fun ensureShellRuntime(): String
-
-/**
- * Whether shell commands currently route through the companion runtime
- * (Android: the targetSdk-28 Messenger Runtime app).
- */
-expect fun isEnhancedShellRuntimeActive(): Boolean
-
-/**
- * Whether a shell runtime exists on this platform at all. Android: the
- * companion runtime app is installed — without it the terminal and the
- * agent tools are disabled. Desktop: always true.
- */
-expect fun isShellRuntimeAvailable(): Boolean

@@ -33,3 +33,9 @@ actual fun copyTextToClipboard(text: String) {
 actual fun appVersionName(): String? = "desktop"
 
 actual val sendOnEnterShortcut: Boolean = true
+
+// 桌面端没有 Messenger Runtime 应用(终端 UI 由该伴随应用的
+// TerminalActivity 提供),因此设置页隐藏终端入口。
+actual val runtimeTerminalSupported: Boolean = false
+
+actual fun openRuntimeTerminal(): Boolean = false

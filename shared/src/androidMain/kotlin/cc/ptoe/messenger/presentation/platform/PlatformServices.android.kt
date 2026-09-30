@@ -18,8 +18,12 @@ package cc.ptoe.messenger.presentation.platform
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
+import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
+import cc.ptoe.messenger.domain.tool.RUNTIME_TERMINAL_ACTIVITY
 
 /** Process-wide Android context, set by MessengerApplication.onCreate. */
 object AndroidContextHolder {
@@ -46,3 +50,17 @@ actual fun appVersionName(): String? = runCatching {
 // 避免外接蓝牙键盘等场景意外触发行为差异。Android 端按标准输入法
 // 回车换行，发送按钮仍为右侧圆形 FilledIconButton。
 actual val sendOnEnterShortcut: Boolean = false
+
+// 终端由伴随的 Messenger Runtime 应用提供(Termux 风格的交互式 shell);
+// 主应用只负责拉起它的 TerminalActivity。
+actual val runtimeTerminalSupported: Boolean = true
+
+actual fun openRuntimeTerminal(): Boolean {
+    val context = AndroidContextHolder.appContext
+    val intent = Intent()
+        .setComponent(ComponentName(RUNTIME_PACKAGE, RUNTIME_TERMINAL_ACTIVITY))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    // 包可见性:主应用清单里声明了 <queries> for the companion package。
+    if (context.packageManager.resolveActivity(intent, 0) == null) return false
+    return runCatching { context.startActivity(intent) }.isSuccess
+}
