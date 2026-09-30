@@ -178,8 +178,12 @@ class TerminalActivity : Activity(), TerminalViewClient, TerminalSessionClient {
         if (sessionFinished) startSessionAsync() else showSoftKeyboard()
     }
 
-    /** The back button is the terminal's ESC, as in Termux. */
-    override fun shouldBackButtonBeMappedToEscape(): Boolean = true
+    /**
+     * Back key / gesture exits or dismisses IME; ESC is provided explicitly
+     * on [ExtraKeysBar]. Mapping Back to ESC intercepts system back gesture
+     * and causes readline to trigger completion ("Display all possibilities?").
+     */
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
 
     override fun shouldEnforceCharBasedInput(): Boolean = true
 
