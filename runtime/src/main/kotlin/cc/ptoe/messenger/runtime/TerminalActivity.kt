@@ -20,6 +20,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.TypedValue
@@ -29,6 +30,8 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -61,7 +64,7 @@ class TerminalActivity : Activity(), TerminalViewClient, TerminalSessionClient {
     private var sessionFinished = false
     private var preparing = false
     private var keyboardRequested = false
-
+    private var backCallback: Any? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_terminal)
@@ -83,14 +86,36 @@ class TerminalActivity : Activity(), TerminalViewClient, TerminalSessionClient {
         statusView.setOnClickListener { startSessionAsync() }
 
         startSessionAsync()
+        registerBackCallbackIfNeeded()
     }
 
+    private fun registerBackCallbackIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val callback = OnBackInvokedCallback { finish() }
+            backCallback = callback
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                callback
+            )
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        finish()
+    }
     override fun onResume() {
         super.onResume()
         if (keyboardRequested) showSoftKeyboard()
     }
 
     override fun onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            (backCallback as? OnBackInvokedCallback)?.let {
+                onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it)
+            }
+            backCallback = null
+        }
         session?.finishIfRunning()
         session = null
         super.onDestroy()
@@ -194,9 +219,13 @@ class TerminalActivity : Activity(), TerminalViewClient, TerminalSessionClient {
     override fun copyModeChanged(copyMode: Boolean) = Unit
 
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession): Boolean = false
-
-    override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
-
+    override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            finish()
+            return true
+        }
+        return false
+    }
     override fun onLongPress(event: MotionEvent): Boolean = false
 
     override fun readControlKey(): Boolean = extraKeys.readControlKey()
