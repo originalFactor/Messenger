@@ -47,11 +47,19 @@ import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
+
 import cc.ptoe.messenger.domain.tool.ChatTool
+
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
+
+import cc.ptoe.messenger.domain.mcp.McpManager
+
 import kotlinx.coroutines.CoroutineScope
+
 import kotlinx.coroutines.Dispatchers
+
 import kotlinx.coroutines.IO
+
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -102,11 +110,33 @@ class AppContainer(
     /** Platform built-in tools: desktop and Android both register the terminal tool. */
     // Re-evaluated on access: Android's tool set depends on whether the
     // companion runtime app is installed (may change during a session).
+
     val builtinTools: List<ChatTool> get() = createBuiltinChatTools()
+
+
+
+    val mcpManager = McpManager(appPreferences)
+
+
+
+    /**
+
+     * Returns active tools: built-in tools + active MCP tools.
+
+     * 每工具的启用与否由各 Agent 的 toolsConfig 决定（见 [Agent.effectiveToolEnabled]）。
+
+     */
+
+    val availableTools: List<ChatTool> get() = builtinTools + mcpManager.activeTools.value
+
+
 
     val chatRepository: ChatRepository = ChatRepositoryImpl()
 
+
+
     val cloudSyncRepository = CloudSyncRepository(
+
         appPreferences = appPreferences,
         database = database,
         filesDir = appDirs.filesDir,

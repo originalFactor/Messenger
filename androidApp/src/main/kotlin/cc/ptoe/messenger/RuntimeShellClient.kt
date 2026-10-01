@@ -218,6 +218,56 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // MCP process management
+    // ---------------------------------------------------------------------
+
+    override suspend fun startMcpProcess(
+        sessionId: Int,
+        command: String,
+        envJson: String?,
+        onOutput: (String) -> Unit,
+        onError: (String) -> Unit,
+        onClosed: (Int) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        val service = service() ?: return@withContext false
+        val callback = object : cc.ptoe.messenger.runtime.IMcpCallback.Stub() {
+            override fun onOutput(reqId: Int, line: String?) {
+                line?.let(onOutput)
+            }
+
+            override fun onError(reqId: Int, error: String?) {
+                error?.let(onError)
+            }
+
+            override fun onClosed(reqId: Int, exitCode: Int) {
+                onClosed(exitCode)
+            }
+        }
+        try {
+            service.startMcpProcess(sessionId, command, envJson, callback)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "startMcpProcess failed", e)
+            false
+        }
+    }
+
+    override suspend fun sendMcpInput(sessionId: Int, line: String): Boolean = withContext(Dispatchers.IO) {
+        val service = service() ?: return@withContext false
+        try {
+            service.sendMcpInput(sessionId, line)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    override suspend fun stopMcpProcess(sessionId: Int): Unit = withContext(Dispatchers.IO) {
+        val service = service() ?: return@withContext
+        try {
+            service.stopMcpProcess(sessionId)
+        } catch (_: Exception) {}
+    }
+
     private companion object {
         const val TAG = "ShellRT"
         const val CONNECT_TIMEOUT_MS = 5_000L

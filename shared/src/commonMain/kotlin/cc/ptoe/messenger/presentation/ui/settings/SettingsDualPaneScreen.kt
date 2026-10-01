@@ -39,7 +39,7 @@ import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersDualPaneScreen
 import org.jetbrains.compose.resources.stringResource
 
-private enum class SettingsDetailPane { Empty, Cloud, Providers, Licenses }
+private enum class SettingsDetailPane { Empty, Cloud, Tools, Providers, Licenses }
 
 @Composable
 fun SettingsDualPaneScreen(
@@ -56,6 +56,7 @@ fun SettingsDualPaneScreen(
         ) {
             SettingsScreen(
                 onProvidersClick = { pane = SettingsDetailPane.Providers },
+                onToolsClick = { pane = SettingsDetailPane.Tools },
                 onCloudSettingsClick = { pane = SettingsDetailPane.Cloud },
                 onLicensesClick = { pane = SettingsDetailPane.Licenses }
             )
@@ -83,6 +84,11 @@ fun SettingsDualPaneScreen(
                 SettingsDetailPane.Cloud -> CloudSettingsScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty },
                     cloudSyncRepository = AppContainerHolder.instance.cloudSyncRepository
+                )
+
+                SettingsDetailPane.Tools -> ToolsSettingsScreen(
+                    onBackClick = { pane = SettingsDetailPane.Empty },
+                        mcpManager = AppContainerHolder.instance.mcpManager
                 )
 
                 SettingsDetailPane.Providers -> ProvidersDualPaneScreen()

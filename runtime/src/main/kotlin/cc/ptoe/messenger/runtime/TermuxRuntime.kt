@@ -624,6 +624,95 @@ internal object TermuxRuntime {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Interactive MCP Process Execution
+    // ---------------------------------------------------------------------
+
+    class McpProcessSession(
+        val process: Process,
+        private val writer: java.io.BufferedWriter
+    ) {
+        fun sendLine(line: String): Boolean {
+            return try {
+                writer.write(line)
+                writer.newLine()
+                writer.flush()
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        fun close() {
+            runCatching { writer.close() }
+            runCatching { process.destroyForcibly() }
+        }
+    }
+
+    suspend fun startMcpProcess(
+        context: Context,
+        command: String,
+        envJson: String?,
+        onOutput: (String) -> Unit,
+        onError: (String) -> Unit,
+        onClosed: (Int) -> Unit
+    ): McpProcessSession? {
+        val runtime = try {
+            withContext(Dispatchers.IO) { installMutex.withLock { ensureInstalled(context) } }
+        } catch (e: Exception) {
+            return null
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val workspace = runtime.workspace
+                val builder = ProcessBuilder(runtime.shell.absolutePath, "-c", command)
+                    .directory(workspace)
+                builder.environment().clear()
+                val env = shellEnvironment(runtime, workspace, workspace).toMutableMap()
+                if (!envJson.isNullOrBlank()) {
+                    runCatching {
+                        val json = org.json.JSONObject(envJson)
+                        for (key in json.keys()) {
+                            env[key] = json.optString(key, "")
+                        }
+                    }
+                }
+                builder.environment().putAll(env)
+                val process = builder.start()
+                val writer = process.outputStream.bufferedWriter(StandardCharsets.UTF_8)
+                val session = McpProcessSession(process, writer)
+
+                // Background thread reading stdout lines
+                Thread {
+                    try {
+                        process.inputStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+                            for (line in lines) {
+                                onOutput(line)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    val code = runCatching { process.waitFor() }.getOrDefault(-1)
+                    onClosed(code)
+                }.start()
+
+                // Background thread reading stderr lines
+                Thread {
+                    try {
+                        process.errorStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+                            for (line in lines) {
+                                onError(line)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+
+                session
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     private fun supportedAbi(): String? = android.os.Build.SUPPORTED_ABIS.firstNotNullOfOrNull {
         when (it) {
             "arm64-v8a", "armeabi-v7a", "x86", "x86_64" -> it

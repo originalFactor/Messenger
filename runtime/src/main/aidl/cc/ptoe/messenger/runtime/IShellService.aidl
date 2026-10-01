@@ -1,5 +1,6 @@
 package cc.ptoe.messenger.runtime;
 
+import cc.ptoe.messenger.runtime.IMcpCallback;
 import cc.ptoe.messenger.runtime.IShellCallback;
 import cc.ptoe.messenger.runtime.ToolResult;
 
@@ -21,4 +22,9 @@ interface IShellService {
     cc.ptoe.messenger.runtime.ToolResult workspaceRead(String path, int startLine, int maxLines);
     cc.ptoe.messenger.runtime.ToolResult workspaceEdit(String path, String oldText, String newText, boolean replaceAll);
     cc.ptoe.messenger.runtime.ToolResult workspaceCreate(String path, String content, boolean overwrite);
+
+    // MCP command server process management
+    boolean startMcpProcess(int sessionId, String command, String envJson, IMcpCallback callback);
+    boolean sendMcpInput(int sessionId, String line);
+    void stopMcpProcess(int sessionId);
 }

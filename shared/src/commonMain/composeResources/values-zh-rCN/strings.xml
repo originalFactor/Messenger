@@ -252,32 +252,97 @@
     <string name="settings_avatar_desc">用于聊天中的用户消息</string>
     <string name="settings_appearance">外观</string>
     <string name="settings_theme">主题</string>
+
     <string name="settings_data">数据</string>
+
     <string name="settings_cloud">Messenger Cloud</string>
-    <string name="settings_cloud_not_logged_in">未登录 · %1$s</string>
+
+    <string name="settings_cloud_not_logged_in">未登录</string>
+
     <string name="settings_providers">模型提供商</string>
+
     <string name="settings_providers_desc">管理 AI 模型提供商和 API Key</string>
+
     <string name="settings_clear_data">清除所有数据</string>
+
     <string name="settings_clear_data_desc">删除所有对话、Agent 和 Provider</string>
     <string name="settings_clear_data_confirm">此操作会清除本应用的本地数据、账户、同步游标、设置和缓存，效果类似 Android 设置中的“清除存储”。云端账户和数据不会被删除。确定要继续吗？</string>
     <string name="settings_clear_data_button">清除</string>
     <string name="settings_about">关于</string>
+
     <string name="settings_version">版本</string>
+
     <string name="settings_licenses">开源许可</string>
+
+    <string name="settings_licenses_desc">查看本应用使用的组件的开源许可证</string>
+
     <string name="settings_select_section">选择一个分区</string>
+
     <string name="settings_theme_system">跟随系统</string>
+
     <string name="settings_theme_light">浅色</string>
+
     <string name="settings_theme_dark">深色</string>
     <string name="settings_version_unknown">未知</string>
 
     <!-- 终端 -->
+
     <string name="settings_advanced">高级</string>
+
     <string name="settings_terminal">终端</string>
-    <string name="settings_terminal_desc">打开 Messenger Runtime 应用:在伴随 runtime 中运行的 Termux 风格交互式 shell</string>
+
+    <string name="settings_terminal_desc">打开 Messenger Runtime 应用</string>
+
     <string name="terminal_not_installed">未安装 Messenger Runtime 伴随应用,无法打开终端,Agent 工具也不可用。</string>
 
+    <string name="settings_tools">MCP 服务器</string>
+
+    <string name="settings_tools_desc">添加、启用或移除 MCP 服务器</string>
+
+    <string name="tools_settings_title">MCP 服务器</string>
+
+    <string name="tools_mcp_empty">尚未添加任何 MCP 服务器</string>
+
+    <string name="tools_mcp_add">添加 MCP 服务器</string>
+
+    <string name="tools_mcp_edit">编辑 MCP 服务器</string>
+
+    <string name="tools_mcp_delete">删除 MCP 服务器</string>
+
+    <string name="tools_mcp_delete_confirm">确定要删除 MCP 服务器“%1$s”吗？</string>
+
+    <string name="tools_mcp_name">名称</string>
+
+    <string name="tools_mcp_type">传输方式</string>
+
+    <string name="tools_mcp_command">命令</string>
+
+    <string name="tools_mcp_command_hint">例如 npx -y @modelcontextprotocol/server-everything</string>
+
+    <string name="tools_mcp_args">参数</string>
+
+    <string name="tools_mcp_args_hint">空格或逗号分隔</string>
+
+    <string name="tools_mcp_env">环境变量</string>
+
+    <string name="tools_mcp_env_hint">每行 KEY=VALUE</string>
+
+    <string name="tools_mcp_url">服务器 URL</string>
+
+    <string name="tools_mcp_url_hint">http://localhost:8000/sse</string>
+
+    <string name="tools_mcp_headers">请求头</string>
+
+    <string name="tools_mcp_headers_hint">每行 Header: Value</string>
+
+    <string name="tools_mcp_runtime_note">在 Android 上，命令类型 MCP 服务器将在 Messenger Runtime 中执行。</string>
+
+
+
     <!-- Cloud Settings -->
+
     <string name="cloud_settings_title">Messenger Cloud</string>
+
     <string name="cloud_server_title">服务地址</string>
     <string name="cloud_server_saved">服务地址已保存</string>
     <string name="cloud_settings_plan_title">套餐</string>

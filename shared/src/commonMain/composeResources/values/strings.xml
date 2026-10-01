@@ -253,32 +253,97 @@
     <string name="settings_avatar_desc">Used for your messages in chat</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_theme">Theme</string>
+
     <string name="settings_data">Data</string>
+
     <string name="settings_cloud">Messenger Cloud</string>
-    <string name="settings_cloud_not_logged_in">Not signed in · %1$s</string>
+
+    <string name="settings_cloud_not_logged_in">Not signed in</string>
+
     <string name="settings_providers">Model providers</string>
+
     <string name="settings_providers_desc">Manage AI model providers and API Keys</string>
+
     <string name="settings_clear_data">Clear all data</string>
+
     <string name="settings_clear_data_desc">Delete all conversations, Agents, and Providers</string>
     <string name="settings_clear_data_confirm">This will clear all local app data, accounts, sync cursors, settings, and caches — similar to "Clear storage" in Android Settings. Cloud accounts and data will not be deleted. Continue?</string>
     <string name="settings_clear_data_button">Clear</string>
     <string name="settings_about">About</string>
+
     <string name="settings_version">Version</string>
+
     <string name="settings_licenses">Open-source licenses</string>
+
+    <string name="settings_licenses_desc">Licenses of the components used by this app</string>
+
     <string name="settings_select_section">Select a section</string>
+
     <string name="settings_theme_system">System default</string>
+
     <string name="settings_theme_light">Light</string>
+
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_version_unknown">Unknown</string>
 
     <!-- Advanced / terminal (terminal UI lives in the companion runtime app) -->
+
     <string name="settings_advanced">Advanced</string>
+
     <string name="settings_terminal">Terminal</string>
-    <string name="settings_terminal_desc">Opens the Messenger Runtime app: a Termux-style interactive shell on the companion's own runtime</string>
+
+    <string name="settings_terminal_desc">Opens the Messenger Runtime companion app</string>
+
     <string name="terminal_not_installed">The Messenger Runtime companion app is not installed. Install it to open the terminal and enable Agent tools.</string>
 
+    <string name="settings_tools">MCP Servers</string>
+
+    <string name="settings_tools_desc">Add, enable, or remove MCP servers</string>
+
+    <string name="tools_settings_title">MCP Servers</string>
+
+    <string name="tools_mcp_empty">No MCP servers added</string>
+
+    <string name="tools_mcp_add">Add MCP Server</string>
+
+    <string name="tools_mcp_edit">Edit MCP Server</string>
+
+    <string name="tools_mcp_delete">Delete MCP Server</string>
+
+    <string name="tools_mcp_delete_confirm">Are you sure you want to delete MCP server \"%1$s\"?</string>
+
+    <string name="tools_mcp_name">Name</string>
+
+    <string name="tools_mcp_type">Transport Type</string>
+
+    <string name="tools_mcp_command">Command</string>
+
+    <string name="tools_mcp_command_hint">e.g. npx -y @modelcontextprotocol/server-everything</string>
+
+    <string name="tools_mcp_args">Arguments</string>
+
+    <string name="tools_mcp_args_hint">comma or space separated</string>
+
+    <string name="tools_mcp_env">Environment variables</string>
+
+    <string name="tools_mcp_env_hint">KEY=VALUE per line</string>
+
+    <string name="tools_mcp_url">Server URL</string>
+
+    <string name="tools_mcp_url_hint">http://localhost:8000/sse</string>
+
+    <string name="tools_mcp_headers">Headers</string>
+
+    <string name="tools_mcp_headers_hint">Header: Value per line</string>
+
+    <string name="tools_mcp_runtime_note">Command MCP servers will be executed inside Messenger Runtime on Android.</string>
+
+
+
     <!-- Cloud Settings -->
+
     <string name="cloud_settings_title">Messenger Cloud</string>
+
     <string name="cloud_server_title">Server address</string>
     <string name="cloud_server_saved">Server address saved</string>
     <string name="cloud_settings_plan_title">Plan</string>

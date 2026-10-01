@@ -54,6 +54,18 @@ interface ShellRuntimeBridge {
     suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult
     suspend fun workspaceEdit(path: String, oldText: String, newText: String, replaceAll: Boolean): ToolExecutionResult
     suspend fun workspaceCreate(path: String, content: String, overwrite: Boolean): ToolExecutionResult
+
+    // MCP command server process management
+    suspend fun startMcpProcess(
+        sessionId: Int,
+        command: String,
+        envJson: String?,
+        onOutput: (String) -> Unit,
+        onError: (String) -> Unit,
+        onClosed: (Int) -> Unit
+    ): Boolean
+    suspend fun sendMcpInput(sessionId: Int, line: String): Boolean
+    suspend fun stopMcpProcess(sessionId: Int)
 }
 
 /** androidApp registers the AIDL client here during application startup. */

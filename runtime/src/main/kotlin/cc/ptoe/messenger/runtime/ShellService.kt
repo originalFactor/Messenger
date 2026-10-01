@@ -42,6 +42,7 @@ class ShellService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val active = ConcurrentHashMap<Int, Job>()
+    private val mcpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
 
     private val binder = object : IShellService.Stub() {
         override fun submit(
@@ -117,6 +118,45 @@ class ShellService : Service() {
         override fun workspaceCreate(path: String?, content: String?, overwrite: Boolean): ToolResult? = ifCallerAllowed {
             runBlocking { TermuxRuntime.workspaceCreate(applicationContext, path.orEmpty(), content.orEmpty(), overwrite) }
         }
+
+        override fun startMcpProcess(
+            sessionId: Int,
+            command: String?,
+            envJson: String?,
+            callback: IMcpCallback?
+        ): Boolean {
+            if (!isCallerAllowed() || command.isNullOrBlank() || callback == null) return false
+            mcpSessions.remove(sessionId)?.close()
+            return runBlocking {
+                val session = TermuxRuntime.startMcpProcess(
+                    context = applicationContext,
+                    command = command,
+                    envJson = envJson,
+                    onOutput = { line -> runCatching { callback.onOutput(sessionId, line) } },
+                    onError = { err -> runCatching { callback.onError(sessionId, err) } },
+                    onClosed = { code ->
+                        mcpSessions.remove(sessionId)
+                        runCatching { callback.onClosed(sessionId, code) }
+                    }
+                )
+                if (session != null) {
+                    mcpSessions[sessionId] = session
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        override fun sendMcpInput(sessionId: Int, line: String?): Boolean {
+            if (!isCallerAllowed() || line == null) return false
+            return mcpSessions[sessionId]?.sendLine(line) ?: false
+        }
+
+        override fun stopMcpProcess(sessionId: Int) {
+            if (!isCallerAllowed()) return
+            mcpSessions.remove(sessionId)?.close()
+        }
     }
 
     /** Only holders of the signature permission (the main app) may call in. */
@@ -134,6 +174,10 @@ class ShellService : Service() {
     }
 
     override fun onDestroy() {
+        for (session in mcpSessions.values) {
+            session.close()
+        }
+        mcpSessions.clear()
         scope.cancel()
         super.onDestroy()
     }

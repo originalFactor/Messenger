@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -90,6 +91,7 @@ import cc.ptoe.messenger.generated.resources.settings_cloud
 import cc.ptoe.messenger.generated.resources.settings_cloud_not_logged_in
 import cc.ptoe.messenger.generated.resources.settings_data
 import cc.ptoe.messenger.generated.resources.settings_licenses
+import cc.ptoe.messenger.generated.resources.settings_licenses_desc
 import cc.ptoe.messenger.generated.resources.settings_my_avatar
 import cc.ptoe.messenger.generated.resources.settings_personal
 import cc.ptoe.messenger.generated.resources.settings_providers
@@ -104,6 +106,8 @@ import cc.ptoe.messenger.generated.resources.settings_terminal_desc
 import cc.ptoe.messenger.generated.resources.terminal_not_installed
 import cc.ptoe.messenger.generated.resources.settings_version
 import cc.ptoe.messenger.generated.resources.settings_version_unknown
+import cc.ptoe.messenger.generated.resources.settings_tools
+import cc.ptoe.messenger.generated.resources.settings_tools_desc
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -112,6 +116,7 @@ import cc.ptoe.messenger.di.AppContainerHolder
 @Composable
 fun SettingsScreen(
     onProvidersClick: () -> Unit,
+    onToolsClick: () -> Unit = {},
     onLicensesClick: () -> Unit,
     onCloudSettingsClick: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
@@ -125,7 +130,6 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val userAvatar by viewModel.userAvatar.collectAsStateWithLifecycle()
     val cloudUser by viewModel.cloudUser.collectAsStateWithLifecycle()
-    val cloudServerUrl by viewModel.cloudServerUrl.collectAsStateWithLifecycle()
     val cloudSyncError by viewModel.cloudSyncError.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
@@ -258,7 +262,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_cloud),
-                    subtitle = cloudUser?.email ?: stringResource(Res.string.settings_cloud_not_logged_in, cloudServerUrl),
+                    subtitle = cloudUser?.email ?: stringResource(Res.string.settings_cloud_not_logged_in),
                     icon = Icons.Default.Cloud,
                     onClick = onCloudSettingsClick
                 )
@@ -269,6 +273,14 @@ fun SettingsScreen(
                     subtitle = stringResource(Res.string.settings_providers_desc),
                     icon = Icons.Default.Cloud,
                     onClick = onProvidersClick
+                )
+            }
+            item {
+                ListItem(
+                    title = stringResource(Res.string.settings_tools),
+                    subtitle = stringResource(Res.string.settings_tools_desc),
+                    icon = Icons.Default.Build,
+                    onClick = onToolsClick
                 )
             }
             item {
@@ -318,7 +330,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_licenses),
-                    subtitle = null,
+                    subtitle = stringResource(Res.string.settings_licenses_desc),
                     icon = Icons.Default.Code,
                     onClick = onLicensesClick
                 )
