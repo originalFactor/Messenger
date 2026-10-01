@@ -17,10 +17,11 @@
 package cc.ptoe.messenger.presentation.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -565,12 +566,15 @@ fun CloudSettingsScreen(
         }
 
         // 实例地址子页：覆盖层 + 预测性返回（划出露出底层主页面）。
-        // 进入时从右侧滑入并渐显（与导航 push 的视觉方向一致）；退出动画
-        // 交给预测性返回手势驱动，避免与 AnimatedVisibility 退场动画叠加闪烁。
+        // 进入时从右侧滑入并渐显（与导航 push 的视觉方向一致）；退场为
+        // 「滑向右 + 渐淡」（与导航 pop 一致），覆盖程序化关闭（顶栏返回
+        // 箭头等）；预测性返回手势提交时内容已推到进度 1（不可见），不会
+        // 与该退场过渡叠加闪烁。
         AnimatedVisibility(
             visible = showServerPage,
             enter = slideInHorizontally(tween(TRANSITION_DURATION_MS)) { it } + fadeIn(tween(TRANSITION_DURATION_MS)),
-            exit = ExitTransition.None
+            exit = slideOutHorizontally(tween(TRANSITION_DURATION_MS)) { it } +
+                fadeOut(tween(TRANSITION_DURATION_MS))
         ) {
             BackHandler(enabled = true, onBack = { showServerPage = false }) {
                 CloudServerScreen(
