@@ -129,8 +129,7 @@ fun ChatScreen(
             providerRepository = AppContainerHolder.instance.providerRepository,
             chatImageStore = AppContainerHolder.instance.chatImageStore,
             conversationTitleGenerator = AppContainerHolder.instance.conversationTitleGenerator,
-            appPreferences = AppContainerHolder.instance.appPreferences,
-            builtinTools = AppContainerHolder.instance.builtinTools
+            builtinTools = AppContainerHolder.instance.availableTools
         )
     )
 ) {
@@ -145,7 +144,7 @@ fun ChatScreen(
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
     val pendingToolConfirmation by viewModel.pendingToolConfirmation.collectAsStateWithLifecycle()
-    val toolAutoConfirm by viewModel.toolAutoConfirm.collectAsStateWithLifecycle()
+    val agentWritable by viewModel.agentWritable.collectAsStateWithLifecycle()
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -297,17 +296,13 @@ fun ChatScreen(
                         pickImageLauncher.launch()
                     },
                     onRemoveImage = { viewModel.removePendingImage(it) },
-                    // Only tools that explicitly support unattended execution expose this mode.
-                    toolAutoConfirm = if (
-                        viewModel.toolsAvailable &&
-                        viewModel.toolsCanAutoConfirm &&
-                        agent?.toolsEnabled == true
-                    ) {
-                        toolAutoConfirm
+                    // Agent 只读/可写模式切换按平台是否注册工具决定展示
+                    agentWritable = if (viewModel.toolsAvailable) {
+                        agentWritable
                     } else {
                         null
                     },
-                    onToolModeToggle = { viewModel.setToolAutoConfirm(!toolAutoConfirm) }
+                    onAgentModeChange = { viewModel.setAgentWritable(it) }
                 )
             }
         },

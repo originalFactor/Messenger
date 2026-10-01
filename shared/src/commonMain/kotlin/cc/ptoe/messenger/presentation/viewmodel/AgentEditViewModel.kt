@@ -72,8 +72,12 @@ data class AgentEditUiState(
     val followDefaultTopP: Boolean = false,
     val followDefaultMaxTokens: Boolean = false,
     val followDefaultReasoningEffort: Boolean = false,
-    /** 是否随请求向模型声明内置工具（仅平台注册了工具时实际生效）。 */
+    /** 是否随请求向模型声明工具（仅平台注册了工具时实际生效）。 */
     val toolsEnabled: Boolean = false,
+    /** 非默认 Agent 可整体跟随默认 Agent 的工具配置。 */
+    val toolsFollowDefault: Boolean = false,
+    /** 每工具开关（工具函数名 → 是否启用）；缺失键视为开启（默认全开）。 */
+    val toolsConfig: Map<String, Boolean> = emptyMap(),
     val defaultAgent: Agent? = null,
     val nameError: String? = null,
     val isEditing: Boolean = false,
@@ -206,6 +210,8 @@ class AgentEditViewModel(
                     followDefaultMaxTokens = agent.followDefaultMaxTokens,
                     followDefaultReasoningEffort = agent.followDefaultReasoningEffort,
                     toolsEnabled = agent.toolsEnabled,
+                    toolsFollowDefault = agent.toolsFollowDefault,
+                    toolsConfig = agent.toolsConfig,
                     marketAgentId = agent.marketAgentId,
                     marketAgentRole = agent.marketAgentRole,
                     isEditing = true
@@ -299,6 +305,20 @@ class AgentEditViewModel(
         _uiState.value = _uiState.value.copy(toolsEnabled = enabled)
     }
 
+    fun onToolsFollowDefaultChange(follow: Boolean) {
+        _uiState.value = _uiState.value.copy(toolsFollowDefault = follow)
+    }
+
+    /**
+     * 单工具开关：缺失键即开启（默认全开），因此只记录显式关闭的工具，
+     * 之后新增的工具对既有配置自动可用。
+     */
+    fun onToolEnabledChange(toolName: String, enabled: Boolean) {
+        val config = _uiState.value.toolsConfig.toMutableMap()
+        if (enabled) config.remove(toolName) else config[toolName] = false
+        _uiState.value = _uiState.value.copy(toolsConfig = config)
+    }
+
     /** 角色选择器确认（"chat" / "default" / "title"），save 时生效并转移单持有角色。 */
     fun onRoleSelected(option: String) {
         _uiState.value = _uiState.value.copy(pendingRole = option)
@@ -370,6 +390,8 @@ class AgentEditViewModel(
                         followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                         followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
                         toolsEnabled = currentState.toolsEnabled,
+                        toolsFollowDefault = currentState.toolsFollowDefault,
+                        toolsConfig = currentState.toolsConfig,
                         isDefault = existing.isDefault || claimDefault,
                         role = if (claimTitle) Agent.ROLE_TITLE else existing.role,
                         updatedAt = now
@@ -398,6 +420,8 @@ class AgentEditViewModel(
                     followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                     followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
                     toolsEnabled = currentState.toolsEnabled,
+                    toolsFollowDefault = currentState.toolsFollowDefault,
+                    toolsConfig = currentState.toolsConfig,
                     createdAt = now,
                     updatedAt = now
                 )
@@ -476,6 +500,8 @@ class AgentEditViewModel(
                 followDefaultMaxTokens = currentState.followDefaultMaxTokens,
                 followDefaultReasoningEffort = currentState.followDefaultReasoningEffort,
                 toolsEnabled = currentState.toolsEnabled,
+                toolsFollowDefault = currentState.toolsFollowDefault,
+                toolsConfig = currentState.toolsConfig,
                 updatedAt = System.currentTimeMillis()
             )
         )

@@ -25,6 +25,7 @@ import cc.ptoe.messenger.data.local.entity.ModelEntity
 import cc.ptoe.messenger.data.local.entity.ProviderEntity
 import cc.ptoe.messenger.data.remote.api.OpenAiClient
 import cc.ptoe.messenger.data.util.FileKit
+import cc.ptoe.messenger.data.util.ToolsConfigCodec
 import cc.ptoe.messenger.data.util.logE
 import cc.ptoe.messenger.data.util.logI
 import cc.ptoe.messenger.data.util.logW
@@ -1512,6 +1513,8 @@ private fun AgentEntity.toCloudRequest() = CloudAgentRequest(
     marketAgentRole = marketAgentRole,
     role = role,
     toolsEnabled = toolsEnabled,
+    toolsFollowDefault = toolsFollowDefault,
+    toolsConfig = ToolsConfigCodec.decode(toolsConfig),
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1570,6 +1573,8 @@ private fun ConversationEntity.toCloudRequest(messages: List<MessageEntity>) = C
     overrideTopP = overrideTopP?.toDouble(),
     overrideMaxTokens = overrideMaxTokens,
     overrideReasoningEffort = overrideReasoningEffort,
+    overrideToolsEnabled = overrideToolsEnabled,
+    writable = writable,
     reasoningFormat = reasoningFormat,
     contextSummary = contextSummary,
     contextSummaryUntil = contextSummaryUntil,
@@ -1613,6 +1618,8 @@ private fun CloudAgentDocument.toEntity(avatar: String?) = AgentEntity(
     // 旧版本服务端/客户端可能不带 role，兜底为普通聊天角色
     role = role?.takeIf { it.isNotBlank() } ?: Agent.ROLE_CHAT,
     toolsEnabled = toolsEnabled,
+    toolsFollowDefault = toolsFollowDefault,
+    toolsConfig = ToolsConfigCodec.encode(toolsConfig.orEmpty()),
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1639,6 +1646,8 @@ private fun AgentEntity.toDomain() = Agent(
     marketAgentRole = marketAgentRole,
     role = role,
     toolsEnabled = toolsEnabled,
+    toolsFollowDefault = toolsFollowDefault,
+    toolsConfig = ToolsConfigCodec.decode(toolsConfig),
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -1674,6 +1683,8 @@ private fun CloudConversationDocument.toEntity() = ConversationEntity(
     overrideTopP = overrideTopP?.toFloat(),
     overrideMaxTokens = overrideMaxTokens,
     overrideReasoningEffort = overrideReasoningEffort,
+    overrideToolsEnabled = overrideToolsEnabled,
+    writable = writable,
     createdAt = createdAt,
     updatedAt = updatedAt,
     lastMessage = messages.lastOrNull()?.content,

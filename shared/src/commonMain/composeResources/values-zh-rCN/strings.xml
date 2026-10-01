@@ -108,7 +108,11 @@
     <string name="agent_edit_followed_model_value">使用默认 Agent 的模型设置</string>
     <string name="agent_edit_takeover_active">已接管默认 Agent 的设置</string>
     <string name="agent_edit_takeover_hint">右滑接管 · 左滑恢复自定义</string>
-    <string name="agent_edit_enable_tools">启用内置工具</string>
+    <string name="agent_edit_enable_tools">启用工具</string>
+    <string name="agent_edit_tools_title">工具</string>
+    <string name="agent_edit_tools_summary_on">已启用 %1$d / %2$d 个工具</string>
+    <string name="agent_edit_tools_summary_off">关闭</string>
+    <string name="agent_edit_tools_empty">当前平台没有可用工具</string>
     <string name="agent_edit_reasoning_effort_label">推理强度</string>
     <string name="agent_edit_published_success">已发布到 Agent 市场</string>
     <string name="agent_edit_publish_failed">发布失败</string>
@@ -179,6 +183,9 @@
     <string name="conversation_settings_override_desc">开启后，本对话将使用以下参数覆盖 Agent 设置</string>
     <string name="conversation_settings_override_active">当前使用 Agent 的设置</string>
     <string name="conversation_settings_override_hint">右滑开启覆盖 · 左滑恢复 Agent 设置</string>
+    <string name="conversation_settings_tools_label">工具</string>
+    <string name="conversation_settings_tools_on">已启用</string>
+    <string name="conversation_settings_tools_off">已禁用</string>
     <string name="conversation_settings_temperature_value">Temperature: %1$s</string>
     <string name="conversation_settings_top_p_value">Top P: %1$s</string>
     <string name="conversation_settings_no_provider">暂无 Provider，请先在设置中添加</string>
@@ -252,97 +259,54 @@
     <string name="settings_avatar_desc">用于聊天中的用户消息</string>
     <string name="settings_appearance">外观</string>
     <string name="settings_theme">主题</string>
-
     <string name="settings_data">数据</string>
-
     <string name="settings_cloud">Messenger Cloud</string>
-
     <string name="settings_cloud_not_logged_in">未登录</string>
-
     <string name="settings_providers">模型提供商</string>
-
     <string name="settings_providers_desc">管理 AI 模型提供商和 API Key</string>
-
     <string name="settings_clear_data">清除所有数据</string>
-
     <string name="settings_clear_data_desc">删除所有对话、Agent 和 Provider</string>
     <string name="settings_clear_data_confirm">此操作会清除本应用的本地数据、账户、同步游标、设置和缓存，效果类似 Android 设置中的“清除存储”。云端账户和数据不会被删除。确定要继续吗？</string>
     <string name="settings_clear_data_button">清除</string>
     <string name="settings_about">关于</string>
-
     <string name="settings_version">版本</string>
-
     <string name="settings_licenses">开源许可</string>
-
     <string name="settings_licenses_desc">查看本应用使用的组件的开源许可证</string>
-
     <string name="settings_select_section">选择一个分区</string>
-
     <string name="settings_theme_system">跟随系统</string>
-
     <string name="settings_theme_light">浅色</string>
-
     <string name="settings_theme_dark">深色</string>
     <string name="settings_version_unknown">未知</string>
 
     <!-- 终端 -->
-
     <string name="settings_advanced">高级</string>
-
     <string name="settings_terminal">终端</string>
-
     <string name="settings_terminal_desc">打开 Messenger Runtime 应用</string>
-
     <string name="terminal_not_installed">未安装 Messenger Runtime 伴随应用,无法打开终端,Agent 工具也不可用。</string>
-
     <string name="settings_tools">MCP 服务器</string>
-
     <string name="settings_tools_desc">添加、启用或移除 MCP 服务器</string>
-
     <string name="tools_settings_title">MCP 服务器</string>
-
     <string name="tools_mcp_empty">尚未添加任何 MCP 服务器</string>
-
     <string name="tools_mcp_add">添加 MCP 服务器</string>
-
     <string name="tools_mcp_edit">编辑 MCP 服务器</string>
-
     <string name="tools_mcp_delete">删除 MCP 服务器</string>
-
     <string name="tools_mcp_delete_confirm">确定要删除 MCP 服务器“%1$s”吗？</string>
-
     <string name="tools_mcp_name">名称</string>
-
     <string name="tools_mcp_type">传输方式</string>
-
     <string name="tools_mcp_command">命令</string>
-
     <string name="tools_mcp_command_hint">例如 npx -y @modelcontextprotocol/server-everything</string>
-
     <string name="tools_mcp_args">参数</string>
-
     <string name="tools_mcp_args_hint">空格或逗号分隔</string>
-
     <string name="tools_mcp_env">环境变量</string>
-
     <string name="tools_mcp_env_hint">每行 KEY=VALUE</string>
-
     <string name="tools_mcp_url">服务器 URL</string>
-
     <string name="tools_mcp_url_hint">http://localhost:8000/sse</string>
-
     <string name="tools_mcp_headers">请求头</string>
-
     <string name="tools_mcp_headers_hint">每行 Header: Value</string>
-
     <string name="tools_mcp_runtime_note">在 Android 上，命令类型 MCP 服务器将在 Messenger Runtime 中执行。</string>
 
-
-
     <!-- Cloud Settings -->
-
     <string name="cloud_settings_title">Messenger Cloud</string>
-
     <string name="cloud_server_title">服务地址</string>
     <string name="cloud_server_saved">服务地址已保存</string>
     <string name="cloud_settings_plan_title">套餐</string>
@@ -441,8 +405,9 @@
     <string name="tool_card_success">已完成</string>
     <string name="tool_card_failed">执行失败</string>
     <string name="tool_card_result_label">结果</string>
-    <string name="tool_mode_manual">工具执行：手动确认</string>
-    <string name="tool_mode_auto">工具执行：自动</string>
+    <string name="tool_terminal_desc">在 Agent 工作区中运行命令</string>
+    <string name="chat_mode_readonly">只读模式</string>
+    <string name="chat_mode_writable">可写模式</string>
     <string name="error_tool_rounds_exceeded">工具调用轮数超出上限</string>
 
     <!-- Errors / Validation -->

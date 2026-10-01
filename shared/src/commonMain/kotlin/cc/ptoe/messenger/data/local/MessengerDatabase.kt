@@ -39,7 +39,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 16,
+    version = 18,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -96,6 +96,38 @@ abstract class MessengerDatabase : RoomDatabase() {
             override fun migrate(connection: SQLiteConnection) {
                 connection.prepare(
                     "ALTER TABLE agents ADD COLUMN toolsEnabled INTEGER NOT NULL DEFAULT 0"
+                ).step()
+            }
+        }
+
+        /**
+         * v17：agents 表新增每工具开关列——toolsFollowDefault（是否跟随默认
+         * Agent 的工具配置）+ toolsConfig（Map<String,Boolean> 的 JSON，键为工具
+         * 函数名；空串 = 默认全开，缺失键视为开启）。
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE agents ADD COLUMN toolsFollowDefault INTEGER NOT NULL DEFAULT 0"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE agents ADD COLUMN toolsConfig TEXT NOT NULL DEFAULT ''"
+                ).step()
+            }
+        }
+
+        /**
+         * v18：conversations 表新增会话级设置列——overrideToolsEnabled（工具总
+         * 开关的会话级覆盖，null = 跟随 Agent 生效值）+ writable（本会话的
+         * Agent 只读/可写模式，取代原 DataStore 全局记忆）。
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE conversations ADD COLUMN overrideToolsEnabled INTEGER"
+                ).step()
+                connection.prepare(
+                    "ALTER TABLE conversations ADD COLUMN writable INTEGER NOT NULL DEFAULT 0"
                 ).step()
             }
         }

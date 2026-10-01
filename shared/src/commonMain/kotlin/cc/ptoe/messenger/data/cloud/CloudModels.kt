@@ -92,6 +92,10 @@ data class CloudAgentDocument(
     val role: String? = null,
     /** 工具开关；旧版本服务端/客户端可能不带该字段，缺省 false。 */
     val toolsEnabled: Boolean = false,
+    /** 非默认 Agent 是否整体跟随默认 Agent 的工具配置；旧字段缺省 false。 */
+    val toolsFollowDefault: Boolean = false,
+    /** 每工具开关（键为工具函数名）；旧字段缺失（null）视为默认全开。 */
+    val toolsConfig: Map<String, Boolean>? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
     val version: Long = 0,
@@ -126,6 +130,10 @@ data class CloudConversationDocument(
     val overrideTopP: Double? = null,
     val overrideMaxTokens: Int? = null,
     val overrideReasoningEffort: String? = null,
+    /** 工具总开关的会话级覆盖；旧服务端/客户端缺省 null = 跟随 Agent。 */
+    val overrideToolsEnabled: Boolean? = null,
+    /** 本会话的 Agent 模式（只读/可写）；旧字段缺省 false = 只读。 */
+    val writable: Boolean = false,
     val reasoningFormat: String? = null,
     /** 80% 上下文自动摘要状态。旧服务端文档不含这些键。 */
     val contextSummary: String? = null,

@@ -43,6 +43,10 @@ data class AgentEntity(
     val marketAgentRole: String? = null,
     val role: String = Agent.ROLE_CHAT,
     val toolsEnabled: Boolean = false,
+    /** 非默认 Agent 是否整体跟随默认 Agent 的工具配置。 */
+    val toolsFollowDefault: Boolean = false,
+    /** 每工具开关的 JSON（Map<String, Boolean>）；空串 = 默认全开。 */
+    val toolsConfig: String = "",
     val createdAt: Long,
     val updatedAt: Long
 )

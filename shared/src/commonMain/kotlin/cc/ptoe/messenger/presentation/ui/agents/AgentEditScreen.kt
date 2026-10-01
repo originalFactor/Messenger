@@ -16,6 +16,15 @@
 
 package cc.ptoe.messenger.presentation.ui.agents
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -37,6 +46,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileUpload
@@ -46,6 +56,8 @@ import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -62,6 +74,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -76,6 +89,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -86,9 +100,13 @@ import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.tool.ChatTool
+import cc.ptoe.messenger.domain.tool.TerminalTool
+import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.platform.copyAvatarToInternal
 import cc.ptoe.messenger.presentation.platform.deleteAvatarFile
 import cc.ptoe.messenger.presentation.platform.rememberAvatarImagePicker
+import cc.ptoe.messenger.presentation.viewmodel.AgentEditUiState
 import cc.ptoe.messenger.presentation.viewmodel.AgentEditViewModel
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import cc.ptoe.messenger.generated.resources.Res
@@ -150,7 +168,12 @@ import cc.ptoe.messenger.generated.resources.agent_edit_unpublished_success
 import cc.ptoe.messenger.generated.resources.agent_edit_update_failed
 import cc.ptoe.messenger.generated.resources.agent_edit_updated_success
 import cc.ptoe.messenger.generated.resources.agent_edit_enable_tools
+import cc.ptoe.messenger.generated.resources.agent_edit_tools_empty
+import cc.ptoe.messenger.generated.resources.agent_edit_tools_summary_off
+import cc.ptoe.messenger.generated.resources.agent_edit_tools_summary_on
+import cc.ptoe.messenger.generated.resources.agent_edit_tools_title
 import cc.ptoe.messenger.generated.resources.provider_model_picker_label
+import cc.ptoe.messenger.generated.resources.tool_terminal_desc
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
@@ -208,6 +231,10 @@ fun AgentEditScreen(
     var showPushDialog by remember { mutableStateOf(false) }
     var showUnpublishDialog by remember { mutableStateOf(false) }
     var showPullDialog by remember { mutableStateOf(false) }
+    var showToolsPage by remember { mutableStateOf(false) }
+
+    // 平台注册的可用工具（内置 + MCP）；每工具开关在工具配置子页中维护
+    val tools = remember { AppContainerHolder.instance.availableTools }
 
     val strPublishedSuccess = stringResource(Res.string.agent_edit_published_success)
     val strPublishFailed = stringResource(Res.string.agent_edit_publish_failed)
@@ -253,351 +280,400 @@ fun AgentEditScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = when {
-                            uiState.isDefault -> stringResource(Res.string.agent_edit_title_default)
-                            uiState.isEditing -> stringResource(Res.string.agent_edit_title_edit)
-                            else -> stringResource(Res.string.agent_edit_title_new)
-                        }
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(Res.string.action_back)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = when {
+                                uiState.isDefault -> stringResource(Res.string.agent_edit_title_default)
+                                uiState.isEditing -> stringResource(Res.string.agent_edit_title_edit)
+                                else -> stringResource(Res.string.agent_edit_title_new)
+                            }
                         )
-                    }
-                },
-                actions = {
-                    TextButton(onClick = {
-                        if (viewModel.save()) {
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(Res.string.action_back)
+                            )
                         }
-                    }) {
-                        Text(stringResource(Res.string.action_save))
+                    },
+                    actions = {
+                        TextButton(onClick = {
+                            if (viewModel.save()) {
+                            }
+                        }) {
+                            Text(stringResource(Res.string.action_save))
+                        }
                     }
-                }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        modifier = Modifier.fillMaxSize()
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Column(
+                )
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            Box(
                 modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .widthIn(max = 600.dp)
-                    .fillMaxWidth()
-                    .padding(16.dp)
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.TopCenter
             ) {
-                // 头像
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .widthIn(max = 600.dp)
+                        .fillMaxWidth()
+                        .padding(16.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(96.dp)
-                            .clickable {
-                                avatarPicker.launch()
-                            },
-                        contentAlignment = Alignment.Center
+                    // 头像
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        AgentAvatar(
-                            avatar = uiState.avatar,
-                            size = 96.dp
-                        )
-                        // 右下角相机徽标，提示可点击更换
                         Box(
                             modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .size(28.dp)
-                                .zIndex(1f)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
+                                .size(96.dp)
+                                .clickable {
+                                    avatarPicker.launch()
+                                },
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.AddAPhoto,
-                                contentDescription = stringResource(Res.string.agent_edit_change_avatar),
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onPrimary
+                            AgentAvatar(
+                                avatar = uiState.avatar,
+                                size = 96.dp
                             )
+                            // 右下角相机徽标，提示可点击更换
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .size(28.dp)
+                                    .zIndex(1f)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AddAPhoto,
+                                    contentDescription = stringResource(Res.string.agent_edit_change_avatar),
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
                         }
                     }
-                }
 
-                if (uiState.avatar != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = {
-                            uiState.avatar?.let { deleteAvatarFile(it) }
-                            viewModel.onAvatarChange(null)
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text(stringResource(Res.string.agent_edit_remove_avatar))
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = uiState.name,
-                    onValueChange = { viewModel.onNameChange(it) },
-                    label = { Text(stringResource(Res.string.agent_edit_name_label)) },
-                    isError = uiState.nameError != null,
-                    supportingText = {
-                        uiState.nameError?.let { error ->
-                            Text(
-                                text = error,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                    if (uiState.avatar != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(
+                            onClick = {
+                                uiState.avatar?.let { deleteAvatarFile(it) }
+                                viewModel.onAvatarChange(null)
+                            },
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        ) {
+                            Text(stringResource(Res.string.agent_edit_remove_avatar))
                         }
-                    },
-                    singleLine = true,
-                    enabled = !uiState.isDefault, // 默认 Agent 名称不允许修改（保持"默认 Agent"标识）
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // 角色（普通 / 默认 / 标题生成器）
-                ListItem(
-                    title = stringResource(Res.string.agent_edit_role_label),
-                    subtitle = if (roleLocked) {
-                        stringResource(Res.string.agent_edit_role_locked)
-                    } else {
-                        displayRoleLabel
-                    },
-                    icon = Icons.Default.Person,
-                    titleColor = if (roleLocked) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.onSurface,
-                    onClick = if (roleLocked) null else {
-                        { showRolePicker = true }
                     }
-                )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                val systemPromptValue = if (showFollowToggles && uiState.followDefaultSystemPrompt) {
-                    uiState.defaultAgent?.systemPrompt ?: ""
-                } else {
-                    uiState.systemPrompt
-                }
-                FollowableTarget(
-                    enabled = showFollowToggles,
-                    followed = uiState.followDefaultSystemPrompt,
-                    onFollowChange = viewModel::onFollowSystemPromptChange
-                ) {
                     OutlinedTextField(
-                        value = systemPromptValue,
-                        onValueChange = { viewModel.onSystemPromptChange(it) },
-                        label = { Text(stringResource(Res.string.agent_edit_system_prompt_label)) },
-                        placeholder = { Text(stringResource(Res.string.agent_edit_system_prompt_placeholder)) },
-                        minLines = 3,
-                        maxLines = 8,
-                        enabled = !showFollowToggles || !uiState.followDefaultSystemPrompt,
+                        value = uiState.name,
+                        onValueChange = { viewModel.onNameChange(it) },
+                        label = { Text(stringResource(Res.string.agent_edit_name_label)) },
+                        isError = uiState.nameError != null,
+                        supportingText = {
+                            uiState.nameError?.let { error ->
+                                Text(
+                                    text = error,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        enabled = !uiState.isDefault, // 默认 Agent 名称不允许修改（保持"默认 Agent"标识）
                         modifier = Modifier.fillMaxWidth()
                     )
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                val modelSectionEnabled = !showFollowToggles || !uiState.followDefaultModel
-                FollowableTarget(
-                    enabled = showFollowToggles,
-                    followed = uiState.followDefaultModel,
-                    onFollowChange = viewModel::onFollowModelChange
-                ) {
-                    if (modelSectionEnabled) {
-                        // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
-                        val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
-                        val selectedModel = models.find { it.id == uiState.defaultModelId }
-                        val subtitle = when {
-                            selectedModel != null && selectedProvider != null ->
-                                "${selectedProvider.name} · ${selectedModel.modelId}"
-                            selectedProvider != null -> selectedProvider.name
-                            else -> stringResource(Res.string.agent_edit_select_provider)
+                    // 角色（普通 / 默认 / 标题生成器）
+                    ListItem(
+                        horizontalMargin = 0.dp,
+                        title = stringResource(Res.string.agent_edit_role_label),
+                        subtitle = if (roleLocked) {
+                            stringResource(Res.string.agent_edit_role_locked)
+                        } else {
+                            displayRoleLabel
+                        },
+                        icon = Icons.Default.Person,
+                        titleColor = if (roleLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                        onClick = if (roleLocked) null else {
+                            { showRolePicker = true }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val systemPromptValue = if (showFollowToggles && uiState.followDefaultSystemPrompt) {
+                        uiState.defaultAgent?.systemPrompt ?: ""
+                    } else {
+                        uiState.systemPrompt
+                    }
+                    FollowableTarget(
+                        enabled = showFollowToggles,
+                        followed = uiState.followDefaultSystemPrompt,
+                        onFollowChange = viewModel::onFollowSystemPromptChange
+                    ) {
+                        OutlinedTextField(
+                            value = systemPromptValue,
+                            onValueChange = { viewModel.onSystemPromptChange(it) },
+                            label = { Text(stringResource(Res.string.agent_edit_system_prompt_label)) },
+                            placeholder = { Text(stringResource(Res.string.agent_edit_system_prompt_placeholder)) },
+                            minLines = 3,
+                            maxLines = 8,
+                            enabled = !showFollowToggles || !uiState.followDefaultSystemPrompt,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val modelSectionEnabled = !showFollowToggles || !uiState.followDefaultModel
+                    FollowableTarget(
+                        enabled = showFollowToggles,
+                        followed = uiState.followDefaultModel,
+                        onFollowChange = viewModel::onFollowModelChange
+                    ) {
+                        if (modelSectionEnabled) {
+                            // Provider + 模型合并为一个设置条目，subtitle 展示「Provider 名 · 模型 ID」
+                            val selectedProvider = providers.find { it.id == uiState.selectedProviderId }
+                            val selectedModel = models.find { it.id == uiState.defaultModelId }
+                            val subtitle = when {
+                                selectedModel != null && selectedProvider != null ->
+                                    "${selectedProvider.name} · ${selectedModel.modelId}"
+                                selectedProvider != null -> selectedProvider.name
+                                else -> stringResource(Res.string.agent_edit_select_provider)
+                            }
+                            ListItem(
+                                horizontalMargin = 0.dp,
+                                title = stringResource(Res.string.provider_model_picker_label),
+                                subtitle = subtitle,
+                                icon = Icons.Default.SmartToy,
+                                onClick = { onPickProvider(uiState.selectedProviderId) }
+                            )
+                        } else {
+                            // 跟随默认 Agent：只读展示默认 Agent 的模型信息
+                            FollowedValueBox(
+                                label = stringResource(Res.string.agent_edit_followed_model_label),
+                                value = stringResource(Res.string.agent_edit_followed_model_value)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    SectionHeader(title = stringResource(Res.string.agent_edit_advanced_settings))
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val tempEnabled = !showFollowToggles || !uiState.followDefaultTemperature
+                    val tempValue = if (showFollowToggles && uiState.followDefaultTemperature) {
+                        uiState.defaultAgent?.temperature ?: uiState.temperature
+                    } else {
+                        uiState.temperature
+                    }
+                    FollowableTarget(
+                        enabled = showFollowToggles,
+                        followed = uiState.followDefaultTemperature,
+                        onFollowChange = viewModel::onFollowTemperatureChange
+                    ) {
+                        Column {
+                            Text(
+                                text = stringResource(Res.string.agent_edit_temperature_label, formatOneDecimal(tempValue)),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (tempEnabled) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Slider(
+                                value = tempValue,
+                                onValueChange = { viewModel.onTemperatureChange(it) },
+                                enabled = tempEnabled,
+                                valueRange = 0f..2f,
+                                steps = 19
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val maxTokensEnabled = !showFollowToggles || !uiState.followDefaultMaxTokens
+                    val maxTokensValue = if (showFollowToggles && uiState.followDefaultMaxTokens) {
+                        uiState.defaultAgent?.maxTokens?.toString() ?: ""
+                    } else {
+                        uiState.maxTokens ?: ""
+                    }
+                    FollowableTarget(
+                        enabled = showFollowToggles,
+                        followed = uiState.followDefaultMaxTokens,
+                        onFollowChange = viewModel::onFollowMaxTokensChange
+                    ) {
+                        OutlinedTextField(
+                            value = maxTokensValue,
+                            onValueChange = { value ->
+                                viewModel.onMaxTokensChange(value.ifBlank { null })
+                            },
+                            label = { Text(stringResource(Res.string.agent_edit_max_tokens_label)) },
+                            placeholder = { Text(stringResource(Res.string.agent_edit_max_tokens_placeholder)) },
+                            singleLine = true,
+                            enabled = maxTokensEnabled,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val reasoningEnabled = !showFollowToggles || !uiState.followDefaultReasoningEffort
+                    val reasoningValue = if (showFollowToggles && uiState.followDefaultReasoningEffort) {
+                        uiState.defaultAgent?.reasoningEffort
+                    } else {
+                        uiState.reasoningEffort
+                    }
+                    FollowableTarget(
+                        enabled = showFollowToggles,
+                        followed = uiState.followDefaultReasoningEffort,
+                        onFollowChange = viewModel::onFollowReasoningEffortChange
+                    ) {
+                        ReasoningEffortDropdown(
+                            selectedEffort = reasoningValue,
+                            enabled = reasoningEnabled,
+                            onEffortChange = { viewModel.onReasoningEffortChange(it) }
+                        )
+                    }
+
+                    // 工具入口：进入页内工具配置子页（总开关 + 每工具开关；
+                    // 标题生成智能体是后台功能角色，不暴露）。
+                    // 与角色 / 模型选择条目同款 ListItem 卡片样式。
+                    if (uiState.role != Agent.ROLE_TITLE) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        val toolsMasterOn = if (!uiState.isDefault && uiState.toolsFollowDefault) {
+                            uiState.defaultAgent?.toolsEnabled ?: uiState.toolsEnabled
+                        } else {
+                            uiState.toolsEnabled
+                        }
+                        val enabledCount = tools.count { tool ->
+                            val config = if (!uiState.isDefault && uiState.toolsFollowDefault) {
+                                uiState.defaultAgent?.toolsConfig
+                            } else {
+                                uiState.toolsConfig
+                            }
+                            config?.get(tool.name) ?: true
                         }
                         ListItem(
-                            title = stringResource(Res.string.provider_model_picker_label),
-                            subtitle = subtitle,
-                            icon = Icons.Default.SmartToy,
-                            onClick = { onPickProvider(uiState.selectedProviderId) }
-                        )
-                    } else {
-                        // 跟随默认 Agent：只读展示默认 Agent 的模型信息
-                        FollowedValueBox(
-                            label = stringResource(Res.string.agent_edit_followed_model_label),
-                            value = stringResource(Res.string.agent_edit_followed_model_value)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader(title = stringResource(Res.string.agent_edit_advanced_settings))
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val tempEnabled = !showFollowToggles || !uiState.followDefaultTemperature
-                val tempValue = if (showFollowToggles && uiState.followDefaultTemperature) {
-                    uiState.defaultAgent?.temperature ?: uiState.temperature
-                } else {
-                    uiState.temperature
-                }
-                FollowableTarget(
-                    enabled = showFollowToggles,
-                    followed = uiState.followDefaultTemperature,
-                    onFollowChange = viewModel::onFollowTemperatureChange
-                ) {
-                    Column {
-                        Text(
-                            text = stringResource(Res.string.agent_edit_temperature_label, formatOneDecimal(tempValue)),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (tempEnabled) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                        Slider(
-                            value = tempValue,
-                            onValueChange = { viewModel.onTemperatureChange(it) },
-                            enabled = tempEnabled,
-                            valueRange = 0f..2f,
-                            steps = 19,
-                            modifier = Modifier.padding(horizontal = 16.dp)
+                            horizontalMargin = 0.dp,
+                            title = stringResource(Res.string.agent_edit_tools_title),
+                            subtitle = if (toolsMasterOn) {
+                                stringResource(Res.string.agent_edit_tools_summary_on, enabledCount, tools.size)
+                            } else {
+                                stringResource(Res.string.agent_edit_tools_summary_off)
+                            },
+                            icon = Icons.Default.Build,
+                            onClick = { showToolsPage = true }
                         )
                     }
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                val maxTokensEnabled = !showFollowToggles || !uiState.followDefaultMaxTokens
-                val maxTokensValue = if (showFollowToggles && uiState.followDefaultMaxTokens) {
-                    uiState.defaultAgent?.maxTokens?.toString() ?: ""
-                } else {
-                    uiState.maxTokens ?: ""
-                }
-                FollowableTarget(
-                    enabled = showFollowToggles,
-                    followed = uiState.followDefaultMaxTokens,
-                    onFollowChange = viewModel::onFollowMaxTokensChange
-                ) {
-                    OutlinedTextField(
-                        value = maxTokensValue,
-                        onValueChange = { value ->
-                            viewModel.onMaxTokensChange(value.ifBlank { null })
-                        },
-                        label = { Text(stringResource(Res.string.agent_edit_max_tokens_label)) },
-                        placeholder = { Text(stringResource(Res.string.agent_edit_max_tokens_placeholder)) },
-                        singleLine = true,
-                        enabled = maxTokensEnabled,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                val reasoningEnabled = !showFollowToggles || !uiState.followDefaultReasoningEffort
-                val reasoningValue = if (showFollowToggles && uiState.followDefaultReasoningEffort) {
-                    uiState.defaultAgent?.reasoningEffort
-                } else {
-                    uiState.reasoningEffort
-                }
-                FollowableTarget(
-                    enabled = showFollowToggles,
-                    followed = uiState.followDefaultReasoningEffort,
-                    onFollowChange = viewModel::onFollowReasoningEffortChange
-                ) {
-                    ReasoningEffortDropdown(
-                        selectedEffort = reasoningValue,
-                        enabled = reasoningEnabled,
-                        onEffortChange = { viewModel.onReasoningEffortChange(it) }
-                    )
-                }
-
-                // 工具开关：仅普通/默认 Agent 暴露（标题生成智能体是后台功能角色）
-                if (uiState.role != Agent.ROLE_TITLE) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    SettingToggleRow(
-                        label = stringResource(Res.string.agent_edit_enable_tools),
-                        checked = uiState.toolsEnabled,
-                        onCheckedChange = { viewModel.onToolsEnabledChange(it) }
-                    )
-                }
-
-                if (cloudUser != null && uiState.isEditing && !uiState.isDefault) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    SectionHeader(title = stringResource(Res.string.agent_edit_market_section))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    when (uiState.marketAgentRole) {
-                        "publisher" -> {
-                            Button(
-                                onClick = { showPushDialog = true },
+                    if (cloudUser != null && uiState.isEditing && !uiState.isDefault) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        SectionHeader(title = stringResource(Res.string.agent_edit_market_section))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        when (uiState.marketAgentRole) {
+                            "publisher" -> {
+                                Button(
+                                    onClick = { showPushDialog = true },
+                                    enabled = !uiState.marketActionInProgress,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.FileUpload, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(Res.string.agent_edit_push_update))
+                                }
+                                TextButton(
+                                    onClick = { showUnpublishDialog = true },
+                                    enabled = !uiState.marketActionInProgress,
+                                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                                ) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(Res.string.agent_edit_unpublish))
+                                }
+                            }
+                            "importer" -> {
+                                Button(
+                                    onClick = {
+                                        viewModel.checkMarketAgentUpdate { result ->
+                                            coroutineScope.launch {
+                                                result.onSuccess { update ->
+                                                    if (update.hasUpdate) showPullDialog = true
+                                                    else snackbarHostState.showSnackbar(strAlreadyUpToDate)
+                                                }.onFailure { error ->
+                                                    snackbarHostState.showSnackbar(error.message ?: strGetUpdateFailed)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = !uiState.marketActionInProgress,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.SystemUpdateAlt, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(Res.string.agent_edit_get_update))
+                                }
+                            }
+                            else -> Button(
+                                onClick = { showPublishDialog = true },
                                 enabled = !uiState.marketActionInProgress,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Default.FileUpload, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text(stringResource(Res.string.agent_edit_push_update))
+                                Text(stringResource(Res.string.agent_edit_publish_to_market))
                             }
-                            TextButton(
-                                onClick = { showUnpublishDialog = true },
-                                enabled = !uiState.marketActionInProgress,
-                                modifier = Modifier.align(Alignment.CenterHorizontally)
-                            ) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(Res.string.agent_edit_unpublish))
-                            }
-                        }
-                        "importer" -> {
-                            Button(
-                                onClick = {
-                                    viewModel.checkMarketAgentUpdate { result ->
-                                        coroutineScope.launch {
-                                            result.onSuccess { update ->
-                                                if (update.hasUpdate) showPullDialog = true
-                                                else snackbarHostState.showSnackbar(strAlreadyUpToDate)
-                                            }.onFailure { error ->
-                                                snackbarHostState.showSnackbar(error.message ?: strGetUpdateFailed)
-                                            }
-                                        }
-                                    }
-                                },
-                                enabled = !uiState.marketActionInProgress,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.SystemUpdateAlt, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(Res.string.agent_edit_get_update))
-                            }
-                        }
-                        else -> Button(
-                            onClick = { showPublishDialog = true },
-                            enabled = !uiState.marketActionInProgress,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.FileUpload, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(Res.string.agent_edit_publish_to_market))
                         }
                     }
                 }
+            }
+        }
+
+        // 工具配置子页：页内状态切换的覆盖层 + 预测性返回（划出时露出底层编辑主页面，
+        // 与 Cloud 设置页的实例地址子页同模式）。退场为「滑向右 + 渐淡」（与导航 pop
+        // 一致），覆盖程序化关闭；预测性返回手势提交时内容已推到进度 1（不可见），
+        // 不会与该退场过渡叠加闪烁。
+        AnimatedVisibility(
+            visible = showToolsPage,
+            enter = slideInHorizontally(
+                spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                    visibilityThreshold = IntOffset.VisibilityThreshold
+                )
+            ) { it } + fadeIn(tween(SUBPAGE_TRANSITION_MS)),
+            exit = slideOutHorizontally(tween(SUBPAGE_TRANSITION_MS)) { it } +
+                fadeOut(tween(SUBPAGE_TRANSITION_MS))
+        ) {
+            BackHandler(enabled = true, onBack = { showToolsPage = false }) {
+                AgentToolsPage(
+                    state = uiState,
+                    tools = tools,
+                    onBack = { showToolsPage = false },
+                    onToolsEnabledChange = viewModel::onToolsEnabledChange,
+                    onToolsFollowDefaultChange = viewModel::onToolsFollowDefaultChange,
+                    onToolEnabledChange = viewModel::onToolEnabledChange
+                )
             }
         }
     }
@@ -694,29 +770,54 @@ fun AgentEditScreen(
     }
 }
 
+/**
+ * 工具配置子页的开关卡片行，与工具设置页（ToolsSettingsScreen）的 MCP 服务器
+ * 卡片同款：surfaceContainer 卡片 + 标题/说明 + 尾部 Switch。
+ */
 @Composable
-private fun SettingToggleRow(
-    label: String,
+private fun ToolToggleCard(
+    title: String,
+    subtitle: String?,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
-    Row(
+    Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(vertical = 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        )
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Switch(
+                checked = checked,
+                enabled = enabled,
+                onCheckedChange = onCheckedChange
+            )
+        }
     }
 }
 
@@ -860,7 +961,6 @@ private fun ReasoningEffortDropdown(
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
         )
         ExposedDropdownMenu(
             expanded = expanded && enabled,
@@ -878,3 +978,113 @@ private fun ReasoningEffortDropdown(
         }
     }
 }
+
+
+/**
+ * Agent 工具配置子页：总开关 + 「跟随默认 Agent」+ 每工具开关列表。
+ * 「默认全开」以缺失键表达：[AgentEditUiState.toolsConfig] 只记录显式关闭的工具，
+ * 之后新增的工具自动可用。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgentToolsPage(
+    state: AgentEditUiState,
+    tools: List<ChatTool>,
+    onBack: () -> Unit,
+    onToolsEnabledChange: (Boolean) -> Unit,
+    onToolsFollowDefaultChange: (Boolean) -> Unit,
+    onToolEnabledChange: (String, Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // 开启跟随时展示默认 Agent 的配置且不可编辑
+    val following = !state.isDefault && state.toolsFollowDefault
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(Res.string.agent_edit_tools_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(Res.string.action_back)
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        modifier = modifier.fillMaxSize()
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .widthIn(max = 600.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            // 跟随默认 Agent 采用与模型/参数一致的左右滑动接管交互：
+            // 右滑接管默认 Agent 的工具配置（蒙层只读），左滑恢复自定义。
+            // 默认 Agent 自身与标题生成角色没有可跟随的对象，手势关闭。
+            val toolsFollowable = !state.isDefault && state.role != Agent.ROLE_TITLE
+            val toolsMasterChecked = if (following) {
+                state.defaultAgent?.toolsEnabled ?: state.toolsEnabled
+            } else {
+                state.toolsEnabled
+            }
+            FollowableTarget(
+                enabled = toolsFollowable,
+                followed = following,
+                onFollowChange = onToolsFollowDefaultChange
+            ) {
+                ToolToggleCard(
+                    title = stringResource(Res.string.agent_edit_enable_tools),
+                    subtitle = null,
+                    checked = toolsMasterChecked,
+                    enabled = state.toolsEnabled && !following,
+                    onCheckedChange = onToolsEnabledChange
+                )
+
+                if (tools.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.agent_edit_tools_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    tools.forEach { tool ->
+                        val checked = if (following) {
+                            state.defaultAgent?.toolsConfig?.get(tool.name) ?: true
+                        } else {
+                            state.toolsConfig[tool.name] ?: true
+                        }
+                        ToolToggleCard(
+                            title = tool.name,
+                            // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
+                            subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
+                                stringResource(Res.string.tool_terminal_desc)
+                            } else {
+                                tool.description
+                            },
+                            checked = checked,
+                            enabled = state.toolsEnabled && !following,
+                            onCheckedChange = { onToolEnabledChange(tool.name, it) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val SUBPAGE_TRANSITION_MS = 350

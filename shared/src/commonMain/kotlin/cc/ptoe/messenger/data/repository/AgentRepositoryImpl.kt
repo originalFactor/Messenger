@@ -19,6 +19,7 @@ package cc.ptoe.messenger.data.repository
 import cc.ptoe.messenger.data.local.dao.AgentDao
 import cc.ptoe.messenger.data.local.entity.AgentEntity
 import cc.ptoe.messenger.data.util.FileKit
+import cc.ptoe.messenger.data.util.ToolsConfigCodec
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.repository.AgentRepository
@@ -132,6 +133,8 @@ class AgentRepositoryImpl(
             marketAgentRole = marketAgentRole,
             role = role,
             toolsEnabled = toolsEnabled,
+            toolsFollowDefault = toolsFollowDefault,
+            toolsConfig = ToolsConfigCodec.decode(toolsConfig),
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -160,6 +163,8 @@ class AgentRepositoryImpl(
             marketAgentRole = marketAgentRole,
             role = role,
             toolsEnabled = toolsEnabled,
+            toolsFollowDefault = toolsFollowDefault,
+            toolsConfig = ToolsConfigCodec.encode(toolsConfig),
             createdAt = createdAt,
             updatedAt = updatedAt
         )

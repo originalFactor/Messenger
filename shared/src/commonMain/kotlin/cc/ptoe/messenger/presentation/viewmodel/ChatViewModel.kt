@@ -24,7 +24,6 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.data.local.ChatImageStore
-import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.remote.dto.UsageDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
@@ -58,6 +57,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -90,7 +90,6 @@ class ChatViewModel(
     private val providerRepository: ProviderRepository,
     private val chatImageStore: ChatImageStore,
     private val conversationTitleGenerator: ConversationTitleGenerator,
-    private val appPreferences: AppPreferences,
     /** 平台内置工具注册表；为空（如 Android）时即使 Agent 开启开关也不发 tools。 */
     private val builtinTools: List<ChatTool> = emptyList()
 ) : ViewModel() {
@@ -186,10 +185,13 @@ class ChatViewModel(
     private val enabledModels: StateFlow<List<ChatModel>> = _enabledModels.asStateFlow()
 
     /**
-     * 工具执行确认模式：false=手动（每次弹确认框，默认），true=自动（直接执行）。
-     * 由聊天输入栏左侧的按钮切换，DataStore 全局记忆。
+     * Agent 模式（取代原「手动/自动执行」开关）：false=只读（终端保持沙箱
+     * 策略，写入类工具不声明给模型，工具在沙箱内自动执行，默认），true=可写
+     * （终端解除只读策略、写入类工具可用，需确认的工具逐次弹框确认）。
+     * 会话级状态（Conversation.writable），由聊天输入栏 "+" 功能面板切换。
      */
-    val toolAutoConfirm: StateFlow<Boolean> = appPreferences.toolAutoConfirm
+    val agentWritable: StateFlow<Boolean> = conversation
+        .map { it?.writable ?: false }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -199,10 +201,7 @@ class ChatViewModel(
     /** Platform has registered at least one built-in tool. */
     val toolsAvailable: Boolean get() = builtinTools.isNotEmpty()
 
-    /** True when at least one registered tool can run without explicit approval. */
-    val toolsCanAutoConfirm: Boolean get() = builtinTools.any { !it.requiresUserConfirmation }
-
-    /** 等待用户确认的工具调用（手动模式下非空时 ChatScreen 弹确认框）。 */
+    /** 等待用户确认的工具调用（可写模式下非空时 ChatScreen 弹确认框）。 */
     data class PendingToolConfirmation(
         val callId: String,
         val toolName: String,
@@ -216,8 +215,12 @@ class ChatViewModel(
 
     private var toolConfirmationDeferred: CompletableDeferred<Boolean>? = null
 
-    fun setToolAutoConfirm(enabled: Boolean) {
-        viewModelScope.launch { appPreferences.setToolAutoConfirm(enabled) }
+    /** 切换本会话的 Agent 只读/可写模式（写回 Conversation，不改动 updatedAt）。 */
+    fun setAgentWritable(writable: Boolean) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            conversationRepository.update(conv.copy(writable = writable))
+        }
     }
 
     /** 确认框回传：true=允许执行，false=拒绝（拒绝作为结果回传给模型）。 */
@@ -252,7 +255,9 @@ class ChatViewModel(
                 temperature = if (agent.followDefaultTemperature) default.temperature else agent.temperature,
                 topP = if (agent.followDefaultTopP) default.topP else agent.topP,
                 maxTokens = if (agent.followDefaultMaxTokens) default.maxTokens else agent.maxTokens,
-                reasoningEffort = if (agent.followDefaultReasoningEffort) default.reasoningEffort else agent.reasoningEffort
+                reasoningEffort = if (agent.followDefaultReasoningEffort) default.reasoningEffort else agent.reasoningEffort,
+                toolsEnabled = if (agent.toolsFollowDefault) default.toolsEnabled else agent.toolsEnabled,
+                toolsConfig = if (agent.toolsFollowDefault) default.toolsConfig else agent.toolsConfig
             )
         }
 
@@ -263,7 +268,8 @@ class ChatViewModel(
             temperature = conversation.overrideTemperature ?: agentWithDefault.temperature,
             topP = conversation.overrideTopP ?: agentWithDefault.topP,
             maxTokens = conversation.overrideMaxTokens ?: agentWithDefault.maxTokens,
-            reasoningEffort = conversation.overrideReasoningEffort ?: agentWithDefault.reasoningEffort
+            reasoningEffort = conversation.overrideReasoningEffort ?: agentWithDefault.reasoningEffort,
+            toolsEnabled = conversation.overrideToolsEnabled ?: agentWithDefault.toolsEnabled
         )
     }
 
@@ -655,11 +661,26 @@ class ChatViewModel(
             var hasFinished = false
             var currentContent = ""
             try {
-                // 请求是否携带内置 tools：Agent 开关打开且平台注册了工具即发送
+                // 请求是否携带 tools：生效工具总开关打开且平台注册了工具即发送，
+                // 并按 Agent 的每工具开关过滤（配置缺失的键视为开启）。
                 //（不按 supportsToolCalling 门控 — 元数据缺失时该值为 false，
-                //  会让功能看似失效；不支持的服务商会给出可见错误）。
-                val toolsForRequest = if (agent.toolsEnabled && builtinTools.isNotEmpty()) builtinTools else null
-                val toolsByName = builtinTools.associateBy { it.name }
+                //  会让功能看似失效；不支持的服务商会给出可见错误。）
+                // Agent 模式：只读时排除写入类工具（edit/create）且终端保持
+                // 只读策略；可写时终端解除策略、写入类工具恢复声明。
+                val toolsForRequest = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
+                    val enabledTools = builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
+                    if (agentWritable.value) {
+                        enabledTools.map { tool ->
+                            if (tool is TerminalTool) TerminalTool(enforceReadOnly = false) else tool
+                        }
+                    } else {
+                        enabledTools.filter { !it.writeAccess }
+                    }
+                } else {
+                    null
+                }
+                // 仅允许执行已声明（未停用）的工具，模型误调时回错误结果自纠
+                val toolsByName = toolsForRequest?.associateBy { it.name } ?: emptyMap()
                 var excludeId: String? = if (excludeTargetFromHistory) targetMessage.id else null
                 // 插入行的时间戳游标：保证工具轮 assistant 行 / TOOL 结果行严格递增，
                 // 避免同毫秒插入时消息列表顺序漂移。
@@ -829,9 +850,10 @@ class ChatViewModel(
     }
 
     /**
-     * 依次执行一轮工具调用：手动模式下先弹确认框（拒绝则把拒绝文案作为
-     * 结果回传给模型），确认/自动通过后才插入「运行中」TOOL 行并执行；
-     * 完成后更新为结果。未知工具/参数错误同样以结果文本回传，让模型自纠。
+     * 依次执行一轮工具调用：可写模式下需确认的工具逐次弹确认框（拒绝则把
+     * 拒绝文案作为结果回传给模型），确认后才插入「运行中」TOOL 行并执行；
+     * 只读模式下工具在沙箱内自动执行。未知工具/参数错误同样以结果文本
+     * 回传，让模型自纠。
      */
     private suspend fun executeToolCalls(
         conversationId: String,
@@ -846,7 +868,8 @@ class ChatViewModel(
         }
         for (call in calls) {
             val tool = toolsByName[call.name]
-            val allowed = if (tool == null || (!tool.requiresUserConfirmation && toolAutoConfirm.value)) {
+            // 可写模式 = 手动执行：需确认的工具逐次弹框；只读模式 = 沙箱内自动执行
+            val allowed = if (tool == null || !agentWritable.value || !tool.requiresUserConfirmation) {
                 true
             } else {
                 awaitToolConfirmation(call)
@@ -1197,7 +1220,6 @@ class ChatViewModel(
             providerRepository: ProviderRepository,
             chatImageStore: ChatImageStore,
             conversationTitleGenerator: ConversationTitleGenerator,
-            appPreferences: AppPreferences,
             builtinTools: List<ChatTool> = emptyList()
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -1211,7 +1233,6 @@ class ChatViewModel(
                     providerRepository,
                     chatImageStore,
                     conversationTitleGenerator,
-                    appPreferences,
                     builtinTools
                 ) as T
             }

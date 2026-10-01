@@ -47,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -85,6 +86,9 @@ import cc.ptoe.messenger.generated.resources.conversation_settings_select_provid
 import cc.ptoe.messenger.generated.resources.conversation_settings_temperature_value
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
 import cc.ptoe.messenger.generated.resources.conversation_settings_title_label
+import cc.ptoe.messenger.generated.resources.conversation_settings_tools_label
+import cc.ptoe.messenger.generated.resources.conversation_settings_tools_off
+import cc.ptoe.messenger.generated.resources.conversation_settings_tools_on
 import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -293,6 +297,47 @@ fun ConversationSettingsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                     )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 工具总开关覆盖（覆盖值本身就是开/关）
+                SwipeOverrideTarget(
+                    enabled = uiState.overrideToolsEnabled,
+                    onEnabledChange = { enabled ->
+                        viewModel.onOverrideToolsChange(enabled, agent?.toolsEnabled ?: false)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(Res.string.conversation_settings_tools_label),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = stringResource(
+                                    if (uiState.overrideToolsValue) {
+                                        Res.string.conversation_settings_tools_on
+                                    } else {
+                                        Res.string.conversation_settings_tools_off
+                                    }
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = uiState.overrideToolsValue,
+                            onCheckedChange = { viewModel.onToolsValueChange(it) },
+                            enabled = uiState.overrideToolsEnabled
+                        )
+                    }
                 }
             }
         }

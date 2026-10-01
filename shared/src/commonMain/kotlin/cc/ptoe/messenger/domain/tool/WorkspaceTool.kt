@@ -31,6 +31,8 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
 
     override val requiresUserConfirmation: Boolean = name == EDIT || name == CREATE
 
+    override val writeAccess: Boolean get() = name == EDIT || name == CREATE
+
     override val parametersJson: String = SCHEMAS.getValue(name)
 
     override suspend fun execute(argumentsJson: String): ToolExecutionResult {

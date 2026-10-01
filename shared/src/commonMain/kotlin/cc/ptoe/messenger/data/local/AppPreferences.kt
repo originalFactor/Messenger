@@ -37,8 +37,8 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         val CLOUD_SESSION_HOST = stringPreferencesKey("cloud_session_host")
         val CLOUD_USER = stringPreferencesKey("cloud_user")
         val CLOUD_AI_API_KEY = stringPreferencesKey("cloud_ai_api_key")
-        /** 内置工具执行确认模式：false=手动确认（默认），true=自动执行。 */
-        val TOOL_AUTO_CONFIRM = booleanPreferencesKey("tool_auto_confirm")
+        /** MCP 服务器配置列表 JSON。 */
+        val MCP_SERVERS_JSON = stringPreferencesKey("mcp_servers_json")
     }
 
     val defaultAgentInitialized: Flow<Boolean> = dataStore.data
@@ -46,14 +46,18 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
             preferences[PreferencesKeys.DEFAULT_AGENT_INITIALIZED] ?: false
         }
 
-    val toolAutoConfirm: Flow<Boolean> = dataStore.data
+    val mcpServersJson: Flow<String?> = dataStore.data
         .map { preferences ->
-            preferences[PreferencesKeys.TOOL_AUTO_CONFIRM] ?: false
+            preferences[PreferencesKeys.MCP_SERVERS_JSON]
         }
 
-    suspend fun setToolAutoConfirm(enabled: Boolean) {
+    suspend fun setMcpServersJson(json: String?) {
         dataStore.edit { preferences ->
-            preferences[PreferencesKeys.TOOL_AUTO_CONFIRM] = enabled
+            if (json != null) {
+                preferences[PreferencesKeys.MCP_SERVERS_JSON] = json
+            } else {
+                preferences.remove(PreferencesKeys.MCP_SERVERS_JSON)
+            }
         }
     }
 

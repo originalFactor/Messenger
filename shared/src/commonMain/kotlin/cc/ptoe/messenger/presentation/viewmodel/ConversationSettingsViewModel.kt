@@ -58,6 +58,9 @@ data class ConversationSettingsUiState(
     // Max Tokens override（null 值表示"不限"，需用 boolean 跟踪开关）
     val overrideMaxTokensEnabled: Boolean = false,
     val overrideMaxTokensValue: Int? = null,
+    // 工具总开关 override（开关与值解耦：值本身就是 boolean）
+    val overrideToolsEnabled: Boolean = false,
+    val overrideToolsValue: Boolean = false,
     val selectedProviderId: String? = null,
     val isSaved: Boolean = false
 )
@@ -126,6 +129,8 @@ class ConversationSettingsViewModel(
                     overrideReasoningEffortValue = conv.overrideReasoningEffort,
                     overrideMaxTokensEnabled = conv.overrideMaxTokens != null,
                     overrideMaxTokensValue = conv.overrideMaxTokens,
+                    overrideToolsEnabled = conv.overrideToolsEnabled != null,
+                    overrideToolsValue = conv.overrideToolsEnabled ?: false,
                     selectedProviderId = conv.overrideModelId?.let { modelId ->
                         modelRepository.getAll().first().find { it.id == modelId }?.providerId
                     } ?: defaultProviderId
@@ -214,6 +219,17 @@ class ConversationSettingsViewModel(
         _uiState.value = _uiState.value.copy(overrideMaxTokensValue = value)
     }
 
+    fun onOverrideToolsChange(override: Boolean, value: Boolean = false) {
+        _uiState.value = _uiState.value.copy(
+            overrideToolsEnabled = override,
+            overrideToolsValue = if (override) value else false
+        )
+    }
+
+    fun onToolsValueChange(value: Boolean) {
+        _uiState.value = _uiState.value.copy(overrideToolsValue = value)
+    }
+
     fun save() {
         viewModelScope.launch {
             val conv = conversationRepository.getById(conversationId).first() ?: return@launch
@@ -226,6 +242,7 @@ class ConversationSettingsViewModel(
                     overrideTemperature = if (state.overrideTemperatureEnabled) state.overrideTemperatureValue else null,
                     overrideReasoningEffort = if (state.overrideReasoningEffortEnabled) state.overrideReasoningEffortValue else null,
                     overrideMaxTokens = if (state.overrideMaxTokensEnabled) state.overrideMaxTokensValue else null,
+                    overrideToolsEnabled = if (state.overrideToolsEnabled) state.overrideToolsValue else null,
                     updatedAt = now
                 )
             )

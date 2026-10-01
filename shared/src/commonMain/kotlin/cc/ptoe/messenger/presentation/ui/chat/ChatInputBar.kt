@@ -16,7 +16,16 @@
 
 package cc.ptoe.messenger.presentation.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,12 +42,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -48,13 +59,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -62,10 +78,12 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.MessageImage
+import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.platform.sendOnEnterShortcut
 import coil3.compose.AsyncImage
 import okio.Path.Companion.toPath
@@ -75,9 +93,9 @@ import cc.ptoe.messenger.generated.resources.action_stop
 import cc.ptoe.messenger.generated.resources.chat_add_image
 import cc.ptoe.messenger.generated.resources.chat_image_description_hint
 import cc.ptoe.messenger.generated.resources.chat_message_hint
+import cc.ptoe.messenger.generated.resources.chat_mode_readonly
+import cc.ptoe.messenger.generated.resources.chat_mode_writable
 import cc.ptoe.messenger.generated.resources.chat_remove_image
-import cc.ptoe.messenger.generated.resources.tool_mode_auto
-import cc.ptoe.messenger.generated.resources.tool_mode_manual
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -85,8 +103,11 @@ import org.jetbrains.compose.resources.stringResource
  *
  *  - A horizontal preview strip for images the user picked but hasn't
  *    sent yet. Each tile has an X to drop that single image.
- *  - The `+` button that opens the photo picker (handled by
- *    [onAddClick]; the screen wires it to a `rememberLauncherForActivityResult`).
+ *  - The `+` button toggles a WeChat-style bottom panel: the input area
+ *    (and the message list above it) shifts up while the panel expands in
+ *    place, exposing the photo-picker entry and the Agent read-only/writable
+ *    mode toggle (`onAddClick` and `onAgentModeChange` are wired by the
+ *    screen; `agentWritable == null` hides the mode entry).
  *  - The pill-shaped text field plus the send / stop action button,
  *    identical to the legacy Google-Messages style.
  *
@@ -105,14 +126,20 @@ fun ChatInputBar(
     onAddClick: () -> Unit = {},
     onRemoveImage: (MessageImage) -> Unit = {},
     /**
-     * 工具执行确认模式；null 表示当前会话不涉及工具（不展示切换按钮）。
-     * false=手动确认（默认），true=自动执行。
+     * Agent 模式；null 表示平台未注册工具（面板不展示模式切换项）。
+     * false=只读（终端沙箱 + 禁用写入工具 + 自动执行），true=可写
+     * （写入工具可用 + 需确认的工具逐次弹框）。
      */
-    toolAutoConfirm: Boolean? = null,
-    onToolModeToggle: () -> Unit = {},
+    agentWritable: Boolean? = null,
+    onAgentModeChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    var functionPanelExpanded by remember { mutableStateOf(false) }
+
+    // 面板展开时拦截系统返回：先收起面板而不是退出聊天页
+    BackHandler(enabled = functionPanelExpanded, onBack = { functionPanelExpanded = false }) {}
 
     // Enter-to-send keyboard shortcut. Controlled by the platform expect
     // value `sendOnEnterShortcut` — enabled on Desktop (physical keyboard)
@@ -155,6 +182,54 @@ fun ChatInputBar(
             )
         }
 
+        // 微信式功能面板：展开时把输入行（及其上方的消息列表）顶起，
+        // 在输入行上方原地展开功能项；"+" 再点一次收起。
+        AnimatedVisibility(
+            visible = functionPanelExpanded,
+            enter = expandVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                expandFrom = Alignment.Bottom
+            ) + fadeIn(tween(durationMillis = 180)),
+            exit = shrinkVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                shrinkTowards = Alignment.Bottom
+            ) + fadeOut(tween(durationMillis = 180))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            ) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                InputPanelItem(
+                    text = stringResource(Res.string.chat_add_image),
+                    icon = Icons.Default.Image,
+                    enabled = !isAttachingImage,
+                    onClick = {
+                        functionPanelExpanded = false
+                        onAddClick()
+                    }
+                )
+                if (agentWritable != null) {
+                    // 只读/可写：单行点击切换（取代原「手动/自动执行」开关）
+                    InputPanelItem(
+                        text = stringResource(
+                            if (agentWritable) Res.string.chat_mode_writable
+                            else Res.string.chat_mode_readonly
+                        ),
+                        icon = if (agentWritable) Icons.Default.LockOpen else Icons.Default.Lock,
+                        onClick = { onAgentModeChange(!agentWritable) }
+                    )
+                }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -163,9 +238,15 @@ fun ChatInputBar(
                 .background(MaterialTheme.colorScheme.surfaceContainer),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 左侧 + 按钮（Google Messages 风格：附件入口）
+            // 左侧 + 按钮：切换底部功能面板（微信风格）
             IconButton(
-                onClick = onAddClick,
+                onClick = {
+                    if (!functionPanelExpanded) {
+                        // 打开面板时收起键盘（微信行为）
+                        focusManager.clearFocus()
+                    }
+                    functionPanelExpanded = !functionPanelExpanded
+                },
                 enabled = !isGenerating && !isAttachingImage,
                 modifier = Modifier
                     .padding(end = 4.dp)
@@ -181,26 +262,7 @@ fun ChatInputBar(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = stringResource(Res.string.chat_add_image),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // 工具执行模式切换（手动确认 / 自动执行），仅当 Agent 开启工具时展示
-            if (toolAutoConfirm != null) {
-                IconButton(
-                    onClick = onToolModeToggle,
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .size(44.dp)
-                ) {
-                    Icon(
-                        imageVector = if (toolAutoConfirm) Icons.Default.Bolt else Icons.Default.TouchApp,
-                        contentDescription = stringResource(
-                            if (toolAutoConfirm) Res.string.tool_mode_auto
-                            else Res.string.tool_mode_manual
-                        ),
-                        tint = if (toolAutoConfirm) MaterialTheme.colorScheme.primary
+                        tint = if (functionPanelExpanded) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -219,7 +281,7 @@ fun ChatInputBar(
                         }
                     )
                 },
-                shape = RoundedCornerShape(24.dp),
+                shape = MaterialTheme.shapes.large,
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -232,6 +294,10 @@ fun ChatInputBar(
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(focusRequester)
+                    .onFocusChanged { state ->
+                        // 点击输入框获得焦点时收起功能面板（微信行为）
+                        if (state.isFocused) functionPanelExpanded = false
+                    }
                     .then(sendShortcutModifier),
                 maxLines = 5,
                 minLines = 1,
@@ -281,6 +347,37 @@ fun ChatInputBar(
                 }
             }
         }
+    }
+}
+
+/** 功能面板里的一行：前置图标 + 文案。 */
+@Composable
+private fun InputPanelItem(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 

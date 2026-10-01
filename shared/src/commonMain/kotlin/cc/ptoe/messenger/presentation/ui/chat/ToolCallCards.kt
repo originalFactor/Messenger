@@ -150,7 +150,7 @@ private fun ToolCallCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.small)
             .background(containerColor)
             .animateContentSize()
             .clickable { expanded = !expanded }

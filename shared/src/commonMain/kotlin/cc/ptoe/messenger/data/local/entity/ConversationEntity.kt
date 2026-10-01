@@ -43,6 +43,10 @@ data class ConversationEntity(
     val overrideTopP: Float? = null,
     val overrideMaxTokens: Int? = null,
     val overrideReasoningEffort: String? = null,
+    /** 工具总开关的会话级覆盖（null = 跟随 Agent 生效值）。 */
+    val overrideToolsEnabled: Boolean? = null,
+    /** 本会话的 Agent 模式（只读/可写）。 */
+    val writable: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long,
     val lastMessage: String?,

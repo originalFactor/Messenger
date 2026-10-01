@@ -86,6 +86,8 @@ internal data class CloudAgentRequest(
     val marketAgentRole: String? = null,
     val role: String = Agent.ROLE_CHAT,
     val toolsEnabled: Boolean = false,
+    val toolsFollowDefault: Boolean = false,
+    val toolsConfig: Map<String, Boolean> = emptyMap(),
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -127,6 +129,8 @@ internal data class CloudConversationRequest(
     val overrideTopP: Double?,
     val overrideMaxTokens: Int?,
     val overrideReasoningEffort: String?,
+    val overrideToolsEnabled: Boolean? = null,
+    val writable: Boolean = false,
     val reasoningFormat: String?,
     val contextSummary: String? = null,
     val contextSummaryUntil: Long = 0,

@@ -37,8 +37,15 @@ data class Agent(
     val marketAgentVersion: Long? = null,
     val marketAgentRole: String? = null,
     val role: String = ROLE_CHAT,
-    /** 是否随请求向模型声明内置工具（终端等；仅当平台注册了工具时生效）。 */
+    /** 是否随请求向模型声明工具（内置 + MCP；仅当平台注册了工具时生效）。 */
     val toolsEnabled: Boolean = false,
+    /** 非默认 Agent 可整体跟随默认 Agent 的工具配置（总开关 + 每工具开关）。 */
+    val toolsFollowDefault: Boolean = false,
+    /**
+     * 每工具开关（工具函数名 → 是否启用）。缺失的键视为开启（默认全开），
+     * 因此只记录显式关闭的工具，新增工具对旧配置自动可用。
+     */
+    val toolsConfig: Map<String, Boolean> = emptyMap(),
     val createdAt: Long,
     val updatedAt: Long
 ) {
@@ -81,5 +88,20 @@ data class Agent(
             createdAt = now,
             updatedAt = now
         )
+    }
+
+    /** 生效的工具总开关：非默认 Agent 开启跟随时取默认 Agent 的配置。 */
+    fun effectiveToolsEnabled(defaultAgent: Agent?): Boolean =
+        if (!isDefault && toolsFollowDefault) (defaultAgent?.toolsEnabled ?: toolsEnabled)
+        else toolsEnabled
+
+    /** 生效的单工具开关：配置缺失的键视为开启（默认全开）。 */
+    fun effectiveToolEnabled(toolName: String, defaultAgent: Agent?): Boolean {
+        val config = if (!isDefault && toolsFollowDefault && defaultAgent != null) {
+            defaultAgent.toolsConfig
+        } else {
+            toolsConfig
+        }
+        return config[toolName] ?: true
     }
 }
