@@ -18,7 +18,9 @@ package cc.ptoe.messenger.presentation.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -112,6 +114,7 @@ expect fun PlatformThemeSideEffects(
     navigationBarColor: Color
 )
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun MessengerTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -136,10 +139,13 @@ fun MessengerTheme(
         navigationBarColor = colorScheme.surface
     )
 
-    MaterialTheme(
+    // Material 3 Expressive：expressive MotionScheme 带来规范的弹性组件动效
+    //（形状变形、容器动画等），配合 ExpressiveShapes / ExpressiveTypography。
+    MaterialExpressiveTheme(
         colorScheme = colorScheme,
-        typography = ExpressiveTypography,
+        motionScheme = MotionScheme.expressive(),
         shapes = ExpressiveShapes,
+        typography = ExpressiveTypography,
         content = content
     )
 }

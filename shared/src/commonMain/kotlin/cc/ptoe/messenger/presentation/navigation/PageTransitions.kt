@@ -19,6 +19,10 @@ package cc.ptoe.messenger.presentation.navigation
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,9 +30,21 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.unit.IntOffset
 import androidx.navigation.NavBackStackEntry
 
 private const val TRANSITION_DURATION_MS = 240
+
+/**
+ * Expressive 空间动效：无回弹弹簧（快-慢-快的空间节奏），用于前进/后退的
+ * 滑动过渡，取代固定时长的 tween。pop 过渡保持 tween——Android 上由
+ * 预测性返回手势 seekTo 逐帧驱动，弹簧与手势采样配合不佳。
+ */
+private fun <T> expressiveSpatialSpec(visibilityThreshold: T): FiniteAnimationSpec<T> = spring(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+    visibilityThreshold = visibilityThreshold
+)
 
 /**
  * 页面相对位置（值越大越“靠后”）。切换页面时比较两个路由的顺序：
@@ -66,15 +82,15 @@ fun navPageOrder(route: String?): Int = route?.let { RouteOrders[it] } ?: 0
 fun navEnterTransition(vertical: Boolean): AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition = {
     if (isForward(initialState.destination.route, targetState.destination.route)) {
         if (vertical) {
-            slideInVertically(tween(TRANSITION_DURATION_MS)) { it }
+            slideInVertically(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { it }
         } else {
-            slideInHorizontally(tween(TRANSITION_DURATION_MS)) { it }
+            slideInHorizontally(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { it }
         }
     } else {
         if (vertical) {
-            slideInVertically(tween(TRANSITION_DURATION_MS)) { -it }
+            slideInVertically(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { -it }
         } else {
-            slideInHorizontally(tween(TRANSITION_DURATION_MS)) { -it }
+            slideInHorizontally(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { -it }
         }
     }
 }
@@ -83,15 +99,15 @@ fun navEnterTransition(vertical: Boolean): AnimatedContentTransitionScope<NavBac
 fun navExitTransition(vertical: Boolean): AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition = {
     if (isForward(initialState.destination.route, targetState.destination.route)) {
         if (vertical) {
-            slideOutVertically(tween(TRANSITION_DURATION_MS)) { -it }
+            slideOutVertically(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { -it }
         } else {
-            slideOutHorizontally(tween(TRANSITION_DURATION_MS)) { -it }
+            slideOutHorizontally(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { -it }
         }
     } else {
         if (vertical) {
-            slideOutVertically(tween(TRANSITION_DURATION_MS)) { it }
+            slideOutVertically(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { it }
         } else {
-            slideOutHorizontally(tween(TRANSITION_DURATION_MS)) { it }
+            slideOutHorizontally(expressiveSpatialSpec(IntOffset.VisibilityThreshold)) { it }
         }
     }
 }

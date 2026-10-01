@@ -17,6 +17,9 @@
 package cc.ptoe.messenger.presentation.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -75,6 +78,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -572,7 +576,13 @@ fun CloudSettingsScreen(
         // 与该退场过渡叠加闪烁。
         AnimatedVisibility(
             visible = showServerPage,
-            enter = slideInHorizontally(tween(TRANSITION_DURATION_MS)) { it } + fadeIn(tween(TRANSITION_DURATION_MS)),
+            enter = slideInHorizontally(
+                spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                    visibilityThreshold = IntOffset.VisibilityThreshold
+                )
+            ) { it } + fadeIn(tween(TRANSITION_DURATION_MS)),
             exit = slideOutHorizontally(tween(TRANSITION_DURATION_MS)) { it } +
                 fadeOut(tween(TRANSITION_DURATION_MS))
         ) {
