@@ -22,6 +22,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -219,18 +221,26 @@ fun ConversationsScreen(
             },
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
-                    FloatingActionButton(
-                        onClick = {
-                            if (showAllAgents) {
-                                showAgentPicker = true
-                            } else {
-                                viewModel.createNewConversation { conversationId ->
-                                    onConversationClick(conversationId)
+                    // Keep the FAB above the floating bottom navigation pill
+                    // (80 dp bar + 12 dp gap) that the page scrolls beneath.
+                    Box(
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .padding(bottom = 92.dp)
+                    ) {
+                        FloatingActionButton(
+                            onClick = {
+                                if (showAllAgents) {
+                                    showAgentPicker = true
+                                } else {
+                                    viewModel.createNewConversation { conversationId ->
+                                        onConversationClick(conversationId)
+                                    }
                                 }
                             }
+                        ) {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = stringResource(Res.string.conversations_new))
                         }
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = stringResource(Res.string.conversations_new))
                     }
                 }
             }
@@ -242,12 +252,15 @@ fun ConversationsScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
+                        .navigationBarsPadding()
                 )
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
+                        .navigationBarsPadding(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 92.dp)
                 ) {
                     items(conversations, key = { it.id }) { conversation ->
                         ConversationListItem(

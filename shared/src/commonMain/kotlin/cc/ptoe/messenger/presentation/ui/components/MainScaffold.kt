@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -85,30 +84,26 @@ fun MainScaffold(
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     bottomBar = {
                         if (showTopLevelNav) {
+                            // Floating pill: no opaque wrapper background — content
+                            // scrolls beneath the bar and stays visible around it.
                             Box(
                                 modifier = Modifier
-                                    .background(MaterialTheme.colorScheme.surface)
                                     .padding(horizontal = 12.dp)
                                     .navigationBarsPadding()
                             ) {
                                 BottomNavBar(
                                     currentRoute = currentDestination.route,
                                     onItemClick = onItemClick,
-                                    // The transparent wrapper owns the system inset. Keeping it
-                                    // out of NavigationBar prevents its dark surface from growing
-                                    // into the gesture/navigation area.
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                         }
                     }
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                            .consumeWindowInsets(innerPadding)
-                    ) {
+                ) { _ ->
+                    // No bottom padding here: content extends beneath the floating
+                    // bar; top-level screens add their own bar-clearance padding so
+                    // the last list item can scroll clear of the pill.
+                    Box(modifier = Modifier.fillMaxSize()) {
                         NavGraph(
                             navController = navController,
                             sizeClass = sizeClass,

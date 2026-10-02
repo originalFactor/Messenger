@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -177,10 +178,11 @@ fun SettingsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 720.dp),
-                // Keep the last setting clear of the app navigation surface when
-                // the list is scrolled to the end.
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)
+                    .widthIn(max = 720.dp)
+                    .navigationBarsPadding(),
+                // Keep the last setting clear of the floating bottom navigation
+                // pill (80 dp bar + 12 dp gap) which the list scrolls beneath.
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 92.dp)
             ) {
             item {
                 SectionHeader(title = stringResource(Res.string.settings_personal))

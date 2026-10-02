@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -165,7 +166,14 @@ fun AgentsScreen(
             },
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
-                    Column(horizontalAlignment = Alignment.End) {
+                    // Keep the FAB above the floating bottom navigation pill
+                    // (80 dp bar + 12 dp gap) that the page scrolls beneath.
+                    Box(
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .padding(bottom = 92.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.End) {
                         if (cloudUser != null && fabExpanded) {
                             SmallFloatingActionButton(onClick = {
                                 fabExpanded = false
@@ -205,6 +213,7 @@ fun AgentsScreen(
                         }
                     }
                 }
+            }
             },
             modifier = Modifier.fillMaxSize()
         ) { innerPadding ->
@@ -215,6 +224,7 @@ fun AgentsScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
+                        .navigationBarsPadding()
                 )
             } else {
                 // Desktop / large window: constrain list to a centered 720 dp column.
@@ -228,6 +238,8 @@ fun AgentsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .widthIn(max = 720.dp)
+                            .navigationBarsPadding(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 92.dp)
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
                         val isBuiltin = item.agent.id == Agent.BUILTIN_TITLE_AGENT_ID
