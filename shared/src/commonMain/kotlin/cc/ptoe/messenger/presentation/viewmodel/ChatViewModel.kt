@@ -640,6 +640,18 @@ class ChatViewModel(
             var detectedFormat = initialDetectedFormat
             var hasFinished = false
             var currentContent = ""
+            // 插入行的时间戳游标：保证工具轮 assistant 行 / TOOL 结果行 / 最终文本
+            // 严格递增，避免同毫秒插入时消息列表顺序漂移。声明在 try 外，收尾分支
+            // （含异常路径）也能把占位行时间戳推进到工具行之后。
+            var timestampCursor = targetMessage.timestamp
+            suspend fun nextTimestamp(): Long {
+                timestampCursor = maxOf(timestampCursor + 1L, System.currentTimeMillis())
+                return timestampCursor
+            }
+            // 占位行（最终文本落点）的时间戳停留在最初插入时刻，早于工具轮行；
+            // 有工具轮落行时必须顺次推进，否则按时间排序会把最终答案排到卡片之前。
+            suspend fun bumpedFinalTimestamp(): Long? =
+                if (timestampCursor > targetMessage.timestamp) nextTimestamp() else null
             try {
                 // 请求是否携带 tools：生效工具总开关打开且平台注册了工具即发送，
                 // 并按 Agent 的每工具开关过滤（配置缺失的键视为开启）。
@@ -666,13 +678,6 @@ class ChatViewModel(
                 // 仅允许执行已声明（未停用）的工具，模型误调时回错误结果自纠
                 val toolsByName = toolsForRequest?.associateBy { it.name } ?: emptyMap()
                 var excludeId: String? = if (excludeTargetFromHistory) targetMessage.id else null
-                // 插入行的时间戳游标：保证工具轮 assistant 行 / TOOL 结果行严格递增，
-                // 避免同毫秒插入时消息列表顺序漂移。
-                var timestampCursor = targetMessage.timestamp
-                suspend fun nextTimestamp(): Long {
-                    timestampCursor = maxOf(timestampCursor + 1L, System.currentTimeMillis())
-                    return timestampCursor
-                }
 
                 var round = 0
                 var turnComplete = false
@@ -762,7 +767,13 @@ class ChatViewModel(
                                     // 工具调用已进入历史，后续轮次不再排除目标行
                                     excludeId = null
                                 } else if (event.toolCalls.isEmpty() && toolRoundCalls == null) {
-                                    saveStreamResult(targetMessage, currentContent, conversationId, null)
+                                    saveStreamResult(
+                                        targetMessage,
+                                        currentContent,
+                                        conversationId,
+                                        null,
+                                        bumpedFinalTimestamp()
+                                    )
                                     if (currentContent.isNotBlank()) {
                                         awaitMessagePersisted(targetMessage.id, currentContent)
                                         // 最终文本轮完成 → 标题生成（工具轮不触发）
@@ -791,7 +802,13 @@ class ChatViewModel(
                     }
                     if (!hasFinished) {
                         val errorMsg = getString(Res.string.error_api_no_valid_response)
-                        saveStreamResult(targetMessage, currentContent, conversationId, errorMsg)
+                        saveStreamResult(
+                            targetMessage,
+                            currentContent,
+                            conversationId,
+                            errorMsg,
+                            bumpedFinalTimestamp()
+                        )
                         setError(errorMsg)
                         if (currentContent.isNotBlank()) {
                             awaitMessagePersisted(targetMessage.id, currentContent)
@@ -805,7 +822,13 @@ class ChatViewModel(
                     if (round >= MAX_TOOL_ROUNDS) {
                         // 防失控：轮数上限后不再执行工具，按错误收尾
                         val errorMsg = getString(Res.string.error_tool_rounds_exceeded)
-                        saveStreamResult(targetMessage, "", conversationId, errorMsg)
+                        saveStreamResult(
+                            targetMessage,
+                            "",
+                            conversationId,
+                            errorMsg,
+                            bumpedFinalTimestamp()
+                        )
                         setError(errorMsg)
                         _streamingContent.value = null
                         _streamingMessageId.value = null
@@ -822,7 +845,13 @@ class ChatViewModel(
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 val errorMsg = e.message ?: getString(Res.string.error_unknown)
-                saveStreamResult(targetMessage, currentContent, conversationId, errorMsg)
+                saveStreamResult(
+                    targetMessage,
+                    currentContent,
+                    conversationId,
+                    errorMsg,
+                    bumpedFinalTimestamp()
+                )
                 setError(errorMsg)
                 if (currentContent.isNotBlank()) {
                     awaitMessagePersisted(targetMessage.id, currentContent)
@@ -970,7 +999,11 @@ class ChatViewModel(
                             )
                         )
                     } else {
-                        messageRepository.update(msg.copy(status = MessageStatus.SENT))
+                        // 占位行时间戳推进到当前时刻：停止时可能已有工具轮落行
+                        // （时间戳晚于占位行），不推进会把保留的部分文本排到卡片前。
+                        messageRepository.update(
+                            msg.copy(status = MessageStatus.SENT, timestamp = System.currentTimeMillis())
+                        )
                     }
                 }
             }
@@ -1131,14 +1164,16 @@ class ChatViewModel(
         aiMessage: Message,
         content: String,
         conversationId: String,
-        errorMessage: String?
+        errorMessage: String?,
+        timestamp: Long? = null
     ) {
         if (content.isNotBlank()) {
             messageRepository.update(
                 aiMessage.copy(
                     content = content,
                     status = MessageStatus.SENT,
-                    errorMessage = null
+                    errorMessage = null,
+                    timestamp = timestamp ?: aiMessage.timestamp
                 )
             )
             updateConversationLastMessage(conversationId, content, System.currentTimeMillis())
@@ -1147,7 +1182,8 @@ class ChatViewModel(
                 aiMessage.copy(
                     content = content,
                     status = MessageStatus.ERROR,
-                    errorMessage = errorMessage
+                    errorMessage = errorMessage,
+                    timestamp = timestamp ?: aiMessage.timestamp
                 )
             )
         }
