@@ -64,7 +64,8 @@ import org.jetbrains.compose.resources.stringResource
 
 /**
  * 一组工具调用卡片：assistant 工具轮消息 + 紧随的 TOOL 结果行合并渲染。
- * [assistant] 带轮内文本时先渲染文本气泡；为 null 时是孤儿 TOOL 行的兜底展示。
+ * 工具卡片内联在 Agent 发起调用的那轮 AI 气泡内（轮内文本之后）；
+ * [assistant] 为 null 时是孤儿 TOOL 行的兜底展示（无气泡可挂，退回独立卡片）。
  */
 @Composable
 fun ToolGroupItem(
@@ -73,42 +74,54 @@ fun ToolGroupItem(
     modifier: Modifier = Modifier
 ) {
     val calls = assistant?.parts?.filterIsInstance<ContentPart.ToolCall>().orEmpty()
-    Column(
-        // 水平缩进由各子项自理：AiMessageBubble 自带 start 8 / end 64 内边距，
-        // 卡片在下方单独套用同样的缩进，避免双重叠加。
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = 2.dp, bottom = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        if (assistant != null && assistant.content.isNotBlank()) {
-            // 轮内文本（如「让我先看一下目录结构」）仍以普通气泡呈现，
-            // 卡片紧跟其下；组内 isLastInGroup=false，尾巴样式由下一组承担。
-            AiMessageBubble(
-                message = assistant,
-                isLastInGroup = false,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        // 每个调用一张卡；无调用记录的孤儿 TOOL 行直接渲染结果卡
-        val renderCalls: List<Pair<ContentPart.ToolCall, ContentPart.ToolResult?>> =
-            calls.map { call -> call to toolMessages.findResult(call.callId) }
-        val orphanResults = if (calls.isEmpty()) {
-            toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
-        } else {
-            emptyList()
-        }
-        (renderCalls.map { CardRender(call = it.first, result = it.second) } +
-            orphanResults.map { CardRender(call = null, result = it) })
-            .forEach { render ->
+    val renderCalls: List<CardRender> = if (assistant == null) {
+        // 无调用记录的孤儿 TOOL 行直接渲染结果卡
+        toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
+            .map { CardRender(call = null, result = it) }
+    } else {
+        calls.map { call -> CardRender(call = call, result = toolMessages.findResult(call.callId)) }
+    }
+    if (assistant == null) {
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp, bottom = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            renderCalls.forEach { render ->
                 ToolCallCard(
                     toolName = render.call?.name ?: render.result?.name ?: "",
                     command = render.call?.let { TerminalTool.parseCommand(it.arguments) ?: it.arguments },
                     result = render.result,
                     isRunning = render.isRunning(toolMessages),
+                    inBubble = false,
                     modifier = Modifier.padding(start = 8.dp, end = 64.dp)
                 )
             }
+        }
+    } else {
+        // 卡片嵌进工具轮气泡：水平缩进由气泡自带（start 8 / end 64），不再单独套用
+        AiMessageBubble(
+            message = assistant,
+            isLastInGroup = false,
+            modifier = modifier.fillMaxWidth(),
+            inlineContent = {
+                Column(
+                    modifier = Modifier.padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    renderCalls.forEach { render ->
+                        ToolCallCard(
+                            toolName = render.call?.name ?: render.result?.name ?: "",
+                            command = render.call?.let { TerminalTool.parseCommand(it.arguments) ?: it.arguments },
+                            result = render.result,
+                            isRunning = render.isRunning(toolMessages),
+                            inBubble = true
+                        )
+                    }
+                }
+            }
+        )
     }
 }
 
@@ -139,12 +152,16 @@ private fun ToolCallCard(
     command: String?,
     result: ContentPart.ToolResult?,
     isRunning: Boolean,
+    inBubble: Boolean,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember(toolName, command) { mutableStateOf(false) }
+    // 气泡内的卡片底色比气泡（surfaceContainerHigh）再深一级以保持对比；
+    // 孤儿行的独立卡片直接坐在 surface 上，维持原底色。
     val containerColor = when {
         isRunning -> MaterialTheme.colorScheme.secondaryContainer
         result?.isError == true -> MaterialTheme.colorScheme.errorContainer
+        inBubble -> MaterialTheme.colorScheme.surfaceContainerHighest
         else -> MaterialTheme.colorScheme.surfaceContainerHigh
     }
     Column(

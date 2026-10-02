@@ -77,7 +77,12 @@ fun AiMessageBubble(
      * animation, every token paints as soon as it arrives.
      */
     streamingContent: String? = null,
-    streamingMessageId: String? = null
+    streamingMessageId: String? = null,
+    /**
+     * 内联在气泡内、正文之后的附加内容（如工具调用卡片）。提供时正文为空
+     * 不再显示输入指示 — 气泡仍由附加内容撑起（如只有工具调用的轮次）。
+     */
+    inlineContent: (@Composable () -> Unit)? = null
 ) {
     val isError = message.status == MessageStatus.ERROR
     val bubbleColor = if (isError) {
@@ -122,44 +127,46 @@ fun AiMessageBubble(
                 modifier = Modifier
                     .clip(bubbleShape)
                     .background(bubbleColor)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                if (isError) {
-                    ErrorContent(
-                        message = message,
-                        textColor = textColor,
-                        onRetryClick = onRetryClick
-                    )
-                } else if (textForRender.isNotEmpty() || isLiveStream) {
-                    // token 即时绘制（无打字机动画）：live 流式内容读 streamingContent，
-                    // 结束后回退到已持久化的 message.content。状态预填充 + skipToEnd +
-                    // baseDelayMs=0 即立即渲染全文，且仅增长的尾部块随 token 重解析。
-                    if (textForRender.isEmpty() && isLiveStream) {
-                        // 尚未收到首个 token：显示三点输入指示
-                        TypingIndicator()
-                    } else {
-                        val state = remember(message.id, textForRender) {
-                            StreamingTypewriterState().apply {
-                                if (textForRender.isNotEmpty()) {
-                                    appendToken(textForRender)
-                                    completeSource()
-                                    skipToEnd()
+                Column {
+                    if (isError) {
+                        ErrorContent(
+                            message = message,
+                            textColor = textColor,
+                            onRetryClick = onRetryClick
+                        )
+                    } else if (textForRender.isNotEmpty() || isLiveStream) {
+                        // token 即时绘制（无打字机动画）：live 流式内容读 streamingContent，
+                        // 结束后回退到已持久化的 message.content。状态预填充 + skipToEnd +
+                        // baseDelayMs=0 即立即渲染全文，且仅增长的尾部块随 token 重解析。
+                        if (textForRender.isEmpty() && isLiveStream) {
+                            // 尚未收到首个 token：显示三点输入指示
+                            TypingIndicator()
+                        } else {
+                            val state = remember(message.id, textForRender) {
+                                StreamingTypewriterState().apply {
+                                    if (textForRender.isNotEmpty()) {
+                                        appendToken(textForRender)
+                                        completeSource()
+                                        skipToEnd()
+                                    }
                                 }
                             }
+                            val renderer = rememberMarkdownTypewriterRenderer(state)
+                            StreamingTypewriter(
+                                tokens = emptyFlow(),
+                                state = state,
+                                renderer = renderer,
+                                baseDelayMs = 0L,
+                                speedCurve = SpeedCurve.Linear,
+                                tapToSkip = false
+                            )
                         }
-                        val renderer = rememberMarkdownTypewriterRenderer(state)
-                        StreamingTypewriter(
-                            tokens = emptyFlow(),
-                            state = state,
-                            renderer = renderer,
-                            baseDelayMs = 0L,
-                            speedCurve = SpeedCurve.Linear,
-                            tapToSkip = false
-                        )
+                    } else if (inlineContent == null) {
+                        TypingIndicator()
                     }
-                } else {
-                    TypingIndicator()
+                    inlineContent?.invoke()
                 }
             }
         }
