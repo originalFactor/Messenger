@@ -327,27 +327,41 @@ fun ConversationSettingsScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 工具入口：进入页内工具配置子页（总开关 + 每工具开关的会话级覆盖；
-                    // 未覆盖时沿用 Agent 的生效配置）。与 Agent 编辑页的工具入口同款。
-                    ListItem(
-                        horizontalMargin = 0.dp,
-                        title = stringResource(Res.string.agent_edit_tools_title),
-                        subtitle = if (uiState.overrideToolsEnabled) {
-                            if (uiState.overrideToolsValue) {
-                                stringResource(
-                                    Res.string.agent_edit_tools_summary_on,
-                                    tools.count { uiState.overrideToolsConfig[it.name] ?: true },
-                                    tools.size
-                                )
+                    // 工具入口：与其他覆盖行一致，右滑开启会话级覆盖（以 Agent 的
+                    // 当前值作为起点）、左滑恢复 Agent 配置；覆盖开启后点击进入
+                    // 页内工具配置子页编辑总开关 + 每工具开关。
+                    SwipeOverrideTarget(
+                        enabled = uiState.overrideToolsEnabled,
+                        onEnabledChange = { enabled ->
+                            viewModel.onOverrideToolsChange(
+                                enabled,
+                                agent?.toolsEnabled ?: false,
+                                agent?.toolsConfig ?: emptyMap()
+                            )
+                        }
+                    ) {
+                        ListItem(
+                            horizontalMargin = 0.dp,
+                            title = stringResource(Res.string.agent_edit_tools_title),
+                            subtitle = if (uiState.overrideToolsEnabled) {
+                                if (uiState.overrideToolsValue) {
+                                    stringResource(
+                                        Res.string.agent_edit_tools_summary_on,
+                                        tools.count { uiState.overrideToolsConfig[it.name] ?: true },
+                                        tools.size
+                                    )
+                                } else {
+                                    stringResource(Res.string.agent_edit_tools_summary_off)
+                                }
                             } else {
-                                stringResource(Res.string.agent_edit_tools_summary_off)
-                            }
-                        } else {
-                            stringResource(Res.string.conversation_settings_override_active)
-                        },
-                        icon = Icons.Default.Build,
-                        onClick = { showToolsPage = true }
-                    )
+                                stringResource(Res.string.conversation_settings_override_active)
+                            },
+                            icon = Icons.Default.Build,
+                            onClick = if (uiState.overrideToolsEnabled) {
+                                { showToolsPage = true }
+                            } else null
+                        )
+                    }
                 }
             }
         }
@@ -367,20 +381,10 @@ fun ConversationSettingsScreen(
         ) {
             BackHandler(enabled = true, onBack = { showToolsPage = false }) {
                 ConversationToolsPage(
-                    overriding = uiState.overrideToolsEnabled,
                     masterValue = uiState.overrideToolsValue,
                     config = uiState.overrideToolsConfig,
-                    agentMasterValue = agent?.toolsEnabled ?: false,
-                    agentConfig = agent?.toolsConfig,
                     tools = tools,
                     onBack = { showToolsPage = false },
-                    onOverrideChange = {
-                        viewModel.onOverrideToolsChange(
-                            it,
-                            agent?.toolsEnabled ?: false,
-                            agent?.toolsConfig ?: emptyMap()
-                        )
-                    },
                     onMasterChange = viewModel::onToolsValueChange,
                     onToolEnabledChange = viewModel::onToolEnabledChange
                 )
@@ -521,22 +525,18 @@ private fun ReasoningEffortOverrideDropdown(
 }
 
 /**
- * 会话级工具配置子页：总开关 + 每工具开关列表，整体包在左右滑动覆盖手势里——
- * 右滑开启覆盖后，这里的配置即为本会话的生效值；左滑（或蒙层状态下右滑前）
- * 恢复跟随 Agent。「默认全开」以缺失键表达：[ConversationSettingsUiState.overrideToolsConfig]
+ * 会话级工具配置子页：总开关 + 每工具开关列表的纯编辑视图。右滑开启/左滑
+ * 恢复的覆盖手势在主页面的工具入口行上（与其他覆盖行一致），子页只在覆盖
+ * 已开启时可进入。「默认全开」以缺失键表达：[ConversationSettingsUiState.overrideToolsConfig]
  * 只记录显式关闭的工具，之后新增的工具自动可用。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConversationToolsPage(
-    overriding: Boolean,
     masterValue: Boolean,
     config: Map<String, Boolean>,
-    agentMasterValue: Boolean,
-    agentConfig: Map<String, Boolean>?,
     tools: List<ChatTool>,
     onBack: () -> Unit,
-    onOverrideChange: (Boolean) -> Unit,
     onMasterChange: (Boolean) -> Unit,
     onToolEnabledChange: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -569,54 +569,39 @@ private fun ConversationToolsPage(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            SwipeOverrideTarget(
-                enabled = overriding,
-                onEnabledChange = onOverrideChange
-            ) {
-                // SwipeOverrideTarget 的内容容器是 Box（子元素层叠），卡片列表
-                // 必须显式纵排。
-                Column {
-                    ToolToggleCard(
-                        title = stringResource(Res.string.agent_edit_enable_tools),
-                        subtitle = null,
-                        checked = if (overriding) masterValue else agentMasterValue,
-                        enabled = overriding,
-                        onCheckedChange = onMasterChange
-                    )
+            ToolToggleCard(
+                title = stringResource(Res.string.agent_edit_enable_tools),
+                subtitle = null,
+                checked = masterValue,
+                onCheckedChange = onMasterChange
+            )
 
-                    if (tools.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.agent_edit_tools_empty),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        tools.forEach { tool ->
-                            ToolToggleCard(
-                                title = tool.name,
-                                // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
-                                subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
-                                    stringResource(Res.string.tool_terminal_desc)
-                                } else {
-                                    tool.description
-                                },
-                                checked = if (overriding) {
-                                    config[tool.name] ?: true
-                                } else {
-                                    agentConfig?.get(tool.name) ?: true
-                                },
-                                enabled = overriding,
-                                onCheckedChange = { onToolEnabledChange(tool.name, it) }
-                            )
-                        }
-                    }
+            if (tools.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = stringResource(Res.string.agent_edit_tools_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                tools.forEach { tool ->
+                    ToolToggleCard(
+                        title = tool.name,
+                        // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
+                        subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
+                            stringResource(Res.string.tool_terminal_desc)
+                        } else {
+                            tool.description
+                        },
+                        checked = config[tool.name] ?: true,
+                        onCheckedChange = { onToolEnabledChange(tool.name, it) }
+                    )
                 }
             }
         }
