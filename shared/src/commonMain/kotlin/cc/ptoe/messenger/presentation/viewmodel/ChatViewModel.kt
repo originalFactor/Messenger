@@ -44,6 +44,7 @@ import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
+import cc.ptoe.messenger.domain.tool.WorkspaceTool
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -73,6 +74,16 @@ import cc.ptoe.messenger.generated.resources.error_no_available_model
 import cc.ptoe.messenger.generated.resources.error_read_image_failed
 import cc.ptoe.messenger.generated.resources.error_tool_rounds_exceeded
 import cc.ptoe.messenger.generated.resources.error_unknown
+import cc.ptoe.messenger.generated.resources.tool_confirm_allow
+import cc.ptoe.messenger.generated.resources.tool_confirm_deny
+import cc.ptoe.messenger.generated.resources.tool_confirm_message
+import cc.ptoe.messenger.generated.resources.tool_confirm_message_generic
+import cc.ptoe.messenger.generated.resources.tool_confirm_message_write
+import cc.ptoe.messenger.generated.resources.tool_confirm_scope
+import cc.ptoe.messenger.generated.resources.tool_confirm_title
+import cc.ptoe.messenger.generated.resources.tool_confirm_title_create
+import cc.ptoe.messenger.generated.resources.tool_confirm_title_edit
+import cc.ptoe.messenger.generated.resources.tool_confirm_title_generic
 import cc.ptoe.messenger.generated.resources.tool_denied_result
 import cc.ptoe.messenger.generated.resources.tool_interrupted_result
 import cc.ptoe.messenger.generated.resources.tool_unknown_tool
@@ -206,7 +217,11 @@ class ChatViewModel(
         val callId: String,
         val toolName: String,
         /** 解析后的命令文本（用于确认框展示）。 */
-        val command: String
+        val command: String,
+        /** 弹窗文案按工具类型解析（弹窗只在可写模式出现，无只读语境）。 */
+        val title: String,
+        val message: String,
+        val scope: String? = null
     )
 
     private val _pendingToolConfirmation = MutableStateFlow<PendingToolConfirmation?>(null)
@@ -670,7 +685,11 @@ class ChatViewModel(
                 // 只读策略；可写时终端解除策略、写入类工具恢复声明。
                 val toolsForRequest = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
                     val enabledTools = builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
-                    if (agentWritable.value) {
+                    // 发送时的会话快照（launchChatTurn 的 conversation 参数来自
+                    // 发送时的新鲜 DB 读取）。agentWritable StateFlow 由 UI 订阅
+                    // 驱动（WhileSubscribed 5 秒无订阅即重置），App 切后台后其
+                    // .value 会退回 false，不能作为回合内的模式决策依据。
+                    if (conversation.writable) {
                         enabledTools.map { tool ->
                             if (tool is TerminalTool) TerminalTool(enforceReadOnly = false) else tool
                         }
@@ -869,11 +888,15 @@ class ChatViewModel(
         }
         for (call in calls) {
             val tool = toolsByName[call.name]
+            // 可写状态每次从数据库读取权威值：agentWritable StateFlow 由 UI
+            // 订阅驱动（WhileSubscribed 5 秒无订阅即重置为 false），回合期间
+            // App 切后台会让 .value 误报只读，跳过确认框直接执行工具。
+            val writable = conversationRepository.getById(conversationId).first()?.writable ?: false
             // 可写模式 = 手动执行：需确认的工具逐次弹框；只读模式 = 沙箱内自动执行
-            val allowed = if (tool == null || !agentWritable.value || !tool.requiresUserConfirmation) {
+            val allowed = if (tool == null || !writable || !tool.requiresUserConfirmation) {
                 true
             } else {
-                awaitToolConfirmation(call)
+                awaitToolConfirmation(call, tool)
             }
             val row = Message(
                 id = randomUuid(),
@@ -931,13 +954,30 @@ class ChatViewModel(
     }
 
     /** 手动确认：展示命令并挂起等待用户选择；取消时清理弹窗状态后传播。 */
-    private suspend fun awaitToolConfirmation(call: ToolCallData): Boolean {
+    private suspend fun awaitToolConfirmation(call: ToolCallData, tool: ChatTool): Boolean {
         val deferred = CompletableDeferred<Boolean>()
+        // 弹窗只在可写模式出现：此时终端已解除只读策略、编辑/创建会写入
+        // 工作区，文案按工具类型区分（不再沿用旧的「只读命令」措辞）。
+        val (titleRes, messageRes) = when (tool.name) {
+            WorkspaceTool.CREATE ->
+                Res.string.tool_confirm_title_create to Res.string.tool_confirm_message_write
+            WorkspaceTool.EDIT ->
+                Res.string.tool_confirm_title_edit to Res.string.tool_confirm_message_write
+            else ->
+                if (tool is TerminalTool) {
+                    Res.string.tool_confirm_title to Res.string.tool_confirm_message
+                } else {
+                    Res.string.tool_confirm_title_generic to Res.string.tool_confirm_message_generic
+                }
+        }
         toolConfirmationDeferred = deferred
         _pendingToolConfirmation.value = PendingToolConfirmation(
             callId = call.callId,
             toolName = call.name,
-            command = TerminalTool.parseCommand(call.arguments) ?: call.arguments
+            command = TerminalTool.parseCommand(call.arguments) ?: call.arguments,
+            title = getString(titleRes),
+            message = getString(messageRes),
+            scope = if (tool is TerminalTool) getString(Res.string.tool_confirm_scope) else null
         )
         try {
             return deferred.await()

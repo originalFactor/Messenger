@@ -389,9 +389,14 @@
     <string name="datetime_pattern_other_year">yyyy年M月d日</string>
 
     <!-- 内置工具（终端） -->
-    <string name="tool_confirm_title">执行只读终端命令</string>
-    <string name="tool_confirm_message">模型请求执行以下只读命令：</string>
-    <string name="tool_confirm_scope">此命令只能读取 Messenger 的应用私有工作区；修改文件请使用工作区编辑/创建工具。</string>
+    <string name="tool_confirm_title">执行终端命令</string>
+    <string name="tool_confirm_message">模型请求执行以下命令：</string>
+    <string name="tool_confirm_scope">命令在 Messenger Runtime 沙箱内执行，可能修改工作区文件。</string>
+    <string name="tool_confirm_title_create">创建工作区文件</string>
+    <string name="tool_confirm_title_edit">编辑工作区文件</string>
+    <string name="tool_confirm_message_write">模型请求执行以下工作区操作：</string>
+    <string name="tool_confirm_title_generic">执行工具</string>
+    <string name="tool_confirm_message_generic">模型请求调用以下工具：</string>
     <string name="tool_confirm_allow">允许</string>
     <string name="tool_confirm_deny">拒绝</string>
     <string name="tool_denied_result">用户拒绝执行该命令。</string>

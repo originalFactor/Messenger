@@ -390,9 +390,14 @@
     <string name="datetime_pattern_other_year">MMM d, yyyy</string>
 
     <!-- Built-in tools (terminal) -->
-    <string name="tool_confirm_title">Run read-only terminal command</string>
-    <string name="tool_confirm_message">The model wants to run the following read-only command:</string>
-    <string name="tool_confirm_scope">This command reads only from Messenger's private workspace; use workspace edit/create for file changes.</string>
+    <string name="tool_confirm_title">Run terminal command</string>
+    <string name="tool_confirm_message">The model wants to run the following command:</string>
+    <string name="tool_confirm_scope">The command runs inside Messenger's runtime sandbox and may modify workspace files.</string>
+    <string name="tool_confirm_title_create">Create workspace file</string>
+    <string name="tool_confirm_title_edit">Edit workspace file</string>
+    <string name="tool_confirm_message_write">The model wants to perform the following workspace operation:</string>
+    <string name="tool_confirm_title_generic">Run tool</string>
+    <string name="tool_confirm_message_generic">The model wants to call the following tool:</string>
     <string name="tool_confirm_allow">Allow</string>
     <string name="tool_confirm_deny">Deny</string>
     <string name="tool_denied_result">The user denied this command.</string>

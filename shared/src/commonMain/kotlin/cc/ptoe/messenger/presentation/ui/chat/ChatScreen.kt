@@ -104,9 +104,6 @@ import cc.ptoe.messenger.generated.resources.chat_title_default
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
 import cc.ptoe.messenger.generated.resources.tool_confirm_allow
 import cc.ptoe.messenger.generated.resources.tool_confirm_deny
-import cc.ptoe.messenger.generated.resources.tool_confirm_title
-import cc.ptoe.messenger.generated.resources.tool_confirm_message
-import cc.ptoe.messenger.generated.resources.tool_confirm_scope
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -489,15 +486,10 @@ fun ChatScreen(
     pendingToolConfirmation?.let { pending ->
         AlertDialog(
             onDismissRequest = { viewModel.confirmToolExecution(false) },
-            title = { Text(stringResource(Res.string.tool_confirm_title)) },
+            title = { Text(pending.title) },
             text = {
                 Column {
-                    Text(stringResource(Res.string.tool_confirm_message))
-                    Text(
-                        text = stringResource(Res.string.tool_confirm_scope),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(pending.message)
                     Text(
                         text = pending.command,
                         style = MaterialTheme.typography.bodySmall,
@@ -509,6 +501,13 @@ fun ChatScreen(
                             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     )
+                    pending.scope?.let { scope ->
+                        Text(
+                            text = scope,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             },
             confirmButton = {
