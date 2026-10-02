@@ -93,7 +93,8 @@ class AppContainer(
             MessengerDatabase.MIGRATION_14_15,
             MessengerDatabase.MIGRATION_15_16,
             MessengerDatabase.MIGRATION_16_17,
-            MessengerDatabase.MIGRATION_17_18
+            MessengerDatabase.MIGRATION_17_18,
+            MessengerDatabase.MIGRATION_18_19
         )
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()

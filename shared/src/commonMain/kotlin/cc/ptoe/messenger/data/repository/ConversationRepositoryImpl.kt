@@ -18,6 +18,7 @@ package cc.ptoe.messenger.data.repository
 
 import cc.ptoe.messenger.data.local.dao.ConversationDao
 import cc.ptoe.messenger.data.local.entity.ConversationEntity
+import cc.ptoe.messenger.data.util.ToolsConfigCodec
 import cc.ptoe.messenger.domain.model.Conversation
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import kotlinx.coroutines.flow.Flow
@@ -78,6 +79,7 @@ class ConversationRepositoryImpl(
             overrideMaxTokens = overrideMaxTokens,
             overrideReasoningEffort = overrideReasoningEffort,
             overrideToolsEnabled = overrideToolsEnabled,
+            overrideToolsConfig = overrideToolsConfig?.let(ToolsConfigCodec::decode),
             writable = writable,
             createdAt = createdAt,
             updatedAt = updatedAt,
@@ -102,6 +104,7 @@ class ConversationRepositoryImpl(
             overrideMaxTokens = overrideMaxTokens,
             overrideReasoningEffort = overrideReasoningEffort,
             overrideToolsEnabled = overrideToolsEnabled,
+            overrideToolsConfig = overrideToolsConfig?.let(ToolsConfigCodec::encode),
             writable = writable,
             createdAt = createdAt,
             updatedAt = updatedAt,

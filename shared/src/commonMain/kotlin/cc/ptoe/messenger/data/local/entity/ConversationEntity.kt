@@ -45,6 +45,8 @@ data class ConversationEntity(
     val overrideReasoningEffort: String? = null,
     /** 工具总开关的会话级覆盖（null = 跟随 Agent 生效值）。 */
     val overrideToolsEnabled: Boolean? = null,
+    /** 每工具开关的会话级覆盖 JSON（null = 跟随 Agent；空对象 = 默认全开）。 */
+    val overrideToolsConfig: String? = null,
     /** 本会话的 Agent 模式（只读/可写）。 */
     val writable: Boolean = false,
     val createdAt: Long,

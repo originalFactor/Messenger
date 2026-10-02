@@ -28,6 +28,11 @@ data class Conversation(
     val overrideReasoningEffort: String? = null,
     /** 工具总开关的会话级覆盖；null = 跟随 Agent 生效值。 */
     val overrideToolsEnabled: Boolean? = null,
+    /**
+     * 每工具开关的会话级覆盖（工具函数名 → 是否启用）。null = 跟随 Agent
+     * 的每工具配置；缺失键视为开启（默认全开），与 Agent.toolsConfig 同语义。
+     */
+    val overrideToolsConfig: Map<String, Boolean>? = null,
     /** 本会话的 Agent 模式（只读/可写），由聊天输入栏 "+" 面板切换。 */
     val writable: Boolean = false,
     val createdAt: Long,

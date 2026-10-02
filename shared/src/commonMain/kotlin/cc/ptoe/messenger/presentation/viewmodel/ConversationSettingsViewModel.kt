@@ -58,9 +58,10 @@ data class ConversationSettingsUiState(
     // Max Tokens override（null 值表示"不限"，需用 boolean 跟踪开关）
     val overrideMaxTokensEnabled: Boolean = false,
     val overrideMaxTokensValue: Int? = null,
-    // 工具总开关 override（开关与值解耦：值本身就是 boolean）
+    // 工具覆盖（开关与值解耦：值本身就是 boolean；每工具配置缺失键 = 开启）
     val overrideToolsEnabled: Boolean = false,
     val overrideToolsValue: Boolean = false,
+    val overrideToolsConfig: Map<String, Boolean> = emptyMap(),
     val selectedProviderId: String? = null,
     val isSaved: Boolean = false
 )
@@ -131,6 +132,7 @@ class ConversationSettingsViewModel(
                     overrideMaxTokensValue = conv.overrideMaxTokens,
                     overrideToolsEnabled = conv.overrideToolsEnabled != null,
                     overrideToolsValue = conv.overrideToolsEnabled ?: false,
+                    overrideToolsConfig = conv.overrideToolsConfig ?: emptyMap(),
                     selectedProviderId = conv.overrideModelId?.let { modelId ->
                         modelRepository.getAll().first().find { it.id == modelId }?.providerId
                     } ?: defaultProviderId
@@ -219,15 +221,26 @@ class ConversationSettingsViewModel(
         _uiState.value = _uiState.value.copy(overrideMaxTokensValue = value)
     }
 
-    fun onOverrideToolsChange(override: Boolean, value: Boolean = false) {
+    fun onOverrideToolsChange(override: Boolean, value: Boolean = false, config: Map<String, Boolean> = emptyMap()) {
         _uiState.value = _uiState.value.copy(
             overrideToolsEnabled = override,
-            overrideToolsValue = if (override) value else false
+            overrideToolsValue = if (override) value else false,
+            overrideToolsConfig = if (override) config else emptyMap()
         )
     }
 
     fun onToolsValueChange(value: Boolean) {
         _uiState.value = _uiState.value.copy(overrideToolsValue = value)
+    }
+
+    /**
+     * 单工具开关：缺失键即开启（默认全开），因此只记录显式关闭的工具，
+     * 与 [cc.ptoe.messenger.domain.model.Agent.toolsConfig] 同语义。
+     */
+    fun onToolEnabledChange(toolName: String, enabled: Boolean) {
+        val config = _uiState.value.overrideToolsConfig.toMutableMap()
+        if (enabled) config.remove(toolName) else config[toolName] = false
+        _uiState.value = _uiState.value.copy(overrideToolsConfig = config)
     }
 
     fun save() {
@@ -243,6 +256,7 @@ class ConversationSettingsViewModel(
                     overrideReasoningEffort = if (state.overrideReasoningEffortEnabled) state.overrideReasoningEffortValue else null,
                     overrideMaxTokens = if (state.overrideMaxTokensEnabled) state.overrideMaxTokensValue else null,
                     overrideToolsEnabled = if (state.overrideToolsEnabled) state.overrideToolsValue else null,
+                    overrideToolsConfig = if (state.overrideToolsEnabled) state.overrideToolsConfig else null,
                     updatedAt = now
                 )
             )

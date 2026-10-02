@@ -39,7 +39,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -128,6 +128,18 @@ abstract class MessengerDatabase : RoomDatabase() {
                 ).step()
                 connection.prepare(
                     "ALTER TABLE conversations ADD COLUMN writable INTEGER NOT NULL DEFAULT 0"
+                ).step()
+            }
+        }
+
+        /**
+         * v19：conversations 表新增 overrideToolsConfig（每工具开关会话级覆盖的
+         * JSON，null = 跟随 Agent 的每工具配置）。该列晚于 v18 发布，故独立迁移。
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE conversations ADD COLUMN overrideToolsConfig TEXT"
                 ).step()
             }
         }

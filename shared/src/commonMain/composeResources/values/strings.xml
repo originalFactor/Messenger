@@ -184,9 +184,6 @@
     <string name="conversation_settings_override_desc">When enabled, the following parameters will override the Agent settings for this conversation</string>
     <string name="conversation_settings_override_active">Using the Agent value</string>
     <string name="conversation_settings_override_hint">Swipe right to override · swipe left to use the Agent value</string>
-    <string name="conversation_settings_tools_label">Tools</string>
-    <string name="conversation_settings_tools_on">Enabled</string>
-    <string name="conversation_settings_tools_off">Disabled</string>
     <string name="conversation_settings_temperature_value">Temperature: %1$s</string>
     <string name="conversation_settings_top_p_value">Top P: %1$s</string>
     <string name="conversation_settings_no_provider">No provider yet, please add one in Settings</string>

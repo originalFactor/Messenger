@@ -269,7 +269,8 @@ class ChatViewModel(
             topP = conversation.overrideTopP ?: agentWithDefault.topP,
             maxTokens = conversation.overrideMaxTokens ?: agentWithDefault.maxTokens,
             reasoningEffort = conversation.overrideReasoningEffort ?: agentWithDefault.reasoningEffort,
-            toolsEnabled = conversation.overrideToolsEnabled ?: agentWithDefault.toolsEnabled
+            toolsEnabled = conversation.overrideToolsEnabled ?: agentWithDefault.toolsEnabled,
+            toolsConfig = conversation.overrideToolsConfig ?: agentWithDefault.toolsConfig
         )
     }
 

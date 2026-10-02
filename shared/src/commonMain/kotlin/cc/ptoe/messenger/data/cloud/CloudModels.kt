@@ -132,6 +132,8 @@ data class CloudConversationDocument(
     val overrideReasoningEffort: String? = null,
     /** 工具总开关的会话级覆盖；旧服务端/客户端缺省 null = 跟随 Agent。 */
     val overrideToolsEnabled: Boolean? = null,
+    /** 每工具开关的会话级覆盖（缺失键 = 开启）；旧字段缺省 null = 跟随 Agent。 */
+    val overrideToolsConfig: Map<String, Boolean>? = null,
     /** 本会话的 Agent 模式（只读/可写）；旧字段缺省 false = 只读。 */
     val writable: Boolean = false,
     val reasoningFormat: String? = null,

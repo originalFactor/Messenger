@@ -130,6 +130,7 @@ internal data class CloudConversationRequest(
     val overrideMaxTokens: Int?,
     val overrideReasoningEffort: String?,
     val overrideToolsEnabled: Boolean? = null,
+    val overrideToolsConfig: Map<String, Boolean>? = null,
     val writable: Boolean = false,
     val reasoningFormat: String?,
     val contextSummary: String? = null,
