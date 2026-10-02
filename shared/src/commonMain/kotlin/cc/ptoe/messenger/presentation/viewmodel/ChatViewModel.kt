@@ -884,6 +884,9 @@ class ChatViewModel(
                 timestamp = nextTimestamp(),
                 status = MessageStatus.SENDING
             )
+            // 先落库「运行中」行：finishToolMessage 只做 update（Room 对
+            // 不存在的行是 no-op），不先 insert 结果行就永远不会写进历史。
+            messageRepository.insert(row)
             when {
                 tool == null -> finishToolMessage(
                     row,
