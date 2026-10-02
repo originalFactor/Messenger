@@ -13,17 +13,12 @@ package cc.ptoe.messenger.domain.tool
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WorkspaceToolTest {
     @Test
-    fun `workspace tools expose bounded schemas and confirmation policy`() {
+    fun `workspace tools expose bounded schemas`() {
         assertEquals(listOf("glob", "grep", "read", "edit", "create"), WorkspaceTool.all.map { it.name })
-        assertFalse(WorkspaceTool(WorkspaceTool.GLOB).requiresUserConfirmation)
-        assertFalse(WorkspaceTool(WorkspaceTool.READ).requiresUserConfirmation)
-        assertTrue(WorkspaceTool(WorkspaceTool.EDIT).requiresUserConfirmation)
-        assertTrue(WorkspaceTool(WorkspaceTool.CREATE).requiresUserConfirmation)
     }
 
     @Test

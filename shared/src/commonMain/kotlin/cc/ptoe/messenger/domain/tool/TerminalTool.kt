@@ -45,8 +45,6 @@ class TerminalTool(
                 "The command can create, modify, or delete files inside the workspace."
         }
 
-    override val requiresUserConfirmation: Boolean = true
-
     override val parametersJson: String =
         if (enforceReadOnly) {
             """{"type":"object","properties":{"command":{"type":"string",""" +

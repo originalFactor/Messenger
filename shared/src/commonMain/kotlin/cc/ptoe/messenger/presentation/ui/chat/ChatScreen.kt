@@ -102,8 +102,6 @@ import cc.ptoe.messenger.generated.resources.chat_no_model_title
 import cc.ptoe.messenger.generated.resources.chat_start_hint
 import cc.ptoe.messenger.generated.resources.chat_title_default
 import cc.ptoe.messenger.generated.resources.conversation_settings_title
-import cc.ptoe.messenger.generated.resources.tool_confirm_allow
-import cc.ptoe.messenger.generated.resources.tool_confirm_deny
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -140,7 +138,6 @@ fun ChatScreen(
     val streamingContent by viewModel.streamingContent.collectAsStateWithLifecycle()
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
-    val pendingToolConfirmation by viewModel.pendingToolConfirmation.collectAsStateWithLifecycle()
     val agentWritable by viewModel.agentWritable.collectAsStateWithLifecycle()
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
@@ -477,47 +474,6 @@ fun ChatScreen(
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissModelSetupPrompt() }) {
                     Text(stringResource(Res.string.action_cancel))
-                }
-            }
-        )
-    }
-
-    // 工具执行手动确认框（拒绝也会作为结果回传给模型，必须显式二选一）
-    pendingToolConfirmation?.let { pending ->
-        AlertDialog(
-            onDismissRequest = { viewModel.confirmToolExecution(false) },
-            title = { Text(pending.title) },
-            text = {
-                Column {
-                    Text(pending.message)
-                    Text(
-                        text = pending.command,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    )
-                    pending.scope?.let { scope ->
-                        Text(
-                            text = scope,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.confirmToolExecution(true) }) {
-                    Text(stringResource(Res.string.tool_confirm_allow))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.confirmToolExecution(false) }) {
-                    Text(stringResource(Res.string.tool_confirm_deny))
                 }
             }
         )

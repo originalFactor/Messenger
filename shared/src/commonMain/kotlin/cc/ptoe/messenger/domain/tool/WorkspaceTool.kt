@@ -29,8 +29,6 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
         else -> error("Unknown workspace tool: $operationName")
     }
 
-    override val requiresUserConfirmation: Boolean = name == EDIT || name == CREATE
-
     override val writeAccess: Boolean get() = name == EDIT || name == CREATE
 
     override val parametersJson: String = SCHEMAS.getValue(name)

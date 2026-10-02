@@ -29,13 +29,6 @@ interface ChatTool {
     val description: String
 
     /**
-     * Shell-like and file-writing tools stay behind an explicit approval
-     * gate. The gate is enforced in writable Agent mode only; read-only mode
-     * runs tools automatically inside the sandbox.
-     */
-    val requiresUserConfirmation: Boolean get() = false
-
-    /**
      * True when the tool can modify files or system state (workspace
      * edit/create). Such tools are only offered to the model in writable
      * Agent mode; read-only mode excludes them.

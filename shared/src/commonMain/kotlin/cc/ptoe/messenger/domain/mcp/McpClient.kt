@@ -341,7 +341,6 @@ class McpChatTool(
 ) : ChatTool {
     override val name: String = "${serverName}_${toolDef.name}"
     override val description: String = toolDef.description ?: "MCP tool ${toolDef.name} from $serverName"
-    override val requiresUserConfirmation: Boolean = false
     override val parametersJson: String = toolDef.inputSchema.toString()
 
     override suspend fun execute(argumentsJson: String): ToolExecutionResult {
