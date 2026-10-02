@@ -43,12 +43,15 @@ data class ToolCallFunctionDto(
 )
 
 /**
- * Tool schema advertised in the request `tools` array. [parameters] carries
- * the raw JSON Schema object for the function arguments.
+ * Tool schema advertised in the request `tools` array. [type] MUST be sent
+ * on the wire ("function") — OpenAI-compatible backends silently drop
+ * type-less tool entries, so it is a required parameter (a default value
+ * would be omitted by kotlinx.serialization's encodeDefaults=false).
+ * [parameters] carries the raw JSON Schema object for the function arguments.
  */
 @Serializable
 data class ToolSpecDto(
-    @SerialName("type") val type: String = "function",
+    @SerialName("type") val type: String,
     @SerialName("function") val function: ToolSpecFunctionDto
 )
 
