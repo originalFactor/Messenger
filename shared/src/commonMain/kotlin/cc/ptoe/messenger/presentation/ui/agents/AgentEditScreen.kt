@@ -1040,46 +1040,50 @@ private fun AgentToolsPage(
                 followed = following,
                 onFollowChange = onToolsFollowDefaultChange
             ) {
-                ToolToggleCard(
-                    title = stringResource(Res.string.agent_edit_enable_tools),
-                    subtitle = null,
-                    checked = toolsMasterChecked,
-                    enabled = state.toolsEnabled && !following,
-                    onCheckedChange = onToolsEnabledChange
-                )
+                // FollowableTarget 的内容容器是 Box（子元素层叠），卡片列表
+                // 必须显式纵排。
+                Column {
+                    ToolToggleCard(
+                        title = stringResource(Res.string.agent_edit_enable_tools),
+                        subtitle = null,
+                        checked = toolsMasterChecked,
+                        enabled = state.toolsEnabled && !following,
+                        onCheckedChange = onToolsEnabledChange
+                    )
 
-                if (tools.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.agent_edit_tools_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    tools.forEach { tool ->
-                        val checked = if (following) {
-                            state.defaultAgent?.toolsConfig?.get(tool.name) ?: true
-                        } else {
-                            state.toolsConfig[tool.name] ?: true
+                    if (tools.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.agent_edit_tools_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        ToolToggleCard(
-                            title = tool.name,
-                            // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
-                            subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
-                                stringResource(Res.string.tool_terminal_desc)
+                    } else {
+                        tools.forEach { tool ->
+                            val checked = if (following) {
+                                state.defaultAgent?.toolsConfig?.get(tool.name) ?: true
                             } else {
-                                tool.description
-                            },
-                            checked = checked,
-                            enabled = state.toolsEnabled && !following,
-                            onCheckedChange = { onToolEnabledChange(tool.name, it) }
-                        )
+                                state.toolsConfig[tool.name] ?: true
+                            }
+                            ToolToggleCard(
+                                title = tool.name,
+                                // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
+                                subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
+                                    stringResource(Res.string.tool_terminal_desc)
+                                } else {
+                                    tool.description
+                                },
+                                checked = checked,
+                                enabled = state.toolsEnabled && !following,
+                                onCheckedChange = { onToolEnabledChange(tool.name, it) }
+                            )
+                        }
                     }
                 }
             }

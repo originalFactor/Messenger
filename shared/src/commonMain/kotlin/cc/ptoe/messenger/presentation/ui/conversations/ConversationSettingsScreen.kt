@@ -573,45 +573,49 @@ private fun ConversationToolsPage(
                 enabled = overriding,
                 onEnabledChange = onOverrideChange
             ) {
-                ToolToggleCard(
-                    title = stringResource(Res.string.agent_edit_enable_tools),
-                    subtitle = null,
-                    checked = if (overriding) masterValue else agentMasterValue,
-                    enabled = overriding,
-                    onCheckedChange = onMasterChange
-                )
+                // SwipeOverrideTarget 的内容容器是 Box（子元素层叠），卡片列表
+                // 必须显式纵排。
+                Column {
+                    ToolToggleCard(
+                        title = stringResource(Res.string.agent_edit_enable_tools),
+                        subtitle = null,
+                        checked = if (overriding) masterValue else agentMasterValue,
+                        enabled = overriding,
+                        onCheckedChange = onMasterChange
+                    )
 
-                if (tools.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.agent_edit_tools_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    tools.forEach { tool ->
-                        ToolToggleCard(
-                            title = tool.name,
-                            // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
-                            subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
-                                stringResource(Res.string.tool_terminal_desc)
-                            } else {
-                                tool.description
-                            },
-                            checked = if (overriding) {
-                                config[tool.name] ?: true
-                            } else {
-                                agentConfig?.get(tool.name) ?: true
-                            },
-                            enabled = overriding,
-                            onCheckedChange = { onToolEnabledChange(tool.name, it) }
-                        )
+                    if (tools.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.agent_edit_tools_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        tools.forEach { tool ->
+                            ToolToggleCard(
+                                title = tool.name,
+                                // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
+                                subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
+                                    stringResource(Res.string.tool_terminal_desc)
+                                } else {
+                                    tool.description
+                                },
+                                checked = if (overriding) {
+                                    config[tool.name] ?: true
+                                } else {
+                                    agentConfig?.get(tool.name) ?: true
+                                },
+                                enabled = overriding,
+                                onCheckedChange = { onToolEnabledChange(tool.name, it) }
+                            )
+                        }
                     }
                 }
             }
