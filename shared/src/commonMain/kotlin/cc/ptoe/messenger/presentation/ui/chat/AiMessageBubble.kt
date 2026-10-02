@@ -48,6 +48,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cc.ptoe.llmtypewriter.LlmTypewriterDefaults
+import cc.ptoe.llmtypewriter.MarkdownToolCallRenderer
 import cc.ptoe.llmtypewriter.SpeedCurve
 import cc.ptoe.llmtypewriter.StreamingTypewriter
 import cc.ptoe.llmtypewriter.StreamingTypewriterState
@@ -79,10 +81,16 @@ fun AiMessageBubble(
     streamingContent: String? = null,
     streamingMessageId: String? = null,
     /**
-     * 内联在气泡内、正文之后的附加内容（如工具调用卡片）。提供时正文为空
-     * 不再显示输入指示 — 气泡仍由附加内容撑起（如只有工具调用的轮次）。
+     * 静态渲染内容覆盖：工具轮把 `<tool_call>` 流内标记追加到轮内文本后传入，
+     * 让卡片成为 llm-typewriter 内容流的一部分。为 null 时渲染已持久化的
+     * message.content。
      */
-    inlineContent: (@Composable () -> Unit)? = null
+    displayContent: String? = null,
+    /**
+     * llm-typewriter 的 `<tool_call>` 块渲染钩子：提供后内容流中的工具调用
+     * 标记由该钩子就地渲染成卡片（渲染在 Agent 发起调用的流内位置）。
+     */
+    toolCallRenderer: MarkdownToolCallRenderer? = null
 ) {
     val isError = message.status == MessageStatus.ERROR
     val bubbleColor = if (isError) {
@@ -107,8 +115,13 @@ fun AiMessageBubble(
     val isLiveStream = streamingContent != null &&
         streamingMessageId != null &&
         message.id == streamingMessageId
-    // 渲染内容：live 流式读 streamingContent（随 SSE token 即时增长），否则读已持久化内容
-    val textForRender = if (isLiveStream) streamingContent.orEmpty() else message.content
+    // 渲染内容：live 流式读 streamingContent（随 SSE token 即时增长），否则读
+    // displayContent（工具轮的标记流）或已持久化内容
+    val textForRender = if (isLiveStream) {
+        streamingContent.orEmpty()
+    } else {
+        displayContent ?: message.content
+    }
 
     Column(
         modifier = modifier
@@ -127,46 +140,52 @@ fun AiMessageBubble(
                 modifier = Modifier
                     .clip(bubbleShape)
                     .background(bubbleColor)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
-                Column {
-                    if (isError) {
-                        ErrorContent(
-                            message = message,
-                            textColor = textColor,
-                            onRetryClick = onRetryClick
-                        )
-                    } else if (textForRender.isNotEmpty() || isLiveStream) {
-                        // token 即时绘制（无打字机动画）：live 流式内容读 streamingContent，
-                        // 结束后回退到已持久化的 message.content。状态预填充 + skipToEnd +
-                        // baseDelayMs=0 即立即渲染全文，且仅增长的尾部块随 token 重解析。
-                        if (textForRender.isEmpty() && isLiveStream) {
-                            // 尚未收到首个 token：显示三点输入指示
-                            TypingIndicator()
-                        } else {
-                            val state = remember(message.id, textForRender) {
-                                StreamingTypewriterState().apply {
-                                    if (textForRender.isNotEmpty()) {
-                                        appendToken(textForRender)
-                                        completeSource()
-                                        skipToEnd()
-                                    }
+                if (isError) {
+                    ErrorContent(
+                        message = message,
+                        textColor = textColor,
+                        onRetryClick = onRetryClick
+                    )
+                } else if (textForRender.isNotEmpty() || isLiveStream) {
+                    // token 即时绘制（无打字机动画）：live 流式内容读 streamingContent，
+                    // 结束后回退到已持久化的 message.content。状态预填充 + skipToEnd +
+                    // baseDelayMs=0 即立即渲染全文，且仅增长的尾部块随 token 重解析。
+                    if (textForRender.isEmpty() && isLiveStream) {
+                        // 尚未收到首个 token：显示三点输入指示
+                        TypingIndicator()
+                    } else {
+                        val state = remember(message.id, textForRender) {
+                            StreamingTypewriterState().apply {
+                                if (textForRender.isNotEmpty()) {
+                                    appendToken(textForRender)
+                                    completeSource()
+                                    skipToEnd()
                                 }
                             }
-                            val renderer = rememberMarkdownTypewriterRenderer(state)
-                            StreamingTypewriter(
-                                tokens = emptyFlow(),
-                                state = state,
-                                renderer = renderer,
-                                baseDelayMs = 0L,
-                                speedCurve = SpeedCurve.Linear,
-                                tapToSkip = false
-                            )
                         }
-                    } else if (inlineContent == null) {
-                        TypingIndicator()
+                        // toolCallRenderer 挂到 MarkdownStyles 上（钩子是行为参数，
+                        // MarkdownStyles 的自定义 equals 不参与比较，不影响渲染器缓存）
+                        val styles = if (toolCallRenderer != null) {
+                            LlmTypewriterDefaults.markdownStyles()
+                                .copy(toolCallRenderer = toolCallRenderer)
+                        } else {
+                            LlmTypewriterDefaults.markdownStyles()
+                        }
+                        val renderer = rememberMarkdownTypewriterRenderer(state, styles)
+                        StreamingTypewriter(
+                            tokens = emptyFlow(),
+                            state = state,
+                            renderer = renderer,
+                            baseDelayMs = 0L,
+                            speedCurve = SpeedCurve.Linear,
+                            tapToSkip = false
+                        )
                     }
-                    inlineContent?.invoke()
+                } else {
+                    TypingIndicator()
                 }
             }
         }

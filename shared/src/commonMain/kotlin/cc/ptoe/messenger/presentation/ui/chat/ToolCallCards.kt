@@ -50,9 +50,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cc.ptoe.llmtypewriter.MarkdownToolCallRenderer
 import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
-import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.tool_card_failed
@@ -60,12 +60,21 @@ import cc.ptoe.messenger.generated.resources.tool_card_result_label
 import cc.ptoe.messenger.generated.resources.tool_card_running
 import cc.ptoe.messenger.generated.resources.tool_card_success
 import cc.ptoe.messenger.generated.resources.tool_name_terminal
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.compose.resources.stringResource
 
 /**
  * 一组工具调用卡片：assistant 工具轮消息 + 紧随的 TOOL 结果行合并渲染。
- * 工具卡片内联在 Agent 发起调用的那轮 AI 气泡内（轮内文本之后）；
- * [assistant] 为 null 时是孤儿 TOOL 行的兜底展示（无气泡可挂，退回独立卡片）。
+ * 每个调用以 `<tool_call>` 流内标记追加到轮内文本之后，整串交给
+ * llm-typewriter 解析渲染 —— 卡片成为内容流的一部分，渲染在 Agent 发起
+ * 调用的位置。[assistant] 为 null 时是孤儿 TOOL 行的兜底展示（无气泡可挂，
+ * 退回独立卡片）。
  */
 @Composable
 fun ToolGroupItem(
@@ -74,66 +83,114 @@ fun ToolGroupItem(
     modifier: Modifier = Modifier
 ) {
     val calls = assistant?.parts?.filterIsInstance<ContentPart.ToolCall>().orEmpty()
-    val renderCalls: List<CardRender> = if (assistant == null) {
-        // 无调用记录的孤儿 TOOL 行直接渲染结果卡
-        toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
-            .map { CardRender(call = null, result = it) }
-    } else {
-        calls.map { call -> CardRender(call = call, result = toolMessages.findResult(call.callId)) }
-    }
     if (assistant == null) {
+        // 孤儿 TOOL 行（历史异常）：无 assistant 轮可挂，保持独立卡片兜底展示
+        val orphanResults = toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
         Column(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(top = 2.dp, bottom = 2.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            renderCalls.forEach { render ->
+            orphanResults.forEach { result ->
                 ToolCallCard(
-                    toolName = render.call?.name ?: render.result?.name ?: "",
-                    command = render.call?.let { TerminalTool.parseCommand(it.arguments) ?: it.arguments },
-                    result = render.result,
-                    isRunning = render.isRunning(toolMessages),
+                    toolName = result.name,
+                    command = null,
+                    result = result,
+                    isRunning = false,
                     inBubble = false,
                     modifier = Modifier.padding(start = 8.dp, end = 64.dp)
                 )
             }
         }
-    } else {
-        // 卡片嵌进工具轮气泡：水平缩进由气泡自带（start 8 / end 64），不再单独套用
-        AiMessageBubble(
-            message = assistant,
-            isLastInGroup = false,
-            modifier = modifier.fillMaxWidth(),
-            inlineContent = {
-                Column(
-                    modifier = Modifier.padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    renderCalls.forEach { render ->
-                        ToolCallCard(
-                            toolName = render.call?.name ?: render.result?.name ?: "",
-                            command = render.call?.let { TerminalTool.parseCommand(it.arguments) ?: it.arguments },
-                            result = render.result,
-                            isRunning = render.isRunning(toolMessages),
-                            inBubble = true
-                        )
-                    }
-                }
-            }
-        )
+        return
     }
+    // 标记流：轮内文本 + 每个调用一个 <tool_call> 块（段落边界分隔）。
+    // 结果实时取自 TOOL 行：已落定的行携带 output/isError，运行中/未落定的
+    // 行不带结果字段，卡片据此显示运行中状态。
+    val renderContent = buildString {
+        if (assistant.content.isNotBlank()) {
+            append(assistant.content)
+            append("\n\n")
+        }
+        calls.forEachIndexed { index, call ->
+            if (index > 0) append("\n\n")
+            append(buildToolCallMarker(call, toolMessages.findResult(call.callId)))
+        }
+    }
+    AiMessageBubble(
+        message = assistant,
+        isLastInGroup = false,
+        modifier = modifier.fillMaxWidth(),
+        displayContent = renderContent,
+        toolCallRenderer = MarkdownToolCallRenderer { payload -> ToolCallBlockCard(payload) }
+    )
 }
 
-private data class CardRender(val call: ContentPart.ToolCall?, val result: ContentPart.ToolResult?)
+/** `<tool_call>` 流内标记的载荷。[output] / [isError] 仅在结果落定时携带。 */
+internal data class ToolCallMarkerPayload(
+    val callId: String,
+    val name: String,
+    val arguments: String,
+    val output: String? = null,
+    val isError: Boolean = false
+)
 
-private fun CardRender.isRunning(toolMessages: List<Message>): Boolean {
-    if (result != null) return false
-    val callId = call?.callId ?: result?.callId
-    val source = toolMessages.firstOrNull { row ->
-        row.parts.filterIsInstance<ContentPart.ToolResult>().any { it.callId == callId }
-    } ?: return false
-    return source.status == MessageStatus.SENDING
+/**
+ * 把一次工具调用编码为 `<tool_call>{json}</tool_call>` 流内标记。JSON 转义
+ * 保证参数/输出中的引号与换行不破坏标记结构（字面 `</tool_call>` 除外，
+ * 正常工具输出不会出现）。
+ */
+internal fun buildToolCallMarker(call: ContentPart.ToolCall, result: ContentPart.ToolResult?): String {
+    val payload = buildJsonObject {
+        put("callId", JsonPrimitive(call.callId))
+        put("name", JsonPrimitive(call.name))
+        put("arguments", JsonPrimitive(call.arguments))
+        if (result != null) {
+            put("output", JsonPrimitive(result.output))
+            put("isError", JsonPrimitive(result.isError))
+        }
+    }
+    return "<tool_call>$payload</tool_call>"
+}
+
+/** 解析 `<tool_call>` 标记载荷；不完整或非法的载荷返回 null（由调用方退化展示）。 */
+internal fun parseToolCallMarker(payload: String): ToolCallMarkerPayload? = try {
+    val obj = Json.parseToJsonElement(payload) as? JsonObject ?: return null
+    ToolCallMarkerPayload(
+        callId = obj["callId"]?.jsonPrimitive?.contentOrNull ?: return null,
+        name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null,
+        arguments = obj["arguments"]?.jsonPrimitive?.contentOrNull ?: "",
+        output = obj["output"]?.jsonPrimitive?.contentOrNull,
+        isError = obj["isError"]?.jsonPrimitive?.booleanOrNull ?: false
+    )
+} catch (_: Exception) {
+    null
+}
+
+/** `<tool_call>` 流内标记的卡片渲染：解析载荷并复用 [ToolCallCard]；解析失败时等宽展示原文。 */
+@Composable
+internal fun ToolCallBlockCard(payload: String) {
+    val parsed = remember(payload) { parseToolCallMarker(payload) }
+    if (parsed == null) {
+        MonospaceBlock(text = payload.ifBlank { "—" })
+        return
+    }
+    val result = parsed.output?.let {
+        ContentPart.ToolResult(
+            callId = parsed.callId,
+            name = parsed.name,
+            output = it,
+            isError = parsed.isError
+        )
+    }
+    ToolCallCard(
+        toolName = parsed.name,
+        command = TerminalTool.parseCommand(parsed.arguments) ?: parsed.arguments,
+        result = result,
+        isRunning = result == null,
+        inBubble = true
+    )
 }
 
 private fun List<Message>.findResult(callId: String): ContentPart.ToolResult? {
