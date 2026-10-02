@@ -411,6 +411,7 @@ The project uses a manual dependency injection approach via an `AppContainer`:
 - `OpenAiClient.kt` (renamed from `OpenAiApi.kt`) lives in `shared/src/commonMain/kotlin/cc/ptoe/messenger/data/remote/api/`
 - `NetworkClient.kt` lives in `shared/src/commonMain/kotlin/cc/ptoe/messenger/data/remote/`
 - SSE parser files (`ChatStreamEvent.kt`, `ChatStreamParser.kt`, `SSEParser.kt`) live in `shared/src/commonMain/kotlin/cc/ptoe/messenger/data/remote/sse/`
+- **推理内容显示（reasoning formats）**: `ChatStreamParser` 把两种推理增量统一包进 `<think>` 块（llm-typewriter 渲染为可折叠思考卡）：`delta.reasoning_content`（DeepSeek 等完整思维链，事件 `ReasoningDetected(format = "reasoning_content")`）和 `delta.reasoning`（GPT 等推理模型的 Reasoning Summary —— 思维链加密不可见仅回传摘要，事件 `format = "reasoning_summary"`，OpenRouter 与 Responses→Chat Completions 网关的标准字段；同块同至时 `reasoning_content` 优先）。首次检测到的格式持久化到 `Conversation.reasoningFormat` 并随云同步镜像；`buildRequestMessages` 按格式回发历史 —— `reasoning_content` 把 think 标签还原为 `reasoning_content` 字段，`think_tag` 保留标签原样，`reasoning_summary` 剥离思考后仅发正文、不回传任何推理字段（其思维链不可回传，严格网关会拒绝未知字段）。非流式 `createChatCompletion` 同样读取 `message.reasoning_content` / `message.reasoning` 包裹为 think 块
 - DTOs live in `shared/src/commonMain/kotlin/cc/ptoe/messenger/data/remote/dto/`
 - Gson converter for JSON serialization
 - Wear chat requests are forwarded to the phone over a WebSocket on TCP `18765` (`MobileHttpServer` / `WearNetworkBridge`, discovered via NSD mDNS) instead of calling providers directly from the watch

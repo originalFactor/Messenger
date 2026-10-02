@@ -33,11 +33,14 @@ sealed class ChatStreamEvent {
     ) : ChatStreamEvent()
     data class Error(val message: String) : ChatStreamEvent()
     /**
-     * 表示流式响应中检测到了 `reasoning_content` 字段，
-     * 调用方应将对话标注为 "reasoning_content" 格式，
-     * 后续请求中需将 think 标签还原为 `reasoning_content` 字段。
+     * 表示流式响应中检测到了推理内容，[format] 标注来源字段：
+     *  - `"reasoning_content"` — DeepSeek 风格完整思维链，后续请求需将
+     *    think 标签还原为 `reasoning_content` 字段；
+     *  - `"reasoning_summary"` — GPT 等推理模型的思维链加密不可见，仅经
+     *    `reasoning` 字段回传 Reasoning Summary，后续请求直接剥离思考、
+     *    不回传任何推理字段。
      */
-    data object ReasoningDetected : ChatStreamEvent()
+    data class ReasoningDetected(val format: String) : ChatStreamEvent()
 }
 
 /** 一轮流式响应中累积完成的工具调用。 */

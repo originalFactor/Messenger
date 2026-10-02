@@ -140,7 +140,7 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     when (event) {
                         is ChatStreamEvent.ReasoningDetected -> {
                             if (detectedFormat == null) {
-                                detectedFormat = "reasoning_content"
+                                detectedFormat = event.format
                             }
                         }
                         is ChatStreamEvent.Content -> {

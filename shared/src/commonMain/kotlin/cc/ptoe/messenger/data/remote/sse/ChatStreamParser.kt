@@ -18,6 +18,7 @@ package cc.ptoe.messenger.data.remote.sse
 
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionChunkDto
+import cc.ptoe.messenger.data.remote.dto.ChatDeltaDto
 import cc.ptoe.messenger.data.remote.dto.UsageDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -60,10 +61,18 @@ object ChatStreamParser {
                 }
                 val choice = chunk.choices.firstOrNull()
                 if (choice != null) {
-                    val reasoning = choice.delta.reasoningContent
-                    if (!reasoning.isNullOrEmpty()) {
+                    val reasoning = choice.delta.incomingReasoning
+                    if (reasoning != null) {
                         if (!reasoningEmitted) {
-                            emit(ChatStreamEvent.ReasoningDetected)
+                            emit(
+                                ChatStreamEvent.ReasoningDetected(
+                                    format = if (choice.delta.reasoningContent.isNullOrEmpty()) {
+                                        "reasoning_summary"
+                                    } else {
+                                        "reasoning_content"
+                                    }
+                                )
+                            )
                             reasoningEmitted = true
                         }
                         if (!inThinkBlock) {
@@ -122,8 +131,8 @@ object ChatStreamParser {
             try {
                 val chunk = NetworkClient.json.decodeFromString<ChatCompletionChunkDto>(json)
                 val choice = chunk.choices.firstOrNull()
-                val reasoning = choice?.delta?.reasoningContent
-                if (!reasoning.isNullOrEmpty()) {
+                val reasoning = choice?.delta?.incomingReasoning
+                if (reasoning != null) {
                     if (!inThinkBlock) {
                         emit("<think>")
                         inThinkBlock = true
@@ -168,6 +177,16 @@ object ChatStreamParser {
             )
         }
     }
+
+    /**
+     * 本块携带的推理增量：GPT 等推理模型的思维链加密不可见，仅经 `reasoning`
+     * 字段回传 Reasoning Summary，DeepSeek 等经 `reasoning_content` 回传完整
+     * 思维链。二者统一包进 `<think>` 块显示；同块同时携带时
+     * `reasoning_content` 优先。
+     */
+    private val ChatDeltaDto.incomingReasoning: String?
+        get() = reasoningContent?.takeIf { it.isNotEmpty() }
+            ?: reasoning?.takeIf { it.isNotEmpty() }
 
     private fun extractContentText(content: JsonElement): String {
         return when (content) {

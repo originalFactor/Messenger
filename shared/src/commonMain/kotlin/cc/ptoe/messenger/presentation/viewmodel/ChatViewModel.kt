@@ -712,10 +712,11 @@ class ChatViewModel(
                         when (event) {
                             is ChatStreamEvent.ReasoningDetected -> {
                                 if (detectedFormat == null) {
-                                    detectedFormat = "reasoning_content"
+                                    // reasoning_content=完整思维链 / reasoning_summary=GPT 等加密思维链仅回传摘要
+                                    detectedFormat = event.format
                                     // 重新读取，避免覆盖并发写回的其他会话字段
                                     conversationRepository.getById(conversationId).first()?.let {
-                                        conversationRepository.update(it.copy(reasoningFormat = "reasoning_content"))
+                                        conversationRepository.update(it.copy(reasoningFormat = event.format))
                                     }
                                 }
                             }

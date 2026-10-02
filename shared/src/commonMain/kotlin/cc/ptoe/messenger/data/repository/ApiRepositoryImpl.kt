@@ -37,6 +37,7 @@ import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.presentation.utils.extractThinkContent
+import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.flow.Flow
@@ -162,7 +163,8 @@ class ApiRepositoryImpl(
             val response = openAiClient(provider).createChatCompletion(request)
             val choice = response.choices.firstOrNull()
                 ?: throw ApiException("No choices in response")
-            val reasoning = choice.message.reasoningContent
+            val reasoning = choice.message.reasoningContent?.takeIf { it.isNotEmpty() }
+                ?: choice.message.reasoning?.takeIf { it.isNotEmpty() }
             val contentText = extractResponseContent(choice.message.content)
             val finalContent = if (!reasoning.isNullOrEmpty()) {
                 "<think>$reasoning</think>\n$contentText"
@@ -254,15 +256,17 @@ class ApiRepositoryImpl(
                 result.add(ChatMessageDto(role = role, content = buildMultipartContent(parts)))
             } else if (assistantToolCalls.isNotEmpty()) {
                 // 工具调用轮：文本（可能为空）与 tool_calls 一起回显。
+                // reasoning_summary（GPT 等加密思维链模型）直接剥离思考块，
+                // 不回传任何推理字段；think_tag 保留标签原样回显。
                 val text = if (parts.isNotEmpty()) {
                     parts.filterIsInstance<ContentPart.Text>().joinToString("\n") { it.text }
                 } else {
                     message.content
                 }
-                val (reasoning, mainContent) = if (reasoningFormat == "reasoning_content" || reasoningFormat == null) {
-                    extractThinkContent(text)
-                } else {
-                    null to text
+                val (reasoning, mainContent) = when (reasoningFormat) {
+                    "think_tag" -> null to text
+                    "reasoning_summary" -> null to stripThinkBlock(text)
+                    else -> extractThinkContent(text)
                 }
                 result.add(ChatMessageDto(
                     role = role,
@@ -289,7 +293,15 @@ class ApiRepositoryImpl(
                 // 还原为 reasoning_content 字段，避免把 think 标签作为 content 发送给 API。
                 // 当 reasoningFormat 未定义（老对话）且内容包含 <think> 标签时，也提取推理内容发送，
                 // 让 API 返回它偏好的格式，后续根据首次响应标注对话格式。
-                if ((reasoningFormat == "reasoning_content" || reasoningFormat == null) && role == "assistant") {
+                // "reasoning_summary"（GPT 等加密思维链模型）剥离思考后仅发正文 —
+                // 其思维链不可回传，回传 `reasoning_content` 字段会被严格网关拒绝。
+                if (role == "assistant" && reasoningFormat == "reasoning_summary") {
+                    val stripped = stripThinkBlock(text)
+                    result.add(ChatMessageDto(
+                        role = role,
+                        content = if (stripped.isEmpty()) JsonNull else JsonPrimitive(stripped)
+                    ))
+                } else if ((reasoningFormat == "reasoning_content" || reasoningFormat == null) && role == "assistant") {
                     val (reasoning, mainContent) = extractThinkContent(text)
                     if (reasoning != null) {
                         result.add(ChatMessageDto(

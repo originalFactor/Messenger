@@ -25,6 +25,12 @@ data class ChatDeltaDto(
     @SerialName("role") val role: String? = null,
     @SerialName("content") val content: JsonElement? = null,
     @SerialName("reasoning_content") val reasoningContent: String? = null,
+    /**
+     * GPT 等推理模型的 Reasoning Summary（思维链加密不可见，只能回传摘要）。
+     * OpenRouter 与 Responses→Chat Completions 网关的标准字段，与
+     * [reasoningContent] 互为来源，先到达者优先。
+     */
+    @SerialName("reasoning") val reasoning: String? = null,
     /** 流式工具调用增量片段：首块携带 id/name，arguments 跨块拼接。 */
     @SerialName("tool_calls") val toolCalls: List<ToolCallDto>? = null
 )
