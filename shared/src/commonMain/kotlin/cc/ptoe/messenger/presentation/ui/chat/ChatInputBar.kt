@@ -30,8 +30,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -65,6 +67,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -127,8 +130,8 @@ fun ChatInputBar(
     onRemoveImage: (MessageImage) -> Unit = {},
     /**
      * Agent 模式；null 表示平台未注册工具（面板不展示模式切换项）。
-     * false=只读（终端沙箱 + 禁用写入工具 + 自动执行），true=可写
-     * （写入工具可用 + 需确认的工具逐次弹框）。
+     * false=只读（终端保持只读命令白名单 + 禁用写入工具），true=可写
+     * （终端解除只读策略 + 写入工具可用）。两种模式下工具都自动执行。
      */
     agentWritable: Boolean? = null,
     onAgentModeChange: (Boolean) -> Unit = {},
@@ -207,25 +210,35 @@ fun ChatInputBar(
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
             ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                InputPanelItem(
-                    text = stringResource(Res.string.chat_add_image),
-                    icon = Icons.Default.Image,
-                    enabled = !isAttachingImage,
-                    onClick = {
-                        functionPanelExpanded = false
-                        onAddClick()
-                    }
-                )
-                if (agentWritable != null) {
-                    // 只读/可写：单行点击切换（取代原「手动/自动执行」开关）
-                    InputPanelItem(
-                        text = stringResource(
-                            if (agentWritable) Res.string.chat_mode_writable
-                            else Res.string.chat_mode_readonly
-                        ),
-                        icon = if (agentWritable) Icons.Default.LockOpen else Icons.Default.Lock,
-                        onClick = { onAgentModeChange(!agentWritable) }
+                // 微信「+」面板样式：圆角方块图标 + 下方小字标签，每行固定 4 格
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 20.dp)
+                ) {
+                    FunctionPanelEntry(
+                        text = stringResource(Res.string.chat_add_image),
+                        icon = Icons.Default.Image,
+                        enabled = !isAttachingImage,
+                        onClick = {
+                            functionPanelExpanded = false
+                            onAddClick()
+                        }
                     )
+                    if (agentWritable != null) {
+                        // 只读/可写：点击切换（取代原「手动/自动执行」开关）
+                        FunctionPanelEntry(
+                            text = stringResource(
+                                if (agentWritable) Res.string.chat_mode_writable
+                                else Res.string.chat_mode_readonly
+                            ),
+                            icon = if (agentWritable) Icons.Default.LockOpen else Icons.Default.Lock,
+                            onClick = { onAgentModeChange(!agentWritable) }
+                        )
+                    }
+                    // 空槽位补齐固定列宽（每格 1/4 行宽，入口靠左依次排列）
+                    val usedSlots = if (agentWritable != null) 2 else 1
+                    repeat(4 - usedSlots) { Spacer(modifier = Modifier.weight(1f)) }
                 }
             }
         }
@@ -350,33 +363,44 @@ fun ChatInputBar(
     }
 }
 
-/** 功能面板里的一行：前置图标 + 文案。 */
+/** 功能面板的一个入口（微信样式）：圆角方块图标 + 下方小字标签，占行宽的 1/4。 */
 @Composable
-private fun InputPanelItem(
+private fun RowScope.FunctionPanelEntry(
     text: String,
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    Row(
+    Column(
         modifier = modifier
-            .fillMaxWidth()
+            .weight(1f)
+            .clip(MaterialTheme.shapes.medium)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp)
+            .alpha(if (enabled) 1f else 0.38f),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(16.dp))
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = text,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
         )
     }
 }
