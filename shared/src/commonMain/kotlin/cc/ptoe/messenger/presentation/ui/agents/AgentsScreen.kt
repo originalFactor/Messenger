@@ -415,7 +415,11 @@ private fun AgentListItem(
             }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = item.agent.systemPrompt.ifBlank { stringResource(Res.string.agents_no_system_prompt) },
+                text = if (item.agent.description.isNotBlank()) {
+                    item.agent.description
+                } else {
+                    item.agent.systemPrompt.ifBlank { stringResource(Res.string.agents_no_system_prompt) }
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

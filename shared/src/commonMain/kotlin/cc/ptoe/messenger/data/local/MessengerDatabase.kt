@@ -39,7 +39,7 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -140,6 +140,18 @@ abstract class MessengerDatabase : RoomDatabase() {
             override fun migrate(connection: SQLiteConnection) {
                 connection.prepare(
                     "ALTER TABLE conversations ADD COLUMN overrideToolsConfig TEXT"
+                ).step()
+            }
+        }
+
+        /**
+         * v20：agents 表新增 description 描述列（用户可读的一句话介绍，
+         * 列表/编辑页展示用，不随请求发给模型）。
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT ''"
                 ).step()
             }
         }

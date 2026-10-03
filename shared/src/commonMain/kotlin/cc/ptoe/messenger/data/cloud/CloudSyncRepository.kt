@@ -1496,6 +1496,7 @@ private fun AgentEntity.toCloudRequest() = CloudAgentRequest(
     id = id,
     name = name,
     systemPrompt = systemPrompt,
+    description = description,
     defaultModelId = defaultModelId,
     temperature = temperature.toDouble(),
     topP = topP.toDouble(),
@@ -1524,6 +1525,7 @@ private fun AgentEntity.isDefaultAgentBaseline(): Boolean =
         name == "默认 Agent" &&
         avatar == null &&
         systemPrompt == "You are a helpful assistant." &&
+        description.isBlank() &&
         defaultModelId == null &&
         temperature == 0.7f &&
         topP == 1.0f &&
@@ -1601,6 +1603,7 @@ private fun CloudAgentDocument.toEntity(avatar: String?) = AgentEntity(
     name = name,
     avatar = avatar,
     systemPrompt = systemPrompt,
+    description = description,
     defaultModelId = defaultModelId,
     temperature = temperature.toFloat(),
     topP = topP.toFloat(),
@@ -1630,6 +1633,7 @@ private fun AgentEntity.toDomain() = Agent(
     name = name,
     avatar = avatar,
     systemPrompt = systemPrompt,
+    description = description,
     defaultModelId = defaultModelId,
     temperature = temperature,
     topP = topP,

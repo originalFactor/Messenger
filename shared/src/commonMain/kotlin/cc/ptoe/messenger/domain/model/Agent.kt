@@ -21,6 +21,8 @@ data class Agent(
     val name: String,
     val avatar: String? = null,
     val systemPrompt: String,
+    /** 用户可读的一句话描述；列表/详情展示用，不随请求发给模型。 */
+    val description: String = "",
     val defaultModelId: String?,
     val temperature: Float,
     val topP: Float,

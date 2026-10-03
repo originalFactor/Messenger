@@ -130,6 +130,7 @@ import cc.ptoe.messenger.generated.resources.agent_edit_market_section
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_label
 import cc.ptoe.messenger.generated.resources.agent_edit_max_tokens_placeholder
 import cc.ptoe.messenger.generated.resources.agent_edit_name_label
+import cc.ptoe.messenger.generated.resources.agent_edit_description_label
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_confirm
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_desc
 import cc.ptoe.messenger.generated.resources.agent_edit_publish_failed
@@ -395,6 +396,17 @@ fun AgentEditScreen(
                         },
                         singleLine = true,
                         enabled = !uiState.isDefault, // 默认 Agent 名称不允许修改（保持"默认 Agent"标识）
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = uiState.description,
+                        onValueChange = { viewModel.onDescriptionChange(it) },
+                        label = { Text(stringResource(Res.string.agent_edit_description_label)) },
+                        minLines = 1,
+                        maxLines = 4,
                         modifier = Modifier.fillMaxWidth()
                     )
 

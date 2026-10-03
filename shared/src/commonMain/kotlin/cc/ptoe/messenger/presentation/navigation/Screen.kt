@@ -49,6 +49,11 @@ sealed class Screen(val route: String) {
             if (agentId != null) "agent_edit?agentId=$agentId" else "agent_edit"
     }
 
+    /** Agent 页点击 Agent 进入的子页：该 Agent 的聊天列表。 */
+    data object AgentConversations : Screen("agent_conversations/{agentId}") {
+        fun createRoute(agentId: String) = "agent_conversations/$agentId"
+    }
+
     data object ConversationRename : Screen("conversation_rename/{conversationId}") {
         fun createRoute(conversationId: String) = "conversation_rename/$conversationId"
     }

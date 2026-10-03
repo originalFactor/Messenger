@@ -69,6 +69,9 @@ internal data class CloudAgentRequest(
     val name: String,
     val avatarUrl: String? = null,
     val systemPrompt: String,
+    // 无默认值：NetworkClient.json 的 encodeDefaults=false 会把带默认值的字段从
+    // 请求 JSON 中整个省略，description 必须始终上行。
+    val description: String,
     val defaultModelId: String? = null,
     val temperature: Double,
     val topP: Double,

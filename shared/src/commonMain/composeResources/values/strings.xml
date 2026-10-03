@@ -64,12 +64,14 @@
     <string name="agents_model_label">Model: %1$s</string>
     <string name="agents_model_default">Default</string>
     <string name="agents_close_menu">Close menu</string>
-    <string name="agents_select_to_edit">Select an Agent to edit</string>
+    <string name="agents_select_to_view">Select an Agent to view its chats</string>
+    <string name="agent_conversations_empty">No chats with this Agent yet</string>
 
     <!-- Agent Edit -->
     <string name="agent_edit_save">Save</string>
     <string name="agent_edit_remove_avatar">Remove avatar</string>
     <string name="agent_edit_name_label">Name</string>
+    <string name="agent_edit_description_label">Description</string>
     <string name="agent_edit_system_prompt_label">System prompt</string>
     <string name="agent_edit_system_prompt_placeholder">You are a helpful assistant.</string>
     <string name="agent_edit_advanced_settings">Advanced settings</string>
@@ -161,7 +163,6 @@
     <string name="error_context_summarize_failed">Context compression failed: %1$s</string>
 
     <!-- Conversations -->
-    <string name="conversations_all_agents">All Agents</string>
     <string name="conversations_title">Chats</string>
     <string name="conversations_new">New chat</string>
     <string name="conversations_switch_agent">Switch Agent</string>

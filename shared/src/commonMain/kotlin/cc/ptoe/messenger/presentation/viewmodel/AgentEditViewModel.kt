@@ -51,6 +51,7 @@ data class AgentEditUiState(
     val name: String = "",
     val avatar: String? = null,
     val systemPrompt: String = "",
+    val description: String = "",
     val defaultModelId: String? = null,
     val selectedProviderId: String? = null,
     val temperature: Float = 0.7f,
@@ -194,6 +195,7 @@ class AgentEditViewModel(
                     name = agent.name,
                     avatar = agent.avatar,
                     systemPrompt = agent.systemPrompt,
+                    description = agent.description,
                     defaultModelId = agent.defaultModelId,
                     selectedProviderId = providerId,
                     temperature = agent.temperature,
@@ -233,6 +235,10 @@ class AgentEditViewModel(
 
     fun onSystemPromptChange(systemPrompt: String) {
         _uiState.value = _uiState.value.copy(systemPrompt = systemPrompt)
+    }
+
+    fun onDescriptionChange(description: String) {
+        _uiState.value = _uiState.value.copy(description = description)
     }
 
     fun onProviderChange(providerId: String?) {
@@ -378,6 +384,7 @@ class AgentEditViewModel(
                         name = currentState.name.trim(),
                         avatar = currentState.avatar,
                         systemPrompt = currentState.systemPrompt.trim(),
+                        description = currentState.description.trim(),
                         defaultModelId = currentState.defaultModelId,
                         temperature = currentState.temperature,
                         topP = currentState.topP,
@@ -406,6 +413,7 @@ class AgentEditViewModel(
                     name = currentState.name.trim(),
                     avatar = currentState.avatar,
                     systemPrompt = currentState.systemPrompt.trim(),
+                    description = currentState.description.trim(),
                     defaultModelId = currentState.defaultModelId,
                     temperature = currentState.temperature,
                     topP = currentState.topP,
@@ -488,6 +496,7 @@ class AgentEditViewModel(
                 name = currentState.name.trim(),
                 avatar = currentState.avatar,
                 systemPrompt = currentState.systemPrompt.trim(),
+                description = currentState.description.trim(),
                 defaultModelId = currentState.defaultModelId,
                 temperature = currentState.temperature,
                 topP = currentState.topP,

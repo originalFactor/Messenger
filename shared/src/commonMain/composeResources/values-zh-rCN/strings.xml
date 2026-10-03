@@ -64,12 +64,14 @@
     <string name="agents_model_label">模型: %1$s</string>
     <string name="agents_model_default">默认</string>
     <string name="agents_close_menu">关闭操作菜单</string>
-    <string name="agents_select_to_edit">选择一个 Agent 进行编辑</string>
+    <string name="agents_select_to_view">选择一个 Agent 查看聊天</string>
+    <string name="agent_conversations_empty">还没有与该 Agent 的聊天</string>
 
     <!-- Agent Edit -->
     <string name="agent_edit_save">保存</string>
     <string name="agent_edit_remove_avatar">移除头像</string>
     <string name="agent_edit_name_label">名称</string>
+    <string name="agent_edit_description_label">描述</string>
     <string name="agent_edit_system_prompt_label">系统提示词</string>
     <string name="agent_edit_system_prompt_placeholder">You are a helpful assistant.</string>
     <string name="agent_edit_advanced_settings">高级设置</string>
@@ -160,7 +162,6 @@
     <string name="error_context_summarize_failed">上下文压缩失败：%1$s</string>
 
     <!-- Conversations -->
-    <string name="conversations_all_agents">全部 Agent</string>
     <string name="conversations_title">对话</string>
     <string name="conversations_new">新建对话</string>
     <string name="conversations_switch_agent">切换 Agent</string>

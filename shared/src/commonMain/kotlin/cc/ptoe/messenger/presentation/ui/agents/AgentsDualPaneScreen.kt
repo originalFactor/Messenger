@@ -33,19 +33,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.generated.resources.Res
-import cc.ptoe.messenger.generated.resources.agents_select_to_edit
+import cc.ptoe.messenger.generated.resources.agents_select_to_view
 import org.jetbrains.compose.resources.stringResource
 
 /**
  * Material 3 List-Detail layout for Desktop / large windows.
  *
  * Left pane  : `AgentsScreen` (list, fixed ~360 dp wide).
- * Right pane : `AgentEditScreen` for the currently selected Agent, or an
- *              empty placeholder prompting the user to pick an Agent to edit.
+ * Right pane : the selected Agent's conversation list by default. The list's
+ *              settings icon (or the row's edit menu) switches the pane to
+ *              `AgentEditScreen`, and tapping a conversation opens
+ *              `ChatScreen` in the pane.
  *
- * The Agent list stays visible while editing — no back-stack push.
+ * The Agent list stays visible while browsing — no back-stack push.
  * Mirrors `ConversationsDualPaneScreen` for the Agents surface.
  *
  * Selection state is `rememberSaveable` so it survives rail navigation
@@ -53,8 +56,7 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 fun AgentsDualPaneScreen(
-    onOpenAgentEdit: (String) -> Unit,
-    onSelectCurrentAgent: (String) -> Unit,
+    onOpenConversationSettings: (String) -> Unit,
     onMarketClick: () -> Unit,
     onPickProvider: (String?) -> Unit = {},
     pickedModelId: String? = null,
@@ -62,6 +64,8 @@ fun AgentsDualPaneScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedAgentId by rememberSaveable { mutableStateOf<String?>(null) }
+    /** 非空 = 右栏进入该 Agent 的编辑器（列表设置图标 / 行编辑菜单触发）。 */
+    var editingAgentId by rememberSaveable { mutableStateOf<String?>(null) }
     var creatingNewAgent by rememberSaveable { mutableStateOf(false) }
 
     Row(modifier = modifier.fillMaxSize()) {
@@ -77,12 +81,12 @@ fun AgentsDualPaneScreen(
                 onEditClick = { id ->
                     creatingNewAgent = false
                     selectedAgentId = id
-                    onOpenAgentEdit(id)
+                    editingAgentId = id
                 },
                 onAgentClick = { id ->
                     creatingNewAgent = false
-                    onSelectCurrentAgent(id)
                     selectedAgentId = id
+                    editingAgentId = null
                 }
             )
         }
@@ -116,22 +120,48 @@ fun AgentsDualPaneScreen(
                 if (agentId == null) {
                     EmptyState(
                         icon = Icons.Default.SmartToy,
-                        message = stringResource(Res.string.agents_select_to_edit),
+                        message = stringResource(Res.string.agents_select_to_view),
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // 用 agentId 作 key，切换 Agent 时销毁旧 ViewModel 子树并重建，
+                    // 用 agentId 作 key：切换 Agent 时销毁右栏状态与 ViewModel 子树并重建，
                     // 否则 viewModel() 会按 composable 位置缓存第一次创建的 ViewModel，
                     // 导致双栏下点击任意 Agent 始终显示首个 Agent 的内容。
                     key(agentId) {
-                        AgentEditScreen(
-                            agentId = agentId,
-                            onBackClick = { selectedAgentId = null },
-                            onSaved = { /* 保持在右栏，不清空 selectedAgentId */ },
-                            onPickProvider = onPickProvider,
-                            pickedModelId = pickedModelId,
-                            onPickedModelConsumed = onPickedModelConsumed
-                        )
+                        var openConversationId by rememberSaveable { mutableStateOf<String?>(null) }
+                        val conversationId = openConversationId
+                        when {
+                            conversationId != null -> {
+                                ChatScreen(
+                                    conversationId = conversationId,
+                                    onBackClick = { openConversationId = null },
+                                    onSettingsClick = { onOpenConversationSettings(conversationId) },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            editingAgentId != null -> {
+                                AgentEditScreen(
+                                    agentId = agentId,
+                                    onBackClick = { editingAgentId = null },
+                                    onSaved = { /* 保持在右栏编辑器内 */ },
+                                    onPickProvider = onPickProvider,
+                                    pickedModelId = pickedModelId,
+                                    onPickedModelConsumed = onPickedModelConsumed
+                                )
+                            }
+                            else -> {
+                                AgentConversationsScreen(
+                                    agentId = agentId,
+                                    showBackButton = false,
+                                    onBackClick = { selectedAgentId = null },
+                                    onEditClick = { editingAgentId = agentId },
+                                    onConversationClick = { id ->
+                                        openConversationId = id
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
                     }
                 }
             }

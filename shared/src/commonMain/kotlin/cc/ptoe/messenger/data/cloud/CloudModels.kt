@@ -73,6 +73,8 @@ data class CloudAgentDocument(
     val avatarUrl: String? = null,
     val avatarVersion: Long? = null,
     val systemPrompt: String = "",
+    /** 旧版本服务端/客户端可能不带该字段，缺省空串。 */
+    val description: String = "",
     val defaultModelId: String? = null,
     val temperature: Double = 0.0,
     val topP: Double = 0.0,

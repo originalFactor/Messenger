@@ -29,15 +29,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.savedstate.read
+import cc.ptoe.messenger.presentation.ui.agents.AgentConversationsScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentEditScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentsScreen
@@ -62,7 +61,6 @@ import cc.ptoe.messenger.presentation.ui.settings.ToolsSettingsScreen
 import cc.ptoe.messenger.presentation.ui.settings.LicensesScreen
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
-import cc.ptoe.messenger.presentation.viewmodel.ConversationsViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.conversations_rename_title
 import org.jetbrains.compose.resources.stringResource
@@ -124,19 +122,6 @@ fun NavGraph(
             )
         }
         composable(Screen.Agents.route) { backStackEntry ->
-            val conversationsBackStackEntry = remember(backStackEntry) {
-                navController.getBackStackEntry(Screen.Conversations.route)
-            }
-            val conversationsViewModel: ConversationsViewModel = viewModel(
-                conversationsBackStackEntry,
-                factory = ConversationsViewModel.provideFactory(
-                    conversationRepository = AppContainerHolder.instance.conversationRepository,
-                    messageRepository = AppContainerHolder.instance.messageRepository,
-                    currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
-                    agentRepository = AppContainerHolder.instance.agentRepository,
-                    modelRepository = AppContainerHolder.instance.modelRepository
-                )
-            )
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)
                 // 双栏布局下 AgentEditScreen 托管在 Agents 页面内，Picker 结果回传到本 entry
@@ -147,9 +132,8 @@ fun NavGraph(
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
                     AgentsDualPaneScreen(
-                        onOpenAgentEdit = { /* Dual-pane: AgentsDualPaneScreen manages selectedAgentId internally. */ },
-                        onSelectCurrentAgent = { agentId ->
-                            conversationsViewModel.switchAgent(agentId)
+                        onOpenConversationSettings = { conversationId ->
+                            navController.navigate(Screen.ConversationSettings.createRoute(conversationId))
                         },
                         onMarketClick = {
                             navController.navigate(Screen.AgentMarket.route)
@@ -161,7 +145,8 @@ fun NavGraph(
                         onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
                     )
                 } else {
-                    // Phone: single-pane, push AgentEdit / AgentMarket on tap.
+                    // Phone: single-pane — tap an Agent to enter its conversation list;
+                    // title-role agents open the editor directly.
                     AgentsScreen(
                         onAddClick = {
                             navController.navigate(Screen.AgentEdit.createRoute())
@@ -173,8 +158,7 @@ fun NavGraph(
                             navController.navigate(Screen.AgentEdit.createRoute(agentId))
                         },
                         onAgentClick = { agentId ->
-                            conversationsViewModel.switchAgent(agentId)
-                            navController.popBackStack(Screen.Conversations.route, inclusive = false)
+                            navController.navigate(Screen.AgentConversations.createRoute(agentId))
                         }
                     )
                 }
@@ -332,6 +316,23 @@ fun NavGraph(
                 },
                 pickedModelId = pickedModelId,
                 onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
+            )
+        }
+
+        composable(
+            route = Screen.AgentConversations.route,
+            arguments = listOf(navArgument("agentId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val agentId = backStackEntry.arguments?.read { getStringOrNull("agentId") } ?: return@composable
+            AgentConversationsScreen(
+                agentId = agentId,
+                onBackClick = { navController.popBackStack() },
+                onEditClick = {
+                    navController.navigate(Screen.AgentEdit.createRoute(agentId))
+                },
+                onConversationClick = { conversationId ->
+                    navController.navigate(Screen.Chat.createRoute(conversationId))
+                }
             )
         }
 

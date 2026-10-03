@@ -35,10 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
@@ -75,23 +72,11 @@ class ConversationsViewModel(
             initialValue = emptyList()
         )
 
-    private val _showAllAgents = MutableStateFlow(true)
-    val showAllAgents: StateFlow<Boolean> = _showAllAgents.asStateFlow()
-
     private val _uiState = MutableStateFlow(ConversationsUiState())
     val uiState: StateFlow<ConversationsUiState> = _uiState.asStateFlow()
 
-    val conversations: StateFlow<List<Conversation>> = combine(
-        currentAgentRepository.currentAgent,
-        _showAllAgents
-    ) { agent, showAll -> agent to showAll }
-        .flatMapLatest { (agent, showAll) ->
-            when {
-                showAll -> conversationRepository.getAll()
-                agent != null -> conversationRepository.getByAgentId(agent.id)
-                else -> flowOf(emptyList())
-            }
-        }
+    /** 会话主页固定展示全部聊天（按 Agent 过滤在 Agent 聊天列表子页）。 */
+    val conversations: StateFlow<List<Conversation>> = conversationRepository.getAll()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -110,7 +95,6 @@ class ConversationsViewModel(
                 currentAgentRepository.currentAgent.first()
             } ?: return@launch
             currentAgentRepository.setCurrentAgentId(agent.id)
-            _showAllAgents.value = false
             val now = System.currentTimeMillis()
             val providerId = determineProviderId(agent)
             val conversation = Conversation(
@@ -197,11 +181,6 @@ class ConversationsViewModel(
         viewModelScope.launch {
             currentAgentRepository.setCurrentAgentId(agentId)
         }
-        _showAllAgents.value = false
-    }
-
-    fun showAllAgents() {
-        _showAllAgents.value = true
     }
 
     fun enterMultiSelectMode(conversationId: String) {

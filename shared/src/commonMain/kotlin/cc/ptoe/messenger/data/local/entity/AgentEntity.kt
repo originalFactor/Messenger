@@ -26,6 +26,7 @@ data class AgentEntity(
     val name: String,
     val avatar: String? = null,
     val systemPrompt: String,
+    val description: String = "",
     val defaultModelId: String?,
     val temperature: Float,
     val topP: Float,

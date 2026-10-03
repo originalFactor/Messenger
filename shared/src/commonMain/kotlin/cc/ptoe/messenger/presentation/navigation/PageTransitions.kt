@@ -57,6 +57,7 @@ private val RouteOrders: Map<String, Int> = mapOf(
     Screen.ConversationSettings.route to 2,
     Screen.ConversationRename.route to 3,
     Screen.Agents.route to 10,
+    Screen.AgentConversations.route to 11,
     Screen.AgentEdit.route to 11,
     Screen.AgentMarket.route to 11,
     Screen.AgentMarketDetail.route to 12,
