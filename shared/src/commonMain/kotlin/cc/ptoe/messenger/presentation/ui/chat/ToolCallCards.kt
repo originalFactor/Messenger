@@ -70,20 +70,23 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 一组工具调用卡片：assistant 工具轮消息 + 紧随的 TOOL 结果行合并渲染。
- * 每个调用以 `<tool_call>` 流内标记追加到轮内文本之后，整串交给
- * llm-typewriter 解析渲染 —— 卡片成为内容流的一部分，渲染在 Agent 发起
- * 调用的位置。[assistant] 为 null 时是孤儿 TOOL 行的兜底展示（无气泡可挂，
- * 退回独立卡片）。
+ * 一个完整的代理回合渲染为一条消息：内容流 = 各工具轮的轮内文本 + `<tool_call>`
+ * 流内标记（卡片由 llm-typewriter 在 Agent 发起调用的位置就地绘出）+ 最终文本，
+ * 全部同属一个气泡。[finalMessage] 是流式中的占位行时，正文部分实时读
+ * [streamingContent]（卡片之下原地续写）。[rounds] 为空时是孤儿 TOOL 行的
+ * 兜底展示（无气泡可挂，退回独立卡片）。
  */
 @Composable
 fun ToolGroupItem(
-    assistant: Message?,
+    rounds: List<Message>,
     toolMessages: List<Message>,
+    finalMessage: Message?,
+    isLastInGroup: Boolean,
+    streamingContent: String?,
+    streamingMessageId: String?,
     modifier: Modifier = Modifier
 ) {
-    val calls = assistant?.parts?.filterIsInstance<ContentPart.ToolCall>().orEmpty()
-    if (assistant == null) {
+    if (rounds.isEmpty()) {
         // 孤儿 TOOL 行（历史异常）：无 assistant 轮可挂，保持独立卡片兜底展示
         val orphanResults = toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
         Column(
@@ -105,22 +108,30 @@ fun ToolGroupItem(
         }
         return
     }
-    // 标记流：轮内文本 + 每个调用一个 <tool_call> 块（段落边界分隔）。
-    // 结果实时取自 TOOL 行：已落定的行携带 output/isError，运行中/未落定的
-    // 行不带结果字段，卡片据此显示运行中状态。
+    val anchor = finalMessage ?: rounds.last()
+    // 占位行在流式中时正文实时取自 streamingContent（DB 行在 Done 前不更新）
+    val isLiveStreaming = streamingMessageId != null && finalMessage?.id == streamingMessageId
     val renderContent = buildString {
-        if (assistant.content.isNotBlank()) {
-            append(assistant.content)
-            append("\n\n")
+        rounds.forEach { round ->
+            if (round.content.isNotBlank()) {
+                if (isNotEmpty()) append("\n\n")
+                append(round.content)
+            }
+            round.parts.filterIsInstance<ContentPart.ToolCall>().forEach { call ->
+                if (isNotEmpty()) append("\n\n")
+                // 结果实时取自 TOOL 行：已落定的行携带 output/isError，运行中行不带
+                append(buildToolCallMarker(call, toolMessages.findResult(call.callId)))
+            }
         }
-        calls.forEachIndexed { index, call ->
-            if (index > 0) append("\n\n")
-            append(buildToolCallMarker(call, toolMessages.findResult(call.callId)))
+        val finalText = if (isLiveStreaming) streamingContent.orEmpty() else finalMessage?.content.orEmpty()
+        if (finalText.isNotBlank()) {
+            if (isNotEmpty()) append("\n\n")
+            append(finalText)
         }
     }
     AiMessageBubble(
-        message = assistant,
-        isLastInGroup = false,
+        message = anchor,
+        isLastInGroup = isLastInGroup,
         modifier = modifier.fillMaxWidth(),
         displayContent = renderContent,
         toolCallRenderer = MarkdownToolCallRenderer { payload -> ToolCallBlockCard(payload) }

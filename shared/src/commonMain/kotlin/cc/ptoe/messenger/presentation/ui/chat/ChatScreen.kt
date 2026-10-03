@@ -332,7 +332,7 @@ fun ChatScreen(
                                 is ChatListItem.DateSeparator -> "date_${item.id}"
                                 is ChatListItem.MessageItem -> "msg_${item.message.id}"
                                 is ChatListItem.ToolGroupItem ->
-                                    "tool_${item.assistant?.id ?: item.toolMessages.firstOrNull()?.id}"
+                                    "tool_${item.rounds.firstOrNull()?.id ?: item.toolMessages.firstOrNull()?.id}"
                             }
                         }
                     ) { item ->
@@ -341,10 +341,60 @@ fun ChatScreen(
                                 DateSeparator(timestamp = item.timestamp)
                             }
                             is ChatListItem.ToolGroupItem -> {
-                                ToolGroupItem(
-                                    assistant = item.assistant,
-                                    toolMessages = item.toolMessages
-                                )
+                                // 回合气泡与普通消息一样挂长按/右键菜单，动作锚定最终文本行
+                                // （无最终文本时锚定最后一个工具轮行）。
+                                val anchor = item.finalMessage ?: item.rounds.lastOrNull()
+                                val contextMenuState = rememberContextMenuState()
+                                val groupInteractionSource = remember { MutableInteractionSource() }
+                                val groupModifier = if (anchor != null) {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .combinedClickable(
+                                            interactionSource = groupInteractionSource,
+                                            indication = null,
+                                            onClick = {},
+                                            onLongClick = {
+                                                if (!enableContextMenu) {
+                                                    selectedMessageId = anchor.id
+                                                    selectedMessageRole = anchor.role
+                                                    showActionMenu = true
+                                                }
+                                            }
+                                        )
+                                        .then(
+                                            if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
+                                            else Modifier
+                                        )
+                                } else {
+                                    Modifier
+                                }
+                                Box(modifier = groupModifier) {
+                                    ToolGroupItem(
+                                        rounds = item.rounds,
+                                        toolMessages = item.toolMessages,
+                                        finalMessage = item.finalMessage,
+                                        isLastInGroup = item.isLastInGroup,
+                                        streamingContent = streamingContent,
+                                        streamingMessageId = streamingMessageId
+                                    )
+                                    if (enableContextMenu && anchor != null) {
+                                        MessageContextMenu(
+                                            state = contextMenuState,
+                                            messageRole = anchor.role,
+                                            onCopyClick = {
+                                                viewModel.copyMessage(anchor.content)
+                                                showPlatformToast(copiedToastText)
+                                            },
+                                            onRegenerateClick = {
+                                                viewModel.regenerateMessage(anchor.id)
+                                            },
+                                            onDeleteClick = {
+                                                viewModel.deleteMessage(anchor.id)
+                                            },
+                                            onDismiss = {}
+                                        )
+                                    }
+                                }
                             }
                             is ChatListItem.MessageItem -> {
                                 val message = item.message
@@ -482,7 +532,7 @@ fun ChatScreen(
 }
 
 /**
- * 聊天列表项：日期分隔符、消息或工具调用组
+ * 聊天列表项：日期分隔符、消息或代理回合
  */
 private sealed class ChatListItem {
     data class DateSeparator(
@@ -495,18 +545,26 @@ private sealed class ChatListItem {
         val isLastInGroup: Boolean
     ) : ChatListItem()
 
-    /** assistant 工具轮（含 ToolCall parts）+ 紧随的 TOOL 结果行合并渲染。 */
+    /**
+     * 一个完整的代理回合：工具轮 assistant 行（含 ToolCall parts）+ TOOL 结果行 +
+     * 承载最终文本的占位行，合并为一条消息渲染（卡片在流内、正文同属一个气泡）。
+     * [rounds] 为空时是孤儿 TOOL 行的兜底展示。[finalMessage] 为 ERROR 行时不并入
+     * （错误气泡独立渲染，保留重试入口）。
+     */
     data class ToolGroupItem(
-        val assistant: Message?,
-        val toolMessages: List<Message>
+        val rounds: List<Message>,
+        val toolMessages: List<Message>,
+        val finalMessage: Message?,
+        val isLastInGroup: Boolean
     ) : ChatListItem()
 }
 
 /**
  * 构建聊天列表项：在每天首条消息前插入日期分隔符（Google Messages 风格），
  * 同时计算每条消息是否为同发送者组内的最后一条（用于气泡尾巴样式）。
- * assistant 工具轮消息与其 TOOL 结果行合并为一个 [ChatListItem.ToolGroupItem]，
- * 孤儿 TOOL 行（历史异常）也以工具组兜底渲染而不是静默丢弃。
+ * assistant 工具轮消息、其 TOOL 结果行与随后的最终文本行收编为一个
+ * [ChatListItem.ToolGroupItem]（整个回合一条消息），孤儿 TOOL 行（历史异常）
+ * 也以工具组兜底渲染而不是静默丢弃。
  */
 private fun buildChatItems(messages: List<Message>): List<ChatListItem> {
     if (messages.isEmpty()) return emptyList()
@@ -525,18 +583,55 @@ private fun buildChatItems(messages: List<Message>): List<ChatListItem> {
         when {
             message.role == MessageRole.ASSISTANT &&
                 message.parts.any { it is ContentPart.ToolCall } -> {
-                // 收编紧随其后的连续 TOOL 结果行
+                // 收编整个代理回合：连续的 工具轮行 → TOOL 结果行 →（首个非 ERROR 的）
+                // 最终文本占位行。ERROR 占位行不并入，独立渲染错误气泡。
+                val rounds = mutableListOf<Message>()
                 val toolMessages = mutableListOf<Message>()
-                var cursor = index + 1
-                while (cursor < messages.size && messages[cursor].role == MessageRole.TOOL) {
-                    toolMessages.add(messages[cursor])
-                    cursor++
+                var finalMessage: Message? = null
+                var cursor = index
+                while (cursor < messages.size) {
+                    val current = messages[cursor]
+                    when {
+                        current.role == MessageRole.ASSISTANT &&
+                            current.parts.any { it is ContentPart.ToolCall } -> {
+                            rounds.add(current)
+                            cursor++
+                        }
+                        current.role == MessageRole.TOOL -> {
+                            toolMessages.add(current)
+                            cursor++
+                        }
+                        current.role == MessageRole.ASSISTANT &&
+                            rounds.isNotEmpty() &&
+                            finalMessage == null &&
+                            current.status != MessageStatus.ERROR -> {
+                            finalMessage = current
+                            cursor++
+                        }
+                        else -> break
+                    }
                 }
-                items.add(ChatListItem.ToolGroupItem(assistant = message, toolMessages = toolMessages))
+                val isLastInGroup = cursor >= messages.size ||
+                    messages[cursor].role != MessageRole.ASSISTANT
+                items.add(
+                    ChatListItem.ToolGroupItem(
+                        rounds = rounds,
+                        toolMessages = toolMessages,
+                        finalMessage = finalMessage,
+                        isLastInGroup = isLastInGroup
+                    )
+                )
                 index = cursor
             }
             message.role == MessageRole.TOOL -> {
-                items.add(ChatListItem.ToolGroupItem(assistant = null, toolMessages = listOf(message)))
+                items.add(
+                    ChatListItem.ToolGroupItem(
+                        rounds = emptyList(),
+                        toolMessages = listOf(message),
+                        finalMessage = null,
+                        isLastInGroup = false
+                    )
+                )
                 index++
             }
             else -> {
