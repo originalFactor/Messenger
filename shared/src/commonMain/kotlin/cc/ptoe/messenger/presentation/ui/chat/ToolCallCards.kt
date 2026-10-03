@@ -33,7 +33,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +59,7 @@ import cc.ptoe.messenger.generated.resources.tool_card_result_label
 import cc.ptoe.messenger.generated.resources.tool_card_running
 import cc.ptoe.messenger.generated.resources.tool_card_success
 import cc.ptoe.messenger.generated.resources.tool_name_terminal
+import cc.ptoe.messenger.presentation.ui.components.toolIcon
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -243,7 +243,7 @@ private fun ToolCallCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Default.Terminal,
+                imageVector = toolIcon(toolName),
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant

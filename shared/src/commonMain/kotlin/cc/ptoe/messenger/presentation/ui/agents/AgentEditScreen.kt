@@ -85,6 +85,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,6 +98,7 @@ import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
+import cc.ptoe.messenger.presentation.ui.components.toolIcon
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.domain.model.Agent
@@ -793,7 +795,8 @@ private fun ToolToggleCard(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    icon: ImageVector? = null
 ) {
     Card(
         modifier = modifier
@@ -809,6 +812,15 @@ private fun ToolToggleCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
@@ -1093,6 +1105,7 @@ private fun AgentToolsPage(
                                 },
                                 checked = checked,
                                 enabled = state.toolsEnabled && !following,
+                                icon = toolIcon(tool.name),
                                 onCheckedChange = { onToolEnabledChange(tool.name, it) }
                             )
                         }
