@@ -100,17 +100,12 @@ ext["keystorePassword"] = getEnv("KEYSTORE_PASSWORD") ?: ""
 ext["keyAlias"] = getEnv("KEY_ALIAS") ?: "messenger"
 ext["keyPassword"] = getEnv("KEY_PASSWORD") ?: ""
 
-// The standalone com.google.guava:listenablefuture:1.0 stub (pulled transitively
-// by androidx.concurrent:concurrent-futures via androidx.core) ships the
-// com.google.common.util.concurrent.ListenableFuture class. KSP/Room compiler
-// pulls in full Guava at build-time (for com.google.common.collect.ImmutableList),
-// which bundles the same class and would collide. Excluding only the stub
-// globally keeps AGP's checkDebugDuplicateClasses happy while letting Guava
-// itself stay on the build-time classpath so KSP/Room can run.
-// Note: llm-typewriter previously dragged in guava-18.0 via AndroidMath; that
-// path is gone after the RaTeX migration (AndroidMath removed).
-allprojects {
-    configurations.all {
-        exclude(group = "com.google.guava", module = "listenablefuture")
-    }
-}
+// No global exclude of the com.google.guava:listenablefuture:1.0 stub: the
+// collision it guarded against (guava-18.0 dragged in by llm-typewriter via
+// AndroidMath) is gone after the RaTeX migration, and stripping the stub breaks
+// apps that have no other provider of the com.google.common.util.concurrent
+// .ListenableFuture interface — androidx.profileinstaller (pulled by Compose)
+// extends it at runtime, so its App Startup initializer crashed the wear app
+// with NoClassDefFoundError on launch. Full Guava only ever appears on
+// build-time tooling classpaths (KSP/Room, lint), which never collide with the
+// stub in AGP's checkDuplicateClasses.

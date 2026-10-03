@@ -131,19 +131,6 @@ compose.resources {
     generateResClass = always
 }
 
-// The standalone com.google.guava:listenablefuture:1.0 stub (pulled transitively
-// by androidx.concurrent:concurrent-futures via androidx.core) collides with the
-// full Guava that KSP/Room compiler pulls in at build-time for
-// com.google.common.collect.ImmutableList. Exclude only the stub globally so
-// AGP's checkDebugDuplicateClasses passes while Guava stays on the KSP classpath.
-// Note: llm-typewriter previously dragged in guava-18.0 via AndroidMath; that
-// path is gone after the RaTeX migration (AndroidMath removed).
-configurations {
-    all {
-        exclude(group = "com.google.guava", module = "listenablefuture")
-    }
-}
-
 dependencies {
     // Room compiler: per-target KSP registration (AGP 9 KMP library plugin pattern).
     add("kspAndroid", libs.androidx.room.compiler)
