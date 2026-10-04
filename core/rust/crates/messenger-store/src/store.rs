@@ -387,6 +387,21 @@ impl Store {
         })
     }
 
+    /// Read one sync_meta column (pendingUpserts / pendingDeletes) as its
+    /// raw JSON string.
+    pub fn sync_meta_field(&self, account_id: &str, column: &str) -> Result<String, rusqlite::Error> {
+        let sql = match column {
+            "pendingUpserts" => "SELECT pendingUpserts FROM sync_meta WHERE accountId = ?1",
+            "pendingDeletes" => "SELECT pendingDeletes FROM sync_meta WHERE accountId = ?1",
+            other => return Err(rusqlite::Error::InvalidColumnName(other.to_string())),
+        };
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(sql)?;
+            let mut rows = stmt.query_map([account_id], |r| r.get::<_, String>(0))?;
+            Ok(rows.next().transpose()?.unwrap_or_else(|| "[]".to_string()))
+        })
+    }
+
     pub fn set_sync_meta(&self, account_id: &str, cursor: i64, pending_upserts: &str, pending_deletes: &str) -> Result<(), rusqlite::Error> {
         self.with_conn(|conn| {
             conn.execute(

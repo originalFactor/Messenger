@@ -67,7 +67,7 @@ pub struct StoredAgent {
 }
 
 /// `conversations` row with the per-conversation override columns.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StoredConversation {
     pub id: String,
     pub title: String,
