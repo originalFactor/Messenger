@@ -6,6 +6,7 @@
 pub mod api;
 pub mod documents;
 pub mod models;
+pub mod rehydrate;
 #[cfg(test)]
 mod sync_tests;
 pub mod sync;
