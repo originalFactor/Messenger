@@ -52,7 +52,7 @@ class MessengerApplication : Application() {
         container.initializeLocalAndCloudData()
         setupImageLoader(container)
         startWearSync()
-        RustProbe.run() // M0 walking-skeleton probe; removed in M2.
+        RustProbe.run(this) // M1 walking-skeleton probe; replaced by the M2 facades.
     }
 
     /** Coil with the cookie-aware cloud client so authenticated avatars load. */

@@ -1,10 +1,13 @@
-//! Messenger Rust Core — UniFFI boundary (M0 walking skeleton).
+//! Messenger Rust Core — UniFFI boundary.
 //!
-//! M0 only proves the FFI toolchain end to end: a synchronous `corePing`,
-//! and `echoEvents` streaming a short sequence of `AgentEvent`s back to
-//! Kotlin through a UniFFI callback interface. The real Agent Runtime
-//! (LLM streaming, tool loop, store, sync) lands in M1 behind this same
-//! boundary.
+//! `core` exposes the real store/agent surface; `lib.rs` keeps the M0
+//! echo/ping demo used by the walking-skeleton probe.
+
+mod core;
+pub use core::{
+    CoreError, CoreHandle, ConversationSummary, MessageRow, PlatformToolHost, StoreChangeEvent,
+    StoreChangeListener, ToolResultFfi, TurnConfig, TurnEventSink,
+};
 
 use std::time::Duration;
 

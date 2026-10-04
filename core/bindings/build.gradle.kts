@@ -120,8 +120,11 @@ android {
 
 dependencies {
     // UniFFI-generated Kotlin drives the cdylib through JNA; the @aar variant
-    // carries the Android native loader.
+    // carries the Android native loader. Suspended exports pull in
+    // kotlinx-coroutines primitives (CancellableContinuation).
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
 }
 
 tasks.named("preBuild") {
