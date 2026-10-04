@@ -1,0 +1,10 @@
+[package]
+name = "messenger-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

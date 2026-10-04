@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/messenger-ffi", "crates/messenger-llm", "crates/messenger-tools"]
+members = ["crates/messenger-ffi", "crates/messenger-llm", "crates/messenger-tools", "crates/messenger-store"]
 
 [workspace.package]
 version = "0.1.0"
