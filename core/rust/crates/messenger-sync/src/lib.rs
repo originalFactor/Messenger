@@ -4,14 +4,19 @@
 //! upserts/deletes, builtin provider/title-agent seeding).
 
 pub mod api;
+pub mod avatar;
+pub mod cards;
 pub mod documents;
+pub mod market;
 pub mod models;
+pub mod models_sync;
 pub mod rehydrate;
 #[cfg(test)]
 mod sync_tests;
 pub mod sync;
 
 pub use api::CloudApiClient;
+pub use avatar::{AvatarManager, MAX_AVATAR_BYTES};
 pub use models::*;
 pub use models::{BUILTIN_PROVIDER_ID, BUILTIN_PROVIDER_NAME, BUILTIN_TITLE_AGENT_ID, DEFAULT_CLOUD_SERVER_URL, ROLE_CHAT, ROLE_TITLE};
 pub use sync::SyncEngine;

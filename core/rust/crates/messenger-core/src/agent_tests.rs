@@ -310,7 +310,7 @@ async fn cancellation_finalizes_partial_rows() {
                 .respond_with(
                     wiremock::ResponseTemplate::new(200)
                         .set_body_string(r#"data: {"choices":[{"delta":{"content":"partial"}}]}"#)
-                        .set_delay(std::time::Duration::from_millis(50)),
+                        .set_delay(std::time::Duration::from_millis(1000)),
                 )
         .mount(&server)
         .await;
@@ -320,7 +320,7 @@ async fn cancellation_finalizes_partial_rows() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         cancel_clone.cancel();
     });
 
@@ -329,6 +329,7 @@ async fn cancellation_finalizes_partial_rows() {
         .unwrap();
 
     let events = sink.0.lock().unwrap();
+    eprintln!("EVENTS: {events:?}");
     assert!(matches!(events.last(), Some(AgentEvent::Cancelled)));
     // No error bubble row was written by the turn itself.
     let error_rows: Vec<_> = store

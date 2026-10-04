@@ -47,11 +47,13 @@ impl CloudApiClient {
     // -- auth --
 
     pub async fn register(&self, url: &str, body: &CredentialsRequest) -> CloudResult<CloudUser> {
-        self.post_json(url, body).await
+        let resp: UserResponse = self.post_json(url, body).await?;
+        Ok(resp.user)
     }
 
     pub async fn login(&self, url: &str, body: &CredentialsRequest) -> CloudResult<CloudUser> {
-        self.post_json(url, body).await
+        let resp: UserResponse = self.post_json(url, body).await?;
+        Ok(resp.user)
     }
 
     pub async fn logout(&self, url: &str) -> CloudResult<SuccessResponse> {
@@ -59,7 +61,8 @@ impl CloudApiClient {
     }
 
     pub async fn me(&self, url: &str) -> CloudResult<CloudUser> {
-        self.get_json(url).await
+        let resp: UserResponse = self.get_json(url).await?;
+        Ok(resp.user)
     }
 
     pub async fn change_password(
@@ -141,6 +144,146 @@ impl CloudApiClient {
 
     pub async fn delete_provider(&self, url: &str) -> CloudResult<CloudUpsertResponse> {
         self.delete_json(url).await
+    }
+
+    // -- cards --
+
+    pub async fn preview_redeem_card(&self, url: &str, code: &str) -> CloudResult<CloudCardPreviewResponse> {
+        self.post_json(url, &RedeemCodeRequest { code: code.to_string() }).await
+    }
+
+    pub async fn redeem_card(&self, url: &str, code: &str) -> CloudResult<CloudRedeemResponse> {
+        self.post_json(url, &RedeemCodeRequest { code: code.to_string() }).await
+    }
+
+    // -- market --
+
+    pub async fn list_market_agents(
+        &self,
+        url: &str,
+        query: &str,
+        cursor: Option<&str>,
+    ) -> CloudResult<CloudMarketAgentListResponse> {
+        let mut params = vec![("query".to_string(), query.to_string())];
+        if let Some(c) = cursor {
+            params.push(("cursor".to_string(), c.to_string()));
+        }
+        let full = with_query(url, &params);
+        self.get_json(&full).await
+    }
+
+    pub async fn get_market_agent(&self, url: &str) -> CloudResult<CloudMarketAgentResponse> {
+        self.get_json(url).await
+    }
+
+    pub async fn create_market_agent(
+        &self,
+        url: &str,
+        body: &CloudMarketAgentRequest,
+    ) -> CloudResult<CloudMarketAgentResponse> {
+        self.post_json(url, body).await
+    }
+
+    pub async fn update_market_agent(
+        &self,
+        url: &str,
+        body: &CloudMarketAgentRequest,
+    ) -> CloudResult<CloudMarketAgentResponse> {
+        self.put_json(url, body).await
+    }
+
+    pub async fn delete_market_agent(&self, url: &str) -> CloudResult<SuccessResponse> {
+        self.delete_json(url).await
+    }
+
+    // -- avatar upload/delete & conditional download --
+
+    pub async fn upload_avatar(
+        &self,
+        url: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+        mime: &str,
+    ) -> CloudResult<CloudAvatarResponse> {
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename.to_string())
+            .mime_str(mime)
+            .map_err(|e| CloudError::Network(e.to_string()))?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let request = self.add_session(self.http.put(url).multipart(form));
+        let response = request
+            .send()
+            .await
+            .map_err(|e| CloudError::Network(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            let code = status.as_u16();
+            let raw = response.text().await.unwrap_or_default();
+            let message = if raw.is_empty() {
+                format!("HTTP {code}")
+            } else {
+                crate::documents::extract_error_message(&raw)
+            };
+            return Err(CloudError::Http { status: code, message });
+        }
+        response
+            .json::<CloudAvatarResponse>()
+            .await
+            .map_err(|e| CloudError::InvalidBody(e.to_string()))
+    }
+
+    pub async fn delete_avatar(&self, url: &str) -> CloudResult<CloudAvatarResponse> {
+        self.delete_json(url).await
+    }
+
+    /// Download avatar with optional ETag for 304 conditional request.
+    /// Returns:
+    /// - Ok(None) on HTTP 304 Not Modified
+    /// - Ok(Some((bytes, etag, content_type))) on HTTP 200
+    pub async fn download_avatar_conditional(
+        &self,
+        url: &str,
+        if_none_match: Option<&str>,
+    ) -> CloudResult<Option<(Vec<u8>, Option<String>, Option<String>)>> {
+        let mut builder = self.http.get(url);
+        builder = self.add_session(builder);
+        if let Some(etag) = if_none_match {
+            builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+        let response = builder
+            .send()
+            .await
+            .map_err(|e| CloudError::Network(e.to_string()))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let code = status.as_u16();
+            let raw = response.text().await.unwrap_or_default();
+            let message = if raw.is_empty() {
+                format!("HTTP {code}")
+            } else {
+                crate::documents::extract_error_message(&raw)
+            };
+            return Err(CloudError::Http { status: code, message });
+        }
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| CloudError::Network(e.to_string()))?
+            .to_vec();
+        Ok(Some((bytes, etag, content_type)))
     }
 
     // -- internals --

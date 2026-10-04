@@ -13,6 +13,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1", features = ["rt", "macros", "sync", "fs"] }
 sha2 = "0.10"
 base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 wiremock = "0.6"

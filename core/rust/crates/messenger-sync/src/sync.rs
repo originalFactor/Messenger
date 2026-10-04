@@ -31,8 +31,8 @@ pub struct SyncResult {
 }
 
 pub struct SyncEngine<'a> {
-    store: &'a Store,
-    client: CloudApiClient,
+    pub(crate) store: &'a Store,
+    pub(crate) client: CloudApiClient,
 }
 
 impl<'a> SyncEngine<'a> {
@@ -90,11 +90,11 @@ impl<'a> SyncEngine<'a> {
             .map_err(|e| e.to_string())
     }
 
-    fn endpoint(&self, path: &str) -> String {
+    pub(crate) fn endpoint(&self, path: &str) -> String {
         format!("{}/{}", self.server_url().trim_end_matches('/'), path)
     }
 
-    fn signed_in(&self) -> Result<CloudUser, CloudError> {
+    pub(crate) fn signed_in(&self) -> Result<CloudUser, CloudError> {
         self.current_user().ok_or_else(|| CloudError::Http {
             status: 401,
             message: "Please sign in first".into(),

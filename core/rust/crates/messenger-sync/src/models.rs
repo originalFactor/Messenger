@@ -279,6 +279,135 @@ pub struct SuccessResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Avatars, Market & Cards DTOs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudAvatarResponse {
+    pub url: Option<String>,
+    pub version: i64,
+    #[serde(rename = "avatarVersion")]
+    pub avatar_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudMarketAgent {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "avatarUrl")]
+    pub avatar_url: Option<String>,
+    #[serde(rename = "avatarVersion")]
+    pub avatar_version: Option<i64>,
+    #[serde(rename = "systemPrompt")]
+    pub system_prompt: String,
+    pub temperature: f64,
+    #[serde(rename = "topP")]
+    pub top_p: f64,
+    #[serde(rename = "maxTokens")]
+    pub max_tokens: Option<i64>,
+    #[serde(rename = "reasoningEffort")]
+    pub reasoning_effort: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudMarketAgentListResponse {
+    pub agents: Vec<CloudMarketAgent>,
+    #[serde(rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudMarketAgentResponse {
+    pub agent: CloudMarketAgent,
+    #[serde(rename = "isOwner")]
+    pub is_owner: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudMarketAgentUpdate {
+    pub agent: CloudMarketAgent,
+    #[serde(rename = "hasUpdate")]
+    pub has_update: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CloudMarketAgentRequest {
+    pub name: String,
+    #[serde(rename = "systemPrompt")]
+    pub system_prompt: String,
+    pub temperature: f64,
+    #[serde(rename = "topP")]
+    pub top_p: f64,
+    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i64>,
+    #[serde(rename = "reasoningEffort", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudCardPreview {
+    pub code: String,
+    #[serde(rename = "planName")]
+    pub plan_name: String,
+    #[serde(rename = "quotaTokens")]
+    pub quota_tokens: i64,
+    #[serde(rename = "validityDays")]
+    pub validity_days: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudCardPreviewResponse {
+    pub card: CloudCardPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedeemCodeRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudRedeemRedemption {
+    #[serde(rename = "cardCode")]
+    pub card_code: String,
+    #[serde(rename = "planName")]
+    pub plan_name: String,
+    #[serde(rename = "quotaTokens")]
+    pub quota_tokens: i64,
+    #[serde(rename = "validityDays")]
+    pub validity_days: i64,
+    #[serde(rename = "redeemedAt")]
+    pub redeemed_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudQuotaSummary {
+    pub balance: Option<i64>,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CloudRedeemResponse {
+    pub redemption: CloudRedeemRedemption,
+    pub quota: Option<CloudQuotaSummary>,
+}
+
+// ---------------------------------------------------------------------------
 // push request DTOs
 // ---------------------------------------------------------------------------
 
