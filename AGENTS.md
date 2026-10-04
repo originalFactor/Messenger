@@ -620,7 +620,13 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
 
 The repo is mid-migration to the `TARGET.md` architecture (Rust Agent Core + UniFFI bridge + platform-native renderers) under the approved phased plan: M0 FFI walking skeleton → M1 Rust core (agent runtime, SQLite store + legacy import, cloud sync port) → M2 re-anchor the existing Compose UI onto the Rust core (switch point ①) → M3 incremental Document Engine + Android View chat renderer (switch point ②) → M4 Wear on the Rust core (switch point ③) → M5 Desktop renderer + cleanup. The old stack stays buildable and shippable until each switch point.
 
-Current status — **M0 complete**:
+Current status — **M0 complete, M1 in progress** (crates live in `core/rust/crates/`; 80+ Rust tests green across the workspace):
+
+- `messenger-llm` — full port of the LLM layer: streaming parser (think wrapping, tool-call accumulation, usage stashing, double-Done), request builder (reasoning three-state, multipart images, tool specs), reqwest+rustls client, `ChatEventStream` with the mandatory has-finished error sentinel (`error_stream_no_data`).
+- `messenger-tools` — ShellCommandPolicy allowlist, terminal/workspace declarations, `resolve_request_tools` (per-tool config, read-only/writable mode).
+- `messenger-store` — SQLite schema v1 (Room v20 column names verbatim), typed CRUD + StoreEvent notifications, sync_meta/kv tables, one-shot legacy import (WAL-aware staging copy, idempotent marker).
+- `messenger-core` — parts codec, context math (estimation, 80% summarization, orphan-tool trimming), title helpers, and `run_chat_turn`: the event-driven agent loop with ToolHost callback, cancellation, exact-usage bookkeeping.
+- `messenger-ffi` — `CoreHandle` (open+import, subscribe, list, `run_turn` as a Kotlin suspend fn on the uniffi tokio runtime, `cancel_turn`, PlatformToolHost bridge). Verified on emulator: the real Room DB imports and reads back through the FFI.
 
 - `core/rust` is a Cargo workspace; `crates/messenger-ffi` is the only crate so far and owns the whole UniFFI boundary (`uniffi::setup_scaffolding!`, proc-macro exports only — no UDL). Generated Kotlin lands in package `cc.ptoe.messenger.core` (set in `uniffi.toml`), one file per namespace. New core crates are added to the workspace as M1 progresses; the FFI crate stays the single boundary.
 - `:core-bindings` (directory `core/bindings`) is an `com.android.library` module whose `preBuild` runs three `Exec` tasks: `cargoBuildHost` (host release cdylib feeding the bindgen), `generateUniFFIBindings` (`cargo run --bin uniffi-bindgen generate --no-format` into `build/generated/uniffiKotlin`), and `buildRustAndroid` (`cargo ndk --platform 30` for arm64-v8a/armeabi-v7a/x86_64 into `build/rustJniLibs`). Generated code and native libs live under `build/` and are never committed. The bindings load through JNA, so the module depends on `net.java.dev.jna:jna@aar`.
