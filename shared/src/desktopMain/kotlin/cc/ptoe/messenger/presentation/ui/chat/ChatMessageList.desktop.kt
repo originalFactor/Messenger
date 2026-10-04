@@ -170,18 +170,21 @@ internal actual fun ChatMessageList(
                                 )
                             }
                             MessageRole.ASSISTANT -> {
-                                AiMessageBubble(
-                                    message = message,
-                                    isGenerating = isGenerating,
-                                    isLastInGroup = item.isLastInGroup,
+                                DesktopDocumentBubble(
+                                    message = if (message.id == streamingMessageId && streamingContent != null) {
+                                        message.copy(content = streamingContent)
+                                    } else {
+                                        message
+                                    },
+                                    blocks = null,
                                     avatar = agent?.avatar,
+                                    isGenerating = isGenerating && message.id == streamingMessageId,
+                                    isLastInGroup = item.isLastInGroup,
                                     onRetryClick = {
                                         if (message.status == MessageStatus.ERROR) {
                                             onRetryClick(message.id)
                                         }
                                     },
-                                    streamingContent = streamingContent,
-                                    streamingMessageId = streamingMessageId,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
