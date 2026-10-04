@@ -91,6 +91,16 @@ interface CoreBridge {
         toolExecutor: (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     )
+
+    // Document engine session
+    fun createDocumentSession(): DocumentSessionBridge? = null
+    fun parseMarkdownToBlocksJson(markdown: String): String = "[]"
+}
+
+interface DocumentSessionBridge {
+    fun feed(text: String): String
+    fun finish(): String
+    fun getDocumentJson(): String
 }
 
 data class TurnConfigBridge(

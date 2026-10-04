@@ -146,12 +146,8 @@ class DocumentView @JvmOverloads constructor(
                 }
             }
             is RenderBlock.Math -> {
-                // LaTeX math block
-                TextView(context).apply {
-                    textSize = 15f
-                    setTypeface(Typeface.MONOSPACE, Typeface.ITALIC)
-                    setTextColor(Color.parseColor("#1565C0"))
-                    text = "$$ ${block.formula} $$"
+                MathBlockView(context).apply {
+                    bind(block.formula, block.isFinalized, display = true)
                 }
             }
             is RenderBlock.Quote -> {
@@ -194,7 +190,7 @@ class DocumentView @JvmOverloads constructor(
                 (view as? CodeBlockView)?.bind(block.language, block.code)
             }
             is RenderBlock.Math -> {
-                (view as? TextView)?.text = "$$ ${block.formula} $$"
+                (view as? MathBlockView)?.bind(block.formula, block.isFinalized, display = true)
             }
             is RenderBlock.Quote -> {
                 (view as? TextView)?.text = block.text

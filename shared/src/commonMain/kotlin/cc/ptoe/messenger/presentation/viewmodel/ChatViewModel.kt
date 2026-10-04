@@ -186,6 +186,11 @@ class ChatViewModel(
     private val _streamingMessageId = MutableStateFlow<String?>(null)
     val streamingMessageId: StateFlow<String?> = _streamingMessageId.asStateFlow()
 
+    private val _streamingDiff = MutableStateFlow<String?>(null)
+    val streamingDiff: StateFlow<String?> = _streamingDiff.asStateFlow()
+
+    private var currentDocSession: cc.ptoe.messenger.core.DocumentSessionBridge? = null
+
     private var currentGenerationJob: Job? = null
 
     private val _enabledModels = MutableStateFlow<List<ChatModel>>(emptyList())
@@ -627,6 +632,8 @@ class ChatViewModel(
             _streamingMessageId.value = aiMessageId
             _isGenerating.value = true
             _streamingContent.value = ""
+            currentDocSession = bridge.createDocumentSession()
+            _streamingDiff.value = null
 
             currentGenerationJob = viewModelScope.launch {
                 try {
@@ -651,8 +658,10 @@ class ChatViewModel(
                 } catch (e: Exception) {
                     setError(e.message ?: getString(Res.string.error_unknown))
                 } finally {
+                    currentDocSession = null
                     _streamingContent.value = null
                     _streamingMessageId.value = null
+                    _streamingDiff.value = null
                     _isGenerating.value = false
                 }
             }
@@ -1273,18 +1282,28 @@ class ChatViewModel(
             "TextDelta" -> {
                 val text = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 _streamingContent.value = (_streamingContent.value ?: "") + text
+                val diffBatch = currentDocSession?.feed(text)
+                if (!diffBatch.isNullOrBlank() && diffBatch != "{\"diffs\":[]}") {
+                    _streamingDiff.value = diffBatch
+                }
             }
             "RoundPersisted" -> {
                 _streamingContent.value = ""
+                val finishBatch = currentDocSession?.finish()
+                if (!finishBatch.isNullOrBlank() && finishBatch != "{\"diffs\":[]}") {
+                    _streamingDiff.value = finishBatch
+                }
+                currentDocSession = coreBridge?.createDocumentSession()
             }
-            "Finished" -> {
+            "Finished", "Cancelled" -> {
+                val finishBatch = currentDocSession?.finish()
+                if (!finishBatch.isNullOrBlank() && finishBatch != "{\"diffs\":[]}") {
+                    _streamingDiff.value = finishBatch
+                }
+                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
-                _isGenerating.value = false
-            }
-            "Cancelled" -> {
-                _streamingContent.value = null
-                _streamingMessageId.value = null
+                _streamingDiff.value = null
                 _isGenerating.value = false
             }
             "TitleFailed" -> {
@@ -1298,8 +1317,10 @@ class ChatViewModel(
                 if (msg.isNotBlank()) {
                     setError(msg)
                 }
+                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
+                _streamingDiff.value = null
                 _isGenerating.value = false
             }
         }
@@ -1309,6 +1330,7 @@ class ChatViewModel(
         super.onCleared()
         currentGenerationJob?.cancel()
         currentGenerationJob = null
+        currentDocSession = null
     }
 
     companion object {

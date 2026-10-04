@@ -133,4 +133,16 @@ class AndroidCoreBridge(
         }
         core.runTurn(ffiConfig, toolHost, sink)
     }
+
+    override fun createDocumentSession(): DocumentSessionBridge {
+        val handle = DocumentHandle()
+        return object : DocumentSessionBridge {
+            override fun feed(text: String): String = handle.feed(text)
+            override fun finish(): String = handle.finish()
+            override fun getDocumentJson(): String = handle.getDocumentJson()
+        }
+    }
+
+    override fun parseMarkdownToBlocksJson(markdown: String): String =
+        cc.ptoe.messenger.core.parseMarkdownToBlocksJson(markdown)
 }

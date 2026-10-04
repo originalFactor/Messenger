@@ -136,6 +136,7 @@ fun ChatScreen(
     val needsModelSetup by viewModel.needsModelSetup.collectAsStateWithLifecycle()
     val streamingMessageId by viewModel.streamingMessageId.collectAsStateWithLifecycle()
     val streamingContent by viewModel.streamingContent.collectAsStateWithLifecycle()
+    val streamingDiff by viewModel.streamingDiff.collectAsStateWithLifecycle()
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
     val agentWritable by viewModel.agentWritable.collectAsStateWithLifecycle()
@@ -318,164 +319,27 @@ fun ChatScreen(
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                LazyColumn(
-                    state = listState,
-                    reverseLayout = true,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Top,
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(
-                        items = chatItems.asReversed(),
-                        key = { item ->
-                            when (item) {
-                                is ChatListItem.DateSeparator -> "date_${item.id}"
-                                is ChatListItem.MessageItem -> "msg_${item.message.id}"
-                                is ChatListItem.ToolGroupItem ->
-                                    "tool_${item.rounds.firstOrNull()?.id ?: item.toolMessages.firstOrNull()?.id}"
-                            }
-                        }
-                    ) { item ->
-                        when (item) {
-                            is ChatListItem.DateSeparator -> {
-                                DateSeparator(timestamp = item.timestamp)
-                            }
-                            is ChatListItem.ToolGroupItem -> {
-                                // 回合气泡与普通消息一样挂长按/右键菜单，动作锚定最终文本行
-                                // （无最终文本时锚定最后一个工具轮行）。
-                                val anchor = item.finalMessage ?: item.rounds.lastOrNull()
-                                val contextMenuState = rememberContextMenuState()
-                                val groupInteractionSource = remember { MutableInteractionSource() }
-                                val groupModifier = if (anchor != null) {
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .combinedClickable(
-                                            interactionSource = groupInteractionSource,
-                                            indication = null,
-                                            onClick = {},
-                                            onLongClick = {
-                                                if (!enableContextMenu) {
-                                                    selectedMessageId = anchor.id
-                                                    selectedMessageRole = anchor.role
-                                                    showActionMenu = true
-                                                }
-                                            }
-                                        )
-                                        .then(
-                                            if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                                            else Modifier
-                                        )
-                                } else {
-                                    Modifier
-                                }
-                                Box(modifier = groupModifier) {
-                                    ToolGroupItem(
-                                        rounds = item.rounds,
-                                        toolMessages = item.toolMessages,
-                                        finalMessage = item.finalMessage,
-                                        isLastInGroup = item.isLastInGroup,
-                                        streamingContent = streamingContent,
-                                        streamingMessageId = streamingMessageId
-                                    )
-                                    if (enableContextMenu && anchor != null) {
-                                        MessageContextMenu(
-                                            state = contextMenuState,
-                                            messageRole = anchor.role,
-                                            onCopyClick = {
-                                                viewModel.copyMessage(anchor.content)
-                                                showPlatformToast(copiedToastText)
-                                            },
-                                            onRegenerateClick = {
-                                                viewModel.regenerateMessage(anchor.id)
-                                            },
-                                            onDeleteClick = {
-                                                viewModel.deleteMessage(anchor.id)
-                                            },
-                                            onDismiss = {}
-                                        )
-                                    }
-                                }
-                            }
-                            is ChatListItem.MessageItem -> {
-                                val message = item.message
-                                val contextMenuState = rememberContextMenuState()
-                                // 消息气泡禁用 combinedClickable 的默认 indication（hover 高亮 + 涟漪），
-                                // 保持气泡原始视觉干净；onClick / onLongClick / onContextMenu 行为保留。
-                                val bubbleInteractionSource = remember { MutableInteractionSource() }
-                                val bubbleModifier = Modifier
-                                    .fillMaxWidth()
-                                    .combinedClickable(
-                                        interactionSource = bubbleInteractionSource,
-                                        indication = null,
-                                        onClick = {
-                                            if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
-                                                viewModel.retrySend(message.id)
-                                            }
-                                        },
-                                        onLongClick = {
-                                            if (!enableContextMenu) {
-                                                selectedMessageId = message.id
-                                                selectedMessageRole = message.role
-                                                showActionMenu = true
-                                            }
-                                        }
-                                    )
-                                    .then(
-                                        if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                                        else Modifier
-                                    )
-
-                                Box(modifier = bubbleModifier) {
-                                    when (message.role) {
-                                        MessageRole.USER -> {
-                                            UserMessageBubble(
-                                                message = message,
-                                                modifier = Modifier.fillMaxWidth(),
-                                                isLastInGroup = item.isLastInGroup,
-                                                avatar = userAvatar
-                                            )
-                                        }
-                                        MessageRole.ASSISTANT -> {
-                                            AiMessageBubble(
-                                                message = message,
-                                                isGenerating = isGenerating,
-                                                isLastInGroup = item.isLastInGroup,
-                                                avatar = agent?.avatar,
-                                                onRetryClick = {
-                                                    if (message.status == MessageStatus.ERROR) {
-                                                        viewModel.retrySend(message.id)
-                                                    }
-                                                },
-                                                streamingContent = streamingContent,
-                                                streamingMessageId = streamingMessageId,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        MessageRole.SYSTEM, MessageRole.TOOL -> {}
-                                    }
-
-                                    if (enableContextMenu) {
-                                        MessageContextMenu(
-                                            state = contextMenuState,
-                                            messageRole = message.role,
-                                            onCopyClick = {
-                                                viewModel.copyMessage(message.content)
-                                                showPlatformToast(copiedToastText)
-                                            },
-                                            onRegenerateClick = {
-                                                viewModel.regenerateMessage(message.id)
-                                            },
-                                            onDeleteClick = {
-                                                viewModel.deleteMessage(message.id)
-                                            },
-                                            onDismiss = {}
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                ChatMessageList(
+                    chatItems = chatItems,
+                    isGenerating = isGenerating,
+                    streamingContent = streamingContent,
+                    streamingMessageId = streamingMessageId,
+                    streamingDiff = streamingDiff,
+                    agent = agent,
+                    userAvatar = userAvatar,
+                    enableContextMenu = enableContextMenu,
+                    copiedToastText = copiedToastText,
+                    onRetryClick = { messageId -> viewModel.retrySend(messageId) },
+                    onMessageLongClick = { message ->
+                        selectedMessageId = message.id
+                        selectedMessageRole = message.role
+                        showActionMenu = true
+                    },
+                    onCopyClick = { text -> viewModel.copyMessage(text) },
+                    onRegenerateClick = { messageId -> viewModel.regenerateMessage(messageId) },
+                    onDeleteClick = { messageId -> viewModel.deleteMessage(messageId) },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
     }
@@ -534,7 +398,7 @@ fun ChatScreen(
 /**
  * 聊天列表项：日期分隔符、消息或代理回合
  */
-private sealed class ChatListItem {
+internal sealed class ChatListItem {
     data class DateSeparator(
         val id: String,
         val timestamp: Long
@@ -566,7 +430,7 @@ private sealed class ChatListItem {
  * [ChatListItem.ToolGroupItem]（整个回合一条消息），孤儿 TOOL 行（历史异常）
  * 也以工具组兜底渲染而不是静默丢弃。
  */
-private fun buildChatItems(messages: List<Message>): List<ChatListItem> {
+internal fun buildChatItems(messages: List<Message>): List<ChatListItem> {
     if (messages.isEmpty()) return emptyList()
 
     val items = mutableListOf<ChatListItem>()
@@ -648,7 +512,7 @@ private fun buildChatItems(messages: List<Message>): List<ChatListItem> {
 }
 
 @Composable
-private fun DateSeparator(timestamp: Long, modifier: Modifier = Modifier) {
+internal fun DateSeparator(timestamp: Long, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()

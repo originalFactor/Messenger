@@ -20,21 +20,32 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * Android Native MessageView (TARGET.md §8, §9, §10).
+ * Android Native MessageView (TARGET.md §8, §9, §10, §18).
  *
- * Wraps DocumentView inside a chat bubble container with sender alignment
- * and bubble styling.
+ * High-performance native view wrapping [DocumentView] inside an adaptive chat bubble.
+ * Supports User, Assistant, and Date Separator layouts, error state retry hooks,
+ * streaming indicators, and touch/long-press gesture dispatches.
  */
 class MessageView(context: Context) : LinearLayout(context) {
 
     val documentView: DocumentView = DocumentView(context)
     val userTextView: TextView = TextView(context)
+    val statusTextView: TextView = TextView(context)
+    val dateSeparatorTextView: TextView = TextView(context)
     private val bubbleContainer: FrameLayout = FrameLayout(context)
+
+    var currentItem: MessageItem? = null
+        private set
+
+    var onMessageClickListener: ((MessageItem) -> Unit)? = null
+    var onMessageLongClickListener: ((MessageItem, View) -> Unit)? = null
+    var onRetryClickListener: ((MessageItem) -> Unit)? = null
 
     init {
         orientation = VERTICAL
@@ -48,24 +59,69 @@ class MessageView(context: Context) : LinearLayout(context) {
 
         userTextView.textSize = 15f
         userTextView.setTextColor(Color.WHITE)
-        userTextView.setTextIsSelectable(true)
+        userTextView.setTextIsSelectable(false) // Handle selection via custom copy actions
+
+        statusTextView.textSize = 12f
+        statusTextView.setTextColor(Color.parseColor("#BA1A1A")) // Error red
+        statusTextView.visibility = GONE
+
+        dateSeparatorTextView.textSize = 12f
+        dateSeparatorTextView.setTextColor(Color.parseColor("#757575"))
+        dateSeparatorTextView.gravity = Gravity.CENTER
+        dateSeparatorTextView.visibility = GONE
+
+        val dateLp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            val vMargin = (8 * context.resources.displayMetrics.density).toInt()
+            setMargins(0, vMargin, 0, vMargin)
+        }
+        addView(dateSeparatorTextView, dateLp)
 
         bubbleContainer.addView(documentView)
         bubbleContainer.addView(userTextView)
 
-        val lp = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
-        addView(bubbleContainer, lp)
+        val bubbleLp = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+        addView(bubbleContainer, bubbleLp)
+
+        val statusLp = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (4 * context.resources.displayMetrics.density).toInt()
+        }
+        addView(statusTextView, statusLp)
+
+        bubbleContainer.setOnClickListener {
+            val item = currentItem ?: return@setOnClickListener
+            if (item.status.equals("ERROR", ignoreCase = true)) {
+                onRetryClickListener?.invoke(item)
+            } else {
+                onMessageClickListener?.invoke(item)
+            }
+        }
+
+        bubbleContainer.setOnLongClickListener { v ->
+            val item = currentItem ?: return@setOnLongClickListener false
+            onMessageLongClickListener?.invoke(item, v)
+            true
+        }
     }
 
-    fun bind(
-        role: String,
-        content: String,
-        blocks: List<RenderBlock>?,
-        isStreaming: Boolean
-    ) {
+    fun bind(item: MessageItem) {
+        this.currentItem = item
         val density = context.resources.displayMetrics.density
         val cornerRadius = 18f * density
-        val isUser = role.equals("user", ignoreCase = true)
+
+        if (item.isDateSeparator) {
+            gravity = Gravity.CENTER_HORIZONTAL
+            dateSeparatorTextView.visibility = VISIBLE
+            dateSeparatorTextView.text = item.content
+            bubbleContainer.visibility = GONE
+            statusTextView.visibility = GONE
+            return
+        }
+
+        dateSeparatorTextView.visibility = GONE
+        bubbleContainer.visibility = VISIBLE
+
+        val isUser = item.role.equals("user", ignoreCase = true)
+        val isError = item.status.equals("ERROR", ignoreCase = true)
 
         if (isUser) {
             gravity = Gravity.END
@@ -75,20 +131,39 @@ class MessageView(context: Context) : LinearLayout(context) {
             }
             bubbleContainer.background = bg
             userTextView.visibility = VISIBLE
-            userTextView.text = content
+            userTextView.text = item.content
             documentView.visibility = GONE
+            statusTextView.visibility = GONE
         } else {
             gravity = Gravity.START
             val bg = GradientDrawable().apply {
-                setColor(Color.parseColor("#F0F2F5")) // Assistant surface bubble
+                if (isError) {
+                    setColor(Color.parseColor("#FFDAD6")) // Error container background
+                } else {
+                    setColor(Color.parseColor("#F0F2F5")) // Assistant surface bubble
+                }
                 this.cornerRadius = cornerRadius
             }
             bubbleContainer.background = bg
             userTextView.visibility = GONE
             documentView.visibility = VISIBLE
 
-            if (blocks != null) {
-                documentView.setBlocks(blocks)
+            if (item.blocks != null) {
+                documentView.setBlocks(item.blocks)
+            } else if (item.content.isNotBlank()) {
+                val parsed = DocumentParser.parseBlocksJson(
+                    cc.ptoe.messenger.core.parseMarkdownToBlocksJson(item.content)
+                )
+                documentView.setBlocks(parsed)
+            } else if (item.isStreaming) {
+                documentView.setBlocks(emptyList())
+            }
+
+            if (isError) {
+                statusTextView.visibility = VISIBLE
+                statusTextView.text = "Failed to send. Tap to retry."
+            } else {
+                statusTextView.visibility = GONE
             }
         }
     }

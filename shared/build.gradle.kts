@@ -95,6 +95,8 @@ kotlin {
         getByName("androidMain") {
             dependencies {
                 implementation(project(":core-bindings"))
+                implementation(project(":renderer-android"))
+                implementation(libs.androidx.recyclerview)
                 implementation(compose.preview)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.core.ktx)
