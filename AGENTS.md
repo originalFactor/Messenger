@@ -11,12 +11,25 @@ Messenger is a Material 3 designed LLM chat application for Android, focused on 
 - **Language**: Kotlin
 - **UI**: Jetpack Compose (Material 3) + Wear Compose
 - **Architecture**: Clean Architecture (data/domain/presentation layers)
-- **Modules**: `shared` (KMP library: shared Android/Desktop logic), `androidApp` (Android application shell), `desktopApp` (Desktop application shell), `wear` (Wear OS), `runtime` (companion shell-runtime app: own UID + targetSdk 28 for the legacy SELinux domain, hosts the Termux bootstrap), `server` (Next.js SaaS platform — Vercel or self-hosted: official website, web console, cloud sync, card-key billing, AI API relay)
+- **Modules**: `shared` (KMP library: shared Android/Desktop logic), `androidApp` (Android application shell), `desktopApp` (Desktop application shell), `wear` (Wear OS), `runtime` (companion shell-runtime app: own UID + targetSdk 28 for the legacy SELinux domain, hosts the Termux bootstrap), `server` (Next.js SaaS platform — Vercel or self-hosted: official website, web console, cloud sync, card-key billing, AI API relay), `core/rust` + `core/bindings` (Rust Agent Core under construction per `TARGET.md` — see "TARGET.md architecture migration")
 
 ## Project Structure
 
 ```
 Messenger/
+├── core/                       # TARGET.md migration: Rust Agent Core + its Kotlin bridge
+│   ├── rust/                   # Cargo workspace (resolver = 2, release LTO + strip)
+│   │   └── crates/
+│   │       └── messenger-ffi/  # UniFFI boundary crate (cdylib `messenger_ffi`; Kotlin package
+│   │                           #   cc.ptoe.messenger.core via uniffi.toml; src/bin/uniffi-bindgen.rs
+│   │                           #   regenerates bindings). M0 walking skeleton: corePing/coreVersion +
+│   │                           #   echoEvents streaming AgentEvent through the AgentEventSink callback
+│   └── bindings/               # Gradle module :core-bindings (projectDir mapped from core/bindings)
+│       ├── build.gradle.kts    # com.android.library; Exec tasks cargoBuildHost → generateUniFFIBindings
+│       │                       #   (bindgen --no-format) and buildRustAndroid (cargo-ndk, 3 ABIs,
+│       │                       #   --platform 30) wired into preBuild; NDK resolved from
+│       │                       #   ANDROID_NDK_HOME else $sdk.dir/ndk/<highest>
+│       └── proguard-rules.pro  # consumer rules: keep cc.ptoe.messenger.core.** + JNA (R8 on :wear)
 ├── .github/workflows/          # GitHub Actions CI/CD (split into 6 files)
 │   ├── build-android.yml       # Reusable workflow: androidApp ABI release APKs
 │   ├── build-wear.yml          # Reusable workflow: wear release APK
@@ -602,6 +615,18 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
   - Consume theme tokens — `MaterialTheme.shapes.*`, `MaterialTheme.colorScheme.*` (surface-container family for cards/lists) and `MaterialTheme.typography.*`. Do NOT introduce ad-hoc hard-coded `RoundedCornerShape` values when a shape token fits; hard-coded values are allowed only for genuinely one-off shapes (e.g. chat bubble tails).
   - Prefer spring-based motion over fixed-duration linear tweens for spatial transitions (Expressive motion spec); the predictive-back-driven pop transitions (`PageTransitions.kt` + `presentation/platform/BackHandler`) stay as implemented.
   - Prefer the expressive component variants where material3 provides them (e.g. contained loading indicator, `MaterialShapes` polygons for distinctive surfaces like FABs/empty states) over hand-rolled equivalents.
+
+## TARGET.md architecture migration (in progress)
+
+The repo is mid-migration to the `TARGET.md` architecture (Rust Agent Core + UniFFI bridge + platform-native renderers) under the approved phased plan: M0 FFI walking skeleton → M1 Rust core (agent runtime, SQLite store + legacy import, cloud sync port) → M2 re-anchor the existing Compose UI onto the Rust core (switch point ①) → M3 incremental Document Engine + Android View chat renderer (switch point ②) → M4 Wear on the Rust core (switch point ③) → M5 Desktop renderer + cleanup. The old stack stays buildable and shippable until each switch point.
+
+Current status — **M0 complete**:
+
+- `core/rust` is a Cargo workspace; `crates/messenger-ffi` is the only crate so far and owns the whole UniFFI boundary (`uniffi::setup_scaffolding!`, proc-macro exports only — no UDL). Generated Kotlin lands in package `cc.ptoe.messenger.core` (set in `uniffi.toml`), one file per namespace. New core crates are added to the workspace as M1 progresses; the FFI crate stays the single boundary.
+- `:core-bindings` (directory `core/bindings`) is an `com.android.library` module whose `preBuild` runs three `Exec` tasks: `cargoBuildHost` (host release cdylib feeding the bindgen), `generateUniFFIBindings` (`cargo run --bin uniffi-bindgen generate --no-format` into `build/generated/uniffiKotlin`), and `buildRustAndroid` (`cargo ndk --platform 30` for arm64-v8a/armeabi-v7a/x86_64 into `build/rustJniLibs`). Generated code and native libs live under `build/` and are never committed. The bindings load through JNA, so the module depends on `net.java.dev.jna:jna@aar`.
+- `androidApp` carries a temporary `RustProbe` (called at the end of `MessengerApplication.onCreate`) that logs `corePing`/`coreVersion` and a 10-event `echoEvents` stream — the M0 end-to-end proof; delete it when real core wiring lands in M2.
+- CI: `build-android.yml` installs the Rust stable toolchain with the three Android targets (`dtolnay/rust-toolchain`), cargo-ndk (`taiki-e/install-action`), and `Swatinem/rust-cache` scoped to `core/rust`. `build-wear.yml` gains the same steps when the wear app adopts the core (M4).
+- Local dev: `cargo test` inside `core/rust` runs the Rust unit tests; any `:core-bindings`/`androidApp` Gradle build triggers the cargo tasks automatically (incremental). Kotlin-side regeneration is never done by hand.
 
 ## Build & Run
 

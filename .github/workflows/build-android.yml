@@ -55,6 +55,24 @@ jobs:
           # tools are pinned in runtime/build.gradle.kts.
           packages: 'ndk;29.0.14206865 cmake;3.22.1'
 
+      # :core-bindings compiles the Rust core (core/rust) via cargo-ndk for the
+      # three phone ABIs; cargo-ndk picks the NDK up from ANDROID_HOME.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/rust
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:

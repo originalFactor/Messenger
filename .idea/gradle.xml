@@ -25,6 +25,7 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/androidApp" />
+            <option value="$PROJECT_DIR$/core/bindings" />
             <option value="$PROJECT_DIR$/desktopApp" />
             <option value="$PROJECT_DIR$/llm-typewriter" />
             <option value="$PROJECT_DIR$/llm-typewriter/llm-typewriter" />

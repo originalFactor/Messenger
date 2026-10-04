@@ -1,0 +1,17 @@
+[package]
+name = "messenger-ffi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "messenger_ffi"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# `cli` pulls in the bindgen binary deps (clap/anyhow); the linker strips them
+# from the cdylib and release LTO keeps the payload clean.
+uniffi = { version = "0.29", features = ["cli"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

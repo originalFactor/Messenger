@@ -107,6 +107,7 @@ android {
 // exclude from the root build.gradle.kts as a safety net.
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":core-bindings"))
     implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
