@@ -71,3 +71,75 @@ pub struct ToolCallFunction {
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Non-streaming response shapes
+// ---------------------------------------------------------------------------
+
+/// Non-streaming chat completions response.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ChatCompletionResponse {
+    pub id: String,
+    pub choices: Vec<ChatChoice>,
+    pub model: String,
+    pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ChatChoice {
+    pub index: i64,
+    pub message: ResponseMessage,
+    #[serde(rename = "finish_reason")]
+    pub finish_reason: Option<String>,
+}
+
+/// The non-streaming assistant message: `content` may be a string or
+/// multipart array; reasoning rides `reasoning_content` (full CoT) or
+/// `reasoning` (GPT-style summary).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ResponseMessage {
+    pub role: Option<String>,
+    pub content: Option<Value>,
+    #[serde(rename = "reasoning_content")]
+    pub reasoning_content: Option<String>,
+    pub reasoning: Option<String>,
+    #[serde(rename = "tool_calls")]
+    pub tool_calls: Option<Vec<ResponseToolCall>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ResponseToolCall {
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub function: Option<ToolCallFunction>,
+}
+
+/// `GET /models` response. `context_window` / `input_rate` / `output_rate`
+/// are Messenger cloud-proxy extensions; other providers usually omit them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ModelsResponse {
+    pub data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ModelEntry {
+    pub id: String,
+    #[serde(rename = "object")]
+    pub object: String,
+    pub created: Option<i64>,
+    #[serde(rename = "owned_by")]
+    pub owned_by: Option<String>,
+    #[serde(rename = "context_window")]
+    pub context_window: Option<i64>,
+    #[serde(rename = "input_rate")]
+    pub input_rate: Option<f64>,
+    #[serde(rename = "output_rate")]
+    pub output_rate: Option<f64>,
+}
