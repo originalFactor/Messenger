@@ -16,19 +16,43 @@
 
 package cc.ptoe.messenger.presentation.ui.chat
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
 import cc.ptoe.messenger.renderer.ConversationAdapter
 import cc.ptoe.messenger.renderer.MessageItem
+import cc.ptoe.messenger.renderer.RendererTheme
+import cc.ptoe.messenger.renderer.ToolCallData
+import cc.ptoe.messenger.renderer.ToolRoundData
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.action_copy
+import cc.ptoe.messenger.generated.resources.action_retry
+import cc.ptoe.messenger.generated.resources.chat_copied_toast
+import cc.ptoe.messenger.generated.resources.chat_send_failed
+import cc.ptoe.messenger.generated.resources.chat_think_title
+import cc.ptoe.messenger.generated.resources.tool_card_failed
+import cc.ptoe.messenger.generated.resources.tool_card_result_label
+import cc.ptoe.messenger.generated.resources.tool_card_running
+import cc.ptoe.messenger.generated.resources.tool_card_success
+import cc.ptoe.messenger.generated.resources.tool_name_terminal
+import org.jetbrains.compose.resources.stringResource
+import java.io.File
 
 @Composable
 internal actual fun ChatMessageList(
@@ -49,6 +73,50 @@ internal actual fun ChatMessageList(
     modifier: Modifier
 ) {
     val adapter = remember { ConversationAdapter() }
+
+    // Theme tokens: the native renderer follows the host MaterialTheme exactly
+    // (light/dark + dynamic color), with localized labels and decoded avatars.
+    val colorScheme = MaterialTheme.colorScheme
+    val errorTitle = stringResource(Res.string.chat_send_failed)
+    val retryAction = stringResource(Res.string.action_retry)
+    val thinkingTitle = stringResource(Res.string.chat_think_title)
+    val copyAction = stringResource(Res.string.action_copy)
+    val copiedToast = stringResource(Res.string.chat_copied_toast)
+    val runningLabel = stringResource(Res.string.tool_card_running)
+    val successLabel = stringResource(Res.string.tool_card_success)
+    val failedLabel = stringResource(Res.string.tool_card_failed)
+    val resultLabel = stringResource(Res.string.tool_card_result_label)
+    val terminalToolName = stringResource(Res.string.tool_name_terminal)
+    val assistantAvatarBitmap = remember(agent?.avatar) { decodeAvatarBitmap(agent?.avatar) }
+    val userAvatarBitmap = remember(userAvatar) { decodeAvatarBitmap(userAvatar) }
+    val rendererTheme = remember(colorScheme, errorTitle, retryAction, thinkingTitle, copyAction, copiedToast, runningLabel, successLabel, failedLabel, resultLabel, terminalToolName, assistantAvatarBitmap, userAvatarBitmap) {
+        RendererTheme(
+            userBubble = colorScheme.primary.toArgb(),
+            onUserBubble = colorScheme.onPrimary.toArgb(),
+            aiBubble = colorScheme.surfaceContainerHigh.toArgb(),
+            onAiBubble = colorScheme.onSurface.toArgb(),
+            errorBubble = colorScheme.errorContainer.toArgb(),
+            onErrorBubble = colorScheme.onErrorContainer.toArgb(),
+            onSurfaceVariant = colorScheme.onSurfaceVariant.toArgb(),
+            surfaceContainerHighest = colorScheme.surfaceContainerHighest.toArgb(),
+            secondaryContainer = colorScheme.secondaryContainer.toArgb(),
+            onSecondaryContainer = colorScheme.onSecondaryContainer.toArgb(),
+            outlineVariant = colorScheme.outlineVariant.toArgb(),
+            primary = colorScheme.primary.toArgb(),
+            errorTitle = errorTitle,
+            retryAction = retryAction,
+            thinkingTitle = thinkingTitle,
+            copyAction = copyAction,
+            copiedToast = copiedToastText.ifBlank { copiedToast },
+            runningLabel = runningLabel,
+            successLabel = successLabel,
+            failedLabel = failedLabel,
+            resultLabel = resultLabel,
+            terminalToolName = terminalToolName,
+            assistantAvatar = assistantAvatarBitmap,
+            userAvatar = userAvatarBitmap
+        )
+    }
 
     LaunchedEffect(adapter, onRetryClick, onMessageLongClick) {
         adapter.onMessageClickListener = { item ->
@@ -94,17 +162,28 @@ internal actual fun ChatMessageList(
                     )
                 }
                 is ChatListItem.ToolGroupItem -> {
+                    // One agent turn = one bubble: rounds render as text blocks +
+                    // tool cards, the final text streams/appears after them.
                     val finalMsg = item.finalMessage ?: item.rounds.lastOrNull()
                     val isStreaming = finalMsg != null && finalMsg.id == streamingMessageId
-                    val content = if (isStreaming && streamingContent != null) streamingContent
-                    else finalMsg?.content ?: ""
+                    val timestamp = finalMsg?.timestamp ?: item.rounds.lastOrNull()?.timestamp ?: 0L
+                    val rounds = if (item.rounds.isEmpty()) {
+                        // Orphan TOOL rows (historical anomaly): standalone result cards
+                        listOf(orphanRound(item.toolMessages))
+                    } else {
+                        item.rounds.map { round -> roundToRoundData(round, item.toolMessages) }
+                    }
                     MessageItem(
                         id = finalMsg?.id ?: ("tool_" + (item.rounds.firstOrNull()?.id ?: "0")),
                         role = "assistant",
-                        content = content,
+                        content = if (isStreaming && streamingContent != null) streamingContent
+                        else finalMsg?.content ?: "",
+                        rounds = rounds,
                         isStreaming = isStreaming,
                         status = finalMsg?.status?.name ?: "SENT",
-                        timestamp = finalMsg?.timestamp ?: 0L
+                        timestamp = timestamp,
+                        timeText = DateTimeUtils.formatMessageTime(timestamp),
+                        isLastInGroup = item.isLastInGroup
                     )
                 }
                 is ChatListItem.MessageItem -> {
@@ -117,12 +196,27 @@ internal actual fun ChatMessageList(
                         content = content,
                         isStreaming = isStreaming,
                         status = m.status.name,
-                        timestamp = m.timestamp
+                        errorMessage = m.errorMessage,
+                        timestamp = m.timestamp,
+                        timeText = DateTimeUtils.formatMessageTime(m.timestamp),
+                        isLastInGroup = item.isLastInGroup
                     )
                 }
             }
         }
         adapter.submitList(rendererItems)
+    }
+
+    // Stick to the newest item when a turn starts and whenever a new round
+    // placeholder takes over: position 0 is the viewport's bottom edge under
+    // reverseLayout, and the growing bubble extends upward from there. Fires
+    // on streamingMessageId changes only, so browsing history mid-turn is
+    // never interrupted by per-token scrolls.
+    var recyclerView by remember { mutableStateOf<RecyclerView?>(null) }
+    LaunchedEffect(streamingMessageId) {
+        if (streamingMessageId != null) {
+            recyclerView?.scrollToPosition(0)
+        }
     }
 
     AndroidView(
@@ -135,18 +229,71 @@ internal actual fun ChatMessageList(
                 this.adapter = adapter
                 itemAnimator = null // Smooth streaming without layout jitter
                 clipToPadding = false
+                recyclerView = this
             }
         },
         update = { rv ->
-            // Auto-scroll to bottom during live streaming if near bottom
-            val layoutManager = rv.layoutManager as? LinearLayoutManager
-            if (isGenerating && layoutManager != null) {
-                val firstVisible = layoutManager.findFirstVisibleItemPosition()
-                if (firstVisible <= 1) {
-                    rv.scrollToPosition(0)
-                }
-            }
+            adapter.theme = rendererTheme
         },
         modifier = modifier.fillMaxSize()
     )
+}
+
+/** Agent-turn round → structured renderer round (text + tool calls with settled results). */
+private fun roundToRoundData(round: Message, toolMessages: List<Message>): ToolRoundData = ToolRoundData(
+    text = round.content,
+    calls = round.parts.filterIsInstance<ContentPart.ToolCall>().map { call ->
+        val result = toolMessages.findResult(call.callId)
+        ToolCallData(
+            callId = call.callId,
+            name = call.name,
+            arguments = call.arguments,
+            output = result?.output,
+            isError = result?.isError ?: false,
+            running = result == null
+        )
+    }
+)
+
+/** Orphan TOOL rows (no assistant round to hang onto): standalone result cards. */
+private fun orphanRound(toolMessages: List<Message>): ToolRoundData = ToolRoundData(
+    text = "",
+    calls = toolMessages.mapNotNull { tool ->
+        tool.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull()?.let { result ->
+            ToolCallData(
+                callId = result.callId,
+                name = result.name,
+                arguments = "",
+                output = result.output,
+                isError = result.isError,
+                running = false
+            )
+        }
+    }
+)
+
+private fun List<Message>.findResult(callId: String): ContentPart.ToolResult? {
+    // 已完成行以 status=SENT 且结果非空为准；「运行中」行的空结果不在此返回
+    return asSequence()
+        .mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
+        .filter { it.callId == callId }
+        .filter { it.output.isNotEmpty() || it.isError }
+        .firstOrNull()
+}
+
+/** Decode a local avatar file to a small circular-ready bitmap (null → vector fallback). */
+private fun decodeAvatarBitmap(path: String?): Bitmap? {
+    if (path.isNullOrBlank()) return null
+    return runCatching {
+        if (!File(path).exists()) return@runCatching null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        val target = 96
+        while (bounds.outWidth / (sample * 2) >= target && bounds.outHeight / (sample * 2) >= target) {
+            sample *= 2
+        }
+        BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()
 }

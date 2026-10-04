@@ -19,7 +19,6 @@ package cc.ptoe.messenger.renderer
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
@@ -33,15 +32,12 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
     private val langLabel = TextView(context)
     private val copyButton = TextView(context)
     private val codeText = TextView(context)
+    private var theme: RendererTheme? = null
 
     init {
         orientation = VERTICAL
         val cornerRadius = 12f * context.resources.displayMetrics.density
-        val bg = GradientDrawable().apply {
-            setColor(Color.parseColor("#1E1E1E"))
-            this.cornerRadius = cornerRadius
-        }
-        background = bg
+        background = GradientDrawable().apply { this.cornerRadius = cornerRadius }
 
         // Header
         headerLayout.orientation = HORIZONTAL
@@ -50,33 +46,39 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
         val padV = (8 * context.resources.displayMetrics.density).toInt()
         headerLayout.setPadding(padH, padV, padH, padV)
 
-        langLabel.setTextColor(Color.parseColor("#9E9E9E"))
         langLabel.textSize = 12f
         langLabel.typeface = Typeface.MONOSPACE
         val langLp = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         headerLayout.addView(langLabel, langLp)
 
-        copyButton.text = "Copy"
-        copyButton.setTextColor(Color.parseColor("#4FC3F7"))
         copyButton.textSize = 12f
+        copyButton.setPadding((8 * context.resources.displayMetrics.density).toInt(), 0, 0, 0)
         copyButton.setOnClickListener {
             val clip = ClipData.newPlainText("Code", codeText.text)
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(clip)
-            Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, theme?.copiedToast ?: "Copied", Toast.LENGTH_SHORT).show()
         }
         headerLayout.addView(copyButton)
 
         addView(headerLayout)
 
         // Code body
-        codeText.setTextColor(Color.parseColor("#D4D4D4"))
         codeText.typeface = Typeface.MONOSPACE
         codeText.textSize = 13f
         val bodyPad = (12 * context.resources.displayMetrics.density).toInt()
         codeText.setPadding(bodyPad, 0, bodyPad, bodyPad)
         codeText.setTextIsSelectable(true)
         addView(codeText)
+    }
+
+    fun updateTheme(theme: RendererTheme?) {
+        this.theme = theme
+        (background as? GradientDrawable)?.setColor(theme?.surfaceContainerHighest ?: 0xFF1E1E1E.toInt())
+        langLabel.setTextColor(theme?.onSurfaceVariant ?: 0xFF9E9E9E.toInt())
+        copyButton.setTextColor(theme?.primary ?: 0xFF4FC3F7.toInt())
+        copyButton.text = theme?.copyAction ?: "Copy"
+        codeText.setTextColor(theme?.onAiBubble ?: 0xFFD4D4D4.toInt())
     }
 
     fun bind(language: String?, code: String) {

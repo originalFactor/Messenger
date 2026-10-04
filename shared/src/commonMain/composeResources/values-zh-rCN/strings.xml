@@ -397,6 +397,7 @@
     <string name="tool_card_success">已完成</string>
     <string name="tool_card_failed">执行失败</string>
     <string name="tool_card_result_label">结果</string>
+    <string name="chat_think_title">思考过程</string>
     <string name="tool_terminal_desc">在 Agent 工作区中运行命令</string>
     <string name="chat_mode_readonly">只读模式</string>
     <string name="chat_mode_writable">可写模式</string>

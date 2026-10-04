@@ -17,7 +17,6 @@
 package cc.ptoe.messenger.renderer
 
 import android.content.Context
-import android.graphics.Color
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
@@ -34,8 +33,14 @@ import kotlinx.serialization.json.longOrNull
 /**
  * Android Native DocumentView (TARGET.md §8, §9, §10).
  *
- * Renders structured Markdown / LaTeX / Code / ToolCall AST blocks
- * using direct View hierarchy and fine-grained invalidation for high-frequency streaming.
+ * Renders structured Markdown / LaTeX / Code / ToolCall AST blocks using direct
+ * View hierarchy and fine-grained invalidation for high-frequency streaming.
+ *
+ * The view hosts two sections: STATIC blocks (parsed rounds + finalized text,
+ * ids ≥ [STATIC_ID_BASE]) and LIVE blocks appended by Rust streaming DiffBatch
+ * ids (small ids from a fresh StreamingSession). [clearLiveBlocks] removes the
+ * live section when the static section is rebuilt, keeping the id spaces
+ * collision-free.
  */
 class DocumentView @JvmOverloads constructor(
     context: Context,
@@ -44,26 +49,35 @@ class DocumentView @JvmOverloads constructor(
 ) : LinearLayout(context, attrs, defStyleAttr) {
 
     private val blockViews = mutableMapOf<Long, View>()
-    private val blockSpacing = (8 * context.resources.displayMetrics.density).toInt()
+    private val blockSpacing = dp(8f).toInt()
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     init {
         orientation = VERTICAL
     }
 
+    private fun dp(v: Float): Float = v * resources.displayMetrics.density
+
     /** Set static completed blocks (e.g. historical message). */
-    fun setBlocks(blocks: List<RenderBlock>) {
+    fun setBlocks(theme: RendererTheme?, blocks: List<RenderBlock>) {
         removeAllViews()
         blockViews.clear()
         for (block in blocks) {
-            val view = createViewForBlock(block)
+            val view = createViewForBlock(theme, block)
             blockViews[block.id] = view
-            addView(view, createBlockLayoutParams(block))
+            addView(view, createBlockLayoutParams())
+        }
+    }
+
+    /** Remove every live (streaming-session) block; static blocks are preserved. */
+    fun clearLiveBlocks() {
+        for (id in blockViews.keys.filter { it < STATIC_ID_BASE }) {
+            blockViews.remove(id)?.let { removeView(it) }
         }
     }
 
     /** Apply incremental DiffBatch JSON received from Rust StreamingSession. */
-    fun applyDiffBatch(diffBatchJson: String) {
+    fun applyDiffBatch(theme: RendererTheme?, diffBatchJson: String) {
         val root = try {
             json.parseToJsonElement(diffBatchJson) as? JsonObject
         } catch (_: Exception) {
@@ -78,51 +92,44 @@ class DocumentView @JvmOverloads constructor(
                 "append" -> {
                     val blockObj = obj["block"]?.jsonObject ?: continue
                     val block = DocumentParser.parseBlockObject(blockObj) ?: continue
-                    val view = createViewForBlock(block)
+                    if (blockViews.containsKey(block.id)) continue
+                    val view = createViewForBlock(theme, block)
                     blockViews[block.id] = view
-                    addView(view, createBlockLayoutParams(block))
+                    addView(view, createBlockLayoutParams())
                 }
                 "update" -> {
                     val blockObj = obj["block"]?.jsonObject ?: continue
                     val block = DocumentParser.parseBlockObject(blockObj) ?: continue
-                    val existing = blockViews[block.id]
-                    if (existing != null) {
-                        bindBlockToView(existing, block)
-                        existing.invalidate()
-                    } else {
-                        val view = createViewForBlock(block)
-                        blockViews[block.id] = view
-                        addView(view, createBlockLayoutParams(block))
-                    }
+                    val existing = blockViews[block.id] ?: continue
+                    bindBlockToView(existing, block)
+                    existing.invalidate()
                 }
                 "finalize" -> {
                     val id = obj["id"]?.jsonPrimitive?.longOrNull ?: continue
-                    val view = blockViews[id]
-                    // Layout is now frozen; renderers can cache measurements
-                    view?.invalidate()
+                    blockViews[id]?.invalidate()
                 }
-                "reset" -> {
-                    removeAllViews()
-                    blockViews.clear()
-                }
+                "reset" -> clearLiveBlocks()
             }
         }
     }
 
-    private fun createBlockLayoutParams(block: RenderBlock): LayoutParams {
+    private fun createBlockLayoutParams(): LayoutParams {
         val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         lp.topMargin = blockSpacing
         return lp
     }
 
-    private fun createViewForBlock(block: RenderBlock): View {
+    private fun createViewForBlock(theme: RendererTheme?, block: RenderBlock): View {
+        val bodyColor = theme?.onAiBubble ?: 0xDE000000.toInt()
+        val variantColor = theme?.onSurfaceVariant ?: 0x8A000000.toInt()
         return when (block) {
             is RenderBlock.Paragraph -> {
                 TextView(context).apply {
                     textSize = 15f
-                    setTextColor(Color.parseColor("#DE000000"))
-                    setLineSpacing(4f * resources.displayMetrics.density, 1f)
-                    setTextIsSelectable(true)
+                    setTextColor(bodyColor)
+                    typeface = Typeface.SANS_SERIF
+                    setLineSpacing(0f, 1.3f)
+                    // Not selectable: long-press must reach the bubble's context menu
                     text = block.text
                 }
             }
@@ -135,44 +142,59 @@ class DocumentView @JvmOverloads constructor(
                         else -> 15f
                     }
                     textSize = scale
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#DE000000"))
+                    setTypeface(Typeface.SANS_SERIF, Typeface.BOLD)
+                    setTextColor(bodyColor)
                     text = block.text
                 }
             }
             is RenderBlock.Code -> {
                 CodeBlockView(context).apply {
+                    updateTheme(theme)
                     bind(block.language, block.code)
                 }
             }
             is RenderBlock.Math -> {
                 MathBlockView(context).apply {
+                    updateTheme(theme)
                     bind(block.formula, block.isFinalized, display = true)
                 }
             }
             is RenderBlock.Quote -> {
-                TextView(context).apply {
-                    textSize = 14f
-                    setTypeface(null, Typeface.ITALIC)
-                    setTextColor(Color.parseColor("#616161"))
-                    setPadding((12 * resources.displayMetrics.density).toInt(), 0, 0, 0)
-                    text = block.text
+                // Left accent bar + italic variant-colored text
+                LinearLayout(context).apply {
+                    orientation = HORIZONTAL
+                    addView(
+                        View(context).apply { setBackgroundColor(theme?.primary ?: bodyColor) },
+                        LayoutParams(dp(3f).toInt(), LayoutParams.MATCH_PARENT)
+                    )
+                    addView(
+                        TextView(context).apply {
+                            textSize = 14f
+                            setTypeface(Typeface.SANS_SERIF, Typeface.ITALIC)
+                            setTextColor(variantColor)
+                            setPadding(dp(10f).toInt(), 0, 0, 0)
+                            text = block.text
+                        },
+                        LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+                    )
                 }
             }
             is RenderBlock.Think -> {
                 ThinkBlockView(context).apply {
+                    updateTheme(theme)
                     bind(block.content, block.isFinalized)
                 }
             }
             is RenderBlock.ToolCall -> {
                 ToolCallView(context).apply {
+                    updateTheme(theme)
                     bind(block.name, block.arguments, block.output, block.isError, block.isFinalized)
                 }
             }
             is RenderBlock.Divider -> {
                 View(context).apply {
-                    setBackgroundColor(Color.parseColor("#1F000000"))
-                    layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, (1 * resources.displayMetrics.density).toInt())
+                    setBackgroundColor(theme?.outlineVariant ?: 0x1F000000)
+                    layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dp(1f).toInt())
                 }
             }
         }
@@ -193,7 +215,9 @@ class DocumentView @JvmOverloads constructor(
                 (view as? MathBlockView)?.bind(block.formula, block.isFinalized, display = true)
             }
             is RenderBlock.Quote -> {
-                (view as? TextView)?.text = block.text
+                val row = view as? LinearLayout ?: return
+                val quote = row.getChildAt(1) as? TextView ?: return
+                quote.text = block.text
             }
             is RenderBlock.Think -> {
                 (view as? ThinkBlockView)?.bind(block.content, block.isFinalized)
@@ -209,5 +233,10 @@ class DocumentView @JvmOverloads constructor(
             }
             is RenderBlock.Divider -> {}
         }
+    }
+
+    companion object {
+        /** Static (rebuilt) block ids start above every live streaming-session id. */
+        const val STATIC_ID_BASE = 1_000_000L
     }
 }

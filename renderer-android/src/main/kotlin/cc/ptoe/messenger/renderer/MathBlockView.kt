@@ -67,6 +67,15 @@ class MathBlockView(context: Context) : View(context) {
         setPadding(padH, padV, padH, padV)
     }
 
+    /** Display lists hold geometry only; color is a draw-time paint property. */
+    fun updateTheme(theme: RendererTheme?) {
+        val color = theme?.primary ?: Color.parseColor("#1565C0")
+        textPaint.color = color
+        symbolPaint.color = color
+        linePaint.color = color
+        invalidate()
+    }
+
     fun bind(formulaText: String, finalized: Boolean, display: Boolean = true) {
         if (this.formula == formulaText && this.isFinalized == finalized && this.isDisplayMode == display) {
             return

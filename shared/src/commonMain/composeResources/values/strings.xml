@@ -398,6 +398,7 @@
     <string name="tool_card_success">Done</string>
     <string name="tool_card_failed">Failed</string>
     <string name="tool_card_result_label">Result</string>
+    <string name="chat_think_title">Thinking process</string>
     <string name="tool_terminal_desc">Run commands in the Agent workspace</string>
     <string name="chat_mode_readonly">Read-only mode</string>
     <string name="chat_mode_writable">Writable mode</string>

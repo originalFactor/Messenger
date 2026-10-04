@@ -16,19 +16,42 @@
 
 package cc.ptoe.messenger.renderer
 
+import android.graphics.Bitmap
+import android.util.LruCache
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+
+/** One tool invocation inside an agent turn round. */
+data class ToolCallData(
+    val callId: String,
+    val name: String,
+    val arguments: String,
+    val output: String?,
+    val isError: Boolean,
+    val running: Boolean
+)
+
+/** One agent turn round: the round's text plus the tool calls it issued. */
+data class ToolRoundData(
+    val text: String,
+    val calls: List<ToolCallData>
+)
 
 data class MessageItem(
     val id: String,
     val role: String,
     val content: String,
     val blocks: List<RenderBlock>? = null,
+    /** Structured agent-turn rounds; rendered as text blocks + tool cards ahead of [content]. */
+    val rounds: List<ToolRoundData> = emptyList(),
     val isStreaming: Boolean = false,
     val status: String = "SENT",
+    val errorMessage: String? = null,
     val timestamp: Long = 0L,
+    val timeText: String = "",
+    val isLastInGroup: Boolean = true,
     val isDateSeparator: Boolean = false
 )
 
@@ -36,6 +59,17 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
 
     private val items = mutableListOf<MessageItem>()
     private var streamingViewHolder: ViewHolder? = null
+
+    /**
+     * Theme tokens resolved from the host MaterialTheme. Setting a different
+     * value rebinds every row (theme changes are rare — dark mode flips).
+     */
+    var theme: RendererTheme? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            notifyDataSetChanged()
+        }
 
     var onMessageClickListener: ((MessageItem) -> Unit)? = null
     var onMessageLongClickListener: ((MessageItem, View) -> Unit)? = null
@@ -56,8 +90,11 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
                 val old = items[oldItemPosition]
                 val new = newItems[newItemPosition]
                 return old.content == new.content &&
+                        old.rounds == new.rounds &&
                         old.isStreaming == new.isStreaming &&
                         old.status == new.status &&
+                        old.timeText == new.timeText &&
+                        old.isLastInGroup == new.isLastInGroup &&
                         old.blocks == new.blocks
             }
         }
@@ -68,12 +105,11 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
         diffResult.dispatchUpdatesTo(this)
     }
 
-    /** Direct streaming update: updates only DocumentView without notifying RecyclerView */
+    /** Direct streaming update: updates only the live section of the streaming DocumentView. */
     fun applyStreamingDiff(diffBatchJson: String) {
-        val holder = streamingViewHolder
-        if (holder != null) {
-            holder.messageView.documentView.applyDiffBatch(diffBatchJson)
-        }
+        val holder = streamingViewHolder ?: return
+        holder.messageView.documentView.applyDiffBatch(holder.messageView.theme, diffBatchJson)
+        holder.messageView.onLiveBlockApplied()
     }
 
     override fun getItemCount(): Int = items.size
@@ -93,7 +129,7 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
-        holder.messageView.bind(item)
+        holder.messageView.bind(item, theme)
         if (item.isStreaming) {
             streamingViewHolder = holder
         } else if (streamingViewHolder == holder) {
@@ -105,6 +141,13 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
         super.onViewRecycled(holder)
         if (streamingViewHolder == holder) {
             streamingViewHolder = null
+        }
+    }
+
+    companion object {
+        /** Small shared cache for decoded avatar bitmaps (keyed by file path). */
+        val avatarCache = object : LruCache<String, Bitmap>(8) {
+            override fun sizeOf(key: String, value: Bitmap): Int = 1
         }
     }
 }
