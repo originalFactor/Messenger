@@ -14,6 +14,8 @@ use crate::documents::{
 };
 use crate::models::*;
 
+use serde::{Deserialize, Serialize};
+
 /// Paged pull size (Kotlin `SYNC_PAGE_SIZE`).
 const SYNC_PAGE_SIZE: u32 = 100;
 
@@ -22,7 +24,7 @@ pub const KV_SESSION_HOST: &str = "cloud_session_host";
 pub const KV_USER: &str = "cloud_user_json";
 pub const KV_SERVER_URL: &str = "cloud_server_url";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncResult {
     pub latest_version: i64,
     pub agents: usize,
@@ -41,6 +43,14 @@ impl<'a> SyncEngine<'a> {
             store,
             client: CloudApiClient::new(session),
         }
+    }
+
+    pub fn client(&self) -> &CloudApiClient {
+        &self.client
+    }
+
+    pub fn store(&self) -> &Store {
+        self.store
     }
 
     // ------------------------------------------------------------------
@@ -90,11 +100,11 @@ impl<'a> SyncEngine<'a> {
             .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn endpoint(&self, path: &str) -> String {
+    pub fn endpoint(&self, path: &str) -> String {
         format!("{}/{}", self.server_url().trim_end_matches('/'), path)
     }
 
-    pub(crate) fn signed_in(&self) -> Result<CloudUser, CloudError> {
+    pub fn signed_in(&self) -> Result<CloudUser, CloudError> {
         self.current_user().ok_or_else(|| CloudError::Http {
             status: 401,
             message: "Please sign in first".into(),

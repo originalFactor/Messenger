@@ -38,7 +38,6 @@ type PendingMap = Arc<StdMutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>;
 
 struct IncomingBridge {
     pending: PendingMap,
-    closed: Mutex<Option<Arc<dyn Fn(i32) + Send + Sync>>>,
 }
 
 impl IncomingHandler for IncomingBridge {
@@ -109,7 +108,6 @@ impl McpClient {
         }
         let bridge = Arc::new(IncomingBridge {
             pending: Arc::clone(&self.pending),
-            closed: Mutex::new(None),
         });
         if !self.transport.start(bridge).await {
             return false;

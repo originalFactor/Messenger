@@ -236,6 +236,12 @@ pub async fn run_chat_turn(
                     done = Some((finish_reason, usage, tool_calls));
                 }
                 Some(ChatStreamEvent::Error(message)) => {
+                    if cancel.is_cancelled() {
+                        if !current_content.is_empty() {
+                            promote_partial(store, &placeholder_id, &current_content)?;
+                        }
+                        return finalize_cancellation(store, sink, &placeholder_id).await;
+                    }
                     // Persist partial content + error on the placeholder row.
                     let mut failed = placeholder.clone();
                     failed.content = current_content.clone();

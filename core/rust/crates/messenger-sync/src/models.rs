@@ -316,7 +316,7 @@ pub struct CloudMarketAgent {
     pub version: i64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudMarketAgentListResponse {
     pub agents: Vec<CloudMarketAgent>,
@@ -377,7 +377,7 @@ pub struct RedeemCodeRequest {
     pub code: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudRedeemRedemption {
     #[serde(rename = "cardCode")]
@@ -392,7 +392,7 @@ pub struct CloudRedeemRedemption {
     pub redeemed_at: i64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudQuotaSummary {
     pub balance: Option<i64>,
@@ -400,7 +400,7 @@ pub struct CloudQuotaSummary {
     pub expires_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudRedeemResponse {
     pub redemption: CloudRedeemRedemption,

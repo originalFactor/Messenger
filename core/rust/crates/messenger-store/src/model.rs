@@ -2,8 +2,10 @@
 //! store queries; these structs are the layer the FFI facade and the agent
 //! core consume.
 
+use serde::{Deserialize, Serialize};
+
 /// `providers` row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredProvider {
     pub id: String,
     pub name: String,
@@ -14,7 +16,7 @@ pub struct StoredProvider {
 }
 
 /// `models` row (one available model under a provider).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredModel {
     pub id: String,
     pub provider_id: String,
@@ -34,7 +36,7 @@ pub struct StoredModel {
 }
 
 /// `agents` row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredAgent {
     pub id: String,
     pub name: String,
@@ -67,7 +69,7 @@ pub struct StoredAgent {
 }
 
 /// `conversations` row with the per-conversation override columns.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StoredConversation {
     pub id: String,
     pub title: String,
@@ -97,7 +99,7 @@ pub struct StoredConversation {
 /// `messages` row. `role`/`status` are lowercase enum names
 /// (`user|assistant|system|tool`, `sending|sent|error`); `parts_json` holds
 /// the ContentPart JSON array (opaque here; the codecs live in the core).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredMessage {
     pub id: String,
     pub conversation_id: String,

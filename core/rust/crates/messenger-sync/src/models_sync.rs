@@ -101,7 +101,6 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use crate::api::Session;
-    use crate::models::CloudUser;
     use messenger_store::model::StoredProvider;
     use messenger_store::Store;
 

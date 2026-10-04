@@ -207,9 +207,8 @@ impl McpTransport for SseTransport {
             let mut endpoint_tx = Some(endpoint_tx);
             let mut endpoint_url: Option<String> = None;
             let mut close_rx = close_rx;
-            let mut closed = *close_rx.borrow();
 
-            let mut flush = |event_name: &str,
+            let flush = |event_name: &str,
                              data_lines: &[String],
                              handler: &Arc<dyn IncomingHandler>,
                              endpoint_url: &mut Option<String>,
@@ -232,7 +231,7 @@ impl McpTransport for SseTransport {
             loop {
                 tokio::select! {
                     _ = close_rx.changed() => {
-                        closed = *close_rx.borrow();
+                        let closed = *close_rx.borrow();
                         if closed { break; }
                     }
                     chunk = stream.next() => {

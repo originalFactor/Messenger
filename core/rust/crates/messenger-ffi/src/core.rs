@@ -5,8 +5,11 @@
 use std::sync::Arc;
 
 use messenger_core::agent::{run_chat_turn, AgentEvent, TitleConfig, ToolHost, TurnRequest};
-use messenger_store::model::StoredMessage;
+use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider};
 use messenger_store::{import_legacy, Store};
+use messenger_sync::{
+    AvatarManager, Session, SyncEngine, KV_SESSION, KV_SESSION_HOST,
+};
 use messenger_tools::ToolExecutionResult;
 
 /// The handle the app shell holds: store + paths.
@@ -232,6 +235,304 @@ impl CoreHandle {
             .map_err(|e| CoreError::Generic { detail: e.to_string() })
     }
 
+    // -- Store CRUD via JSON --
+
+    pub fn list_providers_json(&self) -> Result<String, CoreError> {
+        let rows = self.store.list_providers().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_provider_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_provider(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_provider_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredProvider = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_provider(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_provider(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_provider(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_models_json(&self) -> Result<String, CoreError> {
+        let rows = self.store.list_models().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_models_by_provider_json(&self, provider_id: String) -> Result<String, CoreError> {
+        let rows = self.store.list_models_by_provider(&provider_id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_model_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_model(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_model_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredModel = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_model(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn set_model_enabled(&self, id: String, enabled: bool) -> Result<(), CoreError> {
+        self.store.set_model_enabled(&id, enabled).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_model(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_model(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_agents_json(&self) -> Result<String, CoreError> {
+        let rows = self.store.list_agents().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_agent_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_agent(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_default_agent_json(&self) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_default_agent().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_title_agent_json(&self) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_title_agent().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_agent_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredAgent = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_agent(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_agent(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_agent(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_conversations_json(&self) -> Result<String, CoreError> {
+        let rows = self.store.list_conversations().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_conversations_by_agent_json(&self, agent_id: String) -> Result<String, CoreError> {
+        let rows = self.store.list_conversations_by_agent(&agent_id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_conversation_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_conversation(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_conversation_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredConversation = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_conversation(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn update_conversation_last_message(&self, id: String, last_message: Option<String>, updated_at: i64) -> Result<(), CoreError> {
+        self.store.update_conversation_last_message(&id, last_message.as_deref(), updated_at).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_conversation(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_conversation(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_messages_by_conversation_json(&self, conversation_id: String) -> Result<String, CoreError> {
+        let rows = self.store.list_messages_by_conversation(&conversation_id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_message_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_message(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_message_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredMessage = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_message(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_message(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_message(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_messages_by_conversation(&self, conversation_id: String) -> Result<(), CoreError> {
+        self.store.delete_messages_by_conversation(&conversation_id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn kv_get(&self, key: String) -> Result<Option<String>, CoreError> {
+        self.store.kv_get(&key).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn kv_set(&self, key: String, value: String) -> Result<(), CoreError> {
+        self.store.kv_set(&key, &value).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn kv_delete(&self, key: String) -> Result<(), CoreError> {
+        self.store.kv_delete(&key).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    // -- Cloud SaaS & Sync --
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_login(&self, email: String, password: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let user = engine.login(&email, &password).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&user).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_register(&self, email: String, password: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let user = engine.register(&email, &password).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&user).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_logout(&self) -> Result<(), CoreError> {
+        let engine = self.sync_engine();
+        engine.logout().await.map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_refresh_user(&self) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let user = engine.refresh_user().await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&user).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn cloud_current_user_json(&self) -> Result<Option<String>, CoreError> {
+        let engine = self.sync_engine();
+        match engine.current_user() {
+            Some(u) => Ok(Some(serde_json::to_string(&u).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn cloud_set_server_url(&self, url: String) -> Result<(), CoreError> {
+        let engine = self.sync_engine();
+        engine.set_server_url(&url).map_err(|e| CoreError::Generic { detail: e })
+    }
+
+    pub fn cloud_get_server_url(&self) -> String {
+        self.sync_engine().server_url()
+    }
+
+    pub fn cloud_has_local_data(&self) -> Result<bool, CoreError> {
+        self.sync_engine().has_local_data().map_err(|e| CoreError::Generic { detail: e })
+    }
+
+    pub fn cloud_mark_change(&self, kind: String, id: String, deleted: bool) -> Result<(), CoreError> {
+        self.sync_engine().request_local_change(&kind, &id, deleted).map_err(|e| CoreError::Generic { detail: e })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_sync(&self, replace_local: bool) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.sync_internal(None, replace_local, None).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_push_pending(&self) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.push_pending_changes().await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_preview_card(&self, code: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let preview = engine.preview_redeem_card(&code).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&preview).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_redeem_card(&self, code: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.redeem_card(&code).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_sync_builtin_models(&self, force: bool) -> Result<u32, CoreError> {
+        let engine = self.sync_engine();
+        let count = engine.sync_builtin_provider_models(force).await.map_err(|e| CoreError::Generic { detail: e })?;
+        Ok(count as u32)
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_list_market_agents(&self, query: String, cursor: Option<String>) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.list_market_agents(&query, cursor.as_deref()).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_get_market_agent(&self, id: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.get_market_agent(&id).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_publish_market_agent(&self, agent_id: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine.publish_market_agent(&agent_id).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_import_market_agent(&self, market_id: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let agent = engine.import_market_agent(&market_id).await.map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&agent).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_cache_avatar(
+        &self,
+        scope: String,
+        account_id: String,
+        id: String,
+        url: String,
+        version: Option<String>,
+        dest_dir: String,
+    ) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let manager = AvatarManager::new(engine.client(), std::path::PathBuf::from(dest_dir));
+        let path = manager
+            .cache_remote_avatar(&scope, &account_id, &id, &url, version.as_deref(), &engine.server_url())
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        Ok(path)
+    }
+
     /// Cancel the active turn (partial rows are preserved by the loop).
     pub fn cancel_turn(&self) {
         self.cancel.lock().unwrap().cancel();
@@ -259,6 +560,13 @@ impl CoreHandle {
 }
 
 impl CoreHandle {
+    fn sync_engine(&self) -> SyncEngine<'_> {
+        let cookie = self.store.kv_get(KV_SESSION).ok().flatten();
+        let host = self.store.kv_get(KV_SESSION_HOST).ok().flatten();
+        let session = Session { cookie, host };
+        SyncEngine::new(&self.store, session)
+    }
+
     fn cancel_token(&self) -> tokio_util::sync::CancellationToken {
         let mut guard = self.cancel.lock().unwrap();
         let token = guard.clone();

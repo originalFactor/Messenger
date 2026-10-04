@@ -924,8 +924,10 @@ dependencies = [
  "messenger-core",
  "messenger-llm",
  "messenger-store",
+ "messenger-sync",
  "messenger-tools",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -964,6 +966,8 @@ name = "messenger-store"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

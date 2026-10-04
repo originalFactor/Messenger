@@ -3,7 +3,7 @@
 //! text turn, verifying store persistence, event ordering, title fallback,
 //! and cancellation finalization.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use messenger_llm::client::OpenAiClient;
 use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredProvider};
