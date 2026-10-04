@@ -20,9 +20,11 @@ package cc.ptoe.messenger.presentation.ui.components
  * Compact document and text formatter for Wear OS (TARGET.md §11).
  *
  * Wear displays must stay minimal and low-overhead:
- * - Folds <think> blocks into compact thought indicators
- * - Replaces verbose <tool_call> JSON blocks with compact tool badges
- * - Avoids full desktop markdown typesetting overhead on watch processors
+ * - Ultra-fast short-circuit path for plain text avoiding regular expression passes
+ * - Folds <think> blocks into compact thought summaries (💭 ...)
+ * - Compacts <tool_call> JSON blocks into badges (🔧 [name])
+ * - Replaces long code fences and LaTeX display blocks with concise on-wrist indicators
+ * - Conserves memory allocations and CPU battery life on wearable chipsets
  */
 object WearTextFormatter {
 
@@ -38,19 +40,37 @@ object WearTextFormatter {
         "<tool_call(?:\\s[^>]*)?>[\\s\\S]*?</tool_call>",
         RegexOption.IGNORE_CASE
     )
+    private val codeBlockRegex = Regex(
+        "```([a-zA-Z0-9_-]*)\\s*\\n([\\s\\S]*?)```"
+    )
+    private val mathBlockRegex = Regex(
+        "\\$\\$([\\s\\S]*?)\\$\\$"
+    )
 
     fun format(content: String, isPending: Boolean): String {
         if (content.isBlank()) {
             return if (isPending) "Thinking..." else "No response."
         }
 
-        // If currently streaming inside an unclosed think block:
-        if (isPending && content.contains("<think", ignoreCase = true) && !content.contains("</think", ignoreCase = true)) {
-            val thought = content.replace(Regex("<think(?:ing)?(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE), "").trim()
-            return if (thought.isBlank()) "Thinking..." else "💭 $thought"
+        // Fast-path: If content contains no markup indicators, return directly with 0 allocation
+        if (!content.contains('<') && !content.contains("```") && !content.contains("$$")) {
+            return content
         }
 
         var text = content
+
+        // 1. Live stream inside an unclosed <think> block
+        if (isPending && text.contains("<think", ignoreCase = true) && !text.contains("</think", ignoreCase = true)) {
+            val thought = text.replace(Regex("<think(?:ing)?(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE), "").trim()
+            if (thought.isBlank()) {
+                return "Thinking..."
+            }
+            // Keep recent preview (up to 90 characters) so wearable layout doesn't thrash
+            val preview = if (thought.length > 90) "..." + thought.takeLast(85) else thought
+            return "💭 $preview"
+        }
+
+        // 2. Strip closed and trailing think blocks from main body
         if (text.contains("<think", ignoreCase = true)) {
             text = text.replace(closedThink, "").replace(unclosedThink, "").trim()
             if (text.isBlank()) {
@@ -58,12 +78,38 @@ object WearTextFormatter {
             }
         }
 
+        // 3. Compact <tool_call> JSON blocks into neat status badges
         if (text.contains("<tool_call", ignoreCase = true)) {
             text = text.replace(toolCallRegex) { match ->
                 val raw = match.value
                 val name = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1) ?: "tool"
-                "🔧 [$name]\n"
+                val isError = raw.contains("\"is_error\"\\s*:\\s*true".toRegex())
+                val icon = if (isError) "⚠️" else "🔧"
+                "$icon [$name]\n"
             }.trim()
+        }
+
+        // 4. Compact oversized code blocks on wearable display
+        if (text.contains("```")) {
+            text = text.replace(codeBlockRegex) { match ->
+                val lang = match.groupValues[1].ifBlank { "code" }
+                val code = match.groupValues[2].trim()
+                val lineCount = code.lines().size
+                if (lineCount > 4) {
+                    val previewLines = code.lines().take(3).joinToString("\n")
+                    "💻 [$lang: $lineCount lines]\n$previewLines\n..."
+                } else {
+                    "💻 [$lang]\n$code"
+                }
+            }
+        }
+
+        // 5. Compact math formulas
+        if (text.contains("$$")) {
+            text = text.replace(mathBlockRegex) { match ->
+                val formula = match.groupValues[1].trim()
+                "📐 $formula"
+            }
         }
 
         return text.ifBlank { if (isPending) "Thinking..." else "No response." }

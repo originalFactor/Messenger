@@ -250,6 +250,8 @@ class WearChatRepository(
         // a terminal Done / Error frame arrives. onEach updates the bubble on
         // every delta; `first` returns the terminal frame and cancels collection.
         val currentContent = StringBuilder()
+        var lastUpdateTime = 0L
+        val throttleIntervalMs = 70L // TARGET.md §11: 60–80ms token batching window for watch battery/CPU saving
         val terminal = try {
             withTimeout(streamTimeoutMs) {
                 bridgeClient.chatFrames
@@ -257,12 +259,15 @@ class WearChatRepository(
                     .onEach { frame ->
                         if (frame is WearChatFrame.Delta) {
                             currentContent.append(frame.delta)
-                            // 内存更新，不触发 DataStore
-                            updatePlaceholderContentInMemory(
-                                conversation.id,
-                                requestId,
-                                currentContent.toString()
-                            )
+                            val now = System.currentTimeMillis()
+                            if (now - lastUpdateTime >= throttleIntervalMs) {
+                                lastUpdateTime = now
+                                updatePlaceholderContentInMemory(
+                                    conversation.id,
+                                    requestId,
+                                    currentContent.toString()
+                                )
+                            }
                         }
                     }
                     .first { it is WearChatFrame.Done || it is WearChatFrame.Error }

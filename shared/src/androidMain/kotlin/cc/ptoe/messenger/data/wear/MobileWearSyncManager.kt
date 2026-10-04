@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.data.wear
 
+import cc.ptoe.messenger.core.TurnConfigBridge
+import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.domain.model.Agent
@@ -26,6 +28,9 @@ import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Provider
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONObject
 import java.util.UUID
 
@@ -114,6 +119,76 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 status = MessageStatus.SENDING
             )
             app.messageRepository.insert(assistantMessage)
+
+            val bridge = app.coreBridge
+            if (bridge != null) {
+                val titleHolder = app.agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
+                val config = TurnConfigBridge(
+                    conversationId = conversationId,
+                    modelId = activeModel.second.modelId,
+                    baseUrl = activeModel.first.baseUrl,
+                    apiKey = activeModel.first.apiKey,
+                    systemPrompt = resolvedAgent.systemPrompt.orEmpty(),
+                    temperature = resolvedAgent.temperature.toDouble(),
+                    topP = resolvedAgent.topP.toDouble(),
+                    maxTokens = resolvedAgent.maxTokens?.toLong(),
+                    reasoningEffort = resolvedAgent.reasoningEffort,
+                    toolNames = emptyList(),
+                    writable = conversation.writable,
+                    contextWindow = activeModel.second.contextWindow,
+                    summarizePrompt = "Please summarize the conversation so far.",
+                    titleAgentId = titleHolder?.id,
+                    titleAgentSystemPrompt = titleHolder?.systemPrompt,
+                    titleAgentModelId = titleHolder?.defaultModelId
+                )
+
+                var currentContent = ""
+                try {
+                    bridge.runTurn(
+                        config = config,
+                        toolExecutor = { name, _ -> "Tool execution disabled on watch" to true },
+                        onEventJson = { eventJson ->
+                            val root = try {
+                                NetworkClient.json.parseToJsonElement(eventJson).jsonObject
+                            } catch (_: Exception) {
+                                return@runTurn
+                            }
+                            val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
+                            when (type) {
+                                "TextDelta" -> {
+                                    val delta = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                    currentContent += delta
+                                    frame("chat_delta") { put("delta", delta) }
+                                }
+                                "Finished" -> {
+                                    frame("chat_done") {
+                                        put("content", currentContent)
+                                        put("userMessageId", userMessage.id)
+                                        put("assistantMessageId", assistantMessage.id)
+                                    }
+                                }
+                                "Error" -> {
+                                    val msg = root["message"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+                                    if (currentContent.isNotBlank()) {
+                                        frame("chat_done") {
+                                            put("content", currentContent)
+                                            put("userMessageId", userMessage.id)
+                                            put("assistantMessageId", assistantMessage.id)
+                                        }
+                                        frame("chat_error") { put("error", msg) }
+                                    } else {
+                                        frame("chat_error") { put("error", msg) }
+                                    }
+                                }
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    val msg = e.message ?: "Failed to generate response."
+                    frame("chat_error") { put("error", msg) }
+                }
+                return
+            }
 
             val history = app.messageRepository.getByConversationId(conversationId).first()
                 .filter {
