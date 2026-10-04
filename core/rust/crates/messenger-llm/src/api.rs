@@ -127,9 +127,11 @@ pub fn response_to_assistant_message(response: ChatCompletionResponse) -> Messag
     };
     Message {
         id: String::new(),
+        conversation_id: String::new(),
         role: MessageRole::Assistant,
         content: final_content.clone(),
         parts: vec![ContentPart::Text { text: final_content }],
+        timestamp: 0,
     }
 }
 
@@ -277,9 +279,11 @@ mod tests {
             "m",
             &[Message {
                 id: "1".into(),
+                conversation_id: String::new(),
                 role: MessageRole::User,
                 content: "hi".into(),
                 parts: vec![],
+                timestamp: 0,
             }],
             &ChatTurnParams::default(),
         )
@@ -307,9 +311,11 @@ mod tests {
             "m",
             &[Message {
                 id: "1".into(),
+                conversation_id: String::new(),
                 role: MessageRole::User,
                 content: "hi".into(),
                 parts: vec![],
+                timestamp: 0,
             }],
             &ChatTurnParams::default(),
         )
@@ -343,9 +349,11 @@ mod tests {
             "m",
             &[Message {
                 id: "1".into(),
+                conversation_id: String::new(),
                 role: MessageRole::User,
                 content: "hi".into(),
                 parts: vec![],
+                timestamp: 0,
             }],
             &ChatTurnParams::default(),
         )

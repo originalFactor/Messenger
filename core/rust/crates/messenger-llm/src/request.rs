@@ -358,11 +358,13 @@ mod tests {
     fn text_message(id: &str, role: MessageRole, content: &str) -> Message {
         Message {
             id: id.to_string(),
+            conversation_id: "c1".to_string(),
             role,
             content: content.to_string(),
             parts: vec![ContentPart::Text {
                 text: content.to_string(),
             }],
+            timestamp: 0,
         }
     }
 
@@ -393,8 +395,10 @@ mod tests {
     fn assistant_tool_call_round_maps_reasoning_content_back() {
         let msg = Message {
             id: "1".into(),
+            conversation_id: String::new(),
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: 0,
             parts: vec![
                 ContentPart::Text {
                     text: "<think>why</think>".to_string(),
@@ -433,8 +437,10 @@ mod tests {
     fn image_message_uses_multipart_content() {
         let msg = Message {
             id: "1".into(),
+            conversation_id: String::new(),
             role: MessageRole::User,
             content: "look".into(),
+            timestamp: 0,
             parts: vec![
                 ContentPart::Text {
                     text: "look".into(),

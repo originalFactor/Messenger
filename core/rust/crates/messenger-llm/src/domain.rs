@@ -49,12 +49,15 @@ pub enum ContentPart {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub id: String,
+    pub conversation_id: String,
     pub role: MessageRole,
     /// Plain-text projection of the text parts (previews/titles/search);
     /// image parts are NOT inlined here.
     pub content: String,
     /// Full payload; single-text messages carry one Text part.
     pub parts: Vec<ContentPart>,
+    /// Strictly-increasing ordering key within a conversation.
+    pub timestamp: i64,
 }
 
 impl Message {

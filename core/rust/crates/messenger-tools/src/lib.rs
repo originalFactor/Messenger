@@ -13,4 +13,4 @@ pub mod tools;
 
 pub use policy::rejection_reason;
 pub use registry::resolve_request_tools;
-pub use tools::{BuiltinTool, ToolExecutionResult, workspace_tools};
+pub use tools::{BuiltinTool, ToolExecutionResult, builtin_registry, workspace_tools};
