@@ -94,6 +94,7 @@ kotlin {
 
         getByName("androidMain") {
             dependencies {
+                implementation(project(":core-bindings"))
                 implementation(compose.preview)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.core.ktx)

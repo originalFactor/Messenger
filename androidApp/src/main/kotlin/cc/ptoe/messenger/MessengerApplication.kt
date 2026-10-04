@@ -18,6 +18,9 @@ package cc.ptoe.messenger
 
 import android.app.Application
 import android.content.Intent
+import cc.ptoe.messenger.core.AndroidCoreBridge
+import cc.ptoe.messenger.core.CoreBridgeRegistry
+import cc.ptoe.messenger.core.CoreHandle
 import cc.ptoe.messenger.data.local.AndroidChatImageStore
 import cc.ptoe.messenger.data.local.androidDatabaseBuilder
 import cc.ptoe.messenger.data.wear.MobileHttpServer
@@ -29,6 +32,7 @@ import cc.ptoe.messenger.presentation.platform.AndroidContextHolder
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.network.ktor3.KtorNetworkFetcherFactory
+import java.io.File
 import okio.Path.Companion.toPath
 
 class MessengerApplication : Application() {
@@ -40,6 +44,17 @@ class MessengerApplication : Application() {
         // Termux bootstrap in its legacy SELinux domain; shell commands route
         // there when installed and fall back to the system shell otherwise.
         ShellRuntimeRegistry.bridge = RuntimeShellClient(applicationContext)
+
+        // Initialize Rust Core SQLite store and import Room database on first run
+        val storeDir = File(filesDir, "messenger_core").apply { mkdirs() }
+        val legacyDir = getDatabasePath("messenger_database").parentFile
+        val core = CoreHandle.open(
+            storePath = File(storeDir, "store.db").absolutePath,
+            legacyDbDir = legacyDir?.takeIf { it.exists() }?.absolutePath,
+            nowMs = System.currentTimeMillis()
+        )
+        CoreBridgeRegistry.bridge = AndroidCoreBridge(core)
+
         val container = AppContainer(
             appDirs = AppDirs(
                 filesDir = filesDir.absolutePath.toPath(),
@@ -52,7 +67,6 @@ class MessengerApplication : Application() {
         container.initializeLocalAndCloudData()
         setupImageLoader(container)
         startWearSync()
-        RustProbe.run(this) // M1 walking-skeleton probe; replaced by the M2 facades.
     }
 
     /** Coil with the cookie-aware cloud client so authenticated avatars load. */

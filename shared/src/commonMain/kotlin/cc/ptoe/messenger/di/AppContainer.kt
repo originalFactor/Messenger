@@ -18,6 +18,8 @@ package cc.ptoe.messenger.di
 
 import androidx.room.RoomDatabase
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import cc.ptoe.messenger.core.CoreBridge
+import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.data.cloud.CloudSyncRepository
 import cc.ptoe.messenger.data.local.AppPreferences
@@ -34,6 +36,12 @@ import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
 import cc.ptoe.messenger.data.repository.ModelRepositoryImpl
 import cc.ptoe.messenger.data.repository.ModelsDevRepositoryImpl
 import cc.ptoe.messenger.data.repository.ProviderRepositoryImpl
+import cc.ptoe.messenger.data.repository.RustAgentRepository
+import cc.ptoe.messenger.data.repository.RustConversationRepository
+import cc.ptoe.messenger.data.repository.RustCurrentAgentRepository
+import cc.ptoe.messenger.data.repository.RustMessageRepository
+import cc.ptoe.messenger.data.repository.RustModelRepository
+import cc.ptoe.messenger.data.repository.RustProviderRepository
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
@@ -130,22 +138,50 @@ class AppContainer(
         localDataMutex = localDataMutex
     )
 
-    val providerRepository: ProviderRepository =
-        ProviderRepositoryImpl(database.providerDao()) { id, deleted ->
-            // 内置云 AI 服务商不参与云同步（各设备本地自建）。
+    val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
+
+    val providerRepository: ProviderRepository = coreBridge?.let {
+        RustProviderRepository(it) { id, deleted ->
             if (id != BUILTIN_PROVIDER_ID) {
                 cloudSyncRepository.requestLocalChange("provider", id, deleted)
             }
         }
+    } ?: ProviderRepositoryImpl(database.providerDao()) { id, deleted ->
+        // 内置云 AI 服务商不参与云同步（各设备本地自建）。
+        if (id != BUILTIN_PROVIDER_ID) {
+            cloudSyncRepository.requestLocalChange("provider", id, deleted)
+        }
+    }
 
-    val modelRepository: ModelRepository =
-        ModelRepositoryImpl(database.modelDao()) { providerId, _ ->
+    val modelRepository: ModelRepository = coreBridge?.let {
+        RustModelRepository(it) { providerId, _ ->
             if (providerId != BUILTIN_PROVIDER_ID) {
                 cloudSyncRepository.requestLocalChange("provider", providerId)
             }
         }
+    } ?: ModelRepositoryImpl(database.modelDao()) { providerId, _ ->
+        if (providerId != BUILTIN_PROVIDER_ID) {
+            cloudSyncRepository.requestLocalChange("provider", providerId)
+        }
+    }
 
-    val agentRepository: AgentRepository = AgentRepositoryImpl(
+    val agentRepository: AgentRepository = coreBridge?.let {
+        RustAgentRepository(
+            coreBridge = it,
+            onChanged = { previous, current ->
+                cloudSyncRepository.requestAgentAvatarChange(previous, current)
+                val builtinInvolved = current?.id == Agent.BUILTIN_TITLE_AGENT_ID ||
+                    previous?.id == Agent.BUILTIN_TITLE_AGENT_ID
+                if (!builtinInvolved) {
+                    current?.let { cloudSyncRepository.requestLocalChange("agent", it.id) }
+                        ?: previous?.let {
+                            cloudSyncRepository.requestLocalChange("agent", it.id, deleted = true)
+                        }
+                }
+            },
+            avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
+        )
+    } ?: AgentRepositoryImpl(
         agentDao = database.agentDao(),
         onChanged = { previous, current ->
             cloudSyncRepository.requestAgentAvatarChange(previous, current)
@@ -162,23 +198,30 @@ class AppContainer(
         avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
     )
 
-    val conversationRepository: ConversationRepository =
-        ConversationRepositoryImpl(database.conversationDao()) { id, deleted ->
+    val conversationRepository: ConversationRepository = coreBridge?.let {
+        RustConversationRepository(it) { id, deleted ->
             cloudSyncRepository.requestLocalChange("conversation", id, deleted)
         }
+    } ?: ConversationRepositoryImpl(database.conversationDao()) { id, deleted ->
+        cloudSyncRepository.requestLocalChange("conversation", id, deleted)
+    }
 
-    val messageRepository: MessageRepository =
-        MessageRepositoryImpl(database.messageDao()) { conversationId ->
+    val messageRepository: MessageRepository = coreBridge?.let {
+        RustMessageRepository(it, chatImageStore) { conversationId ->
             cloudSyncRepository.requestLocalChange("conversation", conversationId)
         }
+    } ?: MessageRepositoryImpl(database.messageDao()) { conversationId ->
+        cloudSyncRepository.requestLocalChange("conversation", conversationId)
+    }
 
     val modelsDevRepository: ModelsDevRepository =
         ModelsDevRepositoryImpl(appDirs.filesDir)
 
     val apiRepository: ApiRepository = ApiRepositoryImpl(modelsDevRepository)
 
-    val currentAgentRepository: CurrentAgentRepository =
-        CurrentAgentRepositoryImpl(appPreferences, agentRepository)
+    val currentAgentRepository: CurrentAgentRepository = coreBridge?.let {
+        RustCurrentAgentRepository(it, agentRepository)
+    } ?: CurrentAgentRepositoryImpl(appPreferences, agentRepository)
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

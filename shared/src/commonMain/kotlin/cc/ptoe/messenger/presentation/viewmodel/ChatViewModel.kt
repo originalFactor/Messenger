@@ -78,6 +78,14 @@ import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 
+import cc.ptoe.messenger.core.CoreBridge
+import cc.ptoe.messenger.core.CoreBridgeRegistry
+import cc.ptoe.messenger.core.TurnConfigBridge
+import cc.ptoe.messenger.data.remote.NetworkClient
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModel(
     private val messageRepository: MessageRepository,
@@ -89,7 +97,8 @@ class ChatViewModel(
     private val chatImageStore: ChatImageStore,
     private val conversationTitleGenerator: ConversationTitleGenerator,
     /** 平台内置工具注册表；为空（如 Android）时即使 Agent 开启开关也不发 tools。 */
-    private val builtinTools: List<ChatTool> = emptyList()
+    private val builtinTools: List<ChatTool> = emptyList(),
+    private val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
 ) : ViewModel() {
 
     private val _conversationId = MutableStateFlow<String?>(null)
@@ -586,6 +595,69 @@ class ChatViewModel(
         }
 
         val (provider, model) = result
+        val bridge = coreBridge
+        if (bridge != null) {
+            val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
+            val enabledTools = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
+                builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
+            } else {
+                emptyList()
+            }
+            val toolsByName = enabledTools.associateBy { it.name }
+            val config = TurnConfigBridge(
+                conversationId = conversationId,
+                modelId = model.modelId,
+                baseUrl = provider.baseUrl,
+                apiKey = provider.apiKey,
+                systemPrompt = agent.systemPrompt,
+                temperature = agent.temperature.toDouble(),
+                topP = agent.topP.toDouble(),
+                maxTokens = agent.maxTokens?.toLong(),
+                reasoningEffort = agent.reasoningEffort,
+                toolNames = enabledTools.map { it.name },
+                writable = conv.writable,
+                contextWindow = model.contextWindow,
+                summarizePrompt = getString(Res.string.context_summarize_prompt),
+                titleAgentId = titleHolder?.id,
+                titleAgentSystemPrompt = titleHolder?.systemPrompt,
+                titleAgentModelId = titleHolder?.defaultModelId,
+            )
+
+            val aiMessageId = randomUuid()
+            _streamingMessageId.value = aiMessageId
+            _isGenerating.value = true
+            _streamingContent.value = ""
+
+            currentGenerationJob = viewModelScope.launch {
+                try {
+                    bridge.runTurn(
+                        config = config,
+                        toolExecutor = { name, argumentsJson ->
+                            val tool = toolsByName[name]
+                            if (tool != null) {
+                                val r = kotlinx.coroutines.runBlocking { tool.execute(argumentsJson) }
+                                r.output to r.isError
+                            } else {
+                                "Unknown tool: $name" to true
+                            }
+                        },
+                        onEventJson = { eventJson ->
+                            handleTurnEvent(eventJson)
+                        }
+                    )
+                } catch (e: CancellationException) {
+                    bridge.cancelTurn()
+                    throw e
+                } catch (e: Exception) {
+                    setError(e.message ?: getString(Res.string.error_unknown))
+                } finally {
+                    _streamingContent.value = null
+                    _streamingMessageId.value = null
+                    _isGenerating.value = false
+                }
+            }
+            return
+        }
 
         // 80% 上下文自动摘要：可能写回会话的摘要状态，返回最新会话快照。
         val effectiveConv = maybeSummarizeContext(conv, agent, model, provider)
@@ -958,6 +1030,7 @@ class ChatViewModel(
     }
 
     fun stopGeneration() {
+        coreBridge?.cancelTurn()
         currentGenerationJob?.cancel()
         currentGenerationJob = null
         _isGenerating.value = false
@@ -1189,6 +1262,49 @@ class ChatViewModel(
         }
     }
 
+    private fun handleTurnEvent(eventJson: String) {
+        val root = try {
+            NetworkClient.json.parseToJsonElement(eventJson).jsonObject
+        } catch (_: Exception) {
+            return
+        }
+        val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return
+        when (type) {
+            "TextDelta" -> {
+                val text = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                _streamingContent.value = (_streamingContent.value ?: "") + text
+            }
+            "RoundPersisted" -> {
+                _streamingContent.value = ""
+            }
+            "Finished" -> {
+                _streamingContent.value = null
+                _streamingMessageId.value = null
+                _isGenerating.value = false
+            }
+            "Cancelled" -> {
+                _streamingContent.value = null
+                _streamingMessageId.value = null
+                _isGenerating.value = false
+            }
+            "TitleFailed" -> {
+                viewModelScope.launch {
+                    val code = root["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    setError(code)
+                }
+            }
+            "Error" -> {
+                val msg = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (msg.isNotBlank()) {
+                    setError(msg)
+                }
+                _streamingContent.value = null
+                _streamingMessageId.value = null
+                _isGenerating.value = false
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         currentGenerationJob?.cancel()
@@ -1214,7 +1330,8 @@ class ChatViewModel(
             providerRepository: ProviderRepository,
             chatImageStore: ChatImageStore,
             conversationTitleGenerator: ConversationTitleGenerator,
-            builtinTools: List<ChatTool> = emptyList()
+            builtinTools: List<ChatTool> = emptyList(),
+            coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -1227,7 +1344,8 @@ class ChatViewModel(
                     providerRepository,
                     chatImageStore,
                     conversationTitleGenerator,
-                    builtinTools
+                    builtinTools,
+                    coreBridge
                 ) as T
             }
         }
