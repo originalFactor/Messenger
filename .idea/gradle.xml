@@ -32,6 +32,7 @@
             <option value="$PROJECT_DIR$/llm-typewriter/sample" />
             <option value="$PROJECT_DIR$/llm-typewriter/sample/androidApp" />
             <option value="$PROJECT_DIR$/llm-typewriter/sample/composeApp" />
+            <option value="$PROJECT_DIR$/renderer-android" />
             <option value="$PROJECT_DIR$/runtime" />
             <option value="$PROJECT_DIR$/shared" />
             <option value="$PROJECT_DIR$/wear" />

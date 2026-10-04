@@ -630,3 +630,52 @@ fn log_import_failure(detail: &str) {
     // Import failures must never block startup; surface via logs for now.
     eprintln!("messenger-core: legacy import failed: {detail}");
 }
+
+// ---------------------------------------------------------------------------
+// Document Engine FFI Boundary (TARGET.md §4, §5, §6)
+// ---------------------------------------------------------------------------
+
+#[derive(uniffi::Object)]
+pub struct DocumentHandle {
+    session: std::sync::Mutex<messenger_markdown::StreamingSession>,
+}
+
+#[uniffi::export]
+impl DocumentHandle {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            session: std::sync::Mutex::new(messenger_markdown::StreamingSession::new()),
+        })
+    }
+
+    /// Feed incoming text delta, returning JSON `DiffBatch` if any diffs accumulated.
+    pub fn feed(&self, text: String) -> String {
+        let mut session = self.session.lock().unwrap();
+        session.feed(&text);
+        let batch = session.drain_batch();
+        serde_json::to_string(&batch).unwrap_or_else(|_| r#"{"diffs":[]}"#.into())
+    }
+
+    /// Flush session on stream completion.
+    pub fn finish(&self) -> String {
+        let mut session = self.session.lock().unwrap();
+        let batch = session.finish();
+        serde_json::to_string(&batch).unwrap_or_else(|_| r#"{"diffs":[]}"#.into())
+    }
+
+    /// Get current full document block array as JSON.
+    pub fn get_document_json(&self) -> String {
+        let session = self.session.lock().unwrap();
+        serde_json::to_string(session.document().blocks()).unwrap_or_else(|_| "[]".into())
+    }
+}
+
+/// Parse full markdown document text into JSON Block array for static rendering.
+#[uniffi::export]
+pub fn parse_markdown_to_blocks_json(markdown: String) -> String {
+    let mut session = messenger_markdown::StreamingSession::new();
+    session.feed(&markdown);
+    let _ = session.finish();
+    serde_json::to_string(session.document().blocks()).unwrap_or_else(|_| "[]".into())
+}

@@ -108,6 +108,7 @@ android {
 dependencies {
     implementation(project(":shared"))
     implementation(project(":core-bindings"))
+    implementation(project(":renderer-android"))
     implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)

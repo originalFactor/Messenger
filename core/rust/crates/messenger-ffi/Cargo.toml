@@ -17,6 +17,8 @@ messenger-llm = { path = "../messenger-llm" }
 messenger-store = { path = "../messenger-store" }
 messenger-tools = { path = "../messenger-tools" }
 messenger-sync = { path = "../messenger-sync" }
+messenger-document = { path = "../messenger-document" }
+messenger-markdown = { path = "../messenger-markdown" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-util = "0.7"
 thiserror = "2"

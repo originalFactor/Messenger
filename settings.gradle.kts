@@ -54,3 +54,4 @@ include(":core-bindings")
 // The bindings module lives under core/bindings to keep the Rust core and its
 // Kotlin bridge side by side; Gradle's default path would be ./core-bindings.
 project(":core-bindings").projectDir = file("core/bindings")
+include(":renderer-android")
