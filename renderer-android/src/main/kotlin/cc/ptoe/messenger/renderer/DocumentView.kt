@@ -58,6 +58,14 @@ class DocumentView @JvmOverloads constructor(
 
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
 
+    /** Text width cap: screen − 64+8dp row insets − 32+8dp avatar+spacer − 28dp bubble padding.
+     * Long single-line blocks must WRAP, never widen the bubble past the row's far inset. */
+    private fun maxTextWidth(): Int {
+        val dp = resources.displayMetrics.density
+        return (resources.displayMetrics.widthPixels - ((112 + 28) * dp).toInt())
+            .coerceAtLeast((100 * dp).toInt())
+    }
+
     /** Set static completed blocks (e.g. historical message). */
     fun setBlocks(theme: RendererTheme?, blocks: List<RenderBlock>) {
         removeAllViews()
@@ -145,6 +153,7 @@ class DocumentView @JvmOverloads constructor(
                     lineHeight = (24 * resources.displayMetrics.density).toInt()
                     setTextColor(bodyColor)
                     typeface = Typeface.SANS_SERIF
+                    maxWidth = maxTextWidth()
                     // Not selectable: long-press must reach the bubble's context menu
                     text = block.text
                 }
@@ -162,6 +171,7 @@ class DocumentView @JvmOverloads constructor(
                     }
                     setTypeface(Typeface.SANS_SERIF, Typeface.BOLD)
                     setTextColor(bodyColor)
+                    maxWidth = maxTextWidth()
                     text = block.text
                 }
             }
@@ -191,6 +201,7 @@ class DocumentView @JvmOverloads constructor(
                             lineHeight = (22 * resources.displayMetrics.density).toInt()
                             setTypeface(Typeface.SANS_SERIF, Typeface.ITALIC)
                             setTextColor(variantColor)
+                            maxWidth = maxTextWidth()
                             setPadding(dp(10f).toInt(), 0, 0, 0)
                             text = block.text
                         },

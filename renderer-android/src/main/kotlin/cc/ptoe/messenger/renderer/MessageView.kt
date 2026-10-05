@@ -100,12 +100,17 @@ class MessageView(context: Context) : LinearLayout(context) {
         userTextView.lineHeight = (20 * resources.displayMetrics.density).toInt()
         userTextView.setTypeface(Typeface.SANS_SERIF, Typeface.NORMAL)
         userTextView.setTextIsSelectable(false)
+        // Cap the text at the row's usable width (screen − 64/8dp row insets −
+        // 32dp avatar − 8dp spacer − 28dp bubble padding): a long single-line
+        // message must WRAP, not push the bubble past the row's far inset.
+        userTextView.maxWidth = maxContentTextWidth()
         userTextView.visibility = GONE
         bubbleContainer.addView(userTextView)
 
         errorColumn.orientation = VERTICAL
         errorTitleView.textSize = 14f
         errorMessageView.textSize = 13f
+        errorMessageView.maxWidth = maxContentTextWidth()
         retryView.textSize = 13f
         retryView.setPadding(0, (6 * dp).toInt(), 0, 0)
         errorColumn.addView(errorTitleView)
@@ -269,6 +274,10 @@ class MessageView(context: Context) : LinearLayout(context) {
             userTextView.visibility = VISIBLE
             userTextView.setTextColor(if (isError) theme?.onErrorBubble ?: 0xFFFFFFFF.toInt() else theme?.onUserBubble ?: 0xFFFFFFFF.toInt())
             userTextView.text = item.content
+            // A recycled TextView keeps its previous measured width when the
+            // new text yields the same line count (checkForRelayout skips the
+            // requestLayout) — force a full re-measure on the next pass.
+            userTextView.forceLayout()
             stopTypingAnimation()
         } else {
             userTextView.visibility = GONE
@@ -404,6 +413,14 @@ class MessageView(context: Context) : LinearLayout(context) {
 
     private fun withAlpha(color: Int, alpha: Float): Int =
         (color and 0x00FFFFFF) or ((alpha * 255).toInt() shl 24)
+
+    /** Text width cap: screen − 64+8dp row insets − 32+8dp avatar+spacer − 28dp bubble padding.
+     * A long single-line message must WRAP, never push the bubble past the row's far inset. */
+    private fun maxContentTextWidth(): Int {
+        val dp = resources.displayMetrics.density
+        return (resources.displayMetrics.widthPixels - ((112 + 28) * dp).toInt())
+            .coerceAtLeast((100 * dp).toInt())
+    }
 
     companion object {
         /** Tool-call card ids inside a round's id band. */
