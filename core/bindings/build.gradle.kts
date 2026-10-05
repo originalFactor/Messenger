@@ -37,10 +37,13 @@ val hostLibName = when {
 }
 
 val rustInputs = Action<Exec> {
+    // Track the WHOLE workspace: messenger-ffi depends on the sibling crates
+    // (store/core/llm/…), so a change outside the ffi crate must still
+    // invalidate the Exec tasks — an ffi-only input set silently shipped
+    // stale cdylibs after sibling-crate edits.
     inputs.file(rustWorkspaceDir.file("Cargo.toml"))
-    inputs.file(rustWorkspaceDir.file("crates/messenger-ffi/Cargo.toml"))
-    inputs.file(rustWorkspaceDir.file("crates/messenger-ffi/uniffi.toml"))
-    inputs.dir(rustWorkspaceDir.dir("crates/messenger-ffi/src"))
+    inputs.file(rustWorkspaceDir.file("Cargo.lock"))
+    inputs.dir(rustWorkspaceDir.dir("crates"))
 }
 
 /** cargo-ndk resolves the NDK from ANDROID_NDK_HOME; fall back to the SDK dir. */

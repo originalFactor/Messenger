@@ -16,6 +16,13 @@ pub struct StoredProvider {
 }
 
 /// `models` row (one available model under a provider).
+///
+/// The Kotlin bridge encodes with `encodeDefaults = false`, so fields whose
+/// value equals the DTO default (`context_window = 0`, modality `"text"`,
+/// capability `false`) are OMITTED from upsert JSON. serde fills missing
+/// `Option<T>` fields with `None` automatically, but plain scalar fields need
+/// an explicit `#[serde(default)]` — keep the two sides in sync when adding
+/// columns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredModel {
     pub id: String,
@@ -23,49 +30,80 @@ pub struct StoredModel {
     pub model_id: String,
     pub display_name: String,
     pub is_enabled: bool,
+    #[serde(default)]
     pub context_window: i64,
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
+    #[serde(default = "default_text_modality")]
     pub input_modalities: String,
+    #[serde(default = "default_text_modality")]
     pub output_modalities: String,
+    #[serde(default)]
     pub supports_tool_calling: bool,
+    #[serde(default)]
     pub supports_thinking: bool,
+    #[serde(default)]
     pub supports_json_output: bool,
+    #[serde(default)]
     pub supports_temperature: bool,
     pub created_at: i64,
 }
 
+fn default_text_modality() -> String {
+    "text".to_string()
+}
+
 /// `agents` row.
+///
+/// Same `encodeDefaults = false` note as [`StoredModel`]: every boolean and
+/// plain-string column with a Kotlin-side default needs `#[serde(default)]`
+/// or the upsert fails with `missing field`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredAgent {
     pub id: String,
     pub name: String,
     pub avatar: Option<String>,
     pub system_prompt: String,
+    #[serde(default)]
     pub description: String,
     pub default_model_id: Option<String>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub max_tokens: Option<i64>,
     pub reasoning_effort: Option<String>,
+    #[serde(default)]
     pub is_default: bool,
+    #[serde(default)]
     pub follow_default_system_prompt: bool,
+    #[serde(default)]
     pub follow_default_model: bool,
+    #[serde(default)]
     pub follow_default_temperature: bool,
+    #[serde(default)]
     pub follow_default_top_p: bool,
+    #[serde(default)]
     pub follow_default_max_tokens: bool,
+    #[serde(default)]
     pub follow_default_reasoning_effort: bool,
     pub market_agent_id: Option<String>,
     pub market_agent_version: Option<i64>,
     pub market_agent_role: Option<String>,
     /// `chat` or `title` (title-role single holder).
+    #[serde(default = "default_agent_role")]
     pub role: String,
+    #[serde(default)]
     pub tools_enabled: bool,
+    #[serde(default)]
     pub tools_follow_default: bool,
     /// JSON `Map<String, Boolean>`; `''` = all on.
+    #[serde(default)]
     pub tools_config: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+fn default_agent_role() -> String {
+    "chat".to_string()
 }
 
 /// `conversations` row with the per-conversation override columns.
@@ -83,6 +121,7 @@ pub struct StoredConversation {
     pub override_tools_enabled: Option<bool>,
     pub override_tools_config: Option<String>,
     /// Conversation-level read-only/writable mode.
+    #[serde(default)]
     pub writable: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -91,8 +130,11 @@ pub struct StoredConversation {
     /// the first streaming response that carried reasoning.
     pub reasoning_format: Option<String>,
     pub context_summary: Option<String>,
+    #[serde(default)]
     pub context_summary_until: i64,
+    #[serde(default)]
     pub context_tokens: i64,
+    #[serde(default)]
     pub context_tokens_at: i64,
 }
 

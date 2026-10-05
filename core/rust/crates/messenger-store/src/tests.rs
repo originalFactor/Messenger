@@ -187,6 +187,56 @@ fn kv_and_sync_meta_round_trip() {
     assert_eq!(store.sync_cursor("acct").unwrap(), 42);
 }
 
+/// The Kotlin bridge encodes with `encodeDefaults = false`, so DTO fields at
+/// their default value never reach the FFI JSON. serde fills missing
+/// `Option<T>` fields with `None`, but every plain scalar with a Kotlin-side
+/// default carries `#[serde(default)]` — this test pins that contract for the
+/// exact payloads that crashed (`missing field 'writable'`).
+#[test]
+fn upsert_json_with_default_valued_fields_omitted_parses() {
+    let conversation = r#"{
+        "id": "c1", "title": "New Chat", "provider_id": "p1", "agent_id": "a1",
+        "override_model_id": null, "override_temperature": null, "override_top_p": null,
+        "override_max_tokens": null, "override_reasoning_effort": null,
+        "override_tools_enabled": null, "override_tools_config": null,
+        "created_at": 100, "updated_at": 100,
+        "last_message": null, "reasoning_format": null, "context_summary": null
+    }"#;
+    let conv: StoredConversation = serde_json::from_str(conversation).unwrap();
+    assert!(!conv.writable);
+    assert_eq!(conv.context_summary_until, 0);
+    assert_eq!(conv.context_tokens, 0);
+    assert_eq!(conv.context_tokens_at, 0);
+
+    let agent = r#"{
+        "id": "a2", "name": "Assistant", "avatar": null, "system_prompt": "be helpful",
+        "default_model_id": null, "temperature": null, "top_p": null, "max_tokens": null,
+        "reasoning_effort": null, "market_agent_id": null, "market_agent_version": null,
+        "market_agent_role": null, "created_at": 100, "updated_at": 100
+    }"#;
+    let agent: StoredAgent = serde_json::from_str(agent).unwrap();
+    assert!(!agent.is_default);
+    assert_eq!(agent.role, "chat");
+    assert_eq!(agent.description, "");
+    assert_eq!(agent.tools_config, "");
+    assert!(!agent.tools_enabled);
+    assert!(!agent.tools_follow_default);
+    assert!(!agent.follow_default_model);
+
+    let model = r#"{
+        "id": "p1:m1", "provider_id": "p1", "model_id": "m1", "display_name": "Model 1",
+        "is_enabled": true, "input_rate": null, "output_rate": null, "created_at": 100
+    }"#;
+    let model: StoredModel = serde_json::from_str(model).unwrap();
+    assert_eq!(model.context_window, 0);
+    assert_eq!(model.input_modalities, "text");
+    assert_eq!(model.output_modalities, "text");
+    assert!(!model.supports_tool_calling);
+    assert!(!model.supports_thinking);
+    assert!(!model.supports_json_output);
+    assert!(!model.supports_temperature);
+}
+
 #[test]
 fn legacy_import_copies_room_rows_and_is_idempotent() {
     let dir = TempDir::new().unwrap();
