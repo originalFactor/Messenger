@@ -107,7 +107,8 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
 
     /** Direct streaming update: updates only the live section of the streaming DocumentView. */
     fun applyStreamingDiff(diffBatchJson: String) {
-        val holder = streamingViewHolder ?: return
+        val holder = streamingViewHolder
+        holder ?: return
         holder.messageView.documentView.applyDiffBatch(holder.messageView.theme, diffBatchJson)
         holder.messageView.onLiveBlockApplied()
     }

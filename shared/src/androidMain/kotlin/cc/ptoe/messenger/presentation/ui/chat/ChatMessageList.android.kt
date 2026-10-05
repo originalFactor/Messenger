@@ -17,7 +17,6 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -28,9 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
@@ -87,8 +90,18 @@ internal actual fun ChatMessageList(
     val failedLabel = stringResource(Res.string.tool_card_failed)
     val resultLabel = stringResource(Res.string.tool_card_result_label)
     val terminalToolName = stringResource(Res.string.tool_name_terminal)
-    val assistantAvatarBitmap = remember(agent?.avatar) { decodeAvatarBitmap(agent?.avatar) }
-    val userAvatarBitmap = remember(userAvatar) { decodeAvatarBitmap(userAvatar) }
+    // Avatars may be local file paths, content:// URIs or remote http(s)
+    // URLs (market agents, cloud user avatar) — load them all through Coil,
+    // mirroring what the Compose AgentAvatar shows.
+    val avatarContext = LocalContext.current
+    var assistantAvatarBitmap by remember(agent?.avatar) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(agent?.avatar) {
+        assistantAvatarBitmap = loadAvatarBitmap(avatarContext, agent?.avatar)
+    }
+    var userAvatarBitmap by remember(userAvatar) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(userAvatar) {
+        userAvatarBitmap = loadAvatarBitmap(avatarContext, userAvatar)
+    }
     val rendererTheme = remember(colorScheme, errorTitle, retryAction, thinkingTitle, copyAction, copiedToast, runningLabel, successLabel, failedLabel, resultLabel, terminalToolName, assistantAvatarBitmap, userAvatarBitmap) {
         RendererTheme(
             userBubble = colorScheme.primary.toArgb(),
@@ -281,19 +294,19 @@ private fun List<Message>.findResult(callId: String): ContentPart.ToolResult? {
         .firstOrNull()
 }
 
-/** Decode a local avatar file to a small circular-ready bitmap (null → vector fallback). */
-private fun decodeAvatarBitmap(path: String?): Bitmap? {
-    if (path.isNullOrBlank()) return null
+/** Decode an avatar (file path, content:// or https URL) into a small bitmap; null → vector fallback. */
+private suspend fun loadAvatarBitmap(context: android.content.Context, source: String?): Bitmap? {
+    if (source.isNullOrBlank()) return null
     return runCatching {
-        if (!File(path).exists()) return@runCatching null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
-        var sample = 1
-        val target = 96
-        while (bounds.outWidth / (sample * 2) >= target && bounds.outHeight / (sample * 2) >= target) {
-            sample *= 2
+        val data = when {
+            source.startsWith("/") -> File(source)
+            else -> source
         }
-        BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+        val request = ImageRequest.Builder(context)
+            .data(data)
+            .size(96)
+            .allowHardware(false)
+            .build()
+        (context.imageLoader.execute(request).image as? coil3.BitmapImage)?.bitmap
     }.getOrNull()
 }

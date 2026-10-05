@@ -63,7 +63,7 @@ class ToolCallView(context: Context) : LinearLayout(context) {
         topRow.orientation = HORIZONTAL
         topRow.gravity = Gravity.CENTER_VERTICAL
 
-        nameLabel.textSize = 13f
+        nameLabel.textSize = 14f
         nameLabel.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD)
         nameLabel.maxLines = 1
         nameLabel.ellipsize = TextUtils.TruncateAt.END

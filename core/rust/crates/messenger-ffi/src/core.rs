@@ -127,6 +127,9 @@ pub trait TurnEventSink: Send + Sync {
 fn agent_event_to_json(event: &AgentEvent) -> String {
     let value = match event {
         AgentEvent::TurnStarted => serde_json::json!({"type": "TurnStarted"}),
+        AgentEvent::StreamingStarted { message_id } => serde_json::json!({
+            "type": "StreamingStarted", "messageId": message_id
+        }),
         AgentEvent::TextDelta { round, text } => serde_json::json!({
             "type": "TextDelta", "round": round, "text": text
         }),

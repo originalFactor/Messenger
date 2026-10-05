@@ -96,7 +96,8 @@ class MessageView(context: Context) : LinearLayout(context) {
         bubbleContainer.addView(documentView)
         documentView.visibility = GONE
 
-        userTextView.textSize = 15f
+        userTextView.textSize = 14f
+        userTextView.lineHeight = (20 * resources.displayMetrics.density).toInt()
         userTextView.setTypeface(Typeface.SANS_SERIF, Typeface.NORMAL)
         userTextView.setTextIsSelectable(false)
         userTextView.visibility = GONE
@@ -117,7 +118,7 @@ class MessageView(context: Context) : LinearLayout(context) {
         typingIndicator.gravity = Gravity.CENTER_VERTICAL
         typingDots.forEach { dot ->
             dot.text = "●"
-            dot.textSize = 7f
+            dot.textSize = 9f
             dot.includeFontPadding = false
             typingIndicator.addView(
                 dot,

@@ -37,6 +37,10 @@ pub const MAX_TOOL_ROUNDS: u32 = 10;
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
     TurnStarted,
+    /// The placeholder row for the final text round was persisted; UIs must
+    /// bind live streaming content to THIS id — the loop creates the row
+    /// itself, so caller-side UUIDs never match it.
+    StreamingStarted { message_id: String },
     TextDelta { round: u32, text: String },
     ReasoningFormatDetected { format: String },
     RoundPersisted { round: u32, message_id: String },
@@ -156,6 +160,9 @@ pub async fn run_chat_turn(
         error_message: None,
     };
     store.upsert_message(&placeholder).map_err(|e| e.to_string())?;
+    sink.on_event(&AgentEvent::StreamingStarted {
+        message_id: placeholder_id.clone(),
+    });
 
     let client = OpenAiClient::new(&request.base_url, &request.api_key);
     let mut current_content = String::new();

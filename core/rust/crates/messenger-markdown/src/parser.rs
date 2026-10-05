@@ -41,6 +41,11 @@ enum ParserState {
 pub struct IncrementalParser {
     state: ParserState,
     buffer: String,
+    /// True right after `update_active_chunk` eagerly promoted a non-blank
+    /// partial line into a streaming paragraph WITHOUT its terminating
+    /// newline. The next continuation line must not prepend a soft-break
+    /// (the model sent it as the same line).
+    eager_line_open: bool,
 }
 
 impl IncrementalParser {
@@ -48,6 +53,7 @@ impl IncrementalParser {
         Self {
             state: ParserState::Idle,
             buffer: String::new(),
+            eager_line_open: false,
         }
     }
 
@@ -269,7 +275,10 @@ impl IncrementalParser {
                     self.state = ParserState::Idle;
                     self.process_line(line, doc, diffs);
                 } else {
-                    text.push('\n');
+                    if !self.eager_line_open {
+                        text.push('\n');
+                    }
+                    self.eager_line_open = false;
                     text.push_str(line);
                     let block = Block::Paragraph {
                         id,
@@ -433,6 +442,7 @@ impl IncrementalParser {
                     status: BlockStatus::Streaming,
                 };
                 diffs.push(doc.append(block));
+                self.eager_line_open = false;
                 self.state = ParserState::InParagraph {
                     id,
                     text: line.to_string(),
@@ -444,6 +454,30 @@ impl IncrementalParser {
     fn update_active_chunk(&mut self, doc: &mut Document, diffs: &mut Vec<DocumentDiff>) {
         let chunk = &self.buffer;
         match &mut self.state {
+            ParserState::Idle => {
+                // Eager streaming: open a paragraph as soon as a non-blank
+                // partial line is buffered so renderers grow text
+                // token-by-token instead of waiting for the line terminator.
+                // The buffer is consumed into the paragraph state; when the
+                // real newline arrives, `process_line` sees the line's
+                // remainder and continues the same paragraph (no duplicate).
+                // Lines that start a non-paragraph block (```, #, >, …) — or
+                // are still a PREFIX of such a starter — never eager-open;
+                // they keep the old buffer-until-newline behavior so the
+                // real block handler sees them intact.
+                if can_eager_open_paragraph(&self.buffer) {
+                    let chunk = std::mem::take(&mut self.buffer);
+                    let id = doc.next_id();
+                    let block = Block::Paragraph {
+                        id,
+                        inlines: parse_inlines(&chunk),
+                        status: BlockStatus::Streaming,
+                    };
+                    diffs.push(doc.append(block));
+                    self.eager_line_open = true;
+                    self.state = ParserState::InParagraph { id, text: chunk };
+                }
+            }
             ParserState::InParagraph { id, text } => {
                 let id = *id;
                 let mut combined = text.clone();
@@ -592,6 +626,21 @@ impl IncrementalParser {
     }
 }
 
+/// Whether a non-blank partial line may be eagerly promoted into a streaming
+/// paragraph. Lines that start (or could still grow into) a non-paragraph
+/// block starter are excluded — they wait for the newline so the real block
+/// handler sees them intact.
+fn can_eager_open_paragraph(buffer: &str) -> bool {
+    if buffer.trim().is_empty() {
+        return false;
+    }
+    const STARTERS: [&str; 13] = [
+        "```", "$$", "<think>", "<tool_call>", "# ", "## ", "### ", "#### ", "##### ", "###### ",
+        "> ", "---", "***",
+    ];
+    STARTERS.iter().all(|s| !buffer.starts_with(s) && !s.starts_with(buffer))
+}
+
 fn parse_heading(line: &str) -> Option<(u8, &str)> {
     if let Some(text) = line.strip_prefix("# ") {
         Some((1, text))
@@ -653,6 +702,70 @@ mod tests {
         } else {
             panic!("expected code block");
         }
+    }
+
+    /// Concatenate the human-visible text of a paragraph's inlines.
+    fn inline_text(inlines: &[messenger_document::Inline]) -> String {
+        inlines
+            .iter()
+            .map(|i| match i {
+                messenger_document::Inline::Text { text }
+                | messenger_document::Inline::Bold { text }
+                | messenger_document::Inline::Italic { text }
+                | messenger_document::Inline::Strikethrough { text }
+                | messenger_document::Inline::Link { text, .. } => text.clone(),
+                messenger_document::Inline::Code { code } => code.clone(),
+                messenger_document::Inline::Math { formula } => formula.clone(),
+            })
+            .collect()
+    }
+
+    /// Single-character feeds must grow a STREAMING paragraph immediately —
+    /// renderers paint each token as it arrives, they never wait for the
+    /// line terminator (which single-line replies never contain).
+    #[test]
+    fn eager_paragraph_streams_per_token() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        // First token already materializes a streaming paragraph
+        let diffs = parser.feed("Hi", &mut doc);
+        assert!(!diffs.is_empty(), "first token must emit a diff");
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(!doc.blocks()[0].is_finalized());
+
+        // Continuation without newline keeps updating the same block
+        let diffs = parser.feed(" there", &mut doc);
+        assert!(!diffs.is_empty());
+        assert_eq!(doc.blocks().len(), 1);
+        if let Block::Paragraph { inlines, .. } = &doc.blocks()[0] {
+            assert_eq!(inline_text(inlines), "Hi there");
+        } else {
+            panic!("expected paragraph");
+        }
+
+        // The terminating newline finalizes; no stray soft-break was injected
+        parser.feed("\n\n", &mut doc);
+        assert!(doc.blocks()[0].is_finalized());
+        if let Block::Paragraph { inlines, .. } = &doc.blocks()[0] {
+            assert_eq!(inline_text(inlines), "Hi there");
+        }
+    }
+
+    /// A partial block starter ("# Ti") is never eager-opened as a paragraph —
+    /// it buffers until the newline and lands in its real block handler.
+    #[test]
+    fn eager_paragraph_corrects_into_heading() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("# Ti", &mut doc);
+        assert_eq!(doc.blocks().len(), 0); // starter prefix stays buffered
+        parser.feed("tle\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(doc.blocks()[0].is_finalized());
+        assert!(matches!(doc.blocks()[0], Block::Heading { level: 1, .. }));
     }
 
     #[test]

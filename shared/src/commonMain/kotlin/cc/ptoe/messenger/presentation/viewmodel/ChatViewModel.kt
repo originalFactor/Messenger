@@ -628,8 +628,6 @@ class ChatViewModel(
                 titleAgentModelId = titleHolder?.defaultModelId,
             )
 
-            val aiMessageId = randomUuid()
-            _streamingMessageId.value = aiMessageId
             _isGenerating.value = true
             _streamingContent.value = ""
             currentDocSession = bridge.createDocumentSession()
@@ -1279,6 +1277,12 @@ class ChatViewModel(
         }
         val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
+            "StreamingStarted" -> {
+                // The Rust loop creates the placeholder row itself; this is
+                // the ONLY id that matches the row the renderer displays.
+                val messageId = root["messageId"]?.jsonPrimitive?.contentOrNull ?: return
+                _streamingMessageId.value = messageId
+            }
             "TextDelta" -> {
                 val text = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 _streamingContent.value = (_streamingContent.value ?: "") + text

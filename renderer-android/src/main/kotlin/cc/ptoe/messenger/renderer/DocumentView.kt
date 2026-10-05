@@ -62,10 +62,10 @@ class DocumentView @JvmOverloads constructor(
     fun setBlocks(theme: RendererTheme?, blocks: List<RenderBlock>) {
         removeAllViews()
         blockViews.clear()
-        for (block in blocks) {
+        blocks.forEachIndexed { index, block ->
             val view = createViewForBlock(theme, block)
             blockViews[block.id] = view
-            addView(view, createBlockLayoutParams())
+            addView(view, createBlockLayoutParams(index > 0))
         }
     }
 
@@ -95,14 +95,24 @@ class DocumentView @JvmOverloads constructor(
                     if (blockViews.containsKey(block.id)) continue
                     val view = createViewForBlock(theme, block)
                     blockViews[block.id] = view
-                    addView(view, createBlockLayoutParams())
+                    addView(view, createBlockLayoutParams(childCount > 0))
                 }
                 "update" -> {
                     val blockObj = obj["block"]?.jsonObject ?: continue
                     val block = DocumentParser.parseBlockObject(blockObj) ?: continue
-                    val existing = blockViews[block.id] ?: continue
-                    bindBlockToView(existing, block)
-                    existing.invalidate()
+                    val existing = blockViews[block.id]
+                    if (existing != null) {
+                        bindBlockToView(existing, block)
+                        existing.invalidate()
+                    } else {
+                        // Self-healing: the block's "append" may have been
+                        // dropped before the streaming row ever bound (the
+                        // first token can beat the rebind). Build it from the
+                        // update's full block state.
+                        val view = createViewForBlock(theme, block)
+                        blockViews[block.id] = view
+                        addView(view, createBlockLayoutParams(childCount > 0))
+                    }
                 }
                 "finalize" -> {
                     val id = obj["id"]?.jsonPrimitive?.longOrNull ?: continue
@@ -113,9 +123,13 @@ class DocumentView @JvmOverloads constructor(
         }
     }
 
-    private fun createBlockLayoutParams(): LayoutParams {
+    /** Spacing between blocks; the FIRST block carries no top margin so text
+     * sits vertically centered in the bubble padding. */
+    private fun createBlockLayoutParams(isNotFirst: Boolean): LayoutParams {
         val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        lp.topMargin = blockSpacing
+        if (isNotFirst) {
+            lp.topMargin = blockSpacing
+        }
         return lp
     }
 
@@ -125,23 +139,27 @@ class DocumentView @JvmOverloads constructor(
         return when (block) {
             is RenderBlock.Paragraph -> {
                 TextView(context).apply {
-                    textSize = 15f
+                    // bodyLarge parity with the former llm-typewriter flow:
+                    // 16sp text on a 24sp line height
+                    textSize = 16f
+                    lineHeight = (24 * resources.displayMetrics.density).toInt()
                     setTextColor(bodyColor)
                     typeface = Typeface.SANS_SERIF
-                    setLineSpacing(0f, 1.3f)
                     // Not selectable: long-press must reach the bubble's context menu
                     text = block.text
                 }
             }
             is RenderBlock.Heading -> {
                 TextView(context).apply {
-                    val scale = when (block.level) {
-                        1 -> 22f
-                        2 -> 19f
-                        3 -> 17f
-                        else -> 15f
+                    // llm-typewriter headingScale × bodyLarge: 1.8/1.5/1.3/1.1/1.0/0.9
+                    textSize = when (block.level) {
+                        1 -> 28.8f
+                        2 -> 24f
+                        3 -> 20.8f
+                        4 -> 17.6f
+                        5 -> 16f
+                        else -> 14.4f
                     }
-                    textSize = scale
                     setTypeface(Typeface.SANS_SERIF, Typeface.BOLD)
                     setTextColor(bodyColor)
                     text = block.text
@@ -169,7 +187,8 @@ class DocumentView @JvmOverloads constructor(
                     )
                     addView(
                         TextView(context).apply {
-                            textSize = 14f
+                            textSize = 15f
+                            lineHeight = (22 * resources.displayMetrics.density).toInt()
                             setTypeface(Typeface.SANS_SERIF, Typeface.ITALIC)
                             setTextColor(variantColor)
                             setPadding(dp(10f).toInt(), 0, 0, 0)
