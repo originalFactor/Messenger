@@ -86,7 +86,9 @@ class MessageView(context: Context) : LinearLayout(context) {
 
         contentRow.orientation = HORIZONTAL
 
-        avatarView.scaleType = ImageView.ScaleType.CENTER
+        // FIT_CENTER: 96px bitmaps scale down cleanly into the 32dp view
+        // (CENTER would draw them 1:1 and crop the outer ring).
+        avatarView.scaleType = ImageView.ScaleType.FIT_CENTER
         leadingSpacer.setBackgroundColor(android.graphics.Color.TRANSPARENT)
         trailingSpacer.setBackgroundColor(android.graphics.Color.TRANSPARENT)
 

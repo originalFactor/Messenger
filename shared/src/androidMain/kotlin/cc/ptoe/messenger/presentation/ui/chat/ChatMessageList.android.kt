@@ -18,6 +18,9 @@ package cc.ptoe.messenger.presentation.ui.chat
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,8 +29,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -90,19 +104,32 @@ internal actual fun ChatMessageList(
     val failedLabel = stringResource(Res.string.tool_card_failed)
     val resultLabel = stringResource(Res.string.tool_card_result_label)
     val terminalToolName = stringResource(Res.string.tool_name_terminal)
-    // Avatars may be local file paths, content:// URIs or remote http(s)
-    // URLs (market agents, cloud user avatar) — load them all through Coil,
-    // mirroring what the Compose AgentAvatar shows.
+    // Avatars may be local file paths or content:// URIs (market agents, cloud
+    // user avatar) — load them through Coil. Fallbacks are rendered from the
+    // very same ImageVectors the Compose AgentAvatar draws (primaryContainer
+    // circle + 60% icon), so native rows mirror the Compose fallback exactly.
     val avatarContext = LocalContext.current
-    var assistantAvatarBitmap by remember(agent?.avatar) { mutableStateOf<Bitmap?>(null) }
+    val assistantFallback = rememberVectorAvatarBitmap(
+        icon = Icons.Default.SmartToy,
+        background = colorScheme.primaryContainer,
+        tint = colorScheme.onPrimaryContainer
+    )
+    val userFallback = rememberVectorAvatarBitmap(
+        icon = Icons.Default.AccountCircle,
+        background = colorScheme.primaryContainer,
+        tint = colorScheme.onPrimaryContainer
+    )
+    var loadedAssistantAvatar by remember(agent?.avatar) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(agent?.avatar) {
-        assistantAvatarBitmap = loadAvatarBitmap(avatarContext, agent?.avatar)
+        loadedAssistantAvatar = loadAvatarBitmap(avatarContext, agent?.avatar)
     }
-    var userAvatarBitmap by remember(userAvatar) { mutableStateOf<Bitmap?>(null) }
+    var loadedUserAvatar by remember(userAvatar) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(userAvatar) {
-        userAvatarBitmap = loadAvatarBitmap(avatarContext, userAvatar)
+        loadedUserAvatar = loadAvatarBitmap(avatarContext, userAvatar)
     }
-    val rendererTheme = remember(colorScheme, errorTitle, retryAction, thinkingTitle, copyAction, copiedToast, runningLabel, successLabel, failedLabel, resultLabel, terminalToolName, assistantAvatarBitmap, userAvatarBitmap) {
+    val assistantAvatar = loadedAssistantAvatar ?: assistantFallback
+    val userAvatarBitmap = loadedUserAvatar ?: userFallback
+    val rendererTheme = remember(colorScheme, errorTitle, retryAction, thinkingTitle, copyAction, copiedToast, runningLabel, successLabel, failedLabel, resultLabel, terminalToolName, assistantAvatar, userAvatarBitmap) {
         RendererTheme(
             userBubble = colorScheme.primary.toArgb(),
             onUserBubble = colorScheme.onPrimary.toArgb(),
@@ -126,7 +153,7 @@ internal actual fun ChatMessageList(
             failedLabel = failedLabel,
             resultLabel = resultLabel,
             terminalToolName = terminalToolName,
-            assistantAvatar = assistantAvatarBitmap,
+            assistantAvatar = assistantAvatar,
             userAvatar = userAvatarBitmap
         )
     }
@@ -294,9 +321,13 @@ private fun List<Message>.findResult(callId: String): ContentPart.ToolResult? {
         .firstOrNull()
 }
 
-/** Decode an avatar (file path, content:// or https URL) into a small bitmap; null → vector fallback. */
+/**
+ * Decode an avatar (file path or content:// URI) into a small bitmap; anything
+ * else (blank, remote http(s) URL — AgentAvatar shows the fallback for those
+ * too) or a failed load → null so the rendered vector fallback is used.
+ */
 private suspend fun loadAvatarBitmap(context: android.content.Context, source: String?): Bitmap? {
-    if (source.isNullOrBlank()) return null
+    if (source.isNullOrBlank() || source.startsWith("http://") || source.startsWith("https://")) return null
     return runCatching {
         val data = when {
             source.startsWith("/") -> File(source)
@@ -309,4 +340,39 @@ private suspend fun loadAvatarBitmap(context: android.content.Context, source: S
             .build()
         (context.imageLoader.execute(request).image as? coil3.BitmapImage)?.bitmap
     }.getOrNull()
+}
+
+/**
+ * Render the exact fallback the Compose AgentAvatar shows — background circle
+ * + 60%-sized icon tinted — by drawing the ImageVector itself through a
+ * CanvasDrawScope, so the glyph is identical by construction (no path-data
+ * duplication that could drift from the material-icons version).
+ */
+@Composable
+private fun rememberVectorAvatarBitmap(
+    icon: ImageVector,
+    background: Color,
+    tint: Color,
+    sizePx: Int = 96
+): Bitmap {
+    val painter = rememberVectorPainter(icon)
+    return remember(painter, background, tint, sizePx) {
+        Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888).also { bmp ->
+            CanvasDrawScope().draw(
+                density = Density(1f),
+                layoutDirection = LayoutDirection.Ltr,
+                canvas = Canvas(bmp.asImageBitmap()),
+                size = Size(sizePx.toFloat(), sizePx.toFloat())
+            ) {
+                drawCircle(color = background, radius = sizePx / 2f)
+                val iconSize = sizePx * 0.6f
+                val offset = (sizePx - iconSize) / 2f
+                translate(offset, offset) {
+                    with(painter) {
+                        draw(size = Size(iconSize, iconSize), colorFilter = ColorFilter.tint(tint))
+                    }
+                }
+            }
+        }
+    }
 }
