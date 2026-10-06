@@ -24,7 +24,6 @@ on:
       - desktopApp/**
       - wear/**
       - runtime/**
-      - llm-typewriter/**
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties
@@ -42,7 +41,6 @@ on:
       - desktopApp/**
       - wear/**
       - runtime/**
-      - llm-typewriter/**
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties

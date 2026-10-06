@@ -131,4 +131,136 @@ class DesktopDocumentParserTest {
         println("DesktopDocumentParser Benchmark: $iterations iterations in $elapsedMs ms (avg $avgMs ms/run)")
         assertTrue(avgMs < 0.2, "Desktop parsing took too long: $avgMs ms")
     }
+
+    @Test
+    fun testParseMarkdownHeadingsAndParagraphs() {
+        val markdown = """
+            # Heading 1
+            ## Heading 2
+            ### Heading 3
+            #### Heading 4
+
+            This is a paragraph with **bold**, *italic*, `code`, and ${'$'}E = mc^2${'$'}.
+        """.trimIndent()
+
+        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        assertEquals(5, blocks.size)
+
+        val h1 = blocks[0] as DesktopBlock.Heading
+        assertEquals(1, h1.level)
+        assertEquals("Heading 1", h1.text)
+
+        val h2 = blocks[1] as DesktopBlock.Heading
+        assertEquals(2, h2.level)
+        assertEquals("Heading 2", h2.text)
+
+        val h3 = blocks[2] as DesktopBlock.Heading
+        assertEquals(3, h3.level)
+        assertEquals("Heading 3", h3.text)
+
+        val h4 = blocks[3] as DesktopBlock.Heading
+        assertEquals(4, h4.level)
+        assertEquals("Heading 4", h4.text)
+
+        val p = blocks[4] as DesktopBlock.Paragraph
+        assertEquals(9, p.inlines.size)
+        assertTrue(p.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
+        assertTrue(p.inlines.any { it is DesktopInline.Italic && it.text == "italic" })
+        assertTrue(p.inlines.any { it is DesktopInline.Code && it.code == "code" })
+        assertTrue(p.inlines.any { it is DesktopInline.Math && it.formula == "E = mc^2" })
+    }
+
+    @Test
+    fun testParseMarkdownCodeBlock() {
+        val markdown = """
+            ```kotlin
+            fun main() {
+                println("Hello")
+            }
+            ```
+        """.trimIndent()
+
+        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        assertEquals(1, blocks.size)
+
+        val c = blocks[0] as DesktopBlock.Code
+        assertEquals("kotlin", c.language)
+        assertEquals("fun main() {\n    println(\"Hello\")\n}", c.code)
+        assertTrue(c.isFinalized)
+    }
+
+    @Test
+    fun testParseMarkdownThinkBlock() {
+        val closedMarkdown = """
+            <think>
+            Internal deliberation...
+            </think>
+            Final answer.
+        """.trimIndent()
+
+        val closedBlocks = DesktopDocumentParser.parseMarkdown(closedMarkdown)
+        assertEquals(2, closedBlocks.size)
+        val thinkClosed = closedBlocks[0] as DesktopBlock.Think
+        assertEquals("Internal deliberation...", thinkClosed.content)
+        assertTrue(thinkClosed.isFinalized)
+
+        val unclosedMarkdown = """
+            <think>
+            Still deliberating...
+        """.trimIndent()
+        val streamingBlocks = DesktopDocumentParser.parseMarkdown(unclosedMarkdown)
+        assertEquals(1, streamingBlocks.size)
+        val thinkStreaming = streamingBlocks[0] as DesktopBlock.Think
+        assertEquals("Still deliberating...", thinkStreaming.content)
+        assertEquals(false, thinkStreaming.isFinalized)
+    }
+
+    @Test
+    fun testParseMarkdownMathAndTableAndList() {
+        val markdown = """
+            $$
+            \int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}
+            $$
+
+            | Col A | Col B |
+            |---|---|
+            | 1 | 2 |
+            | 3 | 4 |
+
+            - First bullet
+            - Second bullet
+              - Indented bullet
+
+            > Important quote
+            > second line
+
+            ---
+        """.trimIndent()
+
+        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        assertEquals(5, blocks.size)
+
+        val math = blocks[0] as DesktopBlock.Math
+        assertTrue(math.formula.contains("\\int_0^\\infty"))
+        assertTrue(math.isFinalized)
+
+        val table = blocks[1] as DesktopBlock.Table
+        assertEquals(listOf("Col A", "Col B"), table.head)
+        assertEquals(2, table.rows.size)
+        assertEquals(listOf("1", "2"), table.rows[0])
+        assertEquals(listOf("3", "4"), table.rows[1])
+
+        val list = blocks[2] as DesktopBlock.ListBlock
+        assertEquals(3, list.items.size)
+        assertEquals("First bullet", list.items[0].text)
+        assertEquals("Second bullet", list.items[1].text)
+        assertEquals(1, list.items[2].indent)
+        assertEquals("Indented bullet", list.items[2].text)
+
+        val quote = blocks[3] as DesktopBlock.Quote
+        assertEquals("Important quote\nsecond line", quote.text)
+
+        val divider = blocks[4] as DesktopBlock.Divider
+        assertTrue(divider.isFinalized)
+    }
 }

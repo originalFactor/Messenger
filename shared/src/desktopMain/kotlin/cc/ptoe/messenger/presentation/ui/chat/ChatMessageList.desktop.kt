@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
@@ -106,21 +107,59 @@ internal actual fun ChatMessageList(
                     } else {
                         Modifier
                     }
-                    Box(modifier = groupModifier) {
-                        ToolGroupItem(
+                    val isLiveStreaming = streamingMessageId != null && item.finalMessage?.id == streamingMessageId
+                    val blocks = remember(item.rounds, item.toolMessages, item.finalMessage?.content, streamingContent, isLiveStreaming) {
+                        buildDesktopToolGroupBlocks(
                             rounds = item.rounds,
                             toolMessages = item.toolMessages,
                             finalMessage = item.finalMessage,
+                            streamingContent = if (isLiveStreaming) streamingContent else null
+                        )
+                    }
+                    val anchorMessage = anchor ?: Message(
+                        id = "tool_group_${item.toolMessages.firstOrNull()?.id ?: "0"}",
+                        conversationId = "",
+                        role = MessageRole.ASSISTANT,
+                        content = "",
+                        timestamp = item.toolMessages.firstOrNull()?.timestamp ?: 0L,
+                        status = MessageStatus.SENT
+                    )
+                    Box(modifier = groupModifier) {
+                        DesktopDocumentBubble(
+                            message = anchorMessage,
+                            blocks = blocks,
+                            avatar = agent?.avatar,
+                            isGenerating = isGenerating && isLiveStreaming,
                             isLastInGroup = item.isLastInGroup,
-                            streamingContent = streamingContent,
-                            streamingMessageId = streamingMessageId
+                            onRetryClick = {
+                                if (anchorMessage.status == MessageStatus.ERROR) {
+                                    onRetryClick(anchorMessage.id)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         )
                         if (enableContextMenu && anchor != null) {
                             MessageContextMenu(
                                 state = contextMenuState,
                                 messageRole = anchor.role,
                                 onCopyClick = {
-                                    onCopyClick(anchor.content)
+                                    val copyText = if (anchor.content.isNotBlank()) anchor.content else {
+                                        blocks.joinToString("\n\n") { block ->
+                                            when (block) {
+                                                is DesktopBlock.Paragraph -> block.text
+                                                is DesktopBlock.Heading -> block.text
+                                                is DesktopBlock.Code -> block.code
+                                                is DesktopBlock.Math -> block.formula
+                                                is DesktopBlock.Think -> block.content
+                                                is DesktopBlock.ToolCall -> block.output.orEmpty()
+                                                is DesktopBlock.Quote -> block.text
+                                                is DesktopBlock.Table -> block.rows.joinToString("\n") { it.joinToString(" | ") }
+                                                is DesktopBlock.ListBlock -> block.items.joinToString("\n") { it.text }
+                                                is DesktopBlock.Divider -> "---"
+                                            }
+                                        }
+                                    }
+                                    onCopyClick(copyText)
                                     showPlatformToast(copiedToastText)
                                 },
                                 onRegenerateClick = {
@@ -213,4 +252,71 @@ internal actual fun ChatMessageList(
             }
         }
     }
+}
+
+private fun buildDesktopToolGroupBlocks(
+    rounds: List<Message>,
+    toolMessages: List<Message>,
+    finalMessage: Message?,
+    streamingContent: String?
+): List<DesktopBlock> {
+    val blocks = mutableListOf<DesktopBlock>()
+    var blockIdCounter = 1L
+
+    if (rounds.isEmpty()) {
+        val orphanResults = toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
+        orphanResults.forEachIndexed { _, result ->
+            blocks.add(
+                DesktopBlock.ToolCall(
+                    id = blockIdCounter++,
+                    callId = result.callId,
+                    name = result.name,
+                    arguments = "",
+                    output = result.output,
+                    isError = result.isError,
+                    isFinalized = true
+                )
+            )
+        }
+        return blocks
+    }
+
+    rounds.forEachIndexed { roundIndex, round ->
+        val roundBaseId = (roundIndex + 1) * 100_000L
+        if (round.content.isNotBlank()) {
+            val roundBlocks = DesktopDocumentParser.parseMarkdown(round.content, baseId = roundBaseId)
+            blocks.addAll(roundBlocks)
+        }
+        val calls = round.parts.filterIsInstance<ContentPart.ToolCall>()
+        calls.forEachIndexed { callIndex, call ->
+            val result = toolMessages.findToolResult(call.callId)
+            blocks.add(
+                DesktopBlock.ToolCall(
+                    id = roundBaseId + 50_000L + callIndex,
+                    callId = call.callId,
+                    name = call.name,
+                    arguments = call.arguments,
+                    output = result?.output,
+                    isError = result?.isError ?: false,
+                    isFinalized = result != null
+                )
+            )
+        }
+    }
+
+    val finalText = streamingContent ?: finalMessage?.content
+    if (!finalText.isNullOrBlank()) {
+        val finalBlocks = DesktopDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
+        blocks.addAll(finalBlocks)
+    }
+
+    return blocks
+}
+
+private fun List<Message>.findToolResult(callId: String): ContentPart.ToolResult? {
+    return asSequence()
+        .mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
+        .filter { it.callId == callId }
+        .filter { it.output.isNotEmpty() || it.isError }
+        .firstOrNull()
 }

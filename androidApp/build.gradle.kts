@@ -101,10 +101,6 @@ android {
 // The per-ABI flavors keep producing split APKs for distribution; the shell
 // runtime itself is the Android system shell, so nothing is bundled per-ABI.
 
-// The guava/listenablefuture duplicate-class collision is resolved at :shared
-// (per-dependency exclude of guava from llm-typewriter). androidApp inherits the
-// cleaned runtime classpath transitively, plus the global listenablefuture stub
-// exclude from the root build.gradle.kts as a safety net.
 dependencies {
     implementation(project(":shared"))
     implementation(project(":core-bindings"))

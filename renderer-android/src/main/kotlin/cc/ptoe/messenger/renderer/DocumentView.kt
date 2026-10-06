@@ -145,7 +145,7 @@ class DocumentView @JvmOverloads constructor(
         return when (block) {
             is RenderBlock.Paragraph -> {
                 TextView(context).apply {
-                    // bodyLarge parity with the former llm-typewriter flow:
+                    // bodyLarge typography:
                     // 16sp text on a 24sp line height
                     textSize = 16f
                     lineHeight = (24 * resources.displayMetrics.density).toInt()
@@ -158,7 +158,7 @@ class DocumentView @JvmOverloads constructor(
             }
             is RenderBlock.Heading -> {
                 TextView(context).apply {
-                    // llm-typewriter headingScale × bodyLarge: 1.8/1.5/1.3/1.1/1.0/0.9
+                    // headingScale × bodyLarge: 1.8/1.5/1.3/1.1/1.0/0.9
                     textSize = when (block.level) {
                         1 -> 28.8f
                         2 -> 24f

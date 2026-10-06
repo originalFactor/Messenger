@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -88,13 +89,26 @@ fun DesktopDocumentBubble(
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 if (blocks != null && blocks.isNotEmpty()) {
-                    DesktopDocumentView(blocks = blocks)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DesktopDocumentView(blocks = blocks)
+                        val lastBlock = blocks.lastOrNull()
+                        val waitingForText = isGenerating && (lastBlock is DesktopBlock.ToolCall && lastBlock.isFinalized)
+                        if (waitingForText) {
+                            Text(
+                                text = "● ● ●",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 } else if (message.content.isNotBlank()) {
                     val parsed = remember(message.content) {
-                        DesktopDocumentParser.parseBlocksJson(
-                            cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.parseMarkdownToBlocksJson(message.content)
-                                ?: "[]"
-                        )
+                        val bridgeJson = cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.parseMarkdownToBlocksJson(message.content)
+                        if (!bridgeJson.isNullOrBlank() && bridgeJson != "[]") {
+                            DesktopDocumentParser.parseBlocksJson(bridgeJson)
+                        } else {
+                            DesktopDocumentParser.parseMarkdown(message.content)
+                        }
                     }
                     if (parsed.isNotEmpty()) {
                         DesktopDocumentView(blocks = parsed)

@@ -4,21 +4,6 @@
   <component name="GradleSettings">
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
-        <compositeConfiguration>
-          <compositeBuild compositeDefinitionSource="SCRIPT">
-            <builds>
-              <build path="$PROJECT_DIR$/llm-typewriter" name="llm-typewriter">
-                <projects>
-                  <project path="$PROJECT_DIR$/llm-typewriter" />
-                  <project path="$PROJECT_DIR$/llm-typewriter/llm-typewriter" />
-                  <project path="$PROJECT_DIR$/llm-typewriter/sample" />
-                  <project path="$PROJECT_DIR$/llm-typewriter/sample/androidApp" />
-                  <project path="$PROJECT_DIR$/llm-typewriter/sample/composeApp" />
-                </projects>
-              </build>
-            </builds>
-          </compositeBuild>
-        </compositeConfiguration>
         <option name="testRunner" value="CHOOSE_PER_TEST" />
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
         <option name="modules">
@@ -27,11 +12,6 @@
             <option value="$PROJECT_DIR$/androidApp" />
             <option value="$PROJECT_DIR$/core/bindings" />
             <option value="$PROJECT_DIR$/desktopApp" />
-            <option value="$PROJECT_DIR$/llm-typewriter" />
-            <option value="$PROJECT_DIR$/llm-typewriter/llm-typewriter" />
-            <option value="$PROJECT_DIR$/llm-typewriter/sample" />
-            <option value="$PROJECT_DIR$/llm-typewriter/sample/androidApp" />
-            <option value="$PROJECT_DIR$/llm-typewriter/sample/composeApp" />
             <option value="$PROJECT_DIR$/renderer-android" />
             <option value="$PROJECT_DIR$/runtime" />
             <option value="$PROJECT_DIR$/shared" />

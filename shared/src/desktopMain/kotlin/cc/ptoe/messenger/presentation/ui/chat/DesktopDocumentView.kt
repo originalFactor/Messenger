@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,9 +63,18 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cc.ptoe.messenger.domain.tool.TerminalTool
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.tool_card_failed
+import cc.ptoe.messenger.generated.resources.tool_card_result_label
+import cc.ptoe.messenger.generated.resources.tool_card_running
+import cc.ptoe.messenger.generated.resources.tool_card_success
+import cc.ptoe.messenger.generated.resources.tool_name_terminal
+import cc.ptoe.messenger.presentation.ui.components.toolIcon
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -75,6 +85,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import org.jetbrains.compose.resources.stringResource
 
 sealed class DesktopBlock {
     abstract val id: Long
@@ -271,6 +282,290 @@ object DesktopDocumentParser {
             else -> null
         }
     }
+
+    private val inlineTokenRegex = Regex("""(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\$[^$]+\$)""")
+
+    fun parseInlines(text: String): List<DesktopInline> {
+        if (text.isEmpty()) return emptyList()
+        val inlines = mutableListOf<DesktopInline>()
+        var lastIndex = 0
+
+        for (match in inlineTokenRegex.findAll(text)) {
+            val range = match.range
+            if (range.first > lastIndex) {
+                inlines.add(DesktopInline.Text(text.substring(lastIndex, range.first)))
+            }
+            val token = match.value
+            val inline = when {
+                token.startsWith("`") && token.endsWith("`") ->
+                    DesktopInline.Code(token.removeSurrounding("`"))
+                (token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__")) ->
+                    DesktopInline.Bold(token.substring(2, token.length - 2))
+                (token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_")) ->
+                    DesktopInline.Italic(token.substring(1, token.length - 1))
+                token.startsWith("$") && token.endsWith("$") ->
+                    DesktopInline.Math(token.removeSurrounding("$"))
+                else -> DesktopInline.Text(token)
+            }
+            inlines.add(inline)
+            lastIndex = range.last + 1
+        }
+        if (lastIndex < text.length) {
+            inlines.add(DesktopInline.Text(text.substring(lastIndex)))
+        }
+        return inlines
+    }
+
+    fun parseMarkdown(markdown: String, baseId: Long = 1L): List<DesktopBlock> {
+        if (markdown.isBlank()) return emptyList()
+
+        val blocks = mutableListOf<DesktopBlock>()
+        var currentId = baseId
+
+        val lines = markdown.lines()
+        var i = 0
+
+        while (i < lines.size) {
+            val line = lines[i]
+
+            // 1. Think block: <think> ... </think> or unclosed <think>
+            if (line.trimStart().startsWith("<think>")) {
+                val thinkBuilder = StringBuilder()
+                val firstLineContent = line.trimStart().removePrefix("<think>")
+                if (firstLineContent.contains("</think>")) {
+                    val content = firstLineContent.substringBefore("</think>")
+                    blocks.add(DesktopBlock.Think(id = currentId++, content = content.trim(), isFinalized = true))
+                    i++
+                    continue
+                }
+                thinkBuilder.append(firstLineContent)
+                var closed = false
+                i++
+                while (i < lines.size) {
+                    val l = lines[i]
+                    if (l.contains("</think>")) {
+                        val before = l.substringBefore("</think>")
+                        if (before.isNotBlank()) thinkBuilder.append("\n").append(before)
+                        closed = true
+                        i++
+                        break
+                    } else {
+                        thinkBuilder.append("\n").append(l)
+                        i++
+                    }
+                }
+                blocks.add(
+                    DesktopBlock.Think(
+                        id = currentId++,
+                        content = thinkBuilder.toString().trim(),
+                        isFinalized = closed
+                    )
+                )
+                continue
+            }
+
+            // 2. Fenced code block: ```[lang] ... ```
+            if (line.trimStart().startsWith("```")) {
+                val lang = line.trimStart().removePrefix("```").trim().ifBlank { null }
+                val codeBuilder = StringBuilder()
+                var closed = false
+                i++
+                while (i < lines.size) {
+                    val l = lines[i]
+                    if (l.trimStart().startsWith("```")) {
+                        closed = true
+                        i++
+                        break
+                    } else {
+                        if (codeBuilder.isNotEmpty()) codeBuilder.append("\n")
+                        codeBuilder.append(l)
+                        i++
+                    }
+                }
+                blocks.add(
+                    DesktopBlock.Code(
+                        id = currentId++,
+                        language = lang,
+                        code = codeBuilder.toString(),
+                        isFinalized = closed
+                    )
+                )
+                continue
+            }
+
+            // 3. Display Math block: $$ ... $$
+            if (line.trimStart().startsWith("$$")) {
+                val mathBuilder = StringBuilder()
+                val first = line.trimStart().removePrefix("$$")
+                if (first.contains("$$") && first.endsWith("$$")) {
+                    val formula = first.removeSuffix("$$").trim()
+                    blocks.add(DesktopBlock.Math(id = currentId++, formula = formula, isFinalized = true))
+                    i++
+                    continue
+                }
+                mathBuilder.append(first)
+                var closed = false
+                i++
+                while (i < lines.size) {
+                    val l = lines[i]
+                    if (l.contains("$$")) {
+                        val part = l.substringBefore("$$")
+                        if (part.isNotBlank()) mathBuilder.append("\n").append(part)
+                        closed = true
+                        i++
+                        break
+                    } else {
+                        if (mathBuilder.isNotEmpty()) mathBuilder.append("\n")
+                        mathBuilder.append(l)
+                        i++
+                    }
+                }
+                blocks.add(
+                    DesktopBlock.Math(
+                        id = currentId++,
+                        formula = mathBuilder.toString().trim(),
+                        isFinalized = closed
+                    )
+                )
+                continue
+            }
+
+            // Blank lines
+            if (line.isBlank()) {
+                i++
+                continue
+            }
+
+            // 4. Horizontal rule / divider: ---, ***, ___
+            val trimmed = line.trim()
+            if (trimmed == "---" || trimmed == "***" || trimmed == "___") {
+                blocks.add(DesktopBlock.Divider(id = currentId++))
+                i++
+                continue
+            }
+
+            // 5. Headings: #, ##, ###, ####
+            if (line.startsWith("#")) {
+                val level = line.takeWhile { it == '#' }.length
+                if (level in 1..6 && line.length > level && line[level] == ' ') {
+                    val text = line.substring(level + 1).trim()
+                    blocks.add(DesktopBlock.Heading(id = currentId++, level = level, text = text, isFinalized = true))
+                    i++
+                    continue
+                }
+            }
+
+            // 6. Blockquote: > ...
+            if (line.trimStart().startsWith(">")) {
+                val quoteBuilder = StringBuilder()
+                while (i < lines.size && lines[i].trimStart().startsWith(">")) {
+                    val quoteLine = lines[i].trimStart().removePrefix(">").trimStart()
+                    if (quoteBuilder.isNotEmpty()) quoteBuilder.append("\n")
+                    quoteBuilder.append(quoteLine)
+                    i++
+                }
+                blocks.add(DesktopBlock.Quote(id = currentId++, text = quoteBuilder.toString(), isFinalized = true))
+                continue
+            }
+
+            // 7. Table: | cell | cell |
+            if (line.trim().startsWith("|") && line.trim().endsWith("|") && i + 1 < lines.size && lines[i + 1].trim().startsWith("|") && lines[i + 1].contains("-")) {
+                val headerCells = line.trim().removeSurrounding("|", "|").split("|").map { it.trim() }
+                i += 2 // skip header and separator (|---|---|)
+                val rows = mutableListOf<List<String>>()
+                while (i < lines.size && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+                    val rowCells = lines[i].trim().removeSurrounding("|", "|").split("|").map { it.trim() }
+                    rows.add(rowCells)
+                    i++
+                }
+                blocks.add(DesktopBlock.Table(id = currentId++, head = headerCells, rows = rows, isFinalized = true))
+                continue
+            }
+
+            // 8. Lists: - item, * item, + item, or 1. item
+            val listMatch = matchListItem(line)
+            if (listMatch != null) {
+                val items = mutableListOf<DesktopBlock.ListItem>()
+                while (i < lines.size) {
+                    val curMatch = matchListItem(lines[i]) ?: break
+                    items.add(curMatch)
+                    i++
+                }
+                blocks.add(DesktopBlock.ListBlock(id = currentId++, items = items, isFinalized = true))
+                continue
+            }
+
+            // 9. Paragraph: accumulate consecutive non-empty lines
+            val paragraphBuilder = StringBuilder()
+            while (i < lines.size && lines[i].isNotBlank() &&
+                !lines[i].trimStart().startsWith("<think>") &&
+                !lines[i].trimStart().startsWith("```") &&
+                !lines[i].trimStart().startsWith("$$") &&
+                !lines[i].trimStart().startsWith("#") &&
+                !lines[i].trimStart().startsWith(">") &&
+                matchListItem(lines[i]) == null &&
+                !(lines[i].trim() == "---" || lines[i].trim() == "***" || lines[i].trim() == "___") &&
+                !(lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|"))) {
+                if (paragraphBuilder.isNotEmpty()) paragraphBuilder.append("\n")
+                paragraphBuilder.append(lines[i])
+                i++
+            }
+            val paraText = paragraphBuilder.toString().trim()
+            if (paraText.isNotEmpty()) {
+                val inlines = parseInlines(paraText)
+                blocks.add(
+                    DesktopBlock.Paragraph(
+                        id = currentId++,
+                        text = paraText,
+                        inlines = inlines,
+                        isFinalized = true
+                    )
+                )
+            }
+        }
+
+        return blocks
+    }
+
+    private fun matchListItem(line: String): DesktopBlock.ListItem? {
+        val indent = (line.takeWhile { it == ' ' || it == '\t' }.length / 2).coerceAtMost(4)
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
+            return DesktopBlock.ListItem(
+                indent = indent,
+                ordered = false,
+                number = 0,
+                text = trimmed.substring(2).trim()
+            )
+        }
+        val digitPrefix = trimmed.takeWhile { it.isDigit() }
+        if (digitPrefix.isNotEmpty() && trimmed.length > digitPrefix.length + 1) {
+            val num = digitPrefix.toIntOrNull() ?: 0
+            val delim = trimmed[digitPrefix.length]
+            if ((delim == '.' || delim == ')') && trimmed[digitPrefix.length + 1] == ' ') {
+                return DesktopBlock.ListItem(
+                    indent = indent,
+                    ordered = true,
+                    number = num,
+                    text = trimmed.substring(digitPrefix.length + 2).trim()
+                )
+            }
+        }
+        return null
+    }
+}
+
+fun DesktopBlock.withId(newId: Long): DesktopBlock = when (this) {
+    is DesktopBlock.Paragraph -> copy(id = newId)
+    is DesktopBlock.Heading -> copy(id = newId)
+    is DesktopBlock.Code -> copy(id = newId)
+    is DesktopBlock.Math -> copy(id = newId)
+    is DesktopBlock.Think -> copy(id = newId)
+    is DesktopBlock.ToolCall -> copy(id = newId)
+    is DesktopBlock.Quote -> copy(id = newId)
+    is DesktopBlock.Table -> copy(id = newId)
+    is DesktopBlock.ListBlock -> copy(id = newId)
+    is DesktopBlock.Divider -> this
 }
 
 /**
@@ -514,11 +809,24 @@ private fun RenderThinkBlock(block: DesktopBlock.Think) {
 
 @Composable
 private fun RenderToolCall(block: DesktopBlock.ToolCall) {
+    var expanded by remember(block.id) { mutableStateOf(false) }
+    val isRunning = !block.isFinalized
+    val command = remember(block.arguments) {
+        TerminalTool.parseCommand(block.arguments) ?: block.arguments.ifBlank { null }
+    }
+    val containerColor = when {
+        isRunning -> MaterialTheme.colorScheme.secondaryContainer
+        block.isError -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(containerColor)
+            .animateContentSize()
+            .clickable { expanded = !expanded }
             .padding(10.dp)
     ) {
         Row(
@@ -526,43 +834,108 @@ private fun RenderToolCall(block: DesktopBlock.ToolCall) {
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
                 Icon(
-                    imageVector = Icons.Default.Terminal,
+                    imageVector = toolIcon(block.name),
                     contentDescription = null,
                     tint = if (block.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(16.dp)
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = block.name,
+                    text = toolDisplayName(block.name),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = when {
+                        isRunning -> stringResource(Res.string.tool_card_running)
+                        block.isError -> stringResource(Res.string.tool_card_failed)
+                        else -> stringResource(Res.string.tool_card_success)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        isRunning -> MaterialTheme.colorScheme.primary
+                        block.isError -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.outline
+                    }
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .rotate(if (expanded) 180f else 0f)
+                )
+            }
+        }
+        if (!expanded && !command.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = if (block.isFinalized) (if (block.isError) "Failed" else "Finished") else "Running",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (block.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                text = command,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp
             )
         }
-        if (block.output != null && block.output.isNotBlank()) {
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = block.output,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
-                    .padding(6.dp)
-            )
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                if (!command.isNullOrBlank()) {
+                    Text(
+                        text = command,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+                            .padding(6.dp)
+                    )
+                }
+                if (block.output != null && block.output.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(Res.string.tool_card_result_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = block.output,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+                            .padding(6.dp)
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun toolDisplayName(name: String): String = when (name) {
+    TerminalTool.TOOL_NAME -> stringResource(Res.string.tool_name_terminal)
+    else -> name
 }
 
 @Composable

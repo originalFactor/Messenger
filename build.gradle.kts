@@ -102,11 +102,10 @@ ext["keyAlias"] = getEnv("KEY_ALIAS") ?: "messenger"
 ext["keyPassword"] = getEnv("KEY_PASSWORD") ?: ""
 
 // No global exclude of the com.google.guava:listenablefuture:1.0 stub: the
-// collision it guarded against (guava-18.0 dragged in by llm-typewriter via
-// AndroidMath) is gone after the RaTeX migration, and stripping the stub breaks
-// apps that have no other provider of the com.google.common.util.concurrent
-// .ListenableFuture interface — androidx.profileinstaller (pulled by Compose)
-// extends it at runtime, so its App Startup initializer crashed the wear app
-// with NoClassDefFoundError on launch. Full Guava only ever appears on
-// build-time tooling classpaths (KSP/Room, lint), which never collide with the
-// stub in AGP's checkDuplicateClasses.
+// collision it historically guarded against (guava-18.0 via AndroidMath) is gone,
+// and stripping the stub breaks apps that have no other provider of the
+// com.google.common.util.concurrent.ListenableFuture interface —
+// androidx.profileinstaller (pulled by Compose) extends it at runtime, so its
+// App Startup initializer crashed the wear app with NoClassDefFoundError on launch.
+// Full Guava only ever appears on build-time tooling classpaths (KSP/Room, lint),
+// which never collide with the stub in AGP's checkDuplicateClasses.

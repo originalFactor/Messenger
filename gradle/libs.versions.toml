@@ -47,6 +47,7 @@ exifinterface = "1.3.7"
 
 # Compose Multiplatform / KMP
 composeMultiplatform = "1.11.1"
+jbComposeMaterial3 = "1.10.0-alpha05"
 jbNavigation = "2.9.2"
 jbLifecycle = "2.11.0"
 ktor = "3.5.1"
@@ -104,6 +105,7 @@ androidx-material-icons-extended = { group = "androidx.compose.material", name =
 jetbrains-lifecycle-viewmodel-compose = { group = "org.jetbrains.androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "jbLifecycle" }
 jetbrains-lifecycle-runtime-compose = { group = "org.jetbrains.androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "jbLifecycle" }
 jetbrains-navigation-compose = { group = "org.jetbrains.androidx.navigation", name = "navigation-compose", version.ref = "jbNavigation" }
+jetbrains-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jbComposeMaterial3" }
 
 ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
@@ -120,8 +122,6 @@ androidx-transition = { group = "androidx.transition", name = "transition", vers
 
 ucrop = { group = "com.github.Yalantis", name = "ucrop", version.ref = "ucrop" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
-
-llm-typewriter = { group = "cc.ptoe", name = "llm-typewriter" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

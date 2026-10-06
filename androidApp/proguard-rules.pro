@@ -125,15 +125,12 @@
 -dontwarn org.commonmark.**
 
 # ===========================================================================
-# llm-typewriter / RaTeX (Markdown + LaTeX rendering)
+# RaTeX (LaTeX rendering)
 # ===========================================================================
-# The markdown renderer is called directly from Compose; LaTeX rendering is now
-# backed by RaTeX-CMP (Rust core). Keep the renderer stack intact for release
-# builds in case RaTeX-CMP does not ship its own consumer rules.
--keep class cc.ptoe.llmtypewriter.** { *; }
+# LaTeX rendering is backed by RaTeX-CMP (Rust core). Keep the renderer stack
+# intact for release builds in case RaTeX-CMP does not ship its own consumer rules.
 -keep class io.ratex.** { *; }
 -keep class io.ratex.**$* { *; }
--dontwarn cc.ptoe.llmtypewriter.**
 -dontwarn io.ratex.**
 
 # ===========================================================================

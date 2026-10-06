@@ -99,7 +99,7 @@ To get a local copy up and running, follow these simple steps.
    ```properties
    sdk.dir=/path/to/android/sdk
    ```
-3. Initialize submodules (the `llm-typewriter` source build is required)
+3. Initialize submodules
    ```sh
    git submodule update --init --recursive
    ```
@@ -170,7 +170,6 @@ ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.co
 
 ## Acknowledgments
 
-* [llm-typewriter](https://github.com/ECSDevs/llm-typewriter) — Progressive Markdown / LaTeX streaming renderer for AI bubbles
 * [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP) — Pure-Rust KaTeX-compatible LaTeX engine shared across Android and JVM Desktop
 * [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — README template
 * [Jetpack Compose](https://developer.android.com/jetpack/compose)

@@ -51,7 +51,7 @@ kotlin {
             dependencies {
                 implementation(compose.runtime)
                 implementation(compose.foundation)
-                implementation(compose.material3)
+                implementation(libs.jetbrains.compose.material3)
                 implementation(compose.materialIconsExtended)
                 implementation(compose.ui)
                 implementation(compose.components.resources)
@@ -79,16 +79,6 @@ kotlin {
 
                 implementation(libs.kotlinx.datetime)
                 implementation(libs.okio)
-
-                // The composite build (settings.gradle.kts includeBuild) substitutes
-                // cc.ptoe:llm-typewriter:1.0 with the checked-out source build regardless
-                // of the requested version. String notation is used because
-                // KotlinDependencyHandler.implementation does not accept Provider + Action
-                // in this Kotlin Gradle Plugin version.
-                // Note: llm-typewriter previously dragged in guava-18.0 via AndroidMath;
-                // that path is gone after the RaTeX migration (AndroidMath removed), so no
-                // per-dependency guava exclude is needed here anymore.
-                implementation("cc.ptoe:llm-typewriter:1.0")
             }
         }
 

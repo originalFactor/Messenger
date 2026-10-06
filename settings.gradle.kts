@@ -40,11 +40,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Messenger"
-includeBuild("llm-typewriter") {
-    dependencySubstitution {
-        substitute(module("cc.ptoe:llm-typewriter")).using(project(":llm-typewriter"))
-    }
-}
 include(":shared")
 include(":androidApp")
 include(":desktopApp")
