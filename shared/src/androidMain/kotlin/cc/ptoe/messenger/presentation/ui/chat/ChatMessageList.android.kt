@@ -143,6 +143,8 @@ internal actual fun ChatMessageList(
             onSecondaryContainer = colorScheme.onSecondaryContainer.toArgb(),
             outlineVariant = colorScheme.outlineVariant.toArgb(),
             primary = colorScheme.primary.toArgb(),
+            secondary = colorScheme.secondary.toArgb(),
+            tertiary = colorScheme.tertiary.toArgb(),
             errorTitle = errorTitle,
             retryAction = retryAction,
             thinkingTitle = thinkingTitle,

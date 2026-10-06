@@ -24,6 +24,16 @@ pub enum Inline {
     Strikethrough { text: String },
 }
 
+/// One list entry: `indent` counts nesting levels (0 = top level), `ordered`
+/// selects the bullet style, `number` is the item's literal ordinal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListItem {
+    pub indent: u8,
+    pub ordered: bool,
+    pub number: u32,
+    pub inlines: Vec<Inline>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Block {
@@ -49,10 +59,12 @@ pub enum Block {
         formula: String,
         status: BlockStatus,
     },
+    /// Ordered/unordered (possibly nested) list. Each item carries its own
+    /// indentation level, marker kind and — for ordered items — literal number
+    /// so renderers can rebuild the original markers.
     List {
         id: BlockId,
-        ordered: bool,
-        items: Vec<Vec<Inline>>,
+        items: Vec<ListItem>,
         status: BlockStatus,
     },
     Quote {

@@ -33,6 +33,8 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
     private val copyButton = TextView(context)
     private val codeText = TextView(context)
     private var theme: RendererTheme? = null
+    private var language: String? = null
+    private var code: String = ""
 
     init {
         orientation = VERTICAL
@@ -54,7 +56,7 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
         copyButton.textSize = 12f
         copyButton.setPadding((8 * context.resources.displayMetrics.density).toInt(), 0, 0, 0)
         copyButton.setOnClickListener {
-            val clip = ClipData.newPlainText("Code", codeText.text)
+            val clip = ClipData.newPlainText("Code", code)
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(clip)
             Toast.makeText(context, theme?.copiedToast ?: "Copied", Toast.LENGTH_SHORT).show()
@@ -78,11 +80,32 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
         langLabel.setTextColor(theme?.onSurfaceVariant ?: 0xFF9E9E9E.toInt())
         copyButton.setTextColor(theme?.primary ?: 0xFF4FC3F7.toInt())
         copyButton.text = theme?.copyAction ?: "Copy"
-        codeText.setTextColor(theme?.onAiBubble ?: 0xFFD4D4D4.toInt())
+        applyCode()
     }
 
     fun bind(language: String?, code: String) {
+        this.language = language
+        this.code = code
         langLabel.text = language ?: "code"
-        codeText.text = code
+        applyCode()
+    }
+
+    /** Re-apply highlighting (theme colors and code text may change independently). */
+    private fun applyCode() {
+        val t = theme
+        codeText.text = if (t != null) {
+            CodeHighlighter.highlight(
+                code,
+                language,
+                CodeHighlighter.Colors(
+                    keyword = t.primary,
+                    string = t.secondary,
+                    number = t.tertiary,
+                    comment = t.onSurfaceVariant
+                )
+            )
+        } else {
+            code
+        }
     }
 }

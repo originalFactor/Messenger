@@ -136,6 +136,19 @@ sealed class DesktopBlock {
         override val isFinalized: Boolean
     ) : DesktopBlock()
 
+    data class ListItem(
+        val indent: Int,
+        val ordered: Boolean,
+        val number: Int,
+        val text: String
+    )
+
+    data class ListBlock(
+        override val id: Long,
+        val items: List<ListItem>,
+        override val isFinalized: Boolean
+    ) : DesktopBlock()
+
     data class Divider(override val id: Long) : DesktopBlock() {
         override val isFinalized: Boolean = true
     }
@@ -234,6 +247,26 @@ object DesktopDocumentParser {
                 } ?: emptyList()
                 DesktopBlock.Table(id, head, rows, isFinalized)
             }
+            "list" -> {
+                val items = obj["items"]?.jsonArray?.mapNotNull { item ->
+                    val itemObj = item as? JsonObject ?: return@mapNotNull null
+                    val plain = itemObj["inlines"]?.jsonArray?.joinToString("") { inline ->
+                        val o = inline as? JsonObject ?: return@joinToString ""
+                        when (o["type"]?.jsonPrimitive?.contentOrNull) {
+                            "code" -> o["code"]?.jsonPrimitive?.contentOrNull ?: ""
+                            "math" -> o["formula"]?.jsonPrimitive?.contentOrNull ?: ""
+                            else -> o["text"]?.jsonPrimitive?.contentOrNull ?: ""
+                        }
+                    }.orEmpty()
+                    DesktopBlock.ListItem(
+                        indent = itemObj["indent"]?.jsonPrimitive?.intOrNull ?: 0,
+                        ordered = itemObj["ordered"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        number = itemObj["number"]?.jsonPrimitive?.intOrNull ?: 0,
+                        text = plain
+                    )
+                } ?: emptyList()
+                DesktopBlock.ListBlock(id, items, isFinalized)
+            }
             "divider" -> DesktopBlock.Divider(id)
             else -> null
         }
@@ -266,6 +299,7 @@ fun DesktopDocumentView(
                     is DesktopBlock.Think -> RenderThinkBlock(block)
                     is DesktopBlock.ToolCall -> RenderToolCall(block)
                     is DesktopBlock.Table -> RenderTable(block)
+                    is DesktopBlock.ListBlock -> RenderList(block)
                     is DesktopBlock.Quote -> RenderQuote(block)
                     is DesktopBlock.Divider -> HorizontalDivider(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -552,6 +586,38 @@ private fun RenderQuote(block: DesktopBlock.Quote) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         )
+    }
+}
+
+@Composable
+private fun RenderList(block: DesktopBlock.ListBlock) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        block.items.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = (item.indent.coerceAtMost(4) * 18).dp,
+                        top = 2.dp,
+                        bottom = 2.dp
+                    )
+            ) {
+                Text(
+                    text = if (item.ordered) "${item.number}." else "•",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.width(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = item.text,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
     }
 }
 

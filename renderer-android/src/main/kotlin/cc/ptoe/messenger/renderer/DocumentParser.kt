@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.renderer
 
+import android.content.Context
 import android.graphics.Typeface
 import android.text.Spannable
 import android.text.SpannableStringBuilder
@@ -38,7 +39,12 @@ object DocumentParser {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    fun parseBlocksJson(blocksJson: String): List<RenderBlock> {
+    /** Theme color baked into rendered inline-math bitmaps; set by the host views. */
+    @Volatile
+    var inlineMathColor: Int = 0xFF1565C0.toInt()
+
+    /** [context] enables rendered inline-math spans; null falls back to italic text. */
+    fun parseBlocksJson(blocksJson: String, context: Context? = null): List<RenderBlock> {
         val array = try {
             json.parseToJsonElement(blocksJson) as? JsonArray
         } catch (_: Exception) {
@@ -47,11 +53,11 @@ object DocumentParser {
 
         return array.mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
-            parseBlockObject(obj)
+            parseBlockObject(obj, context)
         }
     }
 
-    fun parseBlockObject(obj: JsonObject): RenderBlock? {
+    fun parseBlockObject(obj: JsonObject, context: Context? = null): RenderBlock? {
         val kind = obj["kind"]?.jsonPrimitive?.contentOrNull ?: return null
         val id = obj["id"]?.jsonPrimitive?.longOrNull ?: 0L
         val status = obj["status"]?.jsonPrimitive?.contentOrNull ?: "finalized"
@@ -60,7 +66,7 @@ object DocumentParser {
         return when (kind) {
             "paragraph" -> {
                 val inlines = obj["inlines"]?.jsonArray
-                val text = if (inlines != null) buildInlinesSpanned(inlines) else ""
+                val text = if (inlines != null) buildInlinesSpanned(inlines, context) else ""
                 RenderBlock.Paragraph(id, text, isFinalized)
             }
             "heading" -> {
@@ -100,12 +106,25 @@ object DocumentParser {
                 } ?: emptyList()
                 RenderBlock.Table(id, head, rows, isFinalized)
             }
+            "list" -> {
+                val items = obj["items"]?.jsonArray?.mapNotNull { item ->
+                    val itemObj = item as? JsonObject ?: return@mapNotNull null
+                    val inlines = itemObj["inlines"]?.jsonArray
+                    RenderBlock.ListItemData(
+                        indent = itemObj["indent"]?.jsonPrimitive?.intOrNull ?: 0,
+                        ordered = itemObj["ordered"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        number = itemObj["number"]?.jsonPrimitive?.intOrNull ?: 0,
+                        text = if (inlines != null) buildInlinesSpanned(inlines, context) else ""
+                    )
+                } ?: emptyList()
+                RenderBlock.ListBlock(id, items, isFinalized)
+            }
             "divider" -> RenderBlock.Divider(id)
             else -> null
         }
     }
 
-    private fun buildInlinesSpanned(inlines: JsonArray): CharSequence {
+    private fun buildInlinesSpanned(inlines: JsonArray, context: Context?): CharSequence {
         val rawText = inlines.mapNotNull { item ->
             val obj = item as? JsonObject ?: return@mapNotNull null
             when (obj["type"]?.jsonPrimitive?.contentOrNull) {
@@ -130,18 +149,27 @@ object DocumentParser {
             val start = cursor
             val end = cursor + segment.length
             cursor = end
-            if (start < end) {
-                when (type) {
-                    "bold" -> runCatching { builder.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
-                    "italic" -> runCatching { builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
-                    "code" -> runCatching {
-                        builder.setSpan(TypefaceSpan("monospace"), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                        builder.setSpan(RelativeSizeSpan(0.9f), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    }
-                    "math" -> runCatching { builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
-                    "strikethrough" -> runCatching { builder.setSpan(StrikethroughSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
-                    "link" -> runCatching { builder.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+            if (start >= end) continue
+            when (type) {
+                "bold" -> runCatching { builder.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                "italic" -> runCatching { builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                "code" -> runCatching {
+                    builder.setSpan(TypefaceSpan("monospace"), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    builder.setSpan(RelativeSizeSpan(0.9f), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
+                "math" -> runCatching {
+                    if (context != null) {
+                        // 16sp matches the paragraph body size the span lives in
+                        val sizePx = 16f * context.resources.displayMetrics.density
+                        MathInlineRenderer.span(segment, sizePx, inlineMathColor)
+                            ?.let { builder.setSpan(it, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                            ?: builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    } else {
+                        builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
+                "strikethrough" -> runCatching { builder.setSpan(StrikethroughSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                "link" -> runCatching { builder.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
             }
         }
         return builder

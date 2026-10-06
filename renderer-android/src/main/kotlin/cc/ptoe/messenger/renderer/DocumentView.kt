@@ -60,14 +60,11 @@ class DocumentView @JvmOverloads constructor(
 
     /** Text width cap: screen − 64+8dp row insets − 32+8dp avatar+spacer − 28dp bubble padding.
      * Long single-line blocks must WRAP, never widen the bubble past the row's far inset. */
-    private fun maxTextWidth(): Int {
-        val dp = resources.displayMetrics.density
-        return (resources.displayMetrics.widthPixels - ((112 + 28) * dp).toInt())
-            .coerceAtLeast((100 * dp).toInt())
-    }
+    private fun maxTextWidth(): Int = maxContentTextWidth(resources)
 
     /** Set static completed blocks (e.g. historical message). */
     fun setBlocks(theme: RendererTheme?, blocks: List<RenderBlock>) {
+        DocumentParser.inlineMathColor = theme?.primary ?: DocumentParser.inlineMathColor
         removeAllViews()
         blockViews.clear()
         blocks.forEachIndexed { index, block ->
@@ -86,6 +83,7 @@ class DocumentView @JvmOverloads constructor(
 
     /** Apply incremental DiffBatch JSON received from Rust StreamingSession. */
     fun applyDiffBatch(theme: RendererTheme?, diffBatchJson: String) {
+        DocumentParser.inlineMathColor = theme?.primary ?: DocumentParser.inlineMathColor
         val root = try {
             json.parseToJsonElement(diffBatchJson) as? JsonObject
         } catch (_: Exception) {
@@ -99,7 +97,7 @@ class DocumentView @JvmOverloads constructor(
             when (diffType) {
                 "append" -> {
                     val blockObj = obj["block"]?.jsonObject ?: continue
-                    val block = DocumentParser.parseBlockObject(blockObj) ?: continue
+                    val block = DocumentParser.parseBlockObject(blockObj, context) ?: continue
                     if (blockViews.containsKey(block.id)) continue
                     val view = createViewForBlock(theme, block)
                     blockViews[block.id] = view
@@ -107,7 +105,7 @@ class DocumentView @JvmOverloads constructor(
                 }
                 "update" -> {
                     val blockObj = obj["block"]?.jsonObject ?: continue
-                    val block = DocumentParser.parseBlockObject(blockObj) ?: continue
+                    val block = DocumentParser.parseBlockObject(blockObj, context) ?: continue
                     val existing = blockViews[block.id]
                     if (existing != null) {
                         bindBlockToView(existing, block)
@@ -227,6 +225,12 @@ class DocumentView @JvmOverloads constructor(
                     bind(block.head, block.rows, block.isFinalized)
                 }
             }
+            is RenderBlock.ListBlock -> {
+                BulletListView(context).apply {
+                    updateTheme(theme)
+                    bind(block)
+                }
+            }
             is RenderBlock.Divider -> {
                 View(context).apply {
                     setBackgroundColor(theme?.outlineVariant ?: 0x1F000000)
@@ -270,6 +274,9 @@ class DocumentView @JvmOverloads constructor(
             is RenderBlock.Table -> {
                 (view as? TableView)?.bind(block.head, block.rows, block.isFinalized)
             }
+            is RenderBlock.ListBlock -> {
+                (view as? BulletListView)?.bind(block)
+            }
             is RenderBlock.Divider -> {}
         }
     }
@@ -277,5 +284,12 @@ class DocumentView @JvmOverloads constructor(
     companion object {
         /** Static (rebuilt) block ids start above every live streaming-session id. */
         const val STATIC_ID_BASE = 1_000_000L
+
+        /** Screen-width text cap shared by the bubble's text blocks (also used by BulletListView). */
+        fun maxContentTextWidth(resources: android.content.res.Resources): Int {
+            val dp = resources.displayMetrics.density
+            return (resources.displayMetrics.widthPixels - ((112 + 28) * dp).toInt())
+                .coerceAtLeast((100 * dp).toInt())
+        }
     }
 }

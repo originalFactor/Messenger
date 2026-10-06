@@ -9,4 +9,4 @@ pub mod model;
 
 pub use diff::{DiffBatch, DocumentDiff};
 pub use document::Document;
-pub use model::{Block, BlockId, BlockStatus, Inline};
+pub use model::{Block, BlockId, BlockStatus, Inline, ListItem};

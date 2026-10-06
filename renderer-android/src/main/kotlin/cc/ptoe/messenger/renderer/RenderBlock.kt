@@ -75,6 +75,20 @@ sealed class RenderBlock {
         override val isFinalized: Boolean
     ) : RenderBlock()
 
+    /** One rendered list entry (marker kind + text). */
+    data class ListItemData(
+        val indent: Int,
+        val ordered: Boolean,
+        val number: Int,
+        val text: CharSequence
+    )
+
+    data class ListBlock(
+        override val id: Long,
+        val items: List<ListItemData>,
+        override val isFinalized: Boolean
+    ) : RenderBlock()
+
     data class Divider(
         override val id: Long
     ) : RenderBlock() {

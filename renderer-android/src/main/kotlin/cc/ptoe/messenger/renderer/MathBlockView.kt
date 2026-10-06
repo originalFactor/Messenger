@@ -19,47 +19,24 @@ package cc.ptoe.messenger.renderer
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.Rect
-import android.graphics.Typeface
 import android.view.View
-import kotlin.math.max
+import kotlin.math.min
 
 /**
- * RaTeX-compatible Native Canvas Math Renderer (TARGET.md §4, §13, §18).
- *
- * Renders complete LaTeX mathematical equations directly to [android.graphics.Canvas]
- * using structured layout commands (fractions, roots, sub/superscripts, and math glyphs)
- * with a process-wide [MathLayoutCache] to achieve zero-recomposition and sub-millisecond
- * incremental rendering.
+ * Display-mode math block: lays the formula out with [MathEngine] (fractions,
+ * radicals, scripts, symbol tables) and draws it centered; formulas wider than
+ * the bubble scale down uniformly instead of clipping. Display lists are
+ * cached process-wide ([MathLayoutCache]) for sub-millisecond rebinding.
  */
 class MathBlockView(context: Context) : View(context) {
 
     private var formula: String = ""
     private var isFinalized: Boolean = true
     private var isDisplayMode: Boolean = true
-
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1565C0") // Math primary color
-        textSize = 16f * context.resources.displayMetrics.density
-        typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
-    }
-
-    private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1565C0")
-        textSize = 18f * context.resources.displayMetrics.density
-        typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
-    }
-
-    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1565C0")
-        strokeWidth = 1.8f * context.resources.displayMetrics.density
-        style = Paint.Style.STROKE
-    }
+    private var color: Int = Color.parseColor("#1565C0")
 
     private var displayList: MathDisplayList? = null
-    private val textBounds = Rect()
+    private var drawScale: Float = 1f
 
     init {
         val padH = (12 * context.resources.displayMetrics.density).toInt()
@@ -69,10 +46,7 @@ class MathBlockView(context: Context) : View(context) {
 
     /** Display lists hold geometry only; color is a draw-time paint property. */
     fun updateTheme(theme: RendererTheme?) {
-        val color = theme?.primary ?: Color.parseColor("#1565C0")
-        textPaint.color = color
-        symbolPaint.color = color
-        linePaint.color = color
+        color = theme?.primary ?: Color.parseColor("#1565C0")
         invalidate()
     }
 
@@ -90,170 +64,46 @@ class MathBlockView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val baseFontSizePx = 16f * density
+        val baseFontSizePx = 16f * density * (if (isDisplayMode) 1.15f else 1f)
         val key = MathCacheKey(formula, baseFontSizePx.toInt(), isDisplayMode)
 
         var dl = MathLayoutCache.get(key)
         if (dl == null) {
-            dl = compileDisplayList(formula, isDisplayMode, baseFontSizePx)
+            dl = MathEngine.compile(formula, baseFontSizePx)
             if (isFinalized) {
                 MathLayoutCache.put(key, dl)
             }
         }
         displayList = dl
 
-        val measuredW = (dl.width + paddingLeft + paddingRight).toInt()
-        val measuredH = (dl.height + paddingTop + paddingBottom).toInt()
-
-        val width = resolveSize(measuredW, widthMeasureSpec)
-        val height = resolveSize(measuredH, heightMeasureSpec)
-        setMeasuredDimension(width, height)
+        val available = (MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight)
+            .coerceAtLeast(0)
+        drawScale = if (dl.width > available && dl.width > 0f) {
+            min(1f, available / dl.width)
+        } else {
+            1f
+        }
+        val naturalW = (dl.width * drawScale).toInt() + paddingLeft + paddingRight
+        val naturalH = (dl.height * drawScale).toInt() + paddingTop + paddingBottom
+        setMeasuredDimension(resolveSize(naturalW, widthMeasureSpec), resolveSize(naturalH, heightMeasureSpec))
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val dl = displayList ?: return
+        if (dl.commands.isEmpty()) return
 
         canvas.save()
-        // Center in display mode if available width is larger than content
-        val contentW = dl.width
-        val availableW = width - paddingLeft - paddingRight
-        val offsetX = if (isDisplayMode && availableW > contentW) {
-            paddingLeft + (availableW - contentW) / 2f
-        } else {
-            paddingLeft.toFloat()
-        }
-        val offsetY = paddingTop.toFloat()
-
+        val contentW = dl.width * drawScale
+        val contentH = dl.height * drawScale
+        val availableW = (width - paddingLeft - paddingRight).coerceAtLeast(0)
+        val availableH = (height - paddingTop - paddingBottom).coerceAtLeast(0)
+        val offsetX = paddingLeft + (availableW - contentW) / 2f
+        val offsetY = paddingTop + (availableH - contentH) / 2f
         canvas.translate(offsetX, offsetY)
-        for (cmd in dl.commands) {
-            when (cmd) {
-                is MathCommand.DrawText -> {
-                    val p = if (cmd.isSymbol) symbolPaint else textPaint
-                    p.textSize = cmd.fontSize
-                    canvas.drawText(cmd.text, cmd.x, cmd.y, p)
-                }
-                is MathCommand.DrawLine -> {
-                    linePaint.strokeWidth = cmd.thickness
-                    canvas.drawLine(cmd.startX, cmd.startY, cmd.stopX, cmd.stopY, linePaint)
-                }
-                is MathCommand.DrawRoot -> {
-                    linePaint.strokeWidth = cmd.thickness
-                    val path = Path().apply {
-                        moveTo(cmd.x, cmd.y + cmd.height * 0.6f)
-                        lineTo(cmd.x + cmd.width * 0.25f, cmd.y + cmd.height)
-                        lineTo(cmd.x + cmd.width * 0.45f, cmd.y)
-                        lineTo(cmd.x + cmd.width, cmd.y)
-                    }
-                    canvas.drawPath(path, linePaint)
-                }
-            }
-        }
+        if (drawScale < 1f) canvas.scale(drawScale, drawScale)
+        MathEngine.drawCommands(canvas, dl, color)
         canvas.restore()
-    }
-
-    private fun compileDisplayList(rawFormula: String, display: Boolean, baseFontSize: Float): MathDisplayList {
-        val cmds = mutableListOf<MathCommand>()
-        val cleaned = rawFormula.trim().removePrefix("$$").removeSuffix("$$").removePrefix("$").removeSuffix("$").trim()
-
-        if (cleaned.isEmpty()) {
-            return MathDisplayList(0f, 0f, emptyList())
-        }
-
-        // Check for single \frac{num}{den} pattern
-        val fracRegex = Regex("""^\\frac\{([^{}]+)\}\{([^{}]+)\}$""")
-        val fracMatch = fracRegex.matchEntire(cleaned)
-        if (fracMatch != null) {
-            val num = replaceLatexSymbols(fracMatch.groupValues[1].trim())
-            val den = replaceLatexSymbols(fracMatch.groupValues[2].trim())
-            val numSize = baseFontSize * 0.9f
-            val denSize = baseFontSize * 0.9f
-
-            textPaint.textSize = numSize
-            val numW = textPaint.measureText(num)
-            textPaint.getTextBounds(num, 0, num.length, textBounds)
-            val numH = max(numSize, textBounds.height().toFloat())
-
-            textPaint.textSize = denSize
-            val denW = textPaint.measureText(den)
-            textPaint.getTextBounds(den, 0, den.length, textBounds)
-            val denH = max(denSize, textBounds.height().toFloat())
-
-            val barW = max(numW, denW) + 16f
-            val totalH = numH + denH + 16f
-            val barY = numH + 8f
-
-            val numX = (barW - numW) / 2f
-            val denX = (barW - denW) / 2f
-
-            cmds.add(MathCommand.DrawText(num, numX, numH, numSize, false))
-            cmds.add(MathCommand.DrawLine(0f, barY, barW, barY, 2f))
-            cmds.add(MathCommand.DrawText(den, denX, barY + 8f + denH * 0.8f, denSize, false))
-
-            return MathDisplayList(barW, totalH, cmds)
-        }
-
-        // General equation with math symbol normalization
-        val formatted = replaceLatexSymbols(cleaned)
-        val fontSize = if (display) baseFontSize * 1.15f else baseFontSize
-        textPaint.textSize = fontSize
-
-        val textW = textPaint.measureText(formatted)
-        textPaint.getTextBounds(formatted, 0, formatted.length, textBounds)
-        val textH = max(fontSize * 1.3f, textBounds.height().toFloat() * 1.4f)
-        val baseline = textH * 0.75f
-
-        cmds.add(MathCommand.DrawText(formatted, 0f, baseline, fontSize, false))
-        return MathDisplayList(textW, textH, cmds)
-    }
-
-    private fun replaceLatexSymbols(input: String): String {
-        var s = input
-            .replace("\\alpha", "α")
-            .replace("\\beta", "β")
-            .replace("\\gamma", "γ")
-            .replace("\\delta", "δ")
-            .replace("\\epsilon", "ε")
-            .replace("\\theta", "θ")
-            .replace("\\lambda", "λ")
-            .replace("\\mu", "μ")
-            .replace("\\pi", "π")
-            .replace("\\sigma", "σ")
-            .replace("\\tau", "τ")
-            .replace("\\omega", "ω")
-            .replace("\\Delta", "Δ")
-            .replace("\\Sigma", "Σ")
-            .replace("\\Omega", "Ω")
-            .replace("\\times", "×")
-            .replace("\\cdot", "·")
-            .replace("\\div", "÷")
-            .replace("\\pm", "±")
-            .replace("\\neq", "≠")
-            .replace("\\leq", "≤")
-            .replace("\\geq", "≥")
-            .replace("\\approx", "≈")
-            .replace("\\infty", "∞")
-            .replace("\\sum", "∑")
-            .replace("\\prod", "∏")
-            .replace("\\int", "∫")
-            .replace("\\to", "→")
-            .replace("\\leftarrow", "←")
-            .replace("\\rightarrow", "→")
-            .replace("\\partial", "∂")
-            .replace("\\nabla", "∇")
-            .replace("\\in", "∈")
-            .replace("\\subset", "⊂")
-            .replace("\\cup", "∪")
-            .replace("\\cap", "∩")
-            .replace("\\forall", "∀")
-            .replace("\\exists", "∃")
-            .replace("\\{", "{")
-            .replace("\\}", "}")
-            .replace("\\,", " ")
-            .replace("\\;", "  ")
-            .replace("\\quad", "    ")
-            .replace("\\qquad", "        ")
-        return s
     }
 }
 
@@ -286,6 +136,8 @@ sealed class MathCommand {
 data class MathDisplayList(
     val width: Float,
     val height: Float,
+    /** Distance from the top edge to the formula's baseline (inline alignment). */
+    val ascent: Float,
     val commands: List<MathCommand>
 )
 

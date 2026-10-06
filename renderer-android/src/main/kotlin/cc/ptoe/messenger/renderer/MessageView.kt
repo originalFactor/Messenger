@@ -357,7 +357,7 @@ class MessageView(context: Context) : LinearLayout(context) {
     }
 
     private fun parseStatic(markdown: String): List<RenderBlock> =
-        DocumentParser.parseBlocksJson(cc.ptoe.messenger.core.parseMarkdownToBlocksJson(markdown))
+        DocumentParser.parseBlocksJson(cc.ptoe.messenger.core.parseMarkdownToBlocksJson(markdown), context)
 
     private fun withStaticId(block: RenderBlock, newId: Long): RenderBlock = when (block) {
         is RenderBlock.Paragraph -> block.copy(id = newId)
@@ -368,6 +368,7 @@ class MessageView(context: Context) : LinearLayout(context) {
         is RenderBlock.Think -> block.copy(id = newId)
         is RenderBlock.ToolCall -> block.copy(id = newId)
         is RenderBlock.Table -> block.copy(id = newId)
+        is RenderBlock.ListBlock -> block.copy(id = newId)
         is RenderBlock.Divider -> block.copy(id = newId)
     }
 

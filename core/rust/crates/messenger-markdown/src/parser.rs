@@ -4,7 +4,7 @@
 //! Feeds continuous streaming text into a [`Document`], generating minimal
 //! [`DocumentDiff`]s so platform renderers only invalidate active blocks.
 
-use messenger_document::{Block, BlockId, BlockStatus, Document, DocumentDiff, Inline};
+use messenger_document::{Block, BlockId, BlockStatus, Document, DocumentDiff, Inline, ListItem};
 
 use crate::inlines::parse_inlines;
 
@@ -50,6 +50,10 @@ enum ParserState {
         id: BlockId,
         head: Vec<String>,
         rows: Vec<Vec<String>>,
+    },
+    InList {
+        id: BlockId,
+        items: Vec<ListItem>,
     },
 }
 
@@ -266,6 +270,55 @@ impl IncrementalParser {
                 }
             }
 
+            ParserState::InList { id, items } => {
+                let id = *id;
+                if line.trim().is_empty() {
+                    let block = Block::List {
+                        id,
+                        items: items.clone(),
+                        status: BlockStatus::Finalized,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                    if let Some(diff) = doc.finalize(id) {
+                        diffs.push(diff);
+                    }
+                    self.state = ParserState::Idle;
+                } else if let Some((indent, ordered, number, text)) = parse_list_marker(line) {
+                    items.push(ListItem {
+                        indent,
+                        ordered,
+                        number,
+                        inlines: parse_inlines(text),
+                    });
+                    let block = Block::List {
+                        id,
+                        items: items.clone(),
+                        status: BlockStatus::Streaming,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                } else {
+                    // List ended without a blank line — finalize and let the
+                    // line start whatever comes next.
+                    let block = Block::List {
+                        id,
+                        items: items.clone(),
+                        status: BlockStatus::Finalized,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                    if let Some(diff) = doc.finalize(id) {
+                        diffs.push(diff);
+                    }
+                    self.state = ParserState::Idle;
+                    self.process_line(line, doc, diffs);
+                }
+            }
+
             ParserState::MaybeTable { header, paragraph } => {
                 let header = std::mem::take(header);
                 let saved = paragraph.take();
@@ -401,6 +454,13 @@ impl IncrementalParser {
                         header: line.to_string(),
                         paragraph: Some(saved),
                     };
+                } else if !self.eager_line_open && parse_list_marker(line).is_some() {
+                    // A list item interrupts the paragraph
+                    if let Some(diff) = doc.finalize(id) {
+                        diffs.push(diff);
+                    }
+                    self.state = ParserState::Idle;
+                    self.process_line(line, doc, diffs);
                 } else {
                     if !self.eager_line_open {
                         text.push('\n');
@@ -557,6 +617,25 @@ impl IncrementalParser {
                         id,
                         text: format!("{quote_content}\n"),
                     };
+                    return;
+                }
+
+                // List item: `- `/`* `/`+ ` bullet or `1. `/`1) ` ordinal
+                if let Some((indent, ordered, number, text)) = parse_list_marker(line) {
+                    let item = ListItem {
+                        indent,
+                        ordered,
+                        number,
+                        inlines: parse_inlines(text),
+                    };
+                    let id = doc.next_id();
+                    let block = Block::List {
+                        id,
+                        items: vec![item.clone()],
+                        status: BlockStatus::Streaming,
+                    };
+                    diffs.push(doc.append(block));
+                    self.state = ParserState::InList { id, items: vec![item] };
                     return;
                 }
 
@@ -772,6 +851,19 @@ impl IncrementalParser {
                     diffs.push(diff);
                 }
             }
+            ParserState::InList { id, items } => {
+                let block = Block::List {
+                    id,
+                    items,
+                    status: BlockStatus::Finalized,
+                };
+                if let Some(diff) = doc.update(block) {
+                    diffs.push(diff);
+                }
+                if let Some(diff) = doc.finalize(id) {
+                    diffs.push(diff);
+                }
+            }
             ParserState::MaybeTable { header, paragraph } => {
                 match paragraph {
                     Some((pid, mut text, eager)) => {
@@ -819,11 +911,55 @@ fn can_eager_open_paragraph(buffer: &str) -> bool {
     if buffer.trim().is_empty() {
         return false;
     }
-    const STARTERS: [&str; 14] = [
+    if is_partial_ordered_marker(buffer) {
+        return false;
+    }
+    const STARTERS: [&str; 17] = [
         "```", "$$", "<think>", "<tool_call>", "# ", "## ", "### ", "#### ", "##### ", "###### ",
-        "> ", "---", "***", "|",
+        "> ", "---", "***", "|", "- ", "* ", "+ ",
     ];
     STARTERS.iter().all(|s| !buffer.starts_with(s) && !s.starts_with(buffer))
+}
+
+/// A buffer that could still grow into an ordered-list marker (`12. `, `3) `)
+/// must not eager-open as a paragraph — it waits for the newline.
+fn is_partial_ordered_marker(buffer: &str) -> bool {
+    let t = buffer.trim_start_matches([' ', '\t']);
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 3 {
+        return false;
+    }
+    let rest = &t[digits..];
+    rest.is_empty() || rest == "." || rest == ")" || rest.starts_with(". ") || rest.starts_with(") ")
+}
+
+/// Parse a list-item marker: bullet (`- ` / `* ` / `+ `) or ordinal
+/// (`12. ` / `3) `). Returns (indent level, ordered, ordinal, item text).
+/// Indent counts leading spaces in steps of two (tab = one level).
+fn parse_list_marker(line: &str) -> Option<(u8, bool, u32, &str)> {
+    let stripped = line.trim_start_matches([' ', '\t']);
+    let indent = ((line.len() - stripped.len()) / 2).min(4) as u8;
+    for bullet in ["- ", "* ", "+ "] {
+        if let Some(text) = stripped.strip_prefix(bullet) {
+            if text.trim().is_empty() {
+                return None;
+            }
+            return Some((indent, false, 0, text));
+        }
+    }
+    let digits = stripped.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 3 {
+        return None;
+    }
+    let rest = &stripped[digits..];
+    let text = rest
+        .strip_prefix(". ")
+        .or_else(|| rest.strip_prefix(") "))?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    let number: u32 = stripped[..digits].parse().ok()?;
+    Some((indent, true, number, text))
 }
 
 /// A line shaped like a pipe-table row: starts with `|` and carries at least
@@ -1121,5 +1257,67 @@ mod tests {
         assert!(doc.blocks()[0].is_finalized());
         assert!(matches!(doc.blocks()[1], Block::Paragraph { .. }));
         assert!(doc.blocks()[1].is_finalized());
+    }
+
+    #[test]
+    fn parse_nested_list() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("1. First item\n", &mut doc);
+        assert!(matches!(doc.blocks()[0], Block::List { .. }));
+        parser.feed("2. Second item\n", &mut doc);
+        parser.feed("  - Sub-item A\n", &mut doc);
+        parser.feed("  - Sub-item B\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(doc.blocks()[0].is_finalized());
+        if let Block::List { items, .. } = &doc.blocks()[0] {
+            assert_eq!(items.len(), 4);
+            assert_eq!((items[0].indent, items[0].ordered, items[0].number), (0, true, 1));
+            assert_eq!((items[1].indent, items[1].ordered, items[1].number), (0, true, 2));
+            assert_eq!((items[2].indent, items[2].ordered, items[2].number), (1, false, 0));
+            assert_eq!((items[3].indent, items[3].ordered, items[3].number), (1, false, 0));
+            assert_eq!(inline_text(&items[0].inlines), "First item");
+            assert_eq!(inline_text(&items[3].inlines), "Sub-item B");
+        } else {
+            panic!("expected list");
+        }
+    }
+
+    /// A partial ordered marker buffers instead of eager-opening; bullets and
+    /// dash-like text that is NOT a list item stay paragraphs.
+    #[test]
+    fn list_eager_guard() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("- It", &mut doc);
+        assert_eq!(doc.blocks().len(), 0, "partial bullet must buffer");
+        parser.feed("em one\n", &mut doc);
+        assert!(matches!(doc.blocks()[0], Block::List { .. }));
+        parser.feed("\n", &mut doc);
+
+        let mut doc2 = Document::new();
+        let mut parser2 = IncrementalParser::new();
+        parser2.feed("-5 degrees\n", &mut doc2);
+        assert!(
+            matches!(doc2.blocks()[0], Block::Paragraph { .. }),
+            "'-5' has no marker space — plain paragraph"
+        );
+    }
+
+    /// A non-marker line closes the list and starts a paragraph.
+    #[test]
+    fn list_interrupted_by_paragraph() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("- one\n- two\nplain text\n\n", &mut doc);
+        assert_eq!(doc.blocks().len(), 2);
+        assert!(matches!(doc.blocks()[0], Block::List { .. }));
+        assert!(doc.blocks()[0].is_finalized());
+        assert!(matches!(doc.blocks()[1], Block::Paragraph { .. }));
     }
 }
