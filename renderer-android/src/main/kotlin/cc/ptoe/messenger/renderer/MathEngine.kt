@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.renderer
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -469,11 +470,19 @@ internal object MathInlineRenderer {
 
     private class CachedMath(val bitmap: Bitmap, val ascent: Float, val descent: Float)
 
-    fun span(formula: String, textSizePx: Float, color: Int): MathSpan? {
+    fun span(context: Context, formula: String, textSizePx: Float, color: Int): MathSpan? {
         val cleaned = formula.trim()
         if (cleaned.isEmpty()) return null
         val key = "$cleaned|$textSizePx|$color"
         synchronized(cache) { cache[key] }?.let { return MathSpan(it.bitmap, it.ascent, it.descent) }
+
+        // RaTeX (KaTeX-compatible) first — the built-in MathEngine only runs
+        // when RaTeX cannot parse the fragment.
+        RatexMath.bitmap(context, cleaned, displayMode = false, textSizePx, color)?.let { info ->
+            val entry = CachedMath(info.bitmap, info.ascentPx, info.descentPx)
+            synchronized(cache) { cache[key] = entry }
+            return MathSpan(entry.bitmap, entry.ascent, entry.descent)
+        }
 
         val dl = MathEngine.compile(cleaned, textSizePx)
         if (dl.width <= 0f || dl.height <= 0f) return null

@@ -682,3 +682,10 @@ pub fn parse_markdown_to_blocks_json(markdown: String) -> String {
     let _ = session.finish();
     serde_json::to_string(session.document().blocks()).unwrap_or_else(|_| "[]".into())
 }
+
+/// Highlight a code block with syntect (Sublime Text engine) and return a
+/// JSON array of `[{start, end, color}]` byte spans for the platform renderer.
+#[uniffi::export]
+pub fn highlight_code_json(code: String, language: String, dark: bool) -> String {
+    messenger_highlight::highlight_code_json(&code, &language, dark)
+}

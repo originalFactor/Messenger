@@ -161,7 +161,7 @@ object DocumentParser {
                     if (context != null) {
                         // 16sp matches the paragraph body size the span lives in
                         val sizePx = 16f * context.resources.displayMetrics.density
-                        MathInlineRenderer.span(segment, sizePx, inlineMathColor)
+                        MathInlineRenderer.span(context, segment, sizePx, inlineMathColor)
                             ?.let { builder.setSpan(it, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
                             ?: builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                     } else {

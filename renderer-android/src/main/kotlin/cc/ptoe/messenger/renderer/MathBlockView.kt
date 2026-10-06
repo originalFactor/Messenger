@@ -20,13 +20,17 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.view.View
+import io.ratex.DisplayList
+import io.ratex.measure
 import kotlin.math.min
 
 /**
- * Display-mode math block: lays the formula out with [MathEngine] (fractions,
- * radicals, scripts, symbol tables) and draws it centered; formulas wider than
- * the bubble scale down uniformly instead of clipping. Display lists are
- * cached process-wide ([MathLayoutCache]) for sub-millisecond rebinding.
+ * Display-mode math block. Formulas render through RaTeX (the pure-Rust
+ * KaTeX-compatible engine the Compose flow uses, drawn as display-list
+ * geometry onto this view's canvas) and fall back to the built-in
+ * [MathEngine] when RaTeX cannot parse the input. Either path caches its
+ * layout ([MathLayoutCache] / [RatexMath]) and scales down uniformly when
+ * wider than the bubble.
  */
 class MathBlockView(context: Context) : View(context) {
 
@@ -35,8 +39,11 @@ class MathBlockView(context: Context) : View(context) {
     private var isDisplayMode: Boolean = true
     private var color: Int = Color.parseColor("#1565C0")
 
-    private var displayList: MathDisplayList? = null
+    private var ratexList: DisplayList? = null
+    private var engineList: MathDisplayList? = null
     private var drawScale: Float = 1f
+    private var contentWidth: Float = 0f
+    private var contentHeight: Float = 0f
 
     init {
         val padH = (12 * context.resources.displayMetrics.density).toInt()
@@ -44,9 +51,12 @@ class MathBlockView(context: Context) : View(context) {
         setPadding(padH, padV, padH, padV)
     }
 
-    /** Display lists hold geometry only; color is a draw-time paint property. */
+    /** Layouts hold geometry only; color is a draw/parse-time property. */
     fun updateTheme(theme: RendererTheme?) {
         color = theme?.primary ?: Color.parseColor("#1565C0")
+        ratexList = null
+        engineList = null
+        requestLayout()
         invalidate()
     }
 
@@ -57,52 +67,68 @@ class MathBlockView(context: Context) : View(context) {
         this.formula = formulaText
         this.isFinalized = finalized
         this.isDisplayMode = display
-        this.displayList = null
+        this.ratexList = null
+        this.engineList = null
         requestLayout()
         invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val baseFontSizePx = 16f * density * (if (isDisplayMode) 1.15f else 1f)
-        val key = MathCacheKey(formula, baseFontSizePx.toInt(), isDisplayMode)
+        val fontSizePx = 16f * density * (if (isDisplayMode) 1.15f else 1f)
 
-        var dl = MathLayoutCache.get(key)
-        if (dl == null) {
-            dl = MathEngine.compile(formula, baseFontSizePx)
-            if (isFinalized) {
-                MathLayoutCache.put(key, dl)
+        val ratex = ratexList ?: RatexMath.displayList(formula, isDisplayMode, color)
+        ratexList = ratex
+        if (ratex != null) {
+            val measured = ratex.measure(fontSizePx)
+            contentWidth = measured.widthPx
+            contentHeight = measured.totalHeightPx
+        } else {
+            val key = MathCacheKey(formula, fontSizePx.toInt(), isDisplayMode)
+            var dl = MathLayoutCache.get(key)
+            if (dl == null) {
+                dl = MathEngine.compile(formula, fontSizePx)
+                if (isFinalized) {
+                    MathLayoutCache.put(key, dl)
+                }
             }
+            engineList = dl
+            contentWidth = dl.width
+            contentHeight = dl.height
         }
-        displayList = dl
 
         val available = (MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight)
             .coerceAtLeast(0)
-        drawScale = if (dl.width > available && dl.width > 0f) {
-            min(1f, available / dl.width)
+        drawScale = if (contentWidth > available && contentWidth > 0f) {
+            min(1f, available / contentWidth)
         } else {
             1f
         }
-        val naturalW = (dl.width * drawScale).toInt() + paddingLeft + paddingRight
-        val naturalH = (dl.height * drawScale).toInt() + paddingTop + paddingBottom
+        val naturalW = (contentWidth * drawScale).toInt() + paddingLeft + paddingRight
+        val naturalH = (contentHeight * drawScale).toInt() + paddingTop + paddingBottom
         setMeasuredDimension(resolveSize(naturalW, widthMeasureSpec), resolveSize(naturalH, heightMeasureSpec))
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val dl = displayList ?: return
-        if (dl.commands.isEmpty()) return
+        if (contentWidth <= 0f || contentHeight <= 0f) return
 
         canvas.save()
-        val contentW = dl.width * drawScale
-        val contentH = dl.height * drawScale
+        val contentW = contentWidth * drawScale
+        val contentH = contentHeight * drawScale
         val availableW = (width - paddingLeft - paddingRight).coerceAtLeast(0)
         val availableH = (height - paddingTop - paddingBottom).coerceAtLeast(0)
         val offsetX = paddingLeft + (availableW - contentW) / 2f
         val offsetY = paddingTop + (availableH - contentH) / 2f
         canvas.translate(offsetX, offsetY)
         if (drawScale < 1f) canvas.scale(drawScale, drawScale)
-        MathEngine.drawCommands(canvas, dl, color)
+        val ratex = ratexList
+        if (ratex != null) {
+            val fontSizePx = 16f * resources.displayMetrics.density * (if (isDisplayMode) 1.15f else 1f)
+            RatexMath.draw(canvas, ratex, fontSizePx, context)
+        } else {
+            engineList?.let { MathEngine.drawCommands(canvas, it, color) }
+        }
         canvas.restore()
     }
 }

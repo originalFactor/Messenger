@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.translate
@@ -143,8 +144,7 @@ internal actual fun ChatMessageList(
             onSecondaryContainer = colorScheme.onSecondaryContainer.toArgb(),
             outlineVariant = colorScheme.outlineVariant.toArgb(),
             primary = colorScheme.primary.toArgb(),
-            secondary = colorScheme.secondary.toArgb(),
-            tertiary = colorScheme.tertiary.toArgb(),
+            isDark = colorScheme.surface.luminance() < 0.5f,
             errorTitle = errorTitle,
             retryAction = retryAction,
             thinkingTitle = thinkingTitle,

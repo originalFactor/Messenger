@@ -40,8 +40,8 @@ data class RendererTheme(
     @androidx.annotation.ColorInt val onSecondaryContainer: Int,
     @androidx.annotation.ColorInt val outlineVariant: Int,
     @androidx.annotation.ColorInt val primary: Int,
-    @androidx.annotation.ColorInt val secondary: Int,
-    @androidx.annotation.ColorInt val tertiary: Int,
+    /** True when the host scheme is dark — selects the syntect highlight theme. */
+    val isDark: Boolean,
     // Localized labels (renderer module carries no resources)
     val errorTitle: String,
     val retryAction: String,

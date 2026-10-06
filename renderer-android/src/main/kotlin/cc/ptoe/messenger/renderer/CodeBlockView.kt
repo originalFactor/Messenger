@@ -21,12 +21,22 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 class CodeBlockView(context: Context) : LinearLayout(context) {
+
+    private val spanJson = Json { isLenient = true }
 
     private val headerLayout = LinearLayout(context)
     private val langLabel = TextView(context)
@@ -92,20 +102,45 @@ class CodeBlockView(context: Context) : LinearLayout(context) {
 
     /** Re-apply highlighting (theme colors and code text may change independently). */
     private fun applyCode() {
-        val t = theme
-        codeText.text = if (t != null) {
-            CodeHighlighter.highlight(
-                code,
-                language,
-                CodeHighlighter.Colors(
-                    keyword = t.primary,
-                    string = t.secondary,
-                    number = t.tertiary,
-                    comment = t.onSurfaceVariant
+        codeText.text = highlightCode(code, language)
+    }
+
+    /**
+     * Syntax highlighting via syntect (Sublime Text engine) running in the
+     * Rust core — same engine and themes as the Compose flow's Markdown
+     * pipeline expects, spanning the whole [cc.ptoe.messenger.core] bridge.
+     * Unknown languages and any bridge failure render as plain monospace.
+     */
+    private fun highlightCode(codeText: String, language: String?): CharSequence {
+        val theme = theme ?: return codeText
+        val spans = runCatching {
+            cc.ptoe.messenger.core.highlightCodeJson(codeText, language.orEmpty(), theme.isDark)
+        }.getOrNull() ?: return codeText
+        val parsed = runCatching {
+            spanJson.parseToJsonElement(spans).let { el ->
+                (el as? JsonArray)?.mapNotNull { item ->
+                    val obj = item as? JsonObject ?: return@mapNotNull null
+                    // Colors are unsigned 0xAARRGGBB — beyond Int range, read as Long
+                    Triple(
+                        obj["start"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                        obj["end"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                        obj["color"]?.jsonPrimitive?.longOrNull?.toInt() ?: return@mapNotNull null
+                    )
+                }
+            }
+        }.getOrNull() ?: return codeText
+        if (parsed.isEmpty()) return codeText
+
+        val builder = SpannableStringBuilder(codeText)
+        for ((start, end, color) in parsed) {
+            if (start in 0 until end && end <= codeText.length) {
+                builder.setSpan(
+                    ForegroundColorSpan(color),
+                    start, end,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
-            )
-        } else {
-            code
+            }
         }
+        return builder
     }
 }
