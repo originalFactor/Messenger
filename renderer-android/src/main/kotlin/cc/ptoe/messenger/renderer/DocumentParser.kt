@@ -93,6 +93,13 @@ object DocumentParser {
                 val isError = obj["is_error"]?.jsonPrimitive?.booleanOrNull ?: false
                 RenderBlock.ToolCall(id, callId, name, arguments, output, isError, isFinalized)
             }
+            "table" -> {
+                val head = obj["head"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+                val rows = obj["rows"]?.jsonArray?.map { row ->
+                    (row as? JsonArray)?.map { cell -> cell.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+                } ?: emptyList()
+                RenderBlock.Table(id, head, rows, isFinalized)
+            }
             "divider" -> RenderBlock.Divider(id)
             else -> null
         }

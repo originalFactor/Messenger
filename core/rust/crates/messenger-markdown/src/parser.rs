@@ -4,7 +4,7 @@
 //! Feeds continuous streaming text into a [`Document`], generating minimal
 //! [`DocumentDiff`]s so platform renderers only invalidate active blocks.
 
-use messenger_document::{Block, BlockId, BlockStatus, Document, DocumentDiff};
+use messenger_document::{Block, BlockId, BlockStatus, Document, DocumentDiff, Inline};
 
 use crate::inlines::parse_inlines;
 
@@ -35,6 +35,21 @@ enum ParserState {
     InQuote {
         id: BlockId,
         text: String,
+    },
+    /// A line that looks like a pipe-table row is held for one line of
+    /// lookahead: only a delimiter row (`|---|---|`) turns it into a table.
+    /// Anything else restores the previous context untouched — the held line
+    /// re-enters it verbatim (paragraph continuation or standalone paragraph).
+    MaybeTable {
+        header: String,
+        /// (id, text, eager_line_open) of the paragraph that was open when the
+        /// `|` line arrived, so it can resume exactly where it paused.
+        paragraph: Option<(BlockId, String, bool)>,
+    },
+    InTable {
+        id: BlockId,
+        head: Vec<String>,
+        rows: Vec<Vec<String>>,
     },
 }
 
@@ -251,6 +266,109 @@ impl IncrementalParser {
                 }
             }
 
+            ParserState::MaybeTable { header, paragraph } => {
+                let header = std::mem::take(header);
+                let saved = paragraph.take();
+                if is_table_delimiter(line) {
+                    let id = doc.next_id();
+                    let head = parse_table_row(&header);
+                    let block = Block::Table {
+                        id,
+                        head: head.clone(),
+                        rows: Vec::new(),
+                        status: BlockStatus::Streaming,
+                    };
+                    diffs.push(doc.append(block));
+                    self.state = ParserState::InTable {
+                        id,
+                        head,
+                        rows: Vec::new(),
+                    };
+                } else if let Some((pid, mut text, eager)) = saved {
+                    // Not a table: re-attach the held line to the paused
+                    // paragraph (mirrors the InParagraph continuation arm
+                    // exactly — never re-routed through process_line, which
+                    // would detect the row again and loop).
+                    if !eager {
+                        text.push('\n');
+                    }
+                    text.push_str(&header);
+                    let block = Block::Paragraph {
+                        id: pid,
+                        inlines: parse_inlines(&text),
+                        status: BlockStatus::Streaming,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                    self.eager_line_open = false;
+                    self.state = ParserState::InParagraph { id: pid, text };
+                    self.process_line(line, doc, diffs);
+                } else {
+                    // The held line stands alone as a paragraph after all.
+                    let pid = doc.next_id();
+                    let block = Block::Paragraph {
+                        id: pid,
+                        inlines: parse_inlines(&header),
+                        status: BlockStatus::Streaming,
+                    };
+                    diffs.push(doc.append(block));
+                    self.eager_line_open = false;
+                    self.state = ParserState::InParagraph {
+                        id: pid,
+                        text: header,
+                    };
+                    self.process_line(line, doc, diffs);
+                }
+            }
+
+            ParserState::InTable { id, head, rows } => {
+                let id = *id;
+                if line.trim().is_empty() {
+                    let block = Block::Table {
+                        id,
+                        head: head.clone(),
+                        rows: rows.clone(),
+                        status: BlockStatus::Finalized,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                    if let Some(diff) = doc.finalize(id) {
+                        diffs.push(diff);
+                    }
+                    self.state = ParserState::Idle;
+                } else if looks_like_table_row(line) {
+                    rows.push(parse_table_row(line));
+                    let block = Block::Table {
+                        id,
+                        head: head.clone(),
+                        rows: rows.clone(),
+                        status: BlockStatus::Streaming,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                } else {
+                    // Table ended without a blank line — finalize and let the
+                    // line start whatever comes next.
+                    let block = Block::Table {
+                        id,
+                        head: head.clone(),
+                        rows: rows.clone(),
+                        status: BlockStatus::Finalized,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
+                    }
+                    if let Some(diff) = doc.finalize(id) {
+                        diffs.push(diff);
+                    }
+                    self.state = ParserState::Idle;
+                    self.process_line(line, doc, diffs);
+                }
+            }
+
             ParserState::InParagraph { id, text } => {
                 let id = *id;
                 if line.trim().is_empty() {
@@ -274,6 +392,15 @@ impl IncrementalParser {
                     }
                     self.state = ParserState::Idle;
                     self.process_line(line, doc, diffs);
+                } else if !self.eager_line_open && looks_like_table_row(line) {
+                    // Could be a pipe-table header — hold one line of lookahead;
+                    // the paragraph resumes untouched if no delimiter follows.
+                    let saved = (id, text.clone(), self.eager_line_open);
+                    self.eager_line_open = false;
+                    self.state = ParserState::MaybeTable {
+                        header: line.to_string(),
+                        paragraph: Some(saved),
+                    };
                 } else {
                     if !self.eager_line_open {
                         text.push('\n');
@@ -429,6 +556,16 @@ impl IncrementalParser {
                     self.state = ParserState::InQuote {
                         id,
                         text: format!("{quote_content}\n"),
+                    };
+                    return;
+                }
+
+                // Pipe-table candidate: hold one line of lookahead so a
+                // delimiter row can promote it into a table (see MaybeTable).
+                if looks_like_table_row(line) {
+                    self.state = ParserState::MaybeTable {
+                        header: line.to_string(),
+                        paragraph: None,
                     };
                     return;
                 }
@@ -621,6 +758,54 @@ impl IncrementalParser {
                     diffs.push(diff);
                 }
             }
+            ParserState::InTable { id, head, rows } => {
+                let block = Block::Table {
+                    id,
+                    head,
+                    rows,
+                    status: BlockStatus::Finalized,
+                };
+                if let Some(diff) = doc.update(block) {
+                    diffs.push(diff);
+                }
+                if let Some(diff) = doc.finalize(id) {
+                    diffs.push(diff);
+                }
+            }
+            ParserState::MaybeTable { header, paragraph } => {
+                match paragraph {
+                    Some((pid, mut text, eager)) => {
+                        // The held line re-joins its paused paragraph, which
+                        // then finalizes normally.
+                        if !eager {
+                            text.push('\n');
+                        }
+                        text.push_str(&header);
+                        let block = Block::Paragraph {
+                            id: pid,
+                            inlines: parse_inlines(&text),
+                            status: BlockStatus::Finalized,
+                        };
+                        if let Some(diff) = doc.update(block) {
+                            diffs.push(diff);
+                        }
+                        if let Some(diff) = doc.finalize(pid) {
+                            diffs.push(diff);
+                        }
+                    }
+                    None => {
+                        // The held line was never part of a block — emit it
+                        // as a standalone finalized paragraph.
+                        let pid = doc.next_id();
+                        let block = Block::Paragraph {
+                            id: pid,
+                            inlines: parse_inlines(&header),
+                            status: BlockStatus::Finalized,
+                        };
+                        diffs.push(doc.append(block));
+                    }
+                }
+            }
             ParserState::Idle => {}
         }
     }
@@ -634,11 +819,54 @@ fn can_eager_open_paragraph(buffer: &str) -> bool {
     if buffer.trim().is_empty() {
         return false;
     }
-    const STARTERS: [&str; 13] = [
+    const STARTERS: [&str; 14] = [
         "```", "$$", "<think>", "<tool_call>", "# ", "## ", "### ", "#### ", "##### ", "###### ",
-        "> ", "---", "***",
+        "> ", "---", "***", "|",
     ];
     STARTERS.iter().all(|s| !buffer.starts_with(s) && !s.starts_with(buffer))
+}
+
+/// A line shaped like a pipe-table row: starts with `|` and carries at least
+/// one more pipe. Plain sentences that merely CONTAIN a pipe never match.
+fn looks_like_table_row(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.matches('|').count() >= 2
+}
+
+/// GitHub-style delimiter row: pipes, dashes, colons and spaces only, with at
+/// least one dash and one pipe (`|---|---|`, `| :---: |`, `--- | ---`).
+fn is_table_delimiter(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || !t.contains('-') || !t.contains('|') {
+        return false;
+    }
+    t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+/// Split a pipe row into trimmed cells; outer pipes are optional. Cell text is
+/// flattened from inline markup (bold/italic/code/…) to its plain text.
+fn parse_table_row(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    t.split('|').map(|cell| plain_cell(cell.trim())).collect()
+}
+
+/// Concatenate the human-visible text of parsed inlines (drop markup markers).
+fn plain_cell(text: &str) -> String {
+    let mut out = String::new();
+    for inline in parse_inlines(text) {
+        match inline {
+            Inline::Text { text }
+            | Inline::Bold { text }
+            | Inline::Italic { text }
+            | Inline::Strikethrough { text }
+            | Inline::Link { text, .. } => out.push_str(&text),
+            Inline::Code { code } => out.push_str(&code),
+            Inline::Math { formula } => out.push_str(&formula),
+        }
+    }
+    out
 }
 
 fn parse_heading(line: &str) -> Option<(u8, &str)> {
@@ -781,6 +1009,117 @@ mod tests {
         parser.feed("$$\n\\int_0^1 x dx\n$$\n", &mut doc);
         assert_eq!(doc.blocks().len(), 2);
         assert!(matches!(doc.blocks()[1], Block::Math { .. }));
+        assert!(doc.blocks()[1].is_finalized());
+    }
+
+    #[test]
+    fn parse_streaming_table() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("Intro\n\n", &mut doc);
+        parser.feed("| Tool | Purpose |\n", &mut doc);
+        // Header alone must not become a block yet (lookahead holds it)
+        assert_eq!(doc.blocks().len(), 1, "held header must not emit a block");
+        parser.feed("|---|---|\n", &mut doc);
+        assert_eq!(doc.blocks().len(), 2);
+        assert!(matches!(doc.blocks()[1], Block::Table { .. }));
+        assert!(!doc.blocks()[1].is_finalized());
+        parser.feed("| **terminal** | Run shell |\n", &mut doc);
+        parser.feed("| glob | Find files |\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 2);
+        assert!(doc.blocks()[1].is_finalized());
+        if let Block::Table { head, rows, .. } = &doc.blocks()[1] {
+            assert_eq!(head, &vec!["Tool".to_string(), "Purpose".to_string()]);
+            assert_eq!(
+                rows,
+                &vec![
+                    vec!["terminal".to_string(), "Run shell".to_string()],
+                    vec!["glob".to_string(), "Find files".to_string()],
+                ]
+            );
+        } else {
+            panic!("expected table");
+        }
+    }
+
+    /// Partial `|` lines buffer instead of eager-opening a paragraph; the
+    /// header streams into a table only once the delimiter row arrives.
+    #[test]
+    fn table_header_streaming_via_eager_guard() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("| Too", &mut doc);
+        assert_eq!(doc.blocks().len(), 0, "partial pipe line must buffer");
+        parser.feed("l |\n", &mut doc);
+        assert_eq!(doc.blocks().len(), 0);
+        parser.feed("|---|\n", &mut doc);
+        assert_eq!(doc.blocks().len(), 1);
+        if let Block::Table { head, .. } = &doc.blocks()[0] {
+            assert_eq!(head, &vec!["Tool".to_string()]);
+        } else {
+            panic!("expected table");
+        }
+    }
+
+    /// A `|`-starting line with no delimiter row after it stays a normal
+    /// paragraph, held line included, and following text resumes the same block.
+    #[test]
+    fn pipe_line_without_delimiter_stays_paragraph() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("| just | words\n", &mut doc);
+        assert_eq!(doc.blocks().len(), 0); // held
+        parser.feed("more words\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(doc.blocks()[0].is_finalized());
+        if let Block::Paragraph { inlines, .. } = &doc.blocks()[0] {
+            assert_eq!(inline_text(inlines), "| just | words\nmore words");
+        } else {
+            panic!("expected paragraph");
+        }
+    }
+
+    /// A pipe row interrupting an open paragraph: the paragraph resumes
+    /// untouched when no delimiter follows.
+    #[test]
+    fn pipe_row_inside_paragraph_resumes_paragraph() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("before the pipes\n", &mut doc);
+        parser.feed("| x | y |\n", &mut doc);
+        parser.feed("after the pipes\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        if let Block::Paragraph { inlines, .. } = &doc.blocks()[0] {
+            assert_eq!(inline_text(inlines), "before the pipes\n| x | y |\nafter the pipes");
+        } else {
+            panic!("expected paragraph");
+        }
+    }
+
+    /// A table cut off by a non-row line finalizes and the line re-routes.
+    #[test]
+    fn table_interrupted_by_paragraph() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("| a | b |\n|---|---|\n| 1 | 2 |\n", &mut doc);
+        parser.feed("trailing text\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 2);
+        assert!(matches!(doc.blocks()[0], Block::Table { .. }));
+        assert!(doc.blocks()[0].is_finalized());
+        assert!(matches!(doc.blocks()[1], Block::Paragraph { .. }));
         assert!(doc.blocks()[1].is_finalized());
     }
 }

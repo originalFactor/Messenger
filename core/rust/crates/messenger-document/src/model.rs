@@ -74,6 +74,14 @@ pub enum Block {
         content: String,
         status: BlockStatus,
     },
+    /// Pipe table. Cells carry plain text (inline markup is flattened at
+    /// parse time); `head` doubles as the column count anchor.
+    Table {
+        id: BlockId,
+        head: Vec<String>,
+        rows: Vec<Vec<String>>,
+        status: BlockStatus,
+    },
     Divider {
         id: BlockId,
     },
@@ -90,6 +98,7 @@ impl Block {
             | Block::Quote { id, .. }
             | Block::ToolCall { id, .. }
             | Block::Think { id, .. }
+            | Block::Table { id, .. }
             | Block::Divider { id } => *id,
         }
     }
@@ -103,7 +112,8 @@ impl Block {
             | Block::List { status, .. }
             | Block::Quote { status, .. }
             | Block::ToolCall { status, .. }
-            | Block::Think { status, .. } => *status,
+            | Block::Think { status, .. }
+            | Block::Table { status, .. } => *status,
             Block::Divider { .. } => BlockStatus::Finalized,
         }
     }
@@ -121,7 +131,8 @@ impl Block {
             | Block::List { status, .. }
             | Block::Quote { status, .. }
             | Block::ToolCall { status, .. }
-            | Block::Think { status, .. } => *status = BlockStatus::Finalized,
+            | Block::Think { status, .. }
+            | Block::Table { status, .. } => *status = BlockStatus::Finalized,
             Block::Divider { .. } => {}
         }
     }

@@ -221,6 +221,12 @@ class DocumentView @JvmOverloads constructor(
                     bind(block.name, block.arguments, block.output, block.isError, block.isFinalized)
                 }
             }
+            is RenderBlock.Table -> {
+                TableView(context).apply {
+                    updateTheme(theme)
+                    bind(block.head, block.rows, block.isFinalized)
+                }
+            }
             is RenderBlock.Divider -> {
                 View(context).apply {
                     setBackgroundColor(theme?.outlineVariant ?: 0x1F000000)
@@ -260,6 +266,9 @@ class DocumentView @JvmOverloads constructor(
                     block.isError,
                     block.isFinalized
                 )
+            }
+            is RenderBlock.Table -> {
+                (view as? TableView)?.bind(block.head, block.rows, block.isFinalized)
             }
             is RenderBlock.Divider -> {}
         }

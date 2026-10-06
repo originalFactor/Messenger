@@ -68,6 +68,13 @@ sealed class RenderBlock {
         override val isFinalized: Boolean
     ) : RenderBlock()
 
+    data class Table(
+        override val id: Long,
+        val head: List<String>,
+        val rows: List<List<String>>,
+        override val isFinalized: Boolean
+    ) : RenderBlock()
+
     data class Divider(
         override val id: Long
     ) : RenderBlock() {

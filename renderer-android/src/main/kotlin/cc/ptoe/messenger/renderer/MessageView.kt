@@ -367,6 +367,7 @@ class MessageView(context: Context) : LinearLayout(context) {
         is RenderBlock.Quote -> block.copy(id = newId)
         is RenderBlock.Think -> block.copy(id = newId)
         is RenderBlock.ToolCall -> block.copy(id = newId)
+        is RenderBlock.Table -> block.copy(id = newId)
         is RenderBlock.Divider -> block.copy(id = newId)
     }
 

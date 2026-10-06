@@ -18,7 +18,9 @@ package cc.ptoe.messenger.presentation.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
@@ -126,6 +129,13 @@ sealed class DesktopBlock {
         override val isFinalized: Boolean
     ) : DesktopBlock()
 
+    data class Table(
+        override val id: Long,
+        val head: List<String>,
+        val rows: List<List<String>>,
+        override val isFinalized: Boolean
+    ) : DesktopBlock()
+
     data class Divider(override val id: Long) : DesktopBlock() {
         override val isFinalized: Boolean = true
     }
@@ -217,6 +227,13 @@ object DesktopDocumentParser {
                 val text = obj["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 DesktopBlock.Quote(id, text, isFinalized)
             }
+            "table" -> {
+                val head = obj["head"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+                val rows = obj["rows"]?.jsonArray?.map { row ->
+                    (row as? JsonArray)?.map { cell -> cell.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+                } ?: emptyList()
+                DesktopBlock.Table(id, head, rows, isFinalized)
+            }
             "divider" -> DesktopBlock.Divider(id)
             else -> null
         }
@@ -248,6 +265,7 @@ fun DesktopDocumentView(
                     is DesktopBlock.Math -> RenderMathBlock(block)
                     is DesktopBlock.Think -> RenderThinkBlock(block)
                     is DesktopBlock.ToolCall -> RenderToolCall(block)
+                    is DesktopBlock.Table -> RenderTable(block)
                     is DesktopBlock.Quote -> RenderQuote(block)
                     is DesktopBlock.Divider -> HorizontalDivider(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -534,5 +552,58 @@ private fun RenderQuote(block: DesktopBlock.Quote) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         )
+    }
+}
+
+@Composable
+private fun RenderTable(block: DesktopBlock.Table) {
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .horizontalScroll(rememberScrollState())
+    ) {
+        if (block.head.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                block.head.forEach { cell ->
+                    Text(
+                        text = cell,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                }
+            }
+        }
+        block.rows.forEachIndexed { index, row ->
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                row.forEach { cell ->
+                    Text(
+                        text = cell,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                }
+            }
+            if (index != block.rows.lastIndex) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(borderColor)
+                )
+            }
+        }
     }
 }
