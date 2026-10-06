@@ -20,7 +20,6 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
-import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -32,6 +31,7 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
     private val contentText = TextView(context)
     private var isExpanded = false
     private var theme: RendererTheme? = null
+    private val sectionAnimator = SectionAnimator(contentText)
 
     init {
         orientation = VERTICAL
@@ -63,7 +63,7 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
         // Collapsible content
         contentText.textSize = 12f
         contentText.setPadding(padH, 0, padH, padV)
-        contentText.visibility = View.GONE
+        contentText.visibility = GONE
         addView(contentText)
 
         updateTheme(null)
@@ -92,8 +92,8 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
 
     private fun toggle() {
         isExpanded = !isExpanded
-        contentText.visibility = if (isExpanded) View.VISIBLE else View.GONE
         arrowLabel.text = if (isExpanded) "▲" else "▼"
+        sectionAnimator.animate(isExpanded)
     }
 
     fun bind(content: String, isFinalized: Boolean) {
@@ -102,9 +102,13 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
             // While streaming thinking, keep expanded so user sees thoughts
             if (!isExpanded) {
                 isExpanded = true
-                contentText.visibility = View.VISIBLE
                 arrowLabel.text = "▲"
+                sectionAnimator.applyInstant(true)
             }
+        } else if (!sectionAnimator.isRunning) {
+            // Finalized rebinds must not fight a user-triggered animation, but
+            // they do need to settle the exact collapsed/expanded state.
+            sectionAnimator.applyInstant(isExpanded)
         }
     }
 }

@@ -50,6 +50,7 @@ class ToolCallView(context: Context) : LinearLayout(context) {
     private var output: String? = null
     private var isError = false
     private var isFinalized = true
+    private val sectionAnimator = SectionAnimator(expandedSection)
 
     init {
         orientation = VERTICAL
@@ -106,13 +107,10 @@ class ToolCallView(context: Context) : LinearLayout(context) {
 
     private fun toggleExpanded() {
         isExpanded = !isExpanded
-        applyExpandedState()
+        applyExpandedState(animate = true)
     }
 
-    private fun applyExpandedState() {
-        expandedSection.visibility = if (isExpanded) VISIBLE else GONE
-        commandPreview.visibility =
-            if (!isExpanded && arguments.isNotBlank()) VISIBLE else GONE
+    private fun applyExpandedState(animate: Boolean = false) {
         commandPreview.text = commandDisplay()
         commandText.text = commandDisplay()
         commandText.visibility = if (arguments.isNotBlank()) VISIBLE else GONE
@@ -125,6 +123,18 @@ class ToolCallView(context: Context) : LinearLayout(context) {
         } else {
             resultLabel.visibility = VISIBLE
             outputText.visibility = VISIBLE
+        }
+
+        // Collapsed one-line preview hides while expanded (mirrors ToolCallCard)
+        commandPreview.visibility =
+            if (!isExpanded && arguments.isNotBlank()) VISIBLE else GONE
+
+        if (animate) {
+            sectionAnimator.animate(isExpanded)
+        } else if (!sectionAnimator.isRunning) {
+            // Streaming updates rebind this card constantly; never snap the
+            // section while a user-triggered expand/collapse animation runs.
+            sectionAnimator.applyInstant(isExpanded)
         }
     }
 

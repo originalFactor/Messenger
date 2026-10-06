@@ -61,6 +61,16 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
     private var streamingViewHolder: ViewHolder? = null
 
     /**
+     * Diff batches that raced ahead of their streaming row's bind. At a tool
+     * round boundary the next round's placeholder row (new message id) replaces
+     * the previous one, and DiffUtil dispatches that change asynchronously to
+     * the token stream — a batch arriving in between must NOT be applied to the
+     * previous round's view (stray live blocks in the settled bubble) nor
+     * dropped (the new row would permanently miss its opening blocks).
+     */
+    private val pendingDiffs = mutableMapOf<String, MutableList<String>>()
+
+    /**
      * Theme tokens resolved from the host MaterialTheme. Setting a different
      * value rebinds every row (theme changes are rare — dark mode flips).
      */
@@ -105,9 +115,27 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
         diffResult.dispatchUpdatesTo(this)
     }
 
-    /** Direct streaming update: updates only the live section of the streaming DocumentView. */
-    fun applyStreamingDiff(diffBatchJson: String) {
-        val holder = streamingViewHolder ?: return
+    /**
+     * Direct streaming update: applies the batch to the live section of the
+     * row currently streaming [targetMessageId]. When that row has not bound
+     * yet, the batch is parked and replayed in order by [onBindViewHolder].
+     */
+    fun applyStreamingDiff(targetMessageId: String?, diffBatchJson: String) {
+        if (targetMessageId.isNullOrEmpty()) return
+        val holder = streamingViewHolder
+        if (holder != null && holder.messageView.currentItem?.id == targetMessageId) {
+            applyDiff(holder, diffBatchJson)
+        } else {
+            pendingDiffs.getOrPut(targetMessageId) { mutableListOf() }.add(diffBatchJson)
+        }
+    }
+
+    /** Turn over: drop anything still parked for rows that will never bind. */
+    fun clearPendingDiffs() {
+        pendingDiffs.clear()
+    }
+
+    private fun applyDiff(holder: ViewHolder, diffBatchJson: String) {
         holder.messageView.documentView.applyDiffBatch(holder.messageView.theme, diffBatchJson)
         holder.messageView.onLiveBlockApplied()
     }
@@ -132,6 +160,11 @@ class ConversationAdapter : RecyclerView.Adapter<ConversationAdapter.ViewHolder>
         holder.messageView.bind(item, theme)
         if (item.isStreaming) {
             streamingViewHolder = holder
+            // Replay batches that raced ahead of this bind, then drop stale
+            // buffers from earlier rounds (only one round streams at a time).
+            val mine = pendingDiffs.remove(item.id)
+            pendingDiffs.clear()
+            mine?.forEach { applyDiff(holder, it) }
         } else if (streamingViewHolder == holder) {
             streamingViewHolder = null
         }

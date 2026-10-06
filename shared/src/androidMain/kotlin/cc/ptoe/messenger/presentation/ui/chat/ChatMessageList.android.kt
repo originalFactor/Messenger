@@ -181,10 +181,13 @@ internal actual fun ChatMessageList(
         }
     }
 
-    // Direct incremental streaming diff update: zero-recomposition, zero-adapter-notify
+    // Direct incremental streaming diff update: zero-recomposition, zero-adapter-notify.
+    // The batch is routed by the round's message id — at tool-round boundaries
+    // the next placeholder row may not have bound yet, in which case the
+    // adapter parks the batch and replays it when the row binds.
     LaunchedEffect(streamingDiff) {
         if (!streamingDiff.isNullOrBlank()) {
-            adapter.applyStreamingDiff(streamingDiff)
+            adapter.applyStreamingDiff(streamingMessageId, streamingDiff)
         }
     }
 
@@ -256,6 +259,8 @@ internal actual fun ChatMessageList(
     LaunchedEffect(streamingMessageId) {
         if (streamingMessageId != null) {
             recyclerView?.scrollToPosition(0)
+        } else {
+            adapter.clearPendingDiffs()
         }
     }
 
