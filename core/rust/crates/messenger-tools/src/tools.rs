@@ -27,8 +27,11 @@ pub struct BuiltinTool {
     pub write_access: bool,
     /// JSON Schema (as a JSON string) describing accepted arguments.
     pub parameters_json: String,
-    /// Terminal-only: false lifts the read-only command policy (writable mode).
-    pub enforce_read_only: bool,
+    /// Terminal-only declaration variant: true = read-only Agent mode, where
+    /// the description steers the model toward inspection. Execution is
+    /// identical in both modes — the sandbox confines actual operations,
+    /// never arguments.
+    pub read_only: bool,
 }
 
 impl BuiltinTool {
@@ -36,26 +39,20 @@ impl BuiltinTool {
     pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
     pub const MAX_OUTPUT_CHARS: usize = 10_000;
 
-    pub fn terminal(enforce_read_only: bool) -> Self {
-        let (description, schema) = if enforce_read_only {
-            (
-                "Run one read-only inspection command in Messenger's isolated app-private workspace and return its combined output and exit code. \
-                 Do not use shell operators, interpreters, redirection, or commands that modify files. File changes use the workspace edit/create tools.",
-                r#"{"type":"object","properties":{"command":{"type":"string","description":"One read-only inspection command to execute"}},"required":["command"]}"#,
-            )
+    pub fn terminal(read_only: bool) -> Self {
+        let description = if read_only {
+            "Run one command in Messenger's sandboxed app-private workspace and return its combined output and exit code. \
+             The agent is in read-only mode, so use this for inspection; do not modify files."
         } else {
-            (
-                "Run one command in Messenger's isolated app-private workspace and return its combined output and exit code. \
-                 The command can create, modify, or delete files inside the workspace.",
-                r#"{"type":"object","properties":{"command":{"type":"string","description":"One command to execute"}},"required":["command"]}"#,
-            )
+            "Run one command in Messenger's sandboxed app-private workspace and return its combined output and exit code. \
+             The command can create, modify, or delete files."
         };
         Self {
             name: Self::TERMINAL_NAME.to_string(),
             description: description.to_string(),
             write_access: false,
-            parameters_json: schema.to_string(),
-            enforce_read_only,
+            parameters_json: r#"{"type":"object","properties":{"command":{"type":"string","description":"One command to execute"}},"required":["command"]}"#.to_string(),
+            read_only,
         }
     }
 
@@ -93,7 +90,7 @@ pub const MAX_LINES: u32 = 2000;
 
 const WORKSPACE_SCHEMAS: [(&str, &str); 5] = [
     (GLOB, r#"{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}"#),
-    (GREP, r#"{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"fileGlob":{"type":"string"},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}"#),
+    (GREP, r#"{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"fileGlob":{"type":"string"},"caseSensitive":{"type":"boolean"},"fixedString":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}"#),
     (READ, r#"{"type":"object","properties":{"path":{"type":"string"},"startLine":{"type":"integer","minimum":1},"maxLines":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}"#),
     (EDIT, r#"{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["path","oldText","newText"]}"#),
     (CREATE, r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["path","content"]}"#),
@@ -102,21 +99,21 @@ const WORKSPACE_SCHEMAS: [(&str, &str); 5] = [
 /// All five workspace tools in canonical order (glob/grep/read/edit/create).
 pub fn workspace_tools() -> Vec<BuiltinTool> {
     [
-        (GLOB, "Find workspace files matching a glob such as **/*.kt.", false),
+        (GLOB, "Find files matching a glob such as **/*.kt, relative to the agent workspace.", false),
         (
             GREP,
-            "Search workspace text files for a literal substring or regular expression.",
+            "Fast full-workspace text search with ripgrep: a regular expression (Rust syntax) or fixed string across files; path scopes the search to a file or directory and defaults to the whole workspace.",
             false,
         ),
-        (READ, "Read a line range from a workspace text file.", false),
+        (READ, "Read a line range from a text file; paths are relative to the agent workspace unless absolute.", false),
         (
             EDIT,
-            "Replace exact text in one workspace file; replacement must match exactly once unless replaceAll is true.",
+            "Replace exact text in one file; replacement must match exactly once unless replaceAll is true. Paths are relative to the agent workspace unless absolute.",
             true,
         ),
         (
             CREATE,
-            "Create a text file in the workspace. Existing files are not overwritten unless overwrite is true.",
+            "Create a text file. Existing files are not overwritten unless overwrite is true. Paths are relative to the agent workspace unless absolute.",
             true,
         ),
     ]
@@ -132,7 +129,7 @@ pub fn workspace_tools() -> Vec<BuiltinTool> {
             description: description.to_string(),
             write_access,
             parameters_json,
-            enforce_read_only: false,
+            read_only: false,
         }
     })
     .collect()
@@ -195,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_variants_differ_in_description_and_schema() {
+    fn terminal_variants_differ_only_in_read_only_description() {
         let ro = BuiltinTool::terminal(true);
         let rw = BuiltinTool::terminal(false);
         assert_ne!(ro.description, rw.description);
-        assert_ne!(ro.parameters_json, rw.parameters_json);
-        assert!(ro.enforce_read_only);
-        assert!(!rw.enforce_read_only);
+        assert_eq!(ro.parameters_json, rw.parameters_json);
+        assert!(ro.read_only);
+        assert!(!rw.read_only);
     }
 
     #[test]

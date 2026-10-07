@@ -17,55 +17,70 @@
 package cc.ptoe.messenger.runtime
 
 import java.io.File
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
 
 /**
- * Workspace-confined file operations served to the main app over AIDL. The
- * workspace lives in THIS app's data directory (own UID), so the main app
- * cannot touch it directly — every operation is bounds-checked here.
+ * Workspace file operations served to the main app over AIDL. Paths are
+ * relative to the workspace root unless absolute — arguments are never
+ * path-checked. The sandbox is THIS app's own UID (the workspace lives in
+ * this data directory, and the OS bounds what these operations can touch),
+ * so reads go anywhere this app can read and writes anywhere it can write.
  */
 internal object WorkspaceOps {
     private const val MAX_FILE_BYTES = 4L * 1024 * 1024
     private const val MAX_FILES_SCANNED = 20_000
 
     fun glob(root: File, pattern: String, maxResults: Int): ToolResult = guarded {
-        require(pattern.isNotBlank() && !pattern.startsWith('/') && !pattern.contains('\\')) {
-            "Glob must be a relative forward-slash pattern."
-        }
-        require(pattern.split('/').none { it == ".." }) { "Glob cannot traverse parent directories." }
+        require(pattern.isNotBlank()) { "Glob pattern cannot be empty." }
         val matcher = globRegex(pattern).toRegex()
-        val files = walkFiles(root).filter { matcher.matches(root.toPath().relativize(it).toString().replace('\\', '/')) }
+        val files = walkFiles(root).filter { globMatches(matcher, root, it) }
             .take(maxResults + 1).toList()
         boundedList(files.map { relative(root, it) }, maxResults, "No matching files.")
     }
 
-    fun grep(root: File, pattern: String, path: String, fileGlob: String?, caseSensitive: Boolean, maxResults: Int): ToolResult = guarded {
+    fun grep(root: File, pattern: String, path: String, fileGlob: String?, caseSensitive: Boolean, fixedString: Boolean, maxResults: Int, rgBinary: File?): ToolResult = guarded {
         require(pattern.isNotEmpty()) { "Search pattern cannot be empty." }
+        val rg = rgBinary?.takeIf { it.isFile && it.canExecute() }
+            ?: return@guarded ToolResult("ripgrep is not available in the runtime.", isError = true)
         val base = resolve(root, path, mustExist = true)
-        val fileMatcher = fileGlob?.let { globRegex(it).toRegex() }
-        val regex = try {
-            Pattern.compile(pattern, if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE)
-        } catch (e: PatternSyntaxException) {
-            return@guarded ToolResult("Invalid regular expression: ${e.description}", isError = true)
+        val command = buildList {
+            add(rg.absolutePath)
+            add("--no-heading")
+            add("-n")
+            add("--no-config")
+            add("--hidden")
+            add("--no-ignore")
+            add("-g")
+            add("!.git")
+            if (!caseSensitive) add("--ignore-case")
+            if (fixedString) add("--fixed-strings")
+            fileGlob?.let { add("-g"); add(it) }
+            add("--")
+            add(pattern)
+            add(base.absolutePath)
         }
-        val candidates = if (base.isDirectory) walkFiles(base) else sequenceOf(base.toPath())
-        val results = mutableListOf<String>()
-        for (file in candidates) {
-            if (fileMatcher != null && !fileMatcher.matches(relative(root, file))) continue
-            if (!Files.isRegularFile(file) || Files.size(file) > MAX_FILE_BYTES) continue
-            val lines = Files.readAllLines(file, StandardCharsets.UTF_8)
-            lines.forEachIndexed { index, line ->
-                if (regex.matcher(line).find()) results += "${relative(root, file)}:${index + 1}:$line"
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(false)
+            .start()
+        val rows = mutableListOf<String>()
+        process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            for (line in lines) {
+                rows += dropVimgrepColumn(line)
+                if (rows.size > maxResults) break
             }
-            if (results.size > maxResults) break
         }
-        boundedList(results, maxResults, "No matches.")
+        val stderr = process.errorStream.bufferedReader(Charsets.UTF_8).readText()
+        val exit = process.waitFor()
+        if (exit == 2) {
+            return@guarded ToolResult(stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "ripgrep failed.", isError = true)
+        }
+        val truncated = rows.size > maxResults
+        if (truncated) rows.removeAt(rows.lastIndex)
+        val body = if (rows.isEmpty()) "No matches." else rows.joinToString("\n")
+        ToolResult(body + if (truncated) "\n(results truncated at $maxResults)" else "", isError = false)
     }
 
     fun read(root: File, path: String, startLine: Int, maxLines: Int): ToolResult = guarded {
@@ -96,7 +111,6 @@ internal object WorkspaceOps {
 
     fun create(root: File, path: String, content: String, overwrite: Boolean): ToolResult = guarded {
         val file = resolve(root, path, mustExist = false)
-        require(!Files.isSymbolicLink(file.toPath())) { "Cannot write through a symbolic link." }
         require(content.toByteArray(Charsets.UTF_8).size <= MAX_FILE_BYTES) { "Content exceeds 4 MiB." }
         file.parentFile?.mkdirs()
         if (!overwrite) {
@@ -113,21 +127,24 @@ internal object WorkspaceOps {
         ToolResult(e.message ?: "I/O error", isError = true)
     }
 
+    /**
+     * Resolves a path argument without confinement: absolute paths are used
+     * as-is, relative paths resolve against the workspace root. The sandbox
+     * (this app's UID) bounds what the operation can touch — never the
+     * argument.
+     */
     private fun resolve(root: File, raw: String, mustExist: Boolean): File {
-        require(raw.isNotBlank() && !raw.startsWith('/') && !raw.startsWith('\\') && !Regex("^[A-Za-z]:").containsMatchIn(raw)) {
-            "Path must be relative to the workspace."
-        }
-        val normalized = root.toPath().resolve(raw).normalize()
-        require(normalized.startsWith(root.toPath().normalize())) { "Path escapes the workspace." }
-        val candidate = normalized.toFile()
-        val canonicalRoot = root.canonicalFile.toPath()
-        val canonical = if (mustExist) candidate.canonicalFile.toPath() else {
-            val parent = (candidate.parentFile ?: root).canonicalFile.toPath()
-            parent.resolve(candidate.name).normalize()
-        }
-        require(canonical.startsWith(canonicalRoot) && canonical != canonicalRoot) { "Path escapes the workspace." }
+        require(raw.isNotBlank()) { "Path cannot be empty." }
+        val base = if (raw.startsWith('/')) File(raw).toPath() else root.toPath().resolve(raw)
+        val candidate = base.normalize().toFile()
         if (mustExist) require(candidate.exists()) { "File does not exist." }
-        return canonical.toFile()
+        return candidate
+    }
+
+    /** Glob matches the workspace-relative path, or the absolute path for absolute patterns. */
+    private fun globMatches(matcher: Regex, root: File, path: Path): Boolean {
+        val absolute = path.toString().replace('\\', '/')
+        return matcher.matches(relative(root, path)) || matcher.matches(absolute)
     }
 
     private fun walkFiles(start: File): Sequence<Path> {
@@ -141,6 +158,17 @@ internal object WorkspaceOps {
     private fun relative(root: File, path: Path): String =
         root.canonicalFile.toPath().relativize(path.toFile().canonicalFile.toPath()).toString().replace('\\', '/')
 
+    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
+    private fun dropVimgrepColumn(row: String): String {
+        val first = row.indexOf(':')
+        if (first < 0) return row
+        val second = row.indexOf(':', first + 1)
+        if (second < 0) return row
+        val third = row.indexOf(':', second + 1)
+        if (third < 0) return row
+        return row.substring(0, second) + row.substring(third)
+    }
+
     private fun boundedList(rows: List<String>, limit: Int, empty: String): ToolResult =
         ToolResult(
             if (rows.isEmpty()) empty else rows.take(limit).joinToString("\n") + if (rows.size > limit) "\n(results truncated at $limit)" else "",
@@ -148,8 +176,6 @@ internal object WorkspaceOps {
         )
 
     private fun globRegex(glob: String): String {
-        require(glob.isNotBlank() && !glob.startsWith('/') && !glob.contains('\\')) { "Glob must be a relative forward-slash pattern." }
-        require(glob.split('/').none { it == ".." }) { "Glob cannot traverse parent directories." }
         val out = StringBuilder("^")
         var i = 0
         while (i < glob.length) {

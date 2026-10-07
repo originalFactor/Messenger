@@ -18,7 +18,7 @@ interface IShellService {
     // this app's own data directory, so the main app reaches it only here).
 
     cc.ptoe.messenger.runtime.ToolResult workspaceGlob(String pattern, int maxResults);
-    cc.ptoe.messenger.runtime.ToolResult workspaceGrep(String pattern, String path, String fileGlob, boolean caseSensitive, int maxResults);
+    cc.ptoe.messenger.runtime.ToolResult workspaceGrep(String pattern, String path, String fileGlob, boolean caseSensitive, boolean fixedString, int maxResults);
     cc.ptoe.messenger.runtime.ToolResult workspaceRead(String path, int startLine, int maxLines);
     cc.ptoe.messenger.runtime.ToolResult workspaceEdit(String path, String oldText, String newText, boolean replaceAll);
     cc.ptoe.messenger.runtime.ToolResult workspaceCreate(String path, String content, boolean overwrite);

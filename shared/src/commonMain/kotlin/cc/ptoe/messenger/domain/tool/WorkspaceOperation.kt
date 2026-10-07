@@ -19,6 +19,7 @@ sealed class WorkspaceOperation {
         val path: String,
         val fileGlob: String?,
         val caseSensitive: Boolean,
+        val fixedString: Boolean,
         val maxResults: Int
     ) : WorkspaceOperation()
 

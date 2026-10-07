@@ -22,6 +22,7 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -31,6 +32,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +69,7 @@ data class RuntimeShellResult(
  */
 internal object TermuxRuntime {
     private const val ASSET_NAME = "agent-runtime/bootstrap.zip"
+    private const val JNI_BOOTSTRAP_ENTRY = "libbootstrap.zip.so"
     private const val VERSION = "bootstrap-2026.09.27-r3+apt.android-7"
 
     /**
@@ -129,9 +132,13 @@ internal object TermuxRuntime {
         path: String,
         fileGlob: String?,
         caseSensitive: Boolean,
+        fixedString: Boolean,
         maxResults: Int
     ): ToolResult = withContext(Dispatchers.IO) {
-        WorkspaceOps.grep(workspace(context), pattern, path, fileGlob, caseSensitive, maxResults)
+        WorkspaceOps.grep(
+            workspace(context), pattern, path, fileGlob, caseSensitive, fixedString, maxResults,
+            ripgrepBinary(context)
+        )
     }
 
     suspend fun workspaceRead(context: Context, path: String, startLine: Int, maxLines: Int): ToolResult =
@@ -227,7 +234,7 @@ internal object TermuxRuntime {
         val staging = File(base, ".runtime-$abi-${UUID.randomUUID()}")
         val backup = File(base, ".runtime-$abi-backup")
         try {
-            extractBootstrap(context.assets.open(ASSET_NAME), staging, abi, prefix.absolutePath)
+            extractBootstrap(openBootstrapArchive(context, abi), staging, abi, prefix.absolutePath)
             writeMarker(staging, abi)
             if (backup.exists()) backup.deleteRecursively()
             if (prefix.exists()) Files.move(prefix.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
@@ -250,6 +257,86 @@ internal object TermuxRuntime {
             }
             throw e
         }
+    }
+
+    /**
+     * Resolves the bundled ripgrep binary (`jniLibs/<abi>/librg.so`), copying
+     * it into `<prefix>/bin/rg` when needed so the agent's grep tool and
+     * terminal sessions find it on PATH. Works without the bootstrap: the
+     * binary ships in this APK, not in the archive. Returns null when the
+     * packaged binary is unavailable.
+     */
+    private fun ripgrepBinary(context: Context): File? {
+        val abi = supportedAbi() ?: return null
+        val target = File(File(baseDir(context), "runtime-$abi"), "bin/rg")
+        if (target.isFile && target.canExecute()) return target
+        val source = ripgrepSource(context, abi) ?: return null
+        try {
+            target.parentFile?.mkdirs()
+            source.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            target.setExecutable(true, false)
+        } catch (_: Exception) {
+            // grep reports the missing binary when rg is unavailable.
+            target.delete()
+            return null
+        }
+        return target
+    }
+
+    /** Locates the packaged ripgrep: nativeLibraryDir first, then APK split entries. */
+    private fun ripgrepSource(context: Context, abi: String): File? {
+        File(context.applicationInfo.nativeLibraryDir, "librg.so").takeIf { it.isFile }?.let { return it }
+        val apkPaths = buildList {
+            add(context.applicationInfo.sourceDir)
+            context.applicationInfo.splitSourceDirs?.let(::addAll)
+        }
+        val entryPath = "lib/$abi/librg.so"
+        for (apkPath in apkPaths) {
+            val apk = java.util.zip.ZipFile(apkPath)
+            try {
+                val entry = apk.getEntry(entryPath) ?: continue
+                val tmp = File.createTempFile("rg", ".so", baseDir(context))
+                apk.getInputStream(entry).use { input ->
+                    tmp.outputStream().use { output -> input.copyTo(output) }
+                }
+                tmp.setExecutable(true, false)
+                return tmp
+            } finally {
+                apk.close()
+            }
+        }
+        return null
+    }
+
+    private fun openBootstrapArchive(context: Context, abi: String): InputStream {
+        val nativeLib = File(context.applicationInfo.nativeLibraryDir, JNI_BOOTSTRAP_ENTRY)
+        if (nativeLib.isFile) {
+            return nativeLib.inputStream()
+        }
+        val apkPaths = buildList {
+            add(context.applicationInfo.sourceDir)
+            context.applicationInfo.splitSourceDirs?.let(::addAll)
+        }
+        val entryPath = "lib/$abi/$JNI_BOOTSTRAP_ENTRY"
+        for (apkPath in apkPaths) {
+            val zip = runCatching { ZipFile(apkPath) }.getOrNull() ?: continue
+            val entry = zip.getEntry(entryPath)
+            if (entry != null) {
+                return object : FilterInputStream(zip.getInputStream(entry)) {
+                    override fun close() {
+                        try {
+                            super.close()
+                        } finally {
+                            zip.close()
+                        }
+                    }
+                }
+            }
+            zip.close()
+        }
+        return context.assets.open(ASSET_NAME)
     }
 
     private fun extractBootstrap(input: InputStream, staging: File, abi: String, prefixPath: String) {

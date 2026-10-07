@@ -49,6 +49,7 @@ interface ShellRuntimeBridge {
         path: String,
         fileGlob: String?,
         caseSensitive: Boolean,
+        fixedString: Boolean,
         maxResults: Int
     ): ToolExecutionResult
     suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult

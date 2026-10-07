@@ -16,8 +16,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -41,8 +39,9 @@ private class DesktopWorkspaceFiles(private val root: File) {
     fun execute(op: WorkspaceOperation): ToolExecutionResult = when (op) {
         is WorkspaceOperation.Glob -> {
             val matcher = globRegex(op.pattern).toRegex()
-            listFiles().map { it to relative(it) }.filter { matcher.matches(it.second) }
-                .take(op.maxResults + 1).map { it.second }.toList().result(op.maxResults, "No matching files.")
+            listFiles().filter { globMatches(matcher, it) }
+                .map { relative(it) }
+                .take(op.maxResults + 1).toList().result(op.maxResults, "No matching files.")
         }
         is WorkspaceOperation.Grep -> grep(op)
         is WorkspaceOperation.Read -> read(op)
@@ -52,18 +51,107 @@ private class DesktopWorkspaceFiles(private val root: File) {
 
     private fun grep(op: WorkspaceOperation.Grep): ToolExecutionResult {
         require(op.pattern.isNotEmpty()) { "Search pattern cannot be empty." }
-        val base = resolve(op.path, true)
-        val filePattern = op.fileGlob?.let { globRegex(it).toRegex() }
-        val regex = try { Pattern.compile(op.pattern, if (op.caseSensitive) 0 else Pattern.CASE_INSENSITIVE) }
-        catch (e: PatternSyntaxException) { return ToolExecutionResult("Invalid regular expression: ${e.description}", true) }
-        val matches = (if (Files.isDirectory(base)) listFiles(base.toFile()) else sequenceOf(base)).flatMap { path ->
-            if (filePattern != null && !filePattern.matches(relative(path))) return@flatMap emptySequence()
-            if (Files.size(path) > maxBytes) return@flatMap emptySequence()
-            Files.readAllLines(path, StandardCharsets.UTF_8).asSequence().mapIndexedNotNull { index, line ->
-                if (regex.matcher(line).find()) "${relative(path)}:${index + 1}:$line" else null
+        val rg = DesktopRipgrep.resolve()
+            ?: return ToolExecutionResult("ripgrep is not available: install `rg` on PATH or reinstall the app.", true)
+        val base = resolve(op.path, true).toFile().canonicalFile
+        val workspaceRoot = agentWorkspace.canonicalFile
+        // Inside the workspace: run rg with the workspace as cwd and a
+        // workspace-relative search path so output paths arrive
+        // workspace-relative verbatim. Outside it: absolute root, absolute
+        // output paths (rewritten to forward slashes below).
+        val insideWorkspace = base.path.startsWith(workspaceRoot.path + File.separator)
+        val searchPath = if (insideWorkspace) {
+            workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/').ifEmpty { "." }
+        } else {
+            base.absolutePath.replace('\\', '/')
+        }
+        val command = buildList {
+            add(rg.absolutePath)
+            add("--no-heading")
+            add("-n")
+            add("--no-config")
+            add("--hidden")
+            add("--no-ignore")
+            add("--path-separator")
+            add("/")
+            add("-g")
+            add("!.git")
+            if (!op.caseSensitive) add("--ignore-case")
+            if (op.fixedString) add("--fixed-strings")
+            op.fileGlob?.let { add("-g"); add(it) }
+            add("--")
+            add(op.pattern)
+            add(searchPath)
+        }
+        val process = try {
+            ProcessBuilder(command).directory(workspaceRoot).redirectErrorStream(false).start()
+        } catch (e: Exception) {
+            return ToolExecutionResult("Failed to start ripgrep: ${e.message}", true)
+        }
+        // When the search root is a single FILE, rg prints `line:text`
+        // without any filename — prefix the workspace-relative file so rows
+        // keep the contract ("dir/a.txt:2:...").
+        val fileRootPrefix = if (base.isFile) {
+            if (insideWorkspace) {
+                workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/')
+            } else {
+                base.absolutePath.replace('\\', '/')
             }
-        }.take(op.maxResults + 1).toList()
-        return matches.result(op.maxResults, "No matches.")
+        } else {
+            null
+        }
+        val p = process
+        try {
+            val rows = mutableListOf<String>()
+            p.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                for (line in lines) {
+                    rows += if (fileRootPrefix != null) {
+                        // Row shape: `line:text` (rg omits the filename for a
+                        // single-file search root).
+                        val lineNo = line.indexOf(':')
+                        if (lineNo > 0) "$fileRootPrefix:$line" else line
+                    } else {
+                        normalizePath(dropVimgrepColumn(line))
+                    }
+                    if (rows.size > op.maxResults) break
+                }
+            }
+            val stderr = p.errorStream.bufferedReader(Charsets.UTF_8).readText()
+            val exit = p.waitFor()
+            if (exit == 2) {
+                return ToolExecutionResult(stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "ripgrep failed.", true)
+            }
+            val truncated = rows.size > op.maxResults
+            if (truncated) rows.removeAt(rows.lastIndex)
+            val body = if (rows.isEmpty()) "No matches." else rows.joinToString("\n")
+            return ToolExecutionResult(body + if (truncated) "\n(results truncated at ${op.maxResults})" else "", isError = false)
+        } finally {
+            p.destroyForcibly()
+        }
+    }
+
+    /**
+     * rg with the workspace cwd emits relative paths inside the workspace
+     * and absolute paths (under `--path-separator /`) for absolute roots
+     * outside it. Windows drive prefixes in row paths are normalized to
+     * forward slashes.
+     */
+    private fun normalizePath(row: String): String {
+        val separator = row.indexOf(':')
+        if (separator < 0) return row
+        val rawPath = row.substring(0, separator).replace('\\', '/')
+        return rawPath + row.substring(separator)
+    }
+
+    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
+    private fun dropVimgrepColumn(row: String): String {
+        val first = row.indexOf(':')
+        if (first < 0) return row
+        val second = row.indexOf(':', first + 1)
+        if (second < 0) return row
+        val third = row.indexOf(':', second + 1)
+        if (third < 0) return row
+        return row.substring(0, second) + row.substring(third)
     }
 
     private fun read(op: WorkspaceOperation.Read): ToolExecutionResult {
@@ -92,7 +180,6 @@ private class DesktopWorkspaceFiles(private val root: File) {
 
     private fun create(op: WorkspaceOperation.Create): ToolExecutionResult {
         val file = resolve(op.path, false).toFile()
-        require(!Files.isSymbolicLink(file.toPath())) { "Cannot write through a symbolic link." }
         val bytes = op.content.toByteArray(Charsets.UTF_8)
         require(bytes.size <= maxBytes) { "Content exceeds 4 MiB." }
         file.parentFile?.mkdirs()
@@ -101,17 +188,21 @@ private class DesktopWorkspaceFiles(private val root: File) {
         return ToolExecutionResult("Created ${relative(file.toPath())}.")
     }
 
+    /** Resolves a path argument without confinement: absolute paths are used
+     * as-is, relative paths resolve against the workspace root. The user
+     * process is the sandbox — arguments are never path-checked. */
     private fun resolve(raw: String, exists: Boolean): Path {
-        require(raw.isNotBlank() && !raw.startsWith('/') && !raw.startsWith('\\') && !Regex("^[A-Za-z]:").containsMatchIn(raw)) { "Path must be relative to the workspace." }
-        val path = rootPath.resolve(raw).normalize()
-        require(path.startsWith(rootPath) && path != rootPath) { "Path escapes the workspace." }
-        val canonical = if (exists) path.toFile().canonicalFile.toPath() else {
-            val parent = (path.parent?.toFile() ?: root).canonicalFile.toPath()
-            parent.resolve(path.fileName).normalize()
-        }
-        require(canonical.startsWith(rootPath) && canonical != rootPath) { "Path escapes the workspace." }
-        if (exists) require(Files.exists(canonical)) { "Path does not exist." }
-        return canonical
+        require(raw.isNotBlank()) { "Path cannot be empty." }
+        val base = if (Path.of(raw).isAbsolute) Path.of(raw) else rootPath.resolve(raw)
+        val candidate = base.normalize()
+        if (exists) require(Files.exists(candidate)) { "Path does not exist." }
+        return candidate
+    }
+
+    /** Glob matches the workspace-relative path, or the absolute path for absolute patterns. */
+    private fun globMatches(matcher: Regex, path: Path): Boolean {
+        val absolute = path.toString().replace('\\', '/')
+        return matcher.matches(relative(path)) || matcher.matches(absolute)
     }
 
     private fun listFiles(base: File = root): Sequence<Path> {
@@ -119,10 +210,14 @@ private class DesktopWorkspaceFiles(private val root: File) {
         return Files.walk(path).use { it.filter { item -> item != path && Files.isRegularFile(item, LinkOption.NOFOLLOW_LINKS) }.limit(20_001).toList() }.asSequence()
     }
 
-    private fun relative(path: Path) = rootPath.relativize(path.toFile().canonicalFile.toPath()).toString().replace('\\', '/')
+    private fun relative(path: Path): String = try {
+        rootPath.relativize(path.toFile().canonicalFile.toPath()).toString().replace('\\', '/')
+    } catch (_: IllegalArgumentException) {
+        // 不同的 Windows 盘符无法 relativize，直接用绝对路径展示
+        path.toFile().canonicalFile.toPath().toString().replace('\\', '/')
+    }
 
     private fun globRegex(glob: String): String {
-        require(glob.isNotBlank() && !glob.startsWith('/') && !glob.contains('\\') && glob.split('/').none { it == ".." }) { "Glob must be a workspace-relative pattern." }
         val regex = StringBuilder("^")
         var i = 0
         while (i < glob.length) when {

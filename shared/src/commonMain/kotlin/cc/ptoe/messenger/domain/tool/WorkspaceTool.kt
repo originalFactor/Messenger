@@ -16,16 +16,18 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 
-/** Small, bounded file-navigation tools for the Agent workspace. */
+/** File-navigation and file-mutation tools for the Agent. Paths are relative
+ * to the agent workspace unless absolute; the sandbox confines what the
+ * operations can actually touch — arguments are never path-checked. */
 class WorkspaceTool(private val operationName: String) : ChatTool {
     override val name: String = operationName
 
     override val description: String = when (name) {
-        GLOB -> "Find workspace files matching a glob such as **/*.kt."
-        GREP -> "Search workspace text files for a literal substring or regular expression."
-        READ -> "Read a line range from a workspace text file."
-        EDIT -> "Replace exact text in one workspace file; replacement must match exactly once unless replaceAll is true."
-        CREATE -> "Create a text file in the workspace. Existing files are not overwritten unless overwrite is true."
+        GLOB -> "Find files matching a glob such as **/*.kt, relative to the agent workspace."
+        GREP -> "Fast full-workspace text search with ripgrep: a regular expression (Rust syntax) or fixed string across files; path scopes the search to a file or directory and defaults to the whole workspace."
+        READ -> "Read a line range from a text file; paths are relative to the agent workspace unless absolute."
+        EDIT -> "Replace exact text in one file; replacement must match exactly once unless replaceAll is true. Paths are relative to the agent workspace unless absolute."
+        CREATE -> "Create a text file. Existing files are not overwritten unless overwrite is true. Paths are relative to the agent workspace unless absolute."
         else -> error("Unknown workspace tool: $operationName")
     }
 
@@ -57,6 +59,7 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
                 path = string("path") ?: ".",
                 fileGlob = string("fileGlob"),
                 caseSensitive = bool("caseSensitive", true) ?: return invalidArguments(),
+                fixedString = bool("fixedString", false) ?: return invalidArguments(),
                 maxResults = int("maxResults", DEFAULT_RESULTS)?.coerceIn(1, MAX_RESULTS) ?: return invalidArguments()
             )
             READ -> WorkspaceOperation.Read(
@@ -95,7 +98,7 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
 
         private val SCHEMAS = mapOf(
             GLOB to """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}""",
-            GREP to """{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"fileGlob":{"type":"string"},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}""",
+            GREP to """{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"fileGlob":{"type":"string"},"caseSensitive":{"type":"boolean"},"fixedString":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}},"required":["pattern"]}""",
             READ to """{"type":"object","properties":{"path":{"type":"string"},"startLine":{"type":"integer","minimum":1},"maxLines":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}""",
             EDIT to """{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["path","oldText","newText"]}""",
             CREATE to """{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["path","content"]}"""

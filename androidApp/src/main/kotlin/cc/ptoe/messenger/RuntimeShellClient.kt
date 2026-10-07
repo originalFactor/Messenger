@@ -166,9 +166,10 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         path: String,
         fileGlob: String?,
         caseSensitive: Boolean,
+        fixedString: Boolean,
         maxResults: Int
     ): ToolExecutionResult = workspaceCall {
-        it.workspaceGrep(pattern, path, fileGlob, caseSensitive, maxResults)
+        it.workspaceGrep(pattern, path, fileGlob, caseSensitive, fixedString, maxResults)
     }
 
     override suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult =

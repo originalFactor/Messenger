@@ -41,7 +41,7 @@ internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperat
     return when (operation) {
         is WorkspaceOperation.Glob -> bridge.workspaceGlob(operation.pattern, operation.maxResults)
         is WorkspaceOperation.Grep -> bridge.workspaceGrep(
-            operation.pattern, operation.path, operation.fileGlob, operation.caseSensitive, operation.maxResults
+            operation.pattern, operation.path, operation.fileGlob, operation.caseSensitive, operation.fixedString, operation.maxResults
         )
         is WorkspaceOperation.Read -> bridge.workspaceRead(operation.path, operation.startLine, operation.maxLines)
         is WorkspaceOperation.Edit -> bridge.workspaceEdit(operation.path, operation.oldText, operation.newText, operation.replaceAll)

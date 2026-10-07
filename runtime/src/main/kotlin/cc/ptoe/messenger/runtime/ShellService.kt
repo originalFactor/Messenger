@@ -93,10 +93,11 @@ class ShellService : Service() {
             path: String?,
             fileGlob: String?,
             caseSensitive: Boolean,
+            fixedString: Boolean,
             maxResults: Int
         ): ToolResult? = ifCallerAllowed {
             runBlocking {
-                TermuxRuntime.workspaceGrep(applicationContext, pattern.orEmpty(), path.orEmpty(), fileGlob, caseSensitive, maxResults)
+                TermuxRuntime.workspaceGrep(applicationContext, pattern.orEmpty(), path.orEmpty(), fileGlob, caseSensitive, fixedString, maxResults)
             }
         }
 
