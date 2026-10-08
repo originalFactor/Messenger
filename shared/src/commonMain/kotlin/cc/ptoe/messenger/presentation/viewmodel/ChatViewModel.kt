@@ -74,7 +74,9 @@ import cc.ptoe.messenger.generated.resources.error_unknown
 import cc.ptoe.messenger.generated.resources.tool_interrupted_result
 import cc.ptoe.messenger.generated.resources.tool_unknown_tool
 import org.jetbrains.compose.resources.getString
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
+import cc.ptoe.messenger.data.util.runBlockingCall
 import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
 import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
@@ -383,7 +385,7 @@ class ChatViewModel(
                         conversationId = "",
                         role = MessageRole.USER,
                         content = transcript,
-                        timestamp = System.currentTimeMillis(),
+                        timestamp = currentTimeMillis(),
                         status = MessageStatus.SENT
                     )
                 ),
@@ -403,7 +405,7 @@ class ChatViewModel(
                     estimateTokens(summary) +
                     all.filter { it.timestamp >= firstKept.timestamp }
                         .sumOf { estimateTokens(it) },
-                contextTokensAt = System.currentTimeMillis()
+                contextTokensAt = currentTimeMillis()
             )
             conversationRepository.update(updated)
             updated
@@ -467,7 +469,7 @@ class ChatViewModel(
             ?.takeIf { it > 0L }
             ?: (sentContextEstimate + estimateTokens(responseText))
         conversationRepository.update(
-            conv.copy(contextTokens = tokens, contextTokensAt = System.currentTimeMillis())
+            conv.copy(contextTokens = tokens, contextTokensAt = currentTimeMillis())
         )
     }
 
@@ -558,7 +560,7 @@ class ChatViewModel(
             val images = _pendingImages.value
             val parts = buildMultimodalParts(text, images)
             val userMessageId = randomUuid()
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
 
             val userMessage = Message(
                 id = userMessageId,
@@ -658,7 +660,7 @@ class ChatViewModel(
                                 // → "tool host cancelled"). Report it to the
                                 // model as an error result for self-correction.
                                 try {
-                                    val r = kotlinx.coroutines.runBlocking { tool.execute(argumentsJson) }
+                                    val r = runBlockingCall { tool.execute(argumentsJson) }
                                     r.output to r.isError
                                 } catch (e: CancellationException) {
                                     throw e
@@ -698,7 +700,7 @@ class ChatViewModel(
             conversationId = conversationId,
             role = MessageRole.ASSISTANT,
             content = "",
-            timestamp = System.currentTimeMillis(),
+            timestamp = currentTimeMillis(),
             status = MessageStatus.SENDING
         )
         messageRepository.insert(aiMessage)
@@ -747,7 +749,7 @@ class ChatViewModel(
             // （含异常路径）也能把占位行时间戳推进到工具行之后。
             var timestampCursor = targetMessage.timestamp
             suspend fun nextTimestamp(): Long {
-                timestampCursor = maxOf(timestampCursor + 1L, System.currentTimeMillis())
+                timestampCursor = maxOf(timestampCursor + 1L, currentTimeMillis())
                 return timestampCursor
             }
             // 占位行（最终文本落点）的时间戳停留在最初插入时刻，早于工具轮行；
@@ -960,7 +962,7 @@ class ChatViewModel(
     ) {
         var cursor = startAfterTimestamp
         suspend fun nextTimestamp(): Long {
-            cursor = maxOf(cursor + 1L, System.currentTimeMillis())
+            cursor = maxOf(cursor + 1L, currentTimeMillis())
             return cursor
         }
         for (call in calls) {
@@ -1088,7 +1090,7 @@ class ChatViewModel(
                         // 占位行时间戳推进到当前时刻：停止时可能已有工具轮落行
                         // （时间戳晚于占位行），不推进会把保留的部分文本排到卡片前。
                         messageRepository.update(
-                            msg.copy(status = MessageStatus.SENT, timestamp = System.currentTimeMillis())
+                            msg.copy(status = MessageStatus.SENT, timestamp = currentTimeMillis())
                         )
                     }
                 }
@@ -1228,7 +1230,7 @@ class ChatViewModel(
             updateConversationLastMessage(
                 convId,
                 lastMessage?.content ?: "",
-                lastMessage?.timestamp ?: System.currentTimeMillis()
+                lastMessage?.timestamp ?: currentTimeMillis()
             )
         }
     }
@@ -1294,7 +1296,7 @@ class ChatViewModel(
                     timestamp = timestamp ?: aiMessage.timestamp
                 )
             )
-            updateConversationLastMessage(conversationId, content, System.currentTimeMillis())
+            updateConversationLastMessage(conversationId, content, currentTimeMillis())
         } else if (errorMessage != null) {
             messageRepository.update(
                 aiMessage.copy(

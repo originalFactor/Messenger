@@ -4,8 +4,23 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+
+# Native: the bundled SQLite amalgamation behind rusqlite's own FFI.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "cache"] }
+
+# wasm32-unknown-unknown: SQLite itself is compiled to wasm by
+# `sqlite-wasm-rs`, which rusqlite reaches through `ffi-sqlite-wasm-rs`
+# (a default feature, but spelled out here because we set default-features
+# off to keep the bundled-C build out of the wasm target graph).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rusqlite = { version = "0.40", default-features = false, features = ["cache", "ffi-sqlite-wasm-rs", "serialize"] }
+sqlite-wasm-rs = { version = "0.5", default-features = false }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Blob", "File", "FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetDirectoryOptions", "FileSystemGetFileOptions", "FileSystemWritableFileStream", "Navigator", "StorageManager", "Window", "WritableStream"] }
+wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 serde_json = "1"

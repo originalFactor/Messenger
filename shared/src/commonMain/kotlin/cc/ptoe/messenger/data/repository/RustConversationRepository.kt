@@ -20,6 +20,7 @@ import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.StoredConversationDto
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.util.ToolsConfigCodec
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.domain.model.Conversation
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import kotlinx.coroutines.flow.Flow
@@ -36,7 +37,7 @@ class RustConversationRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Conversation" || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -65,27 +66,27 @@ class RustConversationRepository(
     override suspend fun insert(conversation: Conversation) {
         val dto = conversation.toDto()
         coreBridge.upsertConversationJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(conversation.id, false)
     }
 
     override suspend fun update(conversation: Conversation) {
         val dto = conversation.toDto()
         coreBridge.upsertConversationJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(conversation.id, false)
     }
 
     override suspend fun updateLastMessage(id: String, lastMessage: String, updatedAt: Long) {
         coreBridge.updateConversationLastMessage(id, lastMessage, updatedAt)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(id, false)
     }
 
     override suspend fun delete(id: String) {
         coreBridge.deleteMessagesByConversation(id)
         coreBridge.deleteConversation(id)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(id, true)
     }
 

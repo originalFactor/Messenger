@@ -37,3 +37,7 @@ keyring/
 *.so.debug
 
 /specs
+
+# Kotlin/JS+Wasm toolchain state (npm/yarn lockfiles) and the local web build output.
+kotlin-js-store/
+.wasm-src/

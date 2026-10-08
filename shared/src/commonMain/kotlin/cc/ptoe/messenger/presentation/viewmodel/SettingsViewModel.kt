@@ -22,24 +22,25 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.cloud.CloudSyncResult
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
 import cc.ptoe.messenger.data.cloud.CloudCardPreview
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
 import cc.ptoe.messenger.data.cloud.CloudRedeemResponse
 import cc.ptoe.messenger.presentation.theme.ThemeMode
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import cc.ptoe.messenger.di.AppContainerHolder
 
+import cc.ptoe.messenger.data.util.ioDispatcher
+
 class SettingsViewModel(
     private val themePreferences: ThemePreferences,
     private val appPreferences: AppPreferences,
-    private val cloudSyncRepository: CloudSyncRepository
+    private val cloudSyncRepository: CloudFacade
 ) : ViewModel() {
 
     val themeMode = themePreferences.themeMode
@@ -69,7 +70,7 @@ class SettingsViewModel(
     fun login(email: String, password: String, serverUrl: String, onResult: (Result<CloudLoginOutcome>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.login(email, password, serverUrl)
                         .also { cloudSyncRepository.setServerUrl(serverUrl) }
                 }
@@ -80,7 +81,7 @@ class SettingsViewModel(
     fun register(email: String, password: String, serverUrl: String, onResult: (Result<CloudLoginOutcome>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.register(email, password, serverUrl)
                         .also { cloudSyncRepository.setServerUrl(serverUrl) }
                 }
@@ -99,7 +100,7 @@ class SettingsViewModel(
     ) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.completeLogin(useLocalData)
                 }
             })
@@ -109,7 +110,7 @@ class SettingsViewModel(
     fun changePassword(currentPassword: String, newPassword: String, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.changePassword(currentPassword, newPassword)
                 }
             })
@@ -119,7 +120,7 @@ class SettingsViewModel(
     fun deleteAccount(currentPassword: String, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.deleteAccount(currentPassword)
                 }
             })
@@ -129,7 +130,7 @@ class SettingsViewModel(
     fun previewRedeemCard(code: String, onResult: (Result<CloudCardPreview>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.previewRedeemCard(code)
                 }
             })
@@ -139,7 +140,7 @@ class SettingsViewModel(
     fun redeemCard(code: String, onResult: (Result<CloudRedeemResponse>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     cloudSyncRepository.redeemCard(code)
                 }
             })
@@ -189,7 +190,7 @@ class SettingsViewModel(
         fun provideFactory(
             themePreferences: ThemePreferences,
             appPreferences: AppPreferences,
-            cloudSyncRepository: CloudSyncRepository
+            cloudSyncRepository: CloudFacade
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {

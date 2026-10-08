@@ -89,7 +89,6 @@ import cc.ptoe.messenger.domain.model.MessageImage
 import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.platform.sendOnEnterShortcut
 import coil3.compose.AsyncImage
-import okio.Path.Companion.toPath
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_send
 import cc.ptoe.messenger.generated.resources.action_stop
@@ -437,7 +436,7 @@ private fun PendingImageTile(
         modifier = modifier.size(72.dp)
     ) {
         AsyncImage(
-            model = image.localPath.toPath(),
+            model = image.localPath,
             contentDescription = null,
             modifier = Modifier
                 .size(72.dp)

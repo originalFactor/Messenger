@@ -30,7 +30,6 @@ import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import javax.imageio.ImageIO
 import cc.ptoe.messenger.data.local.DesktopChatImageStore
-import cc.ptoe.messenger.data.local.desktopDatabaseBuilder
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.di.AppDirs
@@ -50,7 +49,6 @@ fun main() {
     )
     val container = AppContainer(
         appDirs = appDirs,
-        databaseBuilder = desktopDatabaseBuilder(appDirs),
         chatImageStore = DesktopChatImageStore(appDirs.filesDir)
     )
     AppContainerHolder.initialize(container)
@@ -60,7 +58,7 @@ fun main() {
         ImageLoader.Builder(context)
             .components {
                 add(KtorNetworkFetcherFactory(
-                    httpClient = { container.cloudSyncRepository.avatarHttpClient }
+                    httpClient = { container.cloud.avatarHttpClient }
                 ))
             }
             .build()

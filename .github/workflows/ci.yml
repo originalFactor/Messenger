@@ -22,8 +22,10 @@ on:
       - shared/**
       - androidApp/**
       - desktopApp/**
+      - webApp/**
       - wear/**
       - runtime/**
+      - core/**
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties
@@ -39,8 +41,10 @@ on:
       - shared/**
       - androidApp/**
       - desktopApp/**
+      - webApp/**
       - wear/**
       - runtime/**
+      - core/**
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties

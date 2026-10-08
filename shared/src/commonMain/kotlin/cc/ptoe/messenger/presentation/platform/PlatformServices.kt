@@ -16,9 +16,6 @@
 
 package cc.ptoe.messenger.presentation.platform
 
-import cc.ptoe.messenger.data.util.FileKit
-import cc.ptoe.messenger.data.util.randomUuid
-import cc.ptoe.messenger.di.AppContainerHolder
 
 /** Shows a short platform toast/notification (Android Toast, Desktop stdout). */
 expect fun showPlatformToast(message: String)
@@ -47,20 +44,10 @@ expect val sendOnEnterShortcut: Boolean
 /**
  * Copies a picked/cropped image file into app-private avatar storage
  * (`filesDir/<subdir>`) and returns the new absolute path. Shared by
- * the settings (user avatar) and agent-edit (agent avatar) flows.
+ * the settings (user avatar) and agent-edit (agent avatar) flows. On web
+ * there is no filesystem, so the source (a `data:` URI) is returned as-is.
  */
-fun copyAvatarToInternal(sourcePath: String, subdir: String): String? {
-    return try {
-        val dir = AppContainerHolder.instance.appDirs.filesDir.resolve(subdir)
-        FileKit.mkdirs(dir)
-        val extension = FileKit.extensionOf(sourcePath).ifBlank { "jpg" }
-        val dest = dir.resolve("${randomUuid()}.$extension")
-        FileKit.copy(sourcePath, dest.toString())
-        dest.toString()
-    } catch (e: Exception) {
-        null
-    }
-}
+expect fun copyAvatarToInternal(sourcePath: String, subdir: String): String?
 
 /**
  * Whether this platform ships the Messenger Runtime terminal app (the
@@ -77,7 +64,4 @@ expect val runtimeTerminalSupported: Boolean
 expect fun openRuntimeTerminal(): Boolean
 
 /** Deletes a previously stored avatar file, if it exists. */
-fun deleteAvatarFile(path: String?) {
-    if (path.isNullOrBlank()) return
-    FileKit.delete(path)
-}
+expect fun deleteAvatarFile(path: String?)

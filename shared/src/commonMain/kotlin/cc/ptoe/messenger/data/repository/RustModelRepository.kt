@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
+
 class RustModelRepository(
     private val coreBridge: CoreBridge,
     private val onChanged: (String, Boolean) -> Unit = { _, _ -> }
@@ -36,7 +38,7 @@ class RustModelRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Model" || kind == "Provider" || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -66,7 +68,7 @@ class RustModelRepository(
     override suspend fun insert(model: ChatModel) {
         val dto = model.toDto()
         coreBridge.upsertModelJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(model.providerId, false)
     }
 
@@ -82,7 +84,7 @@ class RustModelRepository(
 
     override suspend fun delete(id: String) {
         coreBridge.deleteModel(id)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
     }
 
     override suspend fun deleteBatch(ids: List<String>) {
@@ -91,7 +93,7 @@ class RustModelRepository(
 
     override suspend fun setEnabled(id: String, isEnabled: Boolean) {
         coreBridge.setModelEnabled(id, isEnabled)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
     }
 
     override suspend fun setEnabledBatch(ids: List<String>, isEnabled: Boolean) {

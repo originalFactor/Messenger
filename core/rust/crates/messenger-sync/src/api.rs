@@ -366,6 +366,14 @@ pub struct CredentialsPair {
     pub new_password: String,
 }
 
+impl CloudError {
+    /// `Display`-any error as a network error (used where the source is a
+    /// rusqlite/`String` failure rather than a transport one).
+    pub fn network(error: impl std::fmt::Display) -> Self {
+        CloudError::Network(error.to_string())
+    }
+}
+
 fn sync_params(since: i64, collection: &str, cursor: Option<&str>, limit: u32) -> Vec<(String, String)> {
     let mut params = vec![
         ("since".to_string(), since.to_string()),

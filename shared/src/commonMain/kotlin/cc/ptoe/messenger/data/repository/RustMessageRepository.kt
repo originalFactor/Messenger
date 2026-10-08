@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
+
 class RustMessageRepository(
     private val coreBridge: CoreBridge,
     private val chatImageStore: ChatImageStore? = null,
@@ -40,7 +42,7 @@ class RustMessageRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Message" || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -64,7 +66,7 @@ class RustMessageRepository(
     override suspend fun insert(message: Message) {
         val dto = message.toDto()
         coreBridge.upsertMessageJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(message.conversationId)
     }
 
@@ -73,7 +75,7 @@ class RustMessageRepository(
             val dto = m.toDto()
             coreBridge.upsertMessageJson(NetworkClient.json.encodeToString(dto))
         }
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         messages.firstOrNull()?.let { onChanged(it.conversationId) }
     }
 
@@ -84,13 +86,13 @@ class RustMessageRepository(
     override suspend fun delete(id: String) {
         val convId = getConversationIdById(id)
         coreBridge.deleteMessage(id)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         if (convId != null) onChanged(convId)
     }
 
     override suspend fun deleteByConversationId(conversationId: String) {
         coreBridge.deleteMessagesByConversation(conversationId)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(conversationId)
     }
 

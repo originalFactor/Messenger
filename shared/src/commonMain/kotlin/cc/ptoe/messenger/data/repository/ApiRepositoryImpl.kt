@@ -26,6 +26,7 @@ import cc.ptoe.messenger.data.remote.dto.ToolSpecDto
 import cc.ptoe.messenger.data.remote.dto.ToolSpecFunctionDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.ChatStreamParser
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.ContentPart
@@ -81,7 +82,7 @@ class ApiRepositoryImpl(
                     contextWindow = modelDto.contextWindow ?: 0L,
                     inputRate = modelDto.inputRate,
                     outputRate = modelDto.outputRate,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = currentTimeMillis()
                 ).applyModelsDev(metadataByModelId[modelDto.id])
             }
         } catch (e: ResponseException) {
@@ -176,7 +177,7 @@ class ApiRepositoryImpl(
                 conversationId = "",
                 role = MessageRole.ASSISTANT,
                 content = finalContent,
-                timestamp = System.currentTimeMillis(),
+                timestamp = currentTimeMillis(),
                 status = cc.ptoe.messenger.domain.model.MessageStatus.SENT
             )
         } catch (e: ResponseException) {

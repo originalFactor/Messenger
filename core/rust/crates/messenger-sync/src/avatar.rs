@@ -5,9 +5,26 @@
 //! - HTTP 304 re-use of local files without re-downloading
 //! - Uploading and deleting avatars for users and agents via multipart forms
 
-use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use sha2::{Digest, Sha256};
+
+/// Encode bytes as a `data:` URI. On wasm this is what `cache_remote_avatar`
+/// returns: the browser has no filesystem for the Rust core to write into,
+/// and Coil on web renders `data:` URIs natively.
+pub fn data_uri_for(bytes: &[u8], content_type: Option<&str>, url: &str) -> String {
+    use base64::Engine;
+    let mime = content_type
+        .map(|c| c.split(';').next().unwrap_or(c).trim().to_string())
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| mime_for_path(url).to_string());
+    format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
 
 use crate::api::{CloudApiClient, CloudError, CloudResult};
 use crate::models::CloudAvatarResponse;
@@ -17,6 +34,8 @@ pub const ETAG_SIDECAR_SUFFIX: &str = ".etag";
 
 pub struct AvatarManager<'a> {
     client: &'a CloudApiClient,
+    /// Unused on wasm (avatars come back as `data:` URIs there).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     avatars_dir: PathBuf,
 }
 
@@ -28,8 +47,41 @@ impl<'a> AvatarManager<'a> {
         }
     }
 
+    /// wasm32: download the avatar and return it as a `data:` URI. There is
+    /// no filesystem to cache into, and the data URI is a model Coil renders
+    /// directly, so no ETag sidecar bookkeeping applies.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn cache_remote_avatar(
+        &self,
+        _scope: &str,
+        _account_id: &str,
+        _id: &str,
+        url: &str,
+        _version: Option<&str>,
+        base_url: &str,
+    ) -> CloudResult<String> {
+        let request_url = resolve_avatar_url(url, base_url);
+        let (bytes, _etag, content_type) = self
+            .client
+            .download_avatar_conditional(&request_url, None)
+            .await?
+            .ok_or_else(|| CloudError::Network("Avatar download returned 304 with no local file".into()))?;
+        if bytes.len() > MAX_AVATAR_BYTES {
+            return Err(CloudError::Network("Avatar must not exceed 5 MiB".into()));
+        }
+        if bytes.is_empty() {
+            return Err(CloudError::Network("Avatar response was empty".into()));
+        }
+        Ok(data_uri_for(&bytes, content_type.as_deref(), &request_url))
+    }
+
+    /// wasm32: nothing is cached on disk, so there is nothing to delete.
+    #[cfg(target_arch = "wasm32")]
+    pub fn delete_cached_avatars(&self, _scope: &str, _account_id: &str, _id: &str) {}
+
     /// Cache a remote avatar locally using conditional GET with ETag.
     /// Returns the local absolute file path on success.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn cache_remote_avatar(
         &self,
         scope: &str,
@@ -74,6 +126,7 @@ impl<'a> AvatarManager<'a> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn save_avatar_and_cleanup(
         &self,
         scope: &str,
@@ -103,6 +156,7 @@ impl<'a> AvatarManager<'a> {
         Ok(target.to_string_lossy().to_string())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn find_existing_avatar(&self, prefix: &str) -> Option<PathBuf> {
         let entries = fs::read_dir(&self.avatars_dir).ok()?;
         for entry in entries.flatten() {
@@ -120,6 +174,7 @@ impl<'a> AvatarManager<'a> {
         None
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn delete_cached_avatars(&self, scope: &str, account_id: &str, id: &str) {
         let identity = digest(&format!("{scope}|{account_id}|{id}"));
         let prefix = format!("{identity}-");
@@ -135,6 +190,7 @@ impl<'a> AvatarManager<'a> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn delete_cached_avatars_except(&self, scope: &str, account_id: &str, id: &str, keep: &Path) {
         let identity = digest(&format!("{scope}|{account_id}|{id}"));
         let prefix = format!("{identity}-");
@@ -154,6 +210,7 @@ impl<'a> AvatarManager<'a> {
 
     // -- uploads --
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn upload_user_avatar(&self, endpoint: &str, local_path: &str) -> CloudResult<CloudAvatarResponse> {
         let bytes = fs::read(local_path).map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
         if bytes.len() > MAX_AVATAR_BYTES {
@@ -167,10 +224,12 @@ impl<'a> AvatarManager<'a> {
         self.client.upload_avatar(endpoint, filename, bytes, mime).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn delete_user_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
         self.client.delete_avatar(endpoint).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn upload_agent_avatar(&self, endpoint: &str, local_path: &str) -> CloudResult<CloudAvatarResponse> {
         let bytes = fs::read(local_path).map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
         if bytes.len() > MAX_AVATAR_BYTES {
@@ -184,11 +243,29 @@ impl<'a> AvatarManager<'a> {
         self.client.upload_avatar(endpoint, filename, bytes, mime).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn delete_agent_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
         self.client.delete_avatar(endpoint).await
     }
+
+    /// wasm32 upload: `bytes` come from Kotlin (the picked image), because the
+    /// Rust side has no filesystem to read a path from.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn upload_avatar_bytes(
+        &self,
+        endpoint: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+        mime: &str,
+    ) -> CloudResult<CloudAvatarResponse> {
+        if bytes.len() > MAX_AVATAR_BYTES {
+            return Err(CloudError::Network("Avatar must not exceed 5 MiB".into()));
+        }
+        self.client.upload_avatar(endpoint, filename, bytes, mime).await
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn etag_sidecar_for(avatar_path: &Path) -> PathBuf {
     let mut sidecar_name = avatar_path
         .file_name()
@@ -198,6 +275,7 @@ pub fn etag_sidecar_for(avatar_path: &Path) -> PathBuf {
     avatar_path.with_file_name(sidecar_name)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_etag_sidecar(avatar_path: &Path) -> Option<String> {
     let sidecar = etag_sidecar_for(avatar_path);
     if sidecar.exists() {
@@ -207,6 +285,7 @@ pub fn read_etag_sidecar(avatar_path: &Path) -> Option<String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_etag_sidecar(avatar_path: &Path, etag: Option<&str>) {
     let sidecar = etag_sidecar_for(avatar_path);
     match etag {
@@ -252,6 +331,7 @@ pub fn mime_for_path(path: &str) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn digest(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());

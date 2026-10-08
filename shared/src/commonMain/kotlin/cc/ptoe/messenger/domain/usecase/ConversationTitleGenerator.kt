@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.domain.usecase
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.logW
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
@@ -129,7 +130,7 @@ class ConversationTitleGenerator(
                             conversationId = "",
                             role = MessageRole.USER,
                             content = transcript,
-                            timestamp = System.currentTimeMillis(),
+                            timestamp = currentTimeMillis(),
                             status = MessageStatus.SENT
                         )
                     ),

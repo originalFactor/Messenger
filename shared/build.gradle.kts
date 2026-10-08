@@ -46,7 +46,25 @@ kotlin {
 
     jvm("desktop")
 
+    // Compose Multiplatform web target. The browser bundle's entry point lives in
+    // :webApp (which calls `binaries.executable()`); this library target only needs
+    // to compile, so no executable binary is declared here.
+    wasmJs {
+        browser()
+        compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
+    }
+
     sourceSets {
+        // Shared by Android + Desktop but NOT wasmJs: Room, DataStore-with-okio-paths,
+        // okio's FileSystem.SYSTEM and the Room-backed repositories all live here.
+        val jvmSharedMain by creating { dependsOn(getByName("commonMain")) }
+
+        // Shared Android + Desktop tests. They are NOT in commonTest on
+        // purpose: they use org.junit + runBlocking, which do not exist on
+        // wasmJs, and a commonTest directory would force a wasmJs test
+        // compilation of them.
+        val jvmSharedTest by creating { dependsOn(getByName("commonTest")) }
+
         getByName("commonMain") {
             dependencies {
                 implementation(compose.runtime)
@@ -59,10 +77,8 @@ kotlin {
 
                 implementation(libs.kotlinx.coroutines.core)
 
-                implementation(libs.androidx.room.runtime)
-                implementation(libs.androidx.sqlite.bundled)
-
-                implementation(libs.androidx.datastore.preferences)
+                implementation(libs.androidx.datastore.preferences.core)
+                implementation(libs.androidx.datastore.core.okio)
 
                 implementation(libs.jetbrains.navigation.compose)
                 implementation(libs.jetbrains.lifecycle.viewmodel.compose)
@@ -83,6 +99,7 @@ kotlin {
         }
 
         getByName("androidMain") {
+            dependsOn(jvmSharedMain)
             dependencies {
                 implementation(project(":core-bindings"))
                 implementation(project(":renderer-android"))
@@ -103,11 +120,50 @@ kotlin {
             }
         }
 
+        getByName("desktopTest") { dependsOn(jvmSharedTest) }
+
         getByName("desktopMain") {
+            dependsOn(jvmSharedMain)
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
+            }
+        }
+
+        // Room + bundled SQLite: JVM/native only (no wasmJs artifact exists).
+        getByName("jvmSharedMain") {
+            dependencies {
+                implementation(libs.androidx.room.runtime)
+                implementation(libs.androidx.sqlite.bundled)
+            }
+        }
+
+        getByName("wasmJsMain") {
+            dependencies {
+                implementation(compose.runtime)
+                implementation(compose.foundation)
+                implementation(compose.ui)
+                implementation(compose.materialIconsExtended)
+                implementation(compose.components.resources)
+                implementation(libs.jetbrains.compose.material3)
+
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.js)
+                implementation(libs.ktor.client.content.negotiation)
+                implementation(libs.ktor.serialization.kotlinx.json)
+                implementation(libs.ktor.client.logging)
+                implementation(libs.kotlinx.serialization.json)
+                implementation(libs.kotlinx.datetime)
+                implementation(libs.okio)
+                implementation(libs.kotlinx.browser)
+
+                implementation(libs.coil3.compose)
+                implementation(libs.coil3.network.ktor3)
+
+                implementation(libs.jetbrains.navigation.compose)
+                implementation(libs.jetbrains.lifecycle.viewmodel.compose)
+                implementation(libs.jetbrains.lifecycle.runtime.compose)
             }
         }
 
@@ -119,10 +175,8 @@ kotlin {
             }
         }
 
-        getByName("commonTest") {
-            dependencies {
-                implementation(kotlin("test"))
-            }
+        jvmSharedTest.dependencies {
+            implementation(kotlin("test"))
         }
     }
 }

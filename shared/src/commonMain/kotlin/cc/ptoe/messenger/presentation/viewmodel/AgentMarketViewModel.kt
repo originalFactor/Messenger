@@ -21,7 +21,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import cc.ptoe.messenger.data.cloud.CloudMarketAgent
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,7 +44,7 @@ data class AgentMarketUiState(
 )
 
 class AgentMarketViewModel(
-    private val cloudSyncRepository: CloudSyncRepository
+    private val cloudSyncRepository: CloudFacade
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AgentMarketUiState())
     val uiState: StateFlow<AgentMarketUiState> = _uiState.asStateFlow()
@@ -107,7 +107,7 @@ class AgentMarketViewModel(
     }
 
     companion object {
-        fun provideFactory(cloudSyncRepository: CloudSyncRepository): ViewModelProvider.Factory =
+        fun provideFactory(cloudSyncRepository: CloudFacade): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T =
@@ -124,7 +124,7 @@ data class AgentMarketDetailUiState(
 )
 
 class AgentMarketDetailViewModel(
-    private val cloudSyncRepository: CloudSyncRepository,
+    private val cloudSyncRepository: CloudFacade,
     private val marketAgentId: String
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AgentMarketDetailUiState())
@@ -156,7 +156,7 @@ class AgentMarketDetailViewModel(
 
     companion object {
         fun provideFactory(
-            cloudSyncRepository: CloudSyncRepository,
+            cloudSyncRepository: CloudFacade,
             marketAgentId: String
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

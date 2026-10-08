@@ -31,11 +31,29 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // PREFER_SETTINGS rather than FAIL_ON_PROJECT_REPOS: the Kotlin/Wasm
+    // toolchain adds its own Node.js distribution repository to the project,
+    // and a hard failure there blocks every wasmJs task. Settings repositories
+    // still take precedence, so dependency resolution is unchanged.
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
+        // The Kotlin/Wasm toolchain resolves its pinned Node.js distribution
+        // as org.nodejs:node:<version> from this ivy repo, and its Binaryen
+        // (wasm-opt) release as com.github.webassembly:binaryen. Both are
+        // plain release artifacts rather than Maven modules.
+        ivy("https://nodejs.org/dist") {
+            patternLayout { artifact("v[revision]/[artifact](-v[revision]-[classifier]).[ext]") }
+            metadataSources { artifact() }
+            content { includeModule("org.nodejs", "node") }
+        }
+        ivy("https://github.com/WebAssembly/binaryen/releases/download") {
+            patternLayout { artifact("version_[revision]/[artifact]-version_[revision]-[classifier].[ext]") }
+            metadataSources { artifact() }
+            content { includeModule("com.github.webassembly", "binaryen") }
+        }
     }
 }
 
@@ -43,6 +61,7 @@ rootProject.name = "Messenger"
 include(":shared")
 include(":androidApp")
 include(":desktopApp")
+include(":webApp")
 include(":wear")
 include(":runtime")
 include(":core-bindings")

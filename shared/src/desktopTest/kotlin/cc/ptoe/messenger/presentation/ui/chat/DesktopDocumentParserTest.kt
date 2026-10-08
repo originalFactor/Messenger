@@ -21,10 +21,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class DesktopDocumentParserTest {
+class ChatDocumentParserTest {
 
     @Test
-    fun testParseDesktopBlocks() {
+    fun testParseChatBlocks() {
         val json = """
             [
               {
@@ -76,32 +76,32 @@ class DesktopDocumentParserTest {
             ]
         """.trimIndent()
 
-        val blocks = DesktopDocumentParser.parseBlocksJson(json)
+        val blocks = ChatDocumentParser.parseBlocksJson(json)
         assertEquals(6, blocks.size)
 
-        val h = blocks[0] as DesktopBlock.Heading
+        val h = blocks[0] as ChatBlock.Heading
         assertEquals(101L, h.id)
         assertEquals(2, h.level)
         assertEquals("Desktop Architecture", h.text)
 
-        val p = blocks[1] as DesktopBlock.Paragraph
+        val p = blocks[1] as ChatBlock.Paragraph
         assertEquals(102L, p.id)
         assertEquals("Testing immutable block key(block.id)", p.text)
         assertEquals(3, p.inlines.size)
 
-        val c = blocks[2] as DesktopBlock.Code
+        val c = blocks[2] as ChatBlock.Code
         assertEquals(103L, c.id)
         assertEquals("rust", c.language)
 
-        val m = blocks[3] as DesktopBlock.Math
+        val m = blocks[3] as ChatBlock.Math
         assertEquals(104L, m.id)
         assertEquals("E = mc^2", m.formula)
 
-        val t = blocks[4] as DesktopBlock.Think
+        val t = blocks[4] as ChatBlock.Think
         assertEquals(105L, t.id)
         assertEquals(false, t.isFinalized)
 
-        val tc = blocks[5] as DesktopBlock.ToolCall
+        val tc = blocks[5] as ChatBlock.ToolCall
         assertEquals(106L, tc.id)
         assertEquals("workspace_read", tc.name)
         assertEquals(false, tc.isError)
@@ -124,8 +124,8 @@ class DesktopDocumentParserTest {
               }
             ]
         """.trimIndent()
-        val jsonBlocks = DesktopDocumentParser.parseBlocksJson(blocksJson)
-        val jsonList = jsonBlocks[0] as DesktopBlock.ListBlock
+        val jsonBlocks = ChatDocumentParser.parseBlocksJson(blocksJson)
+        val jsonList = jsonBlocks[0] as ChatBlock.ListBlock
         assertEquals(false, jsonList.items[0].task)
         assertEquals("Todo item", jsonList.items[0].text)
         assertEquals(true, jsonList.items[1].task)
@@ -139,8 +139,8 @@ class DesktopDocumentParserTest {
             1. [ ] Ordered todo
             - [x]no-space stays literal
         """.trimIndent()
-        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
-        val list = blocks[0] as DesktopBlock.ListBlock
+        val blocks = ChatDocumentParser.parseMarkdown(markdown)
+        val list = blocks[0] as ChatBlock.ListBlock
         assertEquals(5, list.items.size)
         assertEquals(false, list.items[0].task)
         assertEquals("Todo item", list.items[0].text)
@@ -166,14 +166,14 @@ class DesktopDocumentParserTest {
 
         val elapsedNanos = measureNanoTime {
             for (i in 1..iterations) {
-                val blocks = DesktopDocumentParser.parseBlocksJson(sampleJson)
+                val blocks = ChatDocumentParser.parseBlocksJson(sampleJson)
                 assertEquals(4, blocks.size)
             }
         }
 
         val elapsedMs = elapsedNanos / 1_000_000.0
         val avgMs = elapsedMs / iterations
-        println("DesktopDocumentParser Benchmark: $iterations iterations in $elapsedMs ms (avg $avgMs ms/run)")
+        println("ChatDocumentParser Benchmark: $iterations iterations in $elapsedMs ms (avg $avgMs ms/run)")
         assertTrue(avgMs < 0.2, "Desktop parsing took too long: $avgMs ms")
     }
 
@@ -188,31 +188,31 @@ class DesktopDocumentParserTest {
             This is a paragraph with **bold**, *italic*, `code`, and ${'$'}E = mc^2${'$'}.
         """.trimIndent()
 
-        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        val blocks = ChatDocumentParser.parseMarkdown(markdown)
         assertEquals(5, blocks.size)
 
-        val h1 = blocks[0] as DesktopBlock.Heading
+        val h1 = blocks[0] as ChatBlock.Heading
         assertEquals(1, h1.level)
         assertEquals("Heading 1", h1.text)
 
-        val h2 = blocks[1] as DesktopBlock.Heading
+        val h2 = blocks[1] as ChatBlock.Heading
         assertEquals(2, h2.level)
         assertEquals("Heading 2", h2.text)
 
-        val h3 = blocks[2] as DesktopBlock.Heading
+        val h3 = blocks[2] as ChatBlock.Heading
         assertEquals(3, h3.level)
         assertEquals("Heading 3", h3.text)
 
-        val h4 = blocks[3] as DesktopBlock.Heading
+        val h4 = blocks[3] as ChatBlock.Heading
         assertEquals(4, h4.level)
         assertEquals("Heading 4", h4.text)
 
-        val p = blocks[4] as DesktopBlock.Paragraph
+        val p = blocks[4] as ChatBlock.Paragraph
         assertEquals(9, p.inlines.size)
-        assertTrue(p.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
-        assertTrue(p.inlines.any { it is DesktopInline.Italic && it.text == "italic" })
-        assertTrue(p.inlines.any { it is DesktopInline.Code && it.code == "code" })
-        assertTrue(p.inlines.any { it is DesktopInline.Math && it.formula == "E = mc^2" })
+        assertTrue(p.inlines.any { it is ChatInline.Bold && it.text == "bold" })
+        assertTrue(p.inlines.any { it is ChatInline.Italic && it.text == "italic" })
+        assertTrue(p.inlines.any { it is ChatInline.Code && it.code == "code" })
+        assertTrue(p.inlines.any { it is ChatInline.Math && it.formula == "E = mc^2" })
     }
 
     @Test
@@ -225,10 +225,10 @@ class DesktopDocumentParserTest {
             ```
         """.trimIndent()
 
-        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        val blocks = ChatDocumentParser.parseMarkdown(markdown)
         assertEquals(1, blocks.size)
 
-        val c = blocks[0] as DesktopBlock.Code
+        val c = blocks[0] as ChatBlock.Code
         assertEquals("kotlin", c.language)
         assertEquals("fun main() {\n    println(\"Hello\")\n}", c.code)
         assertTrue(c.isFinalized)
@@ -243,9 +243,9 @@ class DesktopDocumentParserTest {
             Final answer.
         """.trimIndent()
 
-        val closedBlocks = DesktopDocumentParser.parseMarkdown(closedMarkdown)
+        val closedBlocks = ChatDocumentParser.parseMarkdown(closedMarkdown)
         assertEquals(2, closedBlocks.size)
-        val thinkClosed = closedBlocks[0] as DesktopBlock.Think
+        val thinkClosed = closedBlocks[0] as ChatBlock.Think
         assertEquals("Internal deliberation...", thinkClosed.content)
         assertTrue(thinkClosed.isFinalized)
 
@@ -253,9 +253,9 @@ class DesktopDocumentParserTest {
             <think>
             Still deliberating...
         """.trimIndent()
-        val streamingBlocks = DesktopDocumentParser.parseMarkdown(unclosedMarkdown)
+        val streamingBlocks = ChatDocumentParser.parseMarkdown(unclosedMarkdown)
         assertEquals(1, streamingBlocks.size)
-        val thinkStreaming = streamingBlocks[0] as DesktopBlock.Think
+        val thinkStreaming = streamingBlocks[0] as ChatBlock.Think
         assertEquals("Still deliberating...", thinkStreaming.content)
         assertEquals(false, thinkStreaming.isFinalized)
     }
@@ -282,30 +282,30 @@ class DesktopDocumentParserTest {
             ---
         """.trimIndent()
 
-        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        val blocks = ChatDocumentParser.parseMarkdown(markdown)
         assertEquals(5, blocks.size)
 
-        val math = blocks[0] as DesktopBlock.Math
+        val math = blocks[0] as ChatBlock.Math
         assertTrue(math.formula.contains("\\int_0^\\infty"))
         assertTrue(math.isFinalized)
 
-        val table = blocks[1] as DesktopBlock.Table
+        val table = blocks[1] as ChatBlock.Table
         assertEquals(listOf("Col A", "Col B"), table.head)
         assertEquals(2, table.rows.size)
         assertEquals(listOf("1", "2"), table.rows[0])
         assertEquals(listOf("3", "4"), table.rows[1])
 
-        val list = blocks[2] as DesktopBlock.ListBlock
+        val list = blocks[2] as ChatBlock.ListBlock
         assertEquals(3, list.items.size)
         assertEquals("First bullet", list.items[0].text)
         assertEquals("Second bullet", list.items[1].text)
         assertEquals(1, list.items[2].indent)
         assertEquals("Indented bullet", list.items[2].text)
 
-        val quote = blocks[3] as DesktopBlock.Quote
+        val quote = blocks[3] as ChatBlock.Quote
         assertEquals("Important quote\nsecond line", quote.text)
 
-        val divider = blocks[4] as DesktopBlock.Divider
+        val divider = blocks[4] as ChatBlock.Divider
         assertTrue(divider.isFinalized)
     }
 
@@ -327,15 +327,15 @@ class DesktopDocumentParserTest {
               }
             ]
         """.trimIndent()
-        val jsonQuote = DesktopDocumentParser.parseBlocksJson(blocksJson)[0] as DesktopBlock.Quote
+        val jsonQuote = ChatDocumentParser.parseBlocksJson(blocksJson)[0] as ChatBlock.Quote
         assertEquals("Quote with bold and code", jsonQuote.text)
-        assertTrue(jsonQuote.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
-        assertTrue(jsonQuote.inlines.any { it is DesktopInline.Code && it.code == "code" })
+        assertTrue(jsonQuote.inlines.any { it is ChatInline.Bold && it.text == "bold" })
+        assertTrue(jsonQuote.inlines.any { it is ChatInline.Code && it.code == "code" })
 
         // The built-in Kotlin parser strips the same markers
-        val mdQuote = DesktopDocumentParser.parseMarkdown("> Quote with **bold** and `code`.")[0] as DesktopBlock.Quote
+        val mdQuote = ChatDocumentParser.parseMarkdown("> Quote with **bold** and `code`.")[0] as ChatBlock.Quote
         assertEquals("Quote with bold and code.", mdQuote.text)
-        assertTrue(mdQuote.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
-        assertTrue(mdQuote.inlines.any { it is DesktopInline.Code && it.code == "code" })
+        assertTrue(mdQuote.inlines.any { it is ChatInline.Bold && it.text == "bold" })
+        assertTrue(mdQuote.inlines.any { it is ChatInline.Code && it.code == "code" })
     }
 }

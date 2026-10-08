@@ -22,7 +22,6 @@ import cc.ptoe.messenger.core.AndroidCoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.CoreHandle
 import cc.ptoe.messenger.data.local.AndroidChatImageStore
-import cc.ptoe.messenger.data.local.androidDatabaseBuilder
 import cc.ptoe.messenger.data.wear.MobileHttpServer
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -60,7 +59,6 @@ class MessengerApplication : Application() {
                 filesDir = filesDir.absolutePath.toPath(),
                 cacheDir = cacheDir.absolutePath.toPath()
             ),
-            databaseBuilder = androidDatabaseBuilder(this),
             chatImageStore = AndroidChatImageStore(this)
         )
         AppContainerHolder.initialize(container)
@@ -75,7 +73,7 @@ class MessengerApplication : Application() {
             ImageLoader.Builder(context)
                 .components {
                     add(KtorNetworkFetcherFactory(
-                        httpClient = { container.cloudSyncRepository.avatarHttpClient }
+                        httpClient = { container.cloud.avatarHttpClient }
                     ))
                 }
                 .build()

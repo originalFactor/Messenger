@@ -95,6 +95,42 @@ class AndroidCoreBridge(
         destDir: String
     ): String = core.cloudCacheAvatar(scope, accountId, id, url, version, destDir)
 
+    override suspend fun cloudPushSnapshot(): Long = core.cloudPushSnapshot().toLong()
+    override suspend fun cloudSyncWith(
+        since: Long?,
+        replaceLocal: Boolean,
+        expectedServerVersion: Long?
+    ): String = core.cloudSyncWith(since, replaceLocal, expectedServerVersion)
+    override suspend fun cloudReplaceCloudWithLocal(): String = core.cloudReplaceCloudWithLocal()
+    override suspend fun cloudChangePassword(currentPassword: String, newPassword: String) =
+        core.cloudChangePassword(currentPassword, newPassword)
+    override suspend fun cloudDeleteAccount(currentPassword: String) =
+        core.cloudDeleteAccount(currentPassword)
+    override suspend fun cloudEnsureBuiltinTitleAgent() = core.cloudEnsureBuiltinTitleAgent()
+    override suspend fun cloudUploadUserAvatar(bytes: ByteArray, filename: String, mime: String): String =
+        core.cloudUploadUserAvatar(bytes, filename, mime)
+    override suspend fun cloudDeleteUserAvatar(): String = core.cloudDeleteUserAvatar()
+    override suspend fun cloudUploadAgentAvatar(
+        agentId: String,
+        bytes: ByteArray,
+        filename: String,
+        mime: String
+    ): String = core.cloudUploadAgentAvatar(agentId, bytes, filename, mime)
+    override suspend fun cloudDeleteAgentAvatar(agentId: String): String =
+        core.cloudDeleteAgentAvatar(agentId)
+    override suspend fun cloudPushMarketAgentUpdate(agentId: String): String =
+        core.cloudPushMarketAgentUpdate(agentId)
+    override suspend fun cloudRemoveMarketAgent(agentId: String) = core.cloudRemoveMarketAgent(agentId)
+    override suspend fun cloudCheckMarketAgentUpdate(agentId: String): String =
+        core.cloudCheckMarketAgentUpdate(agentId)
+    override suspend fun cloudApplyMarketAgentUpdate(agentId: String, marketJson: String): String =
+        core.cloudApplyMarketAgentUpdate(agentId, marketJson)
+    override suspend fun cloudImportMarketAgentWithAvatar(marketId: String): String =
+        core.cloudImportMarketAgentWithAvatar(marketId)
+    override suspend fun cloudClearMarketLinksAndBuiltinProvider() =
+        core.cloudClearMarketLinksAndBuiltinProvider()
+    override fun clearLocalDataForReinit() = core.clearLocalDataForReinit()
+
     override fun cancelTurn() = core.cancelTurn()
 
     override suspend fun runTurn(

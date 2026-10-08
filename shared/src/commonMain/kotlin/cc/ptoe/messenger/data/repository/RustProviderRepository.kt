@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
+
 class RustProviderRepository(
     private val coreBridge: CoreBridge,
     private val onChanged: (String, Boolean) -> Unit = { _, _ -> }
@@ -35,7 +37,7 @@ class RustProviderRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Provider" || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -58,20 +60,20 @@ class RustProviderRepository(
     override suspend fun insert(provider: Provider) {
         val dto = provider.toDto()
         coreBridge.upsertProviderJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(provider.id, false)
     }
 
     override suspend fun update(provider: Provider) {
         val dto = provider.toDto()
         coreBridge.upsertProviderJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(provider.id, false)
     }
 
     override suspend fun delete(id: String) {
         coreBridge.deleteProvider(id)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(id, true)
     }
 

@@ -11,6 +11,14 @@ use crate::model::{
 };
 use crate::schema::{CREATE_TABLES, SCHEMA_VERSION};
 
+/// Snapshot failures are reported, never fatal: the in-memory database is
+/// authoritative for the current session, so losing a mirror write costs at
+/// most the unflushed tail.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn log_snapshot_failure(detail: &str) {
+    eprintln!("messenger-store: OPFS snapshot failed: {detail}");
+}
+
 /// Which entity a change notification is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityKind {
@@ -41,9 +49,47 @@ pub struct Store {
 
 impl Store {
     /// Open (creating or migrating in place) the store at `path`.
+    ///
+    /// Native: a normal file-backed SQLite database. wasm32-unknown-unknown:
+    /// SQLite itself is compiled to wasm (`sqlite-wasm-rs`) and has no
+    /// filesystem, so the database is persisted in the browser's
+    /// origin-private file system (OPFS) through `sqlite-wasm-vfs`'s
+    /// in-memory pool VFS (`store::wasm_vfs`). The pool is pre-loaded
+    /// synchronously at startup and flushed on every commit, which is the
+    /// only layout that works with rusqlite's blocking `Connection` API —
+    /// `FileSystemSyncAccessHandle` is otherwise async, and the WASM SQLite
+    /// build is intra-process, so a Worker is not an option here.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
         Self::init(conn)
+    }
+
+    /// wasm32: `path` is a logical database name; the bytes come from the
+    /// origin-private file system image that `wasm::prepare` loaded (an empty
+    /// image — i.e. a fresh origin — opens a brand-new database).
+    #[cfg(target_arch = "wasm32")]
+    pub fn open(_path: &Path) -> Result<Self, rusqlite::Error> {
+        let mut conn = Connection::open_in_memory()?;
+        let image = crate::wasm::take_restore_image();
+        if !image.is_empty() {
+            // read_only = false: this database is the live, writable store.
+            conn.deserialize_read_exact("main", image.as_slice(), image.len(), false)?;
+        }
+        Self::init(conn)
+    }
+
+    /// wasm32: mirrors the live in-memory database into OPFS.
+    ///
+    /// Serialization failure is not propagated: a failed mirror must not
+    /// abort an otherwise successful write (the in-memory image stays
+    /// authoritative for the rest of the session).
+    #[cfg(target_arch = "wasm32")]
+    fn snapshot(&self, conn: &Connection) {
+        match conn.serialize("main") {
+            Ok(data) => crate::wasm::stage_snapshot(data.to_vec()),
+            Err(error) => log_snapshot_failure(&error.to_string()),
+        }
     }
 
     /// In-memory store for tests.
@@ -53,6 +99,10 @@ impl Store {
     }
 
     fn init(conn: Connection) -> Result<Self, rusqlite::Error> {
+        // WAL is a filesystem-level journal mode with no meaning for the OPFS
+        // pool VFS (which journals inside its own pool files); keep the native
+        // behaviour byte-identical and skip it on wasm.
+        #[cfg(not(target_arch = "wasm32"))]
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         for ddl in CREATE_TABLES {
@@ -90,7 +140,13 @@ impl Store {
         f: impl FnOnce(&Connection) -> Result<T, rusqlite::Error>,
     ) -> Result<T, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        f(&conn)
+        let result = f(&conn)?;
+        // wasm32:: every mutation lands in the in-memory database, so the
+        // OPFS image is refreshed here — after the statement succeeded, so
+        // reads and failing writes never pay for it.
+        #[cfg(target_arch = "wasm32")]
+        self.snapshot(&conn);
+        Ok(result)
     }
 
     // ------------------------------------------------------------------
@@ -413,6 +469,15 @@ impl Store {
         })?;
         Ok(())
     }
+    /// Drops one account's sync bookkeeping (cursor + pending queues).
+    pub fn clear_sync_meta(&self, account_id: &str) -> Result<(), rusqlite::Error> {
+        self.with_conn(|conn| {
+            conn.execute("DELETE FROM sync_meta WHERE accountId = ?1", [account_id])?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     /// Bulk notification for import-style operations.
     pub fn notify(&self, event: StoreEvent) {
         self.emit(event);
@@ -431,6 +496,8 @@ impl Store {
             f(&guard)?
         };
         tx.commit()?;
+        #[cfg(target_arch = "wasm32")]
+        self.snapshot(&conn);
         Ok(result)
     }
 }

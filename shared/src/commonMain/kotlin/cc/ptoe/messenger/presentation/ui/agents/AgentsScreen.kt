@@ -133,7 +133,7 @@ fun AgentsScreen(
     var showDeleteDialog by remember { mutableStateOf<String?>(null) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var fabExpanded by remember { mutableStateOf(false) }
-    val cloudUser by AppContainerHolder.instance.cloudSyncRepository.user.collectAsStateWithLifecycle(initialValue = null)
+    val cloudUser by AppContainerHolder.instance.cloud.user.collectAsStateWithLifecycle(initialValue = null)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val sizeClass = windowSizeClassFor(maxWidth)

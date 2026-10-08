@@ -32,7 +32,7 @@ kotlinxCoroutines = "1.11.0"
 room = "2.8.4"
 okhttp = "5.4.0"
 javaWebSocket = "1.5.5"
-dataStore = "1.2.1"
+dataStore = "1.3.0-alpha11"
 coil = "2.7.0"
 coil3 = "3.5.0"
 lifecycle = "2.11.0"
@@ -51,6 +51,7 @@ kotlinxSerializationJson = "1.11.0"
 kotlinxDatetime = "0.7.1"
 sqliteBundled = "2.7.0"
 okio = "3.18.0"
+kotlinxBrowser = "0.5.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -86,6 +87,15 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 java-websocket = { group = "org.java-websocket", name = "Java-WebSocket", version.ref = "javaWebSocket" }
 
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "dataStore" }
+# androidx.datastore:datastore-preferences-core exposes a wasmJs variant; the
+# okio-path "datastore-preferences" artifact (used by android/desktop) does not,
+# so shared/commonMain depends on -core + datastore-core-okio and each target
+# constructs its own storage (OkioStorage on Android/Desktop, WebOpfsStorage on web).
+androidx-datastore-preferences-core = { group = "androidx.datastore", name = "datastore-preferences-core", version.ref = "dataStore" }
+androidx-datastore-core-okio = { group = "androidx.datastore", name = "datastore-core-okio", version.ref = "dataStore" }
+# Browser APIs (clipboard, OPFS, document) with no hand-written js() strings,
+# which Kotlin/Wasm does not support outside @JsFun.
+kotlinx-browser = { group = "org.jetbrains.kotlinx", name = "kotlinx-browser", version.ref = "kotlinxBrowser" }
 
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 coil3-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil3" }
@@ -101,6 +111,7 @@ jetbrains-navigation-compose = { group = "org.jetbrains.androidx.navigation", na
 jetbrains-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jbComposeMaterial3" }
 
 ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
+ktor-client-js = { group = "io.ktor", name = "ktor-client-js", version.ref = "ktor" }
 ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-content-negotiation = { group = "io.ktor", name = "ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }

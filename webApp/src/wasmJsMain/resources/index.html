@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Messenger</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* ComposeViewport sizes its canvas to the host element, so the document
+       must actually be viewport-sized: without this the canvas collapses to
+       the height of its own content. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <!-- The webpack build emits the Kotlin/Wasm bundle as webApp.js and injects
+       nothing into this file, so the entry point must be referenced here.
+       ComposeViewport attaches its own canvas to document.body. -->
+  <script src="webApp.js"></script>
+</body>
+</html>

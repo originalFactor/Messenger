@@ -83,7 +83,7 @@ fun SettingsDualPaneScreen(
 
                 SettingsDetailPane.Cloud -> CloudSettingsScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty },
-                    cloudSyncRepository = AppContainerHolder.instance.cloudSyncRepository
+                    cloudSyncRepository = AppContainerHolder.instance.cloud
                 )
 
                 SettingsDetailPane.Tools -> ToolsSettingsScreen(

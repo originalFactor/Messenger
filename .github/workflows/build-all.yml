@@ -32,3 +32,8 @@ jobs:
     name: Build Desktop
     uses: ./.github/workflows/build-desktop.yml
     secrets: inherit
+
+  build-web:
+    name: Build Web
+    uses: ./.github/workflows/build-web.yml
+    secrets: inherit

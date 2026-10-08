@@ -38,6 +38,7 @@ import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.conversations_clone_suffix
 import cc.ptoe.messenger.generated.resources.conversations_new_chat
 import org.jetbrains.compose.resources.getString
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 
 /**
@@ -78,7 +79,7 @@ class AgentConversationsViewModel(
     fun createNewConversation(onCreated: (String) -> Unit = {}) {        viewModelScope.launch {
             val agent = agentRepository.getById(agentId).first() ?: return@launch
             currentAgentRepository.setCurrentAgentId(agent.id)
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val conversation = Conversation(
                 id = randomUuid(),
                 title = getString(Res.string.conversations_new_chat),
@@ -109,7 +110,7 @@ class AgentConversationsViewModel(
             conversationRepository.update(
                 conversation.copy(
                     title = newTitle,
-                    updatedAt = System.currentTimeMillis()
+                    updatedAt = currentTimeMillis()
                 )
             )
         }
@@ -129,7 +130,7 @@ class AgentConversationsViewModel(
             val source = conversationRepository.getById(conversationId).first()
                 ?: return@launch
             val clonedConversationId = randomUuid()
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val clonedConversation = source.copy(
                 id = clonedConversationId,
                 title = source.title + getString(Res.string.conversations_clone_suffix),
@@ -157,7 +158,7 @@ class AgentConversationsViewModel(
     fun switchAgentForConversations(ids: List<String>, targetAgentId: String) {
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             ids.forEach { id ->
                 val conversation = conversationRepository.getById(id).first() ?: return@forEach
                 conversationRepository.update(

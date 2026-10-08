@@ -5,7 +5,6 @@
 //! [`AgentEvent`]s. Cancellation finalizes partial rows instead of losing
 //! them.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use messenger_llm::api::{
@@ -96,12 +95,9 @@ pub struct TurnRequest {
     pub title: Option<TitleConfig>,
 }
 
-pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+/// Wall-clock milliseconds; delegates to the store's platform clock, which is
+/// the browser's `Date.now()` on wasm (`SystemTime::now()` traps there).
+pub use messenger_store::now_ms;
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()

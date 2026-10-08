@@ -55,6 +55,16 @@ jobs:
           name: desktop-msi
           path: artifacts/desktop-msi
 
+      - name: Download Web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-distribution
+          path: artifacts/web
+
+      - name: Package Web distribution
+        run: |
+          cd artifacts/web && zip -r ../messenger-web-${GITHUB_REF#refs/tags/}.zip .
+
       - name: Get version from tag
         id: get_version
         shell: bash
@@ -71,3 +81,4 @@ jobs:
             artifacts/runtime/**/*.apk
             artifacts/wear/wear-release.apk
             artifacts/desktop-msi/*.msi
+            artifacts/messenger-web-*.zip

@@ -125,7 +125,7 @@ fun SettingsScreen(
         factory = SettingsViewModel.provideFactory(
             themePreferences = AppContainerHolder.instance.themePreferences,
             appPreferences = AppContainerHolder.instance.appPreferences,
-            cloudSyncRepository = AppContainerHolder.instance.cloudSyncRepository
+            cloudSyncRepository = AppContainerHolder.instance.cloud
         )
     )
 ) {

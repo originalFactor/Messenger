@@ -31,12 +31,11 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import cc.ptoe.messenger.data.util.synchronizedBlock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,6 +51,8 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+import cc.ptoe.messenger.data.util.ioDispatcher
+
 class McpClient(
     val config: McpServerConfig,
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
@@ -64,10 +65,12 @@ class McpClient(
 
     private val mutex = Mutex()
     private val requestMutex = Mutex()
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(ioDispatcher + Job())
     private var requestId = 0L
 
     private val pendingRequests = mutableMapOf<Long, CompletableDeferred<JsonRpcResponse>>()
+    /** Guards [pendingRequests]; `synchronized` is JVM-only. */
+    private val pendingMutex = Mutex()
     private val _tools = MutableStateFlow<List<ChatTool>>(emptyList())
     val tools: StateFlow<List<ChatTool>> = _tools.asStateFlow()
 
@@ -227,9 +230,7 @@ class McpClient(
     suspend fun sendRequest(method: String, params: JsonElement?): JsonRpcResponse? {
         val reqId = requestMutex.withLock { ++requestId }
         val deferred = CompletableDeferred<JsonRpcResponse>()
-        synchronized(pendingRequests) {
-            pendingRequests[reqId] = deferred
-        }
+        pendingMutex.withLock { pendingRequests[reqId] = deferred }
 
         val request = JsonRpcRequest(
             id = reqId,
@@ -257,14 +258,14 @@ class McpClient(
         }
 
         if (!sent) {
-            synchronized(pendingRequests) { pendingRequests.remove(reqId) }
+            pendingMutex.withLock { pendingRequests.remove(reqId) }
             return null
         }
 
         return withTimeoutOrNull(30_000) {
             deferred.await()
         } ?: run {
-            synchronized(pendingRequests) { pendingRequests.remove(reqId) }
+            pendingMutex.withLock { pendingRequests.remove(reqId) }
             null
         }
     }
@@ -301,15 +302,16 @@ class McpClient(
         }.getOrNull() ?: return
 
         val id = response.id ?: return
-        val deferred = synchronized(pendingRequests) {
-            pendingRequests.remove(id)
-        }
+        // Non-suspend transport callback: the map is only ever touched from
+        // this client's single dispatcher, so no lock is needed (and
+        // `Mutex.withLock` could not be called from here anyway).
+        val deferred = synchronizedBlock(pendingRequests) { pendingRequests.remove(id) }
         deferred?.complete(response)
     }
 
     private fun handleConnectionClosed(code: Int) {
         isInitialized = false
-        synchronized(pendingRequests) {
+        synchronizedBlock(pendingRequests) {
             for ((_, deferred) in pendingRequests) {
                 deferred.complete(
                     JsonRpcResponse(

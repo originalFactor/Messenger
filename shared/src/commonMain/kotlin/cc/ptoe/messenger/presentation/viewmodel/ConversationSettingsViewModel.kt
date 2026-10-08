@@ -43,6 +43,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
+
 data class ConversationSettingsUiState(
     val title: String = "",
     val agentId: String = "",
@@ -246,7 +248,7 @@ class ConversationSettingsViewModel(
     fun save() {
         viewModelScope.launch {
             val conv = conversationRepository.getById(conversationId).first() ?: return@launch
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val state = _uiState.value
             conversationRepository.update(
                 conv.copy(

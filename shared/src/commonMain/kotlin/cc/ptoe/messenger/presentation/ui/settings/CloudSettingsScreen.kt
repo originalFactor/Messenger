@@ -85,9 +85,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.data.cloud.CloudCardPreview
 import cc.ptoe.messenger.data.cloud.CloudQuotaEntitlement
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
 import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
 import kotlinx.datetime.TimeZone
@@ -175,7 +175,7 @@ private const val TRANSITION_DURATION_MS = 350
 @Composable
 fun CloudSettingsScreen(
     onBackClick: () -> Unit,
-    cloudSyncRepository: CloudSyncRepository,
+    cloudSyncRepository: CloudFacade,
     viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.provideFactory(
             AppContainerHolder.instance.themePreferences,

@@ -51,7 +51,6 @@ import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
 import coil3.compose.AsyncImage
-import okio.Path.Companion.toPath
 
 @Composable
 fun UserMessageBubble(
@@ -173,7 +172,7 @@ private fun UserMessageImageRow(
     ) {
         items(images, key = { it.image.localPath }) { part ->
             AsyncImage(
-                model = part.image.localPath.toPath(),
+                model = part.image.localPath,
                 contentDescription = null,
                 modifier = Modifier
                     .size(96.dp)

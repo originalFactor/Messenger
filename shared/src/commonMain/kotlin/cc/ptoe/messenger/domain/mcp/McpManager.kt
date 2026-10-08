@@ -19,8 +19,6 @@ package cc.ptoe.messenger.domain.mcp
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.domain.tool.ChatTool
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +30,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
+import cc.ptoe.messenger.data.util.ioDispatcher
+
 class McpManager(
     private val appPreferences: AppPreferences,
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
@@ -42,7 +42,7 @@ class McpManager(
         isLenient = true
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(ioDispatcher + Job())
     private val mutex = Mutex()
 
     private val _servers = MutableStateFlow<List<McpServerConfig>>(emptyList())

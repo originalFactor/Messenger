@@ -17,16 +17,15 @@
 package cc.ptoe.messenger.data.local
 
 import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
-import okio.Path.Companion.toPath
+import okio.Path
 
 /**
- * Creates the single preferences DataStore. On Android the path must
- * stay `<filesDir>/datastore/messenger_preferences.preferences_pb` so
- * existing installs keep their settings after the KMP migration.
+ * Creates the single preferences DataStore.
+ *
+ * Android/Desktop keep the on-disk path
+ * `<filesDir>/datastore/messenger_preferences.preferences_pb` so installs
+ * keep their settings across the KMP migration. Web stores the same
+ * serialized preferences in the browser's origin-private file system.
  */
-fun createMessengerDataStore(producePath: () -> String): DataStore<Preferences> =
-    PreferenceDataStoreFactory.createWithPath(
-        produceFile = { producePath().toPath() }
-    )
+expect fun createMessengerDataStore(filesDir: Path): DataStore<Preferences>

@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.core
 
+import kotlin.concurrent.Volatile
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -83,6 +84,37 @@ interface CoreBridge {
     suspend fun cloudPublishMarketAgent(agentId: String): String
     suspend fun cloudImportMarketAgent(marketId: String): String
     suspend fun cloudCacheAvatar(scope: String, accountId: String, id: String, url: String, version: String?, destDir: String): String
+
+    // Cloud account settings, avatars, market mutations and the login flows.
+    // Each has a matching export on both boundaries (messenger-ffi and
+    // messenger-wasm), which is what keeps AndroidCoreBridge and
+    // WasmCoreBridge mechanically parallel.
+    suspend fun cloudPushSnapshot(): Long
+    suspend fun cloudSyncWith(
+        since: Long?,
+        replaceLocal: Boolean,
+        expectedServerVersion: Long?
+    ): String
+    suspend fun cloudReplaceCloudWithLocal(): String
+    suspend fun cloudChangePassword(currentPassword: String, newPassword: String)
+    suspend fun cloudDeleteAccount(currentPassword: String)
+    suspend fun cloudEnsureBuiltinTitleAgent()
+    suspend fun cloudUploadUserAvatar(bytes: ByteArray, filename: String, mime: String): String
+    suspend fun cloudDeleteUserAvatar(): String
+    suspend fun cloudUploadAgentAvatar(
+        agentId: String,
+        bytes: ByteArray,
+        filename: String,
+        mime: String
+    ): String
+    suspend fun cloudDeleteAgentAvatar(agentId: String): String
+    suspend fun cloudPushMarketAgentUpdate(agentId: String): String
+    suspend fun cloudRemoveMarketAgent(agentId: String)
+    suspend fun cloudCheckMarketAgentUpdate(agentId: String): String
+    suspend fun cloudApplyMarketAgentUpdate(agentId: String, marketJson: String): String
+    suspend fun cloudImportMarketAgentWithAvatar(marketId: String): String
+    suspend fun cloudClearMarketLinksAndBuiltinProvider()
+    fun clearLocalDataForReinit()
 
     // Agent turn loop
     fun cancelTurn()

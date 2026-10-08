@@ -33,9 +33,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import cc.ptoe.messenger.data.util.FileKit
+import cc.ptoe.messenger.data.util.fileExists
 import coil3.compose.AsyncImage
-import okio.Path.Companion.toPath
 
 @Composable
 fun AgentAvatar(
@@ -45,11 +44,13 @@ fun AgentAvatar(
     fallbackIcon: ImageVector = Icons.Default.SmartToy,
     allowRemote: Boolean = false
 ) {
+    // A String model, never an okio.Path: on web Coil's js/wasm component
+    // registry maps FileSystem-backed values (Path / file:// URIs) onto a
+    // ThrowingFileSystem, so any such model would fail to load.
     val avatarSource = remember(avatar) {
         avatar?.takeIf { it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://") }
-            ?.toPath()
     }
-    val isValid = avatarSource != null && FileKit.exists(avatarSource.toString())
+    val isValid = avatarSource != null && fileExists(avatarSource)
     val remoteAvatar = avatar?.takeIf { allowRemote && (it.startsWith("http://") || it.startsWith("https://")) }
 
     Box(

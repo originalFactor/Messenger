@@ -125,7 +125,7 @@ internal actual fun ChatMessageList(
                         status = MessageStatus.SENT
                     )
                     Box(modifier = groupModifier) {
-                        DesktopDocumentBubble(
+                        ChatDocumentBubble(
                             message = anchorMessage,
                             blocks = blocks,
                             avatar = agent?.avatar,
@@ -146,16 +146,16 @@ internal actual fun ChatMessageList(
                                     val copyText = if (anchor.content.isNotBlank()) anchor.content else {
                                         blocks.joinToString("\n\n") { block ->
                                             when (block) {
-                                                is DesktopBlock.Paragraph -> block.text
-                                                is DesktopBlock.Heading -> block.text
-                                                is DesktopBlock.Code -> block.code
-                                                is DesktopBlock.Math -> block.formula
-                                                is DesktopBlock.Think -> block.content
-                                                is DesktopBlock.ToolCall -> block.output.orEmpty()
-                                                is DesktopBlock.Quote -> block.text
-                                                is DesktopBlock.Table -> block.rows.joinToString("\n") { it.joinToString(" | ") }
-                                                is DesktopBlock.ListBlock -> block.items.joinToString("\n") { it.text }
-                                                is DesktopBlock.Divider -> "---"
+                                                is ChatBlock.Paragraph -> block.text
+                                                is ChatBlock.Heading -> block.text
+                                                is ChatBlock.Code -> block.code
+                                                is ChatBlock.Math -> block.formula
+                                                is ChatBlock.Think -> block.content
+                                                is ChatBlock.ToolCall -> block.output.orEmpty()
+                                                is ChatBlock.Quote -> block.text
+                                                is ChatBlock.Table -> block.rows.joinToString("\n") { it.joinToString(" | ") }
+                                                is ChatBlock.ListBlock -> block.items.joinToString("\n") { it.text }
+                                                is ChatBlock.Divider -> "---"
                                             }
                                         }
                                     }
@@ -209,7 +209,7 @@ internal actual fun ChatMessageList(
                                 )
                             }
                             MessageRole.ASSISTANT -> {
-                                DesktopDocumentBubble(
+                                ChatDocumentBubble(
                                     message = if (message.id == streamingMessageId && streamingContent != null) {
                                         message.copy(content = streamingContent)
                                     } else {
@@ -259,15 +259,15 @@ private fun buildDesktopToolGroupBlocks(
     toolMessages: List<Message>,
     finalMessage: Message?,
     streamingContent: String?
-): List<DesktopBlock> {
-    val blocks = mutableListOf<DesktopBlock>()
+): List<ChatBlock> {
+    val blocks = mutableListOf<ChatBlock>()
     var blockIdCounter = 1L
 
     if (rounds.isEmpty()) {
         val orphanResults = toolMessages.mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
         orphanResults.forEachIndexed { _, result ->
             blocks.add(
-                DesktopBlock.ToolCall(
+                ChatBlock.ToolCall(
                     id = blockIdCounter++,
                     callId = result.callId,
                     name = result.name,
@@ -284,14 +284,14 @@ private fun buildDesktopToolGroupBlocks(
     rounds.forEachIndexed { roundIndex, round ->
         val roundBaseId = (roundIndex + 1) * 100_000L
         if (round.content.isNotBlank()) {
-            val roundBlocks = DesktopDocumentParser.parseMarkdown(round.content, baseId = roundBaseId)
+            val roundBlocks = ChatDocumentParser.parseMarkdown(round.content, baseId = roundBaseId)
             blocks.addAll(roundBlocks)
         }
         val calls = round.parts.filterIsInstance<ContentPart.ToolCall>()
         calls.forEachIndexed { callIndex, call ->
             val result = toolMessages.findToolResult(call.callId)
             blocks.add(
-                DesktopBlock.ToolCall(
+                ChatBlock.ToolCall(
                     id = roundBaseId + 50_000L + callIndex,
                     callId = call.callId,
                     name = call.name,
@@ -306,7 +306,7 @@ private fun buildDesktopToolGroupBlocks(
 
     val finalText = streamingContent ?: finalMessage?.content
     if (!finalText.isNullOrBlank()) {
-        val finalBlocks = DesktopDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
+        val finalBlocks = ChatDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
         blocks.addAll(finalBlocks)
     }
 

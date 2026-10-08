@@ -536,6 +536,207 @@ impl CoreHandle {
         Ok(path)
     }
 
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_push_snapshot(&self) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let version = engine
+            .push_snapshot()
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        Ok(version.to_string())
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_sync_with(
+        &self,
+        since: Option<i64>,
+        replace_local: bool,
+        expected_server_version: Option<i64>,
+    ) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine
+            .sync_internal(since, replace_local, expected_server_version)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_replace_cloud_with_local(&self) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine
+            .replace_cloud_with_local()
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<(), CoreError> {
+        let engine = self.sync_engine();
+        engine
+            .change_password(&current_password, &new_password)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_delete_account(&self, current_password: String) -> Result<(), CoreError> {
+        let engine = self.sync_engine();
+        engine
+            .delete_account(&current_password)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_ensure_builtin_title_agent(&self) -> Result<(), CoreError> {
+        self.sync_engine()
+            .ensure_title_agent()
+            .map_err(|e| CoreError::Generic { detail: e })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_upload_user_avatar(
+        &self,
+        bytes: Vec<u8>,
+        filename: String,
+        mime: String,
+    ) -> Result<String, CoreError> {
+        self.sync_engine()
+            .upload_user_avatar(bytes, &filename, &mime)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_delete_user_avatar(&self) -> Result<String, CoreError> {
+        self.sync_engine()
+            .delete_user_avatar()
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_upload_agent_avatar(
+        &self,
+        agent_id: String,
+        bytes: Vec<u8>,
+        filename: String,
+        mime: String,
+    ) -> Result<String, CoreError> {
+        self.sync_engine()
+            .upload_agent_avatar(&agent_id, bytes, &filename, &mime)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_delete_agent_avatar(&self, agent_id: String) -> Result<String, CoreError> {
+        self.sync_engine()
+            .delete_agent_avatar(&agent_id)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_push_market_agent_update(&self, agent_id: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine
+            .push_market_agent_update(&agent_id)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_remove_market_agent(&self, agent_id: String) -> Result<(), CoreError> {
+        self.sync_engine()
+            .remove_market_agent(&agent_id)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_check_market_agent_update(&self, agent_id: String) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let res = engine
+            .check_market_agent_update(&agent_id)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&res).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_apply_market_agent_update(
+        &self,
+        agent_id: String,
+        market_json: String,
+    ) -> Result<String, CoreError> {
+        let market: messenger_sync::CloudMarketAgent = serde_json::from_str(&market_json)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        let engine = self.sync_engine();
+        let updated = engine
+            .apply_market_agent_update(&agent_id, &market)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&updated).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_import_market_agent_with_avatar(
+        &self,
+        market_id: String,
+    ) -> Result<String, CoreError> {
+        let engine = self.sync_engine();
+        let agent = engine
+            .import_market_agent_with_avatar(&market_id)
+            .await
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&agent).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn cloud_clear_market_links_and_builtin_provider(&self) -> Result<(), CoreError> {
+        self.sync_engine()
+            .clear_market_links_and_builtin_provider()
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    /// Wipes every local row plus the stored session/user state, for the
+    /// settings screen's "clear all data" action. Deliberately not a
+    /// `cloud_sync(replace_local = true)`, which would pull the remote state
+    /// straight back into the freshly cleared local one.
+    pub fn clear_local_data_for_reinit(&self) -> Result<(), CoreError> {
+        for provider in self.store.list_providers().map_err(|e| CoreError::Generic { detail: e.to_string() })? {
+            self.store.delete_provider(&provider.id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        }
+        for conversation in self.store.list_conversations().map_err(|e| CoreError::Generic { detail: e.to_string() })? {
+            self.store
+                .delete_messages_by_conversation(&conversation.id)
+                .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+            self.store
+                .delete_conversation(&conversation.id)
+                .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        }
+        for agent in self.store.list_agents().map_err(|e| CoreError::Generic { detail: e.to_string() })? {
+            self.store.delete_agent(&agent.id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        }
+        for key in [
+            messenger_sync::KV_SESSION,
+            messenger_sync::KV_SESSION_HOST,
+            messenger_sync::KV_USER,
+            "current_agent_id",
+        ] {
+            self.store.kv_delete(key).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        }
+        Ok(())
+    }
+
     /// Cancel the active turn (partial rows are preserved by the loop).
     pub fn cancel_turn(&self) {
         self.cancel.lock().unwrap().cancel();

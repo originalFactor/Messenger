@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::dto::{ChatCompletionResponse, ModelsResponse};
 use crate::request::ChatCompletionRequest;
 use crate::request::extract_http_error_message;
+use futures_util::StreamExt;
+use std::pin::Pin;
 
 /// Errors from the LLM transport. `Http` carries the provider-extracted
 /// message so the UI can surface it verbatim (engineering convention: API
@@ -155,18 +157,39 @@ fn data_payload_of_line(line: &[u8]) -> Option<String> {
 
 /// Streaming response handle: yields each SSE `data:` payload in order,
 /// terminating after the `[DONE]` sentinel or stream end.
-#[derive(Debug)]
+/// SSE byte stream. Boxed because `Response::bytes_stream()` consumes the
+/// response and yields a different opaque type on each reqwest backend
+/// (native hyper vs. wasm fetch), so the concrete type cannot be named.
+/// Native futures must be `Send` (the agent turn runs on a multi-threaded
+/// tokio runtime); wasm values are not `Send` and must not carry the bound.
+#[cfg(not(target_arch = "wasm32"))]
+type ByteStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+type ByteStream = Pin<Box<dyn futures_core::Stream<Item = Result<bytes::Bytes, reqwest::Error>>>>;
+
 pub struct ChatStream {
-    response: reqwest::Response,
+    stream: ByteStream,
     buffer: SseLineBuffer,
     pending: std::collections::VecDeque<String>,
     done: bool,
 }
 
+impl std::fmt::Debug for ChatStream {
+    /// The body is a boxed `dyn Stream`, which is not `Debug`; report the
+    /// buffering state that is meaningful when a caller prints the handle.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatStream")
+            .field("pending", &self.pending.len())
+            .field("done", &self.done)
+            .finish()
+    }
+}
+
 impl ChatStream {
     fn new(response: reqwest::Response) -> Self {
         Self {
-            response,
+            stream: Box::pin(response.bytes_stream()),
             buffer: SseLineBuffer::default(),
             pending: std::collections::VecDeque::new(),
             done: false,
@@ -184,9 +207,12 @@ impl ChatStream {
         if self.done {
             return Ok(None);
         }
+        // `bytes_stream()` exists on both reqwest backends (native and
+        // wasm); `Response::chunk()` does not exist on wasm at all.
         loop {
-            match self.response.chunk().await {
-                Ok(Some(bytes)) => {
+            let chunk = self.stream.next().await;
+            match chunk {
+                Some(Ok(bytes)) => {
                     let mut payloads = self.buffer.feed(&bytes).into_iter();
                     if let Some(first) = payloads.next() {
                         if first == "[DONE]" {
@@ -197,7 +223,8 @@ impl ChatStream {
                         return Ok(Some(first));
                     }
                 }
-                Ok(None) => {
+                Some(Err(e)) => return Err(ApiError::Network(e.to_string())),
+                None => {
                     let mut trailing = self.buffer.finish().into_iter();
                     if let Some(first) = trailing.next() {
                         if first == "[DONE]" {
@@ -208,7 +235,6 @@ impl ChatStream {
                     }
                     return Ok(None);
                 }
-                Err(e) => return Err(ApiError::Network(e.to_string())),
             }
         }
     }

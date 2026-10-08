@@ -235,7 +235,7 @@ fun NavGraph(
         composable(Screen.CloudSettings.route) {
             CloudSettingsScreen(
                 onBackClick = { navController.popBackStack() },
-                cloudSyncRepository = AppContainerHolder.instance.cloudSyncRepository
+                cloudSyncRepository = AppContainerHolder.instance.cloud
             )
         }
         composable(Screen.ToolsSettings.route) {

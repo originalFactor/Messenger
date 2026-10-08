@@ -43,6 +43,7 @@ import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.error_load_failed
 import cc.ptoe.messenger.generated.resources.error_sync_failed
 import org.jetbrains.compose.resources.getString
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 
 enum class SyncStatus {
@@ -180,7 +181,7 @@ class ProviderDetailViewModel(
                     id = randomUuid(),
                     providerId = provider.id,
                     isEnabled = true,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = currentTimeMillis()
                 )
             }
         if (newModels.isNotEmpty()) {
@@ -208,7 +209,7 @@ class ProviderDetailViewModel(
                     modelId = modelId,
                     displayName = displayName.ifBlank { modelId },
                     isEnabled = true,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = currentTimeMillis()
                 ).applyModelsDev(runCatching { modelsDevRepository.getMetadata(modelId) }.getOrNull())
                 modelRepository.insert(newModel)
             }

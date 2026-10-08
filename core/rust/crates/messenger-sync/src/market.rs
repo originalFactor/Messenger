@@ -139,10 +139,7 @@ impl<'a> SyncEngine<'a> {
         let _ = self.signed_in()?;
         let market = self.get_market_agent(market_id).await?;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now = messenger_store::now_ms();
 
         let new_id = uuid::Uuid::new_v4().to_string();
         let imported = StoredAgent {

@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 
+import cc.ptoe.messenger.data.util.currentTimeMillis
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class RustCurrentAgentRepository(
     private val coreBridge: CoreBridge,
@@ -37,7 +39,7 @@ class RustCurrentAgentRepository(
     init {
         coreBridge.subscribe { kind, ids ->
             if ((kind == "Kv" && ids.contains("current_agent_id")) || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -60,6 +62,6 @@ class RustCurrentAgentRepository(
         } else {
             coreBridge.kvSet("current_agent_id", agentId)
         }
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
     }
 }

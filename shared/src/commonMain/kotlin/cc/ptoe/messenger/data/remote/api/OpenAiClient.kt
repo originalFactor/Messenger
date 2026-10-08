@@ -31,11 +31,11 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+
+import cc.ptoe.messenger.data.util.ioDispatcher
 
 /**
  * OpenAI-compatible API client backed by Ktor (replaces the Retrofit
@@ -77,5 +77,5 @@ class OpenAiClient(baseUrl: String, apiKey: String) {
             }
             SSEParser.parse(response.bodyAsChannel()).collect { emit(it) }
         }
-    }.flowOn(Dispatchers.IO)
+    }.flowOn(ioDispatcher)
 }

@@ -35,11 +35,15 @@ pub struct SyncResult {
 pub struct SyncEngine<'a> {
     pub(crate) store: &'a Store,
     pub(crate) client: CloudApiClient,
+    /// Where `cache_avatar` writes (the platform's `cloud_avatars` dir).
+    /// `None` on targets without a filesystem (wasm).
+    pub(crate) avatars_dir: Option<std::path::PathBuf>,
 }
 
 impl<'a> SyncEngine<'a> {
     pub fn new(store: &'a Store, session: Session) -> Self {
         Self {
+            avatars_dir: None,
             store,
             client: CloudApiClient::new(session),
         }
@@ -47,6 +51,12 @@ impl<'a> SyncEngine<'a> {
 
     pub fn client(&self) -> &CloudApiClient {
         &self.client
+    }
+
+    /// Sets the directory avatar downloads are cached into.
+    pub fn with_avatars_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.avatars_dir = Some(dir);
+        self
     }
 
     pub fn store(&self) -> &Store {
@@ -366,6 +376,16 @@ impl<'a> SyncEngine<'a> {
             .map_err(|e| CloudError::Network(e.to_string()))
     }
 
+    /// Pending upsert queue as raw JSON (for callers persisting sync state).
+    pub fn pending_upserts_json(&self, account: &str) -> CloudResult<String> {
+        self.pending_upserts(account)
+    }
+
+    /// Pending delete queue as raw JSON.
+    pub fn pending_deletes_json(&self, account: &str) -> CloudResult<String> {
+        self.pending_deletes(account)
+    }
+
     fn pending_upserts(&self, account: &str) -> CloudResult<String> {
         self.raw_pending(account, "pendingUpserts")
     }
@@ -424,7 +444,7 @@ impl<'a> SyncEngine<'a> {
     // pull
     // ------------------------------------------------------------------
 
-    async fn fetch_cloud_sync(&self, since: i64) -> CloudResult<(CloudSyncResponse, i64)> {
+    pub(crate) async fn fetch_cloud_sync(&self, since: i64) -> CloudResult<(CloudSyncResponse, i64)> {
         let mut agents = Vec::new();
         let mut agents_latest = since;
         let mut raw_server_latest = 0i64;
@@ -637,6 +657,21 @@ impl<'a> SyncEngine<'a> {
     // builtin seeding
     // ------------------------------------------------------------------
 
+    /// Drops the builtin cloud AI provider and its models (logout / account
+    /// deletion / server change each rebuild it from the next login).
+    pub fn remove_builtin_provider(&self) -> Result<(), CloudError> {
+        for model in self
+            .store
+            .list_models_by_provider(BUILTIN_PROVIDER_ID)
+            .map_err(CloudError::network)?
+        {
+            self.store.delete_model(&model.id).map_err(CloudError::network)?;
+        }
+        self.store
+            .delete_provider(BUILTIN_PROVIDER_ID)
+            .map_err(CloudError::network)
+    }
+
     /// Seed/update the builtin cloud AI provider from the signed-in user's
     /// AI key (never synced; excluded from push and pull).
     pub fn ensure_builtin_provider(&self, user: &CloudUser) -> Result<(), String> {
@@ -745,9 +780,6 @@ impl<'a> SyncEngine<'a> {
 
 const BUILTIN_TITLE_AGENT_PROMPT: &str = "You generate short conversation titles. Based on the messages you receive, reply with a single concise title in the same language as the user's messages. Reply with the title text only — no quotes, no trailing punctuation, no explanations.";
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+pub(crate) fn now_ms() -> i64 {
+    messenger_store::now_ms()
 }

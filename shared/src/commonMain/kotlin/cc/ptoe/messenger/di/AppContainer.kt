@@ -16,36 +16,26 @@
 
 package cc.ptoe.messenger.di
 
-import androidx.room.RoomDatabase
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
-import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ChatImageStore
-import cc.ptoe.messenger.data.local.MessengerDatabase
-import cc.ptoe.messenger.data.local.ThemePreferences
-import cc.ptoe.messenger.data.local.createMessengerDataStore
-import cc.ptoe.messenger.data.repository.AgentRepositoryImpl
 import cc.ptoe.messenger.data.repository.ApiRepositoryImpl
-import cc.ptoe.messenger.data.repository.ConversationRepositoryImpl
 import cc.ptoe.messenger.data.repository.CurrentAgentRepositoryImpl
-import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
-import cc.ptoe.messenger.data.repository.ModelRepositoryImpl
-import cc.ptoe.messenger.data.repository.ModelsDevRepositoryImpl
-import cc.ptoe.messenger.data.repository.ProviderRepositoryImpl
+import cc.ptoe.messenger.data.repository.createModelsDevRepository
 import cc.ptoe.messenger.data.repository.RustAgentRepository
 import cc.ptoe.messenger.data.repository.RustConversationRepository
 import cc.ptoe.messenger.data.repository.RustCurrentAgentRepository
 import cc.ptoe.messenger.data.repository.RustMessageRepository
 import cc.ptoe.messenger.data.repository.RustModelRepository
 import cc.ptoe.messenger.data.repository.RustProviderRepository
-import cc.ptoe.messenger.data.util.FileKit
+import cc.ptoe.messenger.data.util.currentTimeMillis
+import cc.ptoe.messenger.data.util.ioDispatcher
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ApiRepository
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
@@ -57,14 +47,11 @@ import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import cc.ptoe.messenger.domain.mcp.McpManager
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import okio.Path
 
 /**
@@ -79,40 +66,25 @@ class AppDirs(
 
 /**
  * Manual service locator shared by every platform entry point
- * (Android `MessengerApplication`, Desktop `main`). Mirrors the
- * dependency graph that `MessengerApplication` used to assemble,
- * minus Android-only pieces (wear bridge, Coil factory).
+ * (Android `MessengerApplication`, Desktop `main`, the web bundle).
+ * Room and the on-disk DataStore are reached through the per-target
+ * [createLocalStores]/[createRoomRepositories] factories, so this class
+ * itself compiles for every target including wasmJs.
  */
 class AppContainer(
     val appDirs: AppDirs,
-    databaseBuilder: RoomDatabase.Builder<MessengerDatabase>,
     val chatImageStore: ChatImageStore,
 ) {
 
     val localDataMutex = Mutex()
 
-    val database: MessengerDatabase = databaseBuilder
-        .setDriver(BundledSQLiteDriver())
-        .setQueryCoroutineContext(Dispatchers.IO)
-        .addMigrations(
-            MessengerDatabase.MIGRATION_13_14,
-            MessengerDatabase.MIGRATION_14_15,
-            MessengerDatabase.MIGRATION_15_16,
-            MessengerDatabase.MIGRATION_16_17,
-            MessengerDatabase.MIGRATION_17_18,
-            MessengerDatabase.MIGRATION_18_19,
-            MessengerDatabase.MIGRATION_19_20
-        )
-        .fallbackToDestructiveMigration(dropAllTables = true)
-        .build()
+    /** Per-platform stores: Room+DataStore on Android/Desktop, Rust+OPFS on web. */
+    val stores: LocalStores = createLocalStores(appDirs)
 
-    private val dataStore = createMessengerDataStore {
-        appDirs.filesDir.resolve("datastore")
-            .resolve("messenger_preferences.preferences_pb").toString()
-    }
+    val appPreferences = stores.appPreferences
+    val themePreferences = stores.themePreferences
 
-    val appPreferences = AppPreferences(dataStore)
-    val themePreferences = ThemePreferences(dataStore)
+    val cloud: CloudFacade = stores.cloud
 
     /** Platform built-in tools: desktop and Android both register the terminal tool. */
     // Re-evaluated on access: Android's tool set depends on whether the
@@ -127,91 +99,69 @@ class AppContainer(
      */
     val availableTools: List<ChatTool> get() = builtinTools + mcpManager.activeTools.value
 
-    val cloudSyncRepository = CloudSyncRepository(
-        appPreferences = appPreferences,
-        database = database,
-        filesDir = appDirs.filesDir,
-        localDataMutex = localDataMutex
-    )
-
     val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
 
-    val providerRepository: ProviderRepository = coreBridge?.let {
-        RustProviderRepository(it) { id, deleted ->
-            if (id != BUILTIN_PROVIDER_ID) {
-                cloudSyncRepository.requestLocalChange("provider", id, deleted)
-            }
-        }
-    } ?: ProviderRepositoryImpl(database.providerDao()) { id, deleted ->
+    private fun providerChanged(id: String, deleted: Boolean) {
         // 内置云 AI 服务商不参与云同步（各设备本地自建）。
-        if (id != BUILTIN_PROVIDER_ID) {
-            cloudSyncRepository.requestLocalChange("provider", id, deleted)
+        if (id != BUILTIN_PROVIDER_ID) cloud.requestLocalChange("provider", id, deleted)
+    }
+
+    private fun modelChanged(providerId: String) {
+        if (providerId != BUILTIN_PROVIDER_ID) cloud.requestLocalChange("provider", providerId)
+    }
+
+    private fun agentChanged(previous: Agent?, current: Agent?) {
+        cloud.requestAgentAvatarChange(previous, current)
+        // 内置标题智能体不参与云同步（各设备本地自建）。
+        val builtinInvolved = current?.id == Agent.BUILTIN_TITLE_AGENT_ID ||
+            previous?.id == Agent.BUILTIN_TITLE_AGENT_ID
+        if (!builtinInvolved) {
+            current?.let { cloud.requestLocalChange("agent", it.id) }
+                ?: previous?.let { cloud.requestLocalChange("agent", it.id, deleted = true) }
         }
     }
 
+    private val hooks = LocalChangeHooks(
+        onProviderChanged = ::providerChanged,
+        onModelChanged = ::modelChanged,
+        onAgentChanged = ::agentChanged,
+        onConversationChanged = { id, deleted -> cloud.requestLocalChange("conversation", id, deleted) },
+        onMessagesChanged = { conversationId -> cloud.requestLocalChange("conversation", conversationId) },
+    )
+
+    /** Non-null only on Android/Desktop (web always runs on the Rust core). */
+    private val roomRepositories: RoomRepositories? =
+        if (coreBridge == null) createRoomRepositories(stores, chatImageStore, hooks) else null
+
+    val providerRepository: ProviderRepository = coreBridge?.let {
+        RustProviderRepository(it) { id, deleted -> providerChanged(id, deleted) }
+    } ?: roomRepositories!!.providers
+
     val modelRepository: ModelRepository = coreBridge?.let {
-        RustModelRepository(it) { providerId, _ ->
-            if (providerId != BUILTIN_PROVIDER_ID) {
-                cloudSyncRepository.requestLocalChange("provider", providerId)
-            }
-        }
-    } ?: ModelRepositoryImpl(database.modelDao()) { providerId, _ ->
-        if (providerId != BUILTIN_PROVIDER_ID) {
-            cloudSyncRepository.requestLocalChange("provider", providerId)
-        }
-    }
+        RustModelRepository(it) { providerId, _ -> modelChanged(providerId) }
+    } ?: roomRepositories!!.models
 
     val agentRepository: AgentRepository = coreBridge?.let {
         RustAgentRepository(
             coreBridge = it,
-            onChanged = { previous, current ->
-                cloudSyncRepository.requestAgentAvatarChange(previous, current)
-                val builtinInvolved = current?.id == Agent.BUILTIN_TITLE_AGENT_ID ||
-                    previous?.id == Agent.BUILTIN_TITLE_AGENT_ID
-                if (!builtinInvolved) {
-                    current?.let { cloudSyncRepository.requestLocalChange("agent", it.id) }
-                        ?: previous?.let {
-                            cloudSyncRepository.requestLocalChange("agent", it.id, deleted = true)
-                        }
-                }
-            },
+            onChanged = { previous, current -> agentChanged(previous, current) },
             avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
         )
-    } ?: AgentRepositoryImpl(
-        agentDao = database.agentDao(),
-        onChanged = { previous, current ->
-            cloudSyncRepository.requestAgentAvatarChange(previous, current)
-            // 内置标题智能体不参与云同步（各设备本地自建）。
-            val builtinInvolved = current?.id == Agent.BUILTIN_TITLE_AGENT_ID ||
-                previous?.id == Agent.BUILTIN_TITLE_AGENT_ID
-            if (!builtinInvolved) {
-                current?.let { cloudSyncRepository.requestLocalChange("agent", it.id) }
-                    ?: previous?.let {
-                        cloudSyncRepository.requestLocalChange("agent", it.id, deleted = true)
-                    }
-            }
-        },
-        avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
-    )
+    } ?: roomRepositories!!.agents
 
     val conversationRepository: ConversationRepository = coreBridge?.let {
         RustConversationRepository(it) { id, deleted ->
-            cloudSyncRepository.requestLocalChange("conversation", id, deleted)
+            cloud.requestLocalChange("conversation", id, deleted)
         }
-    } ?: ConversationRepositoryImpl(database.conversationDao()) { id, deleted ->
-        cloudSyncRepository.requestLocalChange("conversation", id, deleted)
-    }
+    } ?: roomRepositories!!.conversations
 
     val messageRepository: MessageRepository = coreBridge?.let {
         RustMessageRepository(it, chatImageStore) { conversationId ->
-            cloudSyncRepository.requestLocalChange("conversation", conversationId)
+            cloud.requestLocalChange("conversation", conversationId)
         }
-    } ?: MessageRepositoryImpl(database.messageDao()) { conversationId ->
-        cloudSyncRepository.requestLocalChange("conversation", conversationId)
-    }
+    } ?: roomRepositories!!.messages
 
-    val modelsDevRepository: ModelsDevRepository =
-        ModelsDevRepositoryImpl(appDirs.filesDir)
+    val modelsDevRepository: ModelsDevRepository = createModelsDevRepository(appDirs.filesDir)
 
     val apiRepository: ApiRepository = ApiRepositoryImpl(modelsDevRepository)
 
@@ -219,7 +169,7 @@ class AppContainer(
         RustCurrentAgentRepository(it, agentRepository)
     } ?: CurrentAgentRepositoryImpl(appPreferences, agentRepository)
 
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val applicationScope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     /** 首轮回复完成后的 LLM 会话标题生成（手机聊天流与 Wear 代处理流共用）。 */
     val conversationTitleGenerator: ConversationTitleGenerator = ConversationTitleGenerator(
@@ -237,9 +187,9 @@ class AppContainer(
         applicationScope.launch {
             if (appPreferences.cloudSession.first() != null) {
                 runCatching {
-                    cloudSyncRepository.refreshUser()
-                    cloudSyncRepository.sync()
-                    cloudSyncRepository.requestLocalSync()
+                    cloud.refreshUser()
+                    cloud.sync()
+                    cloud.requestLocalSync()
                 }
             }
             ensureBuiltinTitleAgent()
@@ -247,33 +197,20 @@ class AppContainer(
         }
     }
 
-    suspend fun clearAllDataAndReinit() = withContext(Dispatchers.IO) {
-        cloudSyncRepository.cancelPendingLocalSync()
+    suspend fun clearAllDataAndReinit() {
         localDataMutex.withLock {
-            appPreferences.userAvatar.first()?.let { avatarPath ->
-                FileKit.delete(avatarPath)
-            }
-            database.providerDao().deleteAll()
-            database.modelDao().deleteAll()
-            database.agentDao().deleteAll()
-            database.conversationDao().deleteAll()
-            database.messageDao().deleteAll()
-            appPreferences.clearAll()
-            FileKit.deleteRecursively(appDirs.filesDir)
-            FileKit.deleteRecursively(appDirs.cacheDir)
-            cloudSyncRepository.ensureBuiltinTitleAgent()
+            clearLocalData(appDirs, stores)
             createDefaultAgentIfNeededLocked()
         }
     }
 
     /**
      * 内置标题生成智能体的幂等种子（仅缺行时插入，不覆盖用户编辑）。
-     * 委托给 [CloudSyncRepository.ensureBuiltinTitleAgent]（fullSync 补种共用同一实现），
-     * 直接操作 DAO 绕过 repository，天然不触发云同步回调。
+     * 委托给 [CloudFacade.ensureBuiltinTitleAgent]（fullSync 补种共用同一实现）。
      */
     suspend fun ensureBuiltinTitleAgent() {
         localDataMutex.withLock {
-            cloudSyncRepository.ensureBuiltinTitleAgent()
+            cloud.ensureBuiltinTitleAgent()
         }
     }
 
@@ -289,7 +226,7 @@ class AppContainer(
         val existingDefault = agents.firstOrNull { it.isDefault }
         if (existingDefault == null) {
             // 没有默认 Agent，则创建一个
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val defaultAgent = Agent(
                 id = randomUuid(),
                 name = "默认 Agent",

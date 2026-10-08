@@ -105,7 +105,7 @@ fun AgentMarketScreen(
     onAgentClick: (String) -> Unit,
     onImported: () -> Unit,
     viewModel: AgentMarketViewModel = viewModel(
-        factory = AgentMarketViewModel.provideFactory(AppContainerHolder.instance.cloudSyncRepository)
+        factory = AgentMarketViewModel.provideFactory(AppContainerHolder.instance.cloud)
     )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -264,7 +264,7 @@ fun AgentMarketDetailScreen(
     onImported: () -> Unit,
     viewModel: AgentMarketDetailViewModel = viewModel(
         factory = AgentMarketDetailViewModel.provideFactory(
-            AppContainerHolder.instance.cloudSyncRepository,
+            AppContainerHolder.instance.cloud,
             marketAgentId
         )
     )

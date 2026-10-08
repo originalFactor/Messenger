@@ -21,8 +21,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import cc.ptoe.messenger.data.cloud.CloudMarketAgentUpdate
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.AgentRepository
@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.error_name_required
 import org.jetbrains.compose.resources.getString
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 import kotlin.reflect.KClass
 
@@ -92,7 +93,7 @@ class AgentEditViewModel(
     private val agentRepository: AgentRepository,
     private val modelRepository: ModelRepository,
     private val providerRepository: ProviderRepository,
-    private val cloudSyncRepository: CloudSyncRepository,
+    private val cloudSyncRepository: CloudFacade,
     agentId: String? = null
 ) : ViewModel() {
 
@@ -351,7 +352,7 @@ class AgentEditViewModel(
         }
 
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val maxTokensInt = currentState.maxTokens?.toIntOrNull()
             val claimDefault = currentState.pendingRole == ROLE_OPTION_DEFAULT
             val claimTitle = currentState.pendingRole == Agent.ROLE_TITLE
@@ -511,7 +512,7 @@ class AgentEditViewModel(
                 toolsEnabled = currentState.toolsEnabled,
                 toolsFollowDefault = currentState.toolsFollowDefault,
                 toolsConfig = currentState.toolsConfig,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = currentTimeMillis()
             )
         )
     }
@@ -530,7 +531,7 @@ class AgentEditViewModel(
             agentRepository: AgentRepository,
             modelRepository: ModelRepository,
             providerRepository: ProviderRepository,
-            cloudSyncRepository: CloudSyncRepository,
+            cloudSyncRepository: CloudFacade,
             agentId: String? = null
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

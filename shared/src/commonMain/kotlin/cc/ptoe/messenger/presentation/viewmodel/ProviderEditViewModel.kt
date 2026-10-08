@@ -34,6 +34,7 @@ import cc.ptoe.messenger.generated.resources.error_api_url_required
 import cc.ptoe.messenger.generated.resources.error_invalid_url
 import cc.ptoe.messenger.generated.resources.error_name_required
 import org.jetbrains.compose.resources.getString
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 import kotlin.reflect.KClass
 
@@ -167,7 +168,7 @@ class ProviderEditViewModel(
         }
 
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             val editingId = currentProviderId
             if (editingId != null) {
                 val existing = providerRepository.getById(editingId).first()

@@ -19,8 +19,9 @@ package cc.ptoe.messenger.data.repository
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.StoredAgentDto
 import cc.ptoe.messenger.data.remote.NetworkClient
-import cc.ptoe.messenger.data.util.FileKit
+import cc.ptoe.messenger.data.util.deleteFile
 import cc.ptoe.messenger.data.util.ToolsConfigCodec
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.repository.AgentRepository
@@ -41,7 +42,7 @@ class RustAgentRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Agent" || kind == "All" || kind == "Other") {
-                version.value = System.currentTimeMillis()
+                version.value = currentTimeMillis()
             }
         }
     }
@@ -70,7 +71,7 @@ class RustAgentRepository(
     override suspend fun insert(agent: Agent) {
         val dto = agent.toDto()
         coreBridge.upsertAgentJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(null, agent)
     }
 
@@ -78,13 +79,13 @@ class RustAgentRepository(
         val previous = getById(agent.id).first()
         val dto = agent.toDto()
         coreBridge.upsertAgentJson(NetworkClient.json.encodeToString(dto))
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(previous, agent)
     }
 
     override suspend fun clone(id: String): Agent? {
         val source = getById(id).first() ?: return null
-        val now = System.currentTimeMillis()
+        val now = currentTimeMillis()
         val cloned = source.copy(
             id = randomUuid(),
             name = "${source.name} (Copy)",
@@ -104,11 +105,11 @@ class RustAgentRepository(
 
         current.avatar?.let { avatarPath ->
             if (!avatarPath.startsWith("http://") && !avatarPath.startsWith("https://")) {
-                FileKit.delete(avatarPath)
+                deleteFile(avatarPath)
             }
         }
         coreBridge.deleteAgent(id)
-        version.value = System.currentTimeMillis()
+        version.value = currentTimeMillis()
         onChanged(current, null)
     }
 

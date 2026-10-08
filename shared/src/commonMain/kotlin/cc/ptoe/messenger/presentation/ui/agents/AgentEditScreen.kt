@@ -194,7 +194,7 @@ fun AgentEditScreen(
             agentRepository = AppContainerHolder.instance.agentRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
             providerRepository = AppContainerHolder.instance.providerRepository,
-            cloudSyncRepository = AppContainerHolder.instance.cloudSyncRepository,
+            cloudSyncRepository = AppContainerHolder.instance.cloud,
             agentId = agentId
         )
     )
@@ -202,7 +202,7 @@ fun AgentEditScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val providers by viewModel.providers.collectAsStateWithLifecycle(initialValue = emptyList())
     val models by viewModel.modelsForSelectedProvider.collectAsStateWithLifecycle(initialValue = emptyList())
-    val cloudUser by AppContainerHolder.instance.cloudSyncRepository.user.collectAsStateWithLifecycle(initialValue = null)
+    val cloudUser by AppContainerHolder.instance.cloud.user.collectAsStateWithLifecycle(initialValue = null)
 
     // 非默认、非标题生成器才允许接管默认 Agent 的配置
     val showFollowToggles = !uiState.isDefault && uiState.role != Agent.ROLE_TITLE
