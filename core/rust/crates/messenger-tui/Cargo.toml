@@ -1,0 +1,48 @@
+[package]
+name = "messenger-tui"
+version.workspace = true
+edition.workspace = true
+description = "Native Rust terminal client for the Messenger agent core (TARGET.md §16/§22)"
+
+[[bin]]
+name = "messenger-tui"
+path = "src/main.rs"
+
+# The integration tests (`tests/headless.rs`) drive the TUI through the same
+# entry points the binary uses, so the crate needs a library target too.
+[lib]
+name = "messenger_tui"
+path = "src/lib.rs"
+
+[dependencies]
+messenger-core = { path = "../messenger-core" }
+# Decoding `parts_json` needs `messenger_llm::domain::ContentPart`, and the
+# provider "fetch models" flow needs `messenger_llm::client::OpenAiClient`.
+messenger-llm = { path = "../messenger-llm" }
+messenger-store = { path = "../messenger-store" }
+messenger-tools = { path = "../messenger-tools" }
+messenger-document = { path = "../messenger-document" }
+messenger-markdown = { path = "../messenger-markdown" }
+messenger-highlight = { path = "../messenger-highlight" }
+messenger-sync = { path = "../messenger-sync" }
+messenger-mcp = { path = "../messenger-mcp" }
+# Implementing `messenger_core::agent::ToolHost` requires the same attribute.
+async-trait = "0.1"
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+globset = "0.4"
+walkdir = "2"
+dirs = "6"
+unicode-width = "0.2"
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

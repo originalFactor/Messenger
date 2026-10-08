@@ -374,3 +374,92 @@ async fn replace_local_restores_from_cloud() {
     assert!(store.get_agent("local-only").unwrap().is_none());
     assert!(store.get_agent("a1").unwrap().is_some());
 }
+
+#[tokio::test]
+async fn login_captures_and_persists_the_session_cookie() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/auth/login"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .append_header(
+                    "Set-Cookie",
+                    "messenger_session=abc123; Path=/; HttpOnly; SameSite=Lax",
+                )
+                .set_body_json(serde_json::json!({
+                    "user": {"id": "acct-1", "email": "a@b.c", "syncVersion": 5,
+                             "aiApiKey": "sk-cloud"}
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    let user = engine.login("a@b.c", "pw").await.unwrap();
+    assert_eq!(user.email, "a@b.c");
+
+    // The session must be readable from the store: the TUI has no cookie jar,
+    // so without this write every later request is unauthenticated.
+    assert_eq!(
+        store.kv_get(crate::sync::KV_SESSION).unwrap().as_deref(),
+        Some("messenger_session=abc123")
+    );
+    assert_eq!(
+        store.kv_get(crate::sync::KV_SESSION_HOST).unwrap().as_deref(),
+        Some(server.uri().as_str())
+    );
+    assert!(store.kv_get(crate::sync::KV_USER).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn login_without_a_set_cookie_header_keeps_the_previous_session() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/auth/login"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "user": {"id": "acct-2", "email": "c@d.e", "syncVersion": 6}
+        })))
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    engine
+        .save_session(&Session {
+            cookie: Some("messenger_session=keepme".into()),
+            host: Some(server.uri()),
+        })
+        .unwrap();
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    engine.login("c@d.e", "pw").await.unwrap();
+    assert_eq!(
+        store.kv_get(crate::sync::KV_SESSION).unwrap().as_deref(),
+        Some("messenger_session=keepme")
+    );
+}
+
+#[tokio::test]
+async fn failed_login_surfaces_the_server_error_message() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/auth/login"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": {"message": "Invalid credentials"}})),
+        )
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    let error = engine.login("a@b.c", "nope").await.unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("Invalid credentials"), "{text}");
+    assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
+}

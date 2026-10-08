@@ -47,13 +47,49 @@ impl CloudApiClient {
     // -- auth --
 
     pub async fn register(&self, url: &str, body: &CredentialsRequest) -> CloudResult<CloudUser> {
-        let resp: UserResponse = self.post_json(url, body).await?;
-        Ok(resp.user)
+        let (user, _) = self.login_capturing_cookie(url, body).await?;
+        Ok(user)
     }
 
     pub async fn login(&self, url: &str, body: &CredentialsRequest) -> CloudResult<CloudUser> {
-        let resp: UserResponse = self.post_json(url, body).await?;
-        Ok(resp.user)
+        let (user, _) = self.login_capturing_cookie(url, body).await?;
+        Ok(user)
+    }
+
+    /// POST credentials and return the user plus the `messenger_session`
+    /// `Set-Cookie` value from the response (`None` when the server omitted
+    /// it).
+    ///
+    /// The session cookie is the only auth material the server ever returns;
+    /// callers without a cookie jar (the TUI) must persist it from here.
+    pub async fn login_capturing_cookie(
+        &self,
+        url: &str,
+        body: &CredentialsRequest,
+    ) -> CloudResult<(CloudUser, Option<String>)> {
+        let response = self
+            .add_session(self.http.post(url).json(body))
+            .send()
+            .await
+            .map_err(|e| CloudError::Network(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            let code = status.as_u16();
+            let raw = response.text().await.unwrap_or_default();
+            let message = if raw.is_empty() {
+                format!("HTTP {code}")
+            } else {
+                crate::documents::extract_error_message(&raw)
+            };
+            return Err(CloudError::Http { status: code, message });
+        }
+        let cookie = session_cookie(&response);
+        let user = response
+            .json::<UserResponse>()
+            .await
+            .map_err(|e| CloudError::InvalidBody(e.to_string()))?
+            .user;
+        Ok((user, cookie))
     }
 
     pub async fn logout(&self, url: &str) -> CloudResult<SuccessResponse> {
@@ -372,6 +408,21 @@ impl CloudError {
     pub fn network(error: impl std::fmt::Display) -> Self {
         CloudError::Network(error.to_string())
     }
+}
+
+/// Extract the `messenger_session=…` pair from a response's `Set-Cookie`
+/// headers (`None` when the server sent no such cookie). Only the
+/// `name=value` prefix is kept — the attribute list is re-derived by the
+/// server on the next request.
+fn session_cookie(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").trim())
+        .find(|pair| pair.starts_with("messenger_session="))
+        .map(str::to_string)
 }
 
 fn sync_params(since: i64, collection: &str, cursor: Option<&str>, limit: u32) -> Vec<(String, String)> {

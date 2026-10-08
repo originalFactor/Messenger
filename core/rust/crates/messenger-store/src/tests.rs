@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use tempfile::TempDir;
 
-use crate::import::{import_legacy, ImportSummary, IMPORT_MARKER, LEGACY_DB_FILE};
+use crate::import::{import_legacy, ImportSummary, IMPORT_MARKER, LEGACY_DB_FILE, LEGACY_DB_FILE_JVM};
 use crate::model::*;
 use crate::store::{EntityKind, Store};
 
@@ -287,6 +287,54 @@ fn legacy_import_copies_room_rows_and_is_idempotent() {
 
     // Marker recorded.
     assert!(store.kv_get(IMPORT_MARKER).unwrap().is_some());
+}
+
+#[test]
+fn legacy_import_picks_up_the_jvm_desktop_file_name() {
+    let dir = TempDir::new().unwrap();
+    let legacy_dir = dir.path().join("databases");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+
+    // The Desktop app's Room file carries the `.db` suffix.
+    assert!(!legacy_dir.join(LEGACY_DB_FILE).exists());
+    let legacy_path = legacy_dir.join(LEGACY_DB_FILE_JVM);
+    let conn = rusqlite::Connection::open(&legacy_path).unwrap();
+    for ddl in crate::schema::CREATE_TABLES {
+        conn.execute_batch(ddl).unwrap();
+    }
+    conn.execute(
+        "INSERT INTO providers (id, name, baseUrl, apiKey, createdAt, updatedAt) VALUES ('p1','n','u','k',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agents (id, name, systemPrompt, description, role, toolsConfig, createdAt, updatedAt)
+         VALUES ('a1','agent','sp','desc','chat','',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO conversations (id, title, providerId, agentId, writable, createdAt, updatedAt)
+         VALUES ('c1','t','p1','a1',0,1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO messages (id, conversationId, role, content, partsJson, timestamp, status)
+         VALUES ('m1','c1','user','hi',NULL,1,'sent')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = Store::open_memory().unwrap();
+    let summary = import_legacy(&store, &legacy_dir, 9_999).unwrap().unwrap();
+    assert_eq!(
+        summary,
+        ImportSummary { providers: 1, models: 0, agents: 1, conversations: 1, messages: 1 }
+    );
+    assert_eq!(store.get_provider("p1").unwrap().unwrap().name, "n");
+    assert_eq!(store.list_messages_by_conversation("c1").unwrap().len(), 1);
 }
 
 #[test]

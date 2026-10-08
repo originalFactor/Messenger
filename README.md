@@ -55,6 +55,7 @@ Chat with your favourite AI models on your phone, tablet, or desktop — with a 
 Key highlights:
 
 - **Chat anywhere** — Works on your phone, tablet, Wear OS watch, and desktop (JVM)
+- **Chat in your terminal too** — `messenger-tui` is a native Rust client that links the same agent core directly (no Kotlin, no bridge): the same agents, providers, MCP servers and cloud account, rendered for an ANSI terminal, with its own store and an optional one-shot import of the Desktop app's data
 - **Bring your own key** — Use API keys from your preferred AI providers, no middleman
 - **Custom AI agents** — Create and switch between different AI personas and assistants
 - **Built-in terminal tool** — Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
@@ -129,6 +130,19 @@ To get a local copy up and running, follow these simple steps.
 6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.
+
+### Terminal client (optional)
+
+`messenger-tui` is a native Rust terminal client built on the same agent core as the mobile and desktop apps — it links the Rust crates directly, with no bridge. It keeps its own store at `~/.messenger/tui/store.db`, reads `settings.toml` next to it, and can import an existing Desktop database once:
+
+```sh
+cd core/rust
+cargo run -p messenger-tui                                   # start it
+cargo run -p messenger-tui -- --import-desktop               # also import the Desktop app's data (one-shot)
+cargo run -p messenger-tui -- --help                         # every flag
+```
+
+Inside, `F1`–`F6` switch between conversations, chat, agents, providers, MCP servers and settings; `?` lists every key binding. In the chat view all printable keys type into the message, so its commands are `Ctrl`-modified (`Ctrl+W` toggles read-only/writable tool mode, `Esc` cancels a running turn). Tools execute natively in your shell and in the workspace directory (`~/.messenger/agent-runtime/workspace`), and signing in from the Settings view syncs the same cloud account as the other apps. Math renders as its LaTeX source — a terminal cannot stack fractions.
 
 _For more details on architecture, conventions, and hard constraints, please refer to [AGENTS.md](AGENTS.md)_
 

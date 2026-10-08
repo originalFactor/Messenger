@@ -163,6 +163,16 @@ impl McpClient {
         self.tools.lock().await.clone()
     }
 
+    /// This client's server configuration id (the engine uses it to reconcile
+    /// its live client list against the persisted server list).
+    pub fn config_id(&self) -> String {
+        self.config.id.clone()
+    }
+
+    pub fn config(&self) -> &McpServerConfig {
+        &self.config
+    }
+
     fn to_chat_tool(server_name: &str, tool: McpToolDefinition) -> McpChatTool {
         McpChatTool {
             name: format!("{server_name}_{}", tool.name),

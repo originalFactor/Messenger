@@ -130,8 +130,11 @@ impl<'a> SyncEngine<'a> {
             email: email.to_string(),
             password: password.to_string(),
         };
-        let user = self.client.login(&self.endpoint("api/auth/login"), &body).await?;
-        self.complete_authentication(&user).await?;
+        let (user, cookie) = self
+            .client
+            .login_capturing_cookie(&self.endpoint("api/auth/login"), &body)
+            .await?;
+        self.complete_authentication(&user, cookie).await?;
         Ok(user)
     }
 
@@ -140,8 +143,11 @@ impl<'a> SyncEngine<'a> {
             email: email.to_string(),
             password: password.to_string(),
         };
-        let user = self.client.register(&self.endpoint("api/auth/register"), &body).await?;
-        self.complete_authentication(&user).await?;
+        let (user, cookie) = self
+            .client
+            .login_capturing_cookie(&self.endpoint("api/auth/register"), &body)
+            .await?;
+        self.complete_authentication(&user, cookie).await?;
         Ok(user)
     }
 
@@ -157,10 +163,22 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    async fn complete_authentication(&self, user: &CloudUser) -> CloudResult<()> {
-        // The login/register responses set the session cookie; this engine
-        // relies on the caller capturing it (FFI layer surfaces Set-Cookie).
+    async fn complete_authentication(
+        &self,
+        user: &CloudUser,
+        cookie: Option<String>,
+    ) -> CloudResult<()> {
         self.save_user(user).map_err(CloudError::Network)?;
+        // Without this the session never reaches the store: the browser build
+        // works only because its cookie jar supplies it, and every other
+        // target would silently have no auth for the next pull.
+        if let Some(cookie) = cookie {
+            self.save_session(&Session {
+                cookie: Some(cookie),
+                host: Some(self.server_url()),
+            })
+            .map_err(CloudError::Network)?;
+        }
         Ok(())
     }
 

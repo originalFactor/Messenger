@@ -12,6 +12,7 @@ members = [
     "crates/messenger-markdown",
     "crates/messenger-highlight",
     "crates/messenger-wasm",
+    "crates/messenger-tui",
 ]
 
 [workspace.package]

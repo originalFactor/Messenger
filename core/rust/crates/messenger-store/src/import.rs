@@ -21,6 +21,9 @@ use crate::model::{
 pub const IMPORT_MARKER: &str = "legacy_import_done";
 /// Room's legacy database file name (no extension on Android).
 pub const LEGACY_DB_FILE: &str = "messenger_database";
+/// Room's file name on the JVM targets (`Room.databaseBuilder` appends
+/// `.db`), i.e. the Desktop app's `filesDir/databases/messenger_database.db`.
+pub const LEGACY_DB_FILE_JVM: &str = "messenger_database.db";
 
 /// Per-table row counts copied by a successful import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -43,12 +46,17 @@ pub fn import_legacy(
     if store.kv_get(IMPORT_MARKER)?.is_some() {
         return Ok(None);
     }
-    let legacy_db = legacy_dir.join(LEGACY_DB_FILE);
-    if !legacy_db.exists() {
+    // Android keeps the extensionless Room file; the JVM targets (Desktop)
+    // get `messenger_database.db` appended by `Room.databaseBuilder`.
+    let legacy_db = [LEGACY_DB_FILE, LEGACY_DB_FILE_JVM]
+        .iter()
+        .map(|name| legacy_dir.join(name))
+        .find(|path| path.exists());
+    let Some(legacy_db) = legacy_db else {
         // Fresh installs: record the marker so we never rescan.
         store.kv_set(IMPORT_MARKER, &format!("none:{now_ms}"))?;
         return Ok(None);
-    }
+    };
 
     let staging = staging_copy(&legacy_db, store)?;
     let summary = copy_rows(&staging, store)?;
