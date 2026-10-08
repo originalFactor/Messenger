@@ -619,6 +619,10 @@ If a change makes any section of AGENTS.md outdated or incomplete, update it in 
 
 ## Web platform (Compose Multiplatform / Kotlin/Wasm)
 
+- **CJK/text rendering**: Compose Multiplatform on web has NO font fallback before 1.12.0 — Skia-on-wasm ships a Latin-only default font, so every CJK glyph rendered as tofu (□) while ASCII looked fine. The project therefore tracks **CMP 1.12.x**, which added automatic fallback: unresolved characters trigger an on-demand Noto font-subset download (the correct CJK variant is picked from `navigator.language`), and the affected text recomposes once it arrives. That is why `composeMultiplatform`/`jbComposeMaterial3` must not be downgraded below 1.12. Note the tofu can briefly reappear on first paint, and the fallback needs network access to `fonts.gstatic.com`.
+- **`:shared` disables CMP's `checkComposeUiTestConfigurationForWasmJs`**: from 1.12 the plugin requires `binaries.executable()` on a wasmJs target that has Compose UI tests, so Skiko can be bundled by webpack. The check fires on `:shared` because `wasmJsMain` depends on Compose UI, but that module is a LIBRARY with zero wasmJs test sources (the shared tests live in `jvmSharedTest`, which never compiles for wasm) — and a library target must not declare an executable binary (`:webApp` owns the web entry point). The inapplicable check is turned off in `shared/build.gradle.kts`.
+
+
 The Web client is a third Compose Multiplatform target of the same KMP app — not a second UI — so the browser runs the identical screens, repositories and design system.
 
 - **Targets**: `shared` declares `wasmJs { browser() }`; the browser entry point lives in `:webApp` (`webApp/src/wasmJsMain/kotlin/cc/ptoe/messenger/web/Main.kt`), which installs the bridge, builds the `AppContainer`, then calls `ComposeViewport(document.body)`. `:webApp` owns `binaries.executable()` — `:shared` is a library and must not.

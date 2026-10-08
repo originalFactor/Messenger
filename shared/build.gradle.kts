@@ -181,6 +181,17 @@ kotlin {
     }
 }
 
+// Compose 1.12 gates wasmJs tests behind a check that requires
+// `binaries.executable()` so the Skiko runtime can be bundled by webpack. It
+// fires here because wasmJsMain depends on Compose UI, but this module is a
+// LIBRARY with no wasmJs test sources at all — the shared tests live in
+// jvmSharedTest, which never compiles for wasm. Declaring an executable binary
+// on a library target would be wrong (the web entry point belongs to :webApp),
+// so the inapplicable check is disabled instead.
+tasks.matching { it.name == "checkComposeUiTestConfigurationForWasmJs" }.configureEach {
+    enabled = false
+}
+
 compose.resources {
     packageOfResClass = "cc.ptoe.messenger.generated.resources"
     generateResClass = always
