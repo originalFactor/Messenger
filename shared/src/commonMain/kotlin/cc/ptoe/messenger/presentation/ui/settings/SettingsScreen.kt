@@ -73,6 +73,7 @@ import cc.ptoe.messenger.presentation.theme.ThemeMode
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.ListItem
+import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
@@ -181,8 +182,11 @@ fun SettingsScreen(
                     .widthIn(max = 720.dp)
                     .navigationBarsPadding(),
                 // Keep the last setting clear of the floating bottom navigation
-                // pill (80 dp bar + 12 dp gap) which the list scrolls beneath.
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 92.dp)
+                // pill (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
+                // rail layout (desktop / large windows), which has no pill.
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    bottom = LocalBottomNavClearance.current
+                )
             ) {
             item {
                 SectionHeader(title = stringResource(Res.string.settings_personal))

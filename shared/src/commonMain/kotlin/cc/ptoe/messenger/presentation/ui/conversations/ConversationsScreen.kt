@@ -50,6 +50,7 @@ import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.ConversationListItem
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.InputDialog
+import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
 import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
@@ -155,11 +156,12 @@ fun ConversationsScreen(
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
                     // Keep the FAB above the floating bottom navigation pill
-                    // (80 dp bar + 12 dp gap) that the page scrolls beneath.
+                    // (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
+                    // rail layout (desktop / large windows), which has no pill.
                     androidx.compose.foundation.layout.Box(
                         modifier = Modifier
                             .navigationBarsPadding()
-                            .padding(bottom = 92.dp)
+                            .padding(bottom = LocalBottomNavClearance.current)
                     ) {
                         FloatingActionButton(
                             onClick = { showAgentPicker = true }
@@ -185,7 +187,9 @@ fun ConversationsScreen(
                         .fillMaxSize()
                         .padding(innerPadding)
                         .navigationBarsPadding(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 92.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        bottom = LocalBottomNavClearance.current
+                    )
                 ) {
                     items(conversations, key = { it.id }) { conversation ->
                         ConversationListItem(
