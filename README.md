@@ -18,7 +18,7 @@
   <p align="center">
     A beautifully designed, cross-platform AI chat app.
     <br />
-    Chat with your favourite AI models on your phone, tablet, desktop, or Wear OS watch — Material 3 design, Bring Your Own Key, fully open-source and offline-capable.
+    Chat with your favourite AI models on your phone, tablet, desktop, Wear OS watch, browser, or terminal — Material 3 design, Bring Your Own Key, fully open-source and offline-capable.
   </p>
 </div>
 
@@ -38,7 +38,13 @@
         <li><a href="#installation">Installation</a></li>
       </ul>
     </li>
-    <li><a href="#usage">Usage</a></li>
+    <li>
+      <a href="#usage">Usage</a>
+      <ul>
+        <li><a href="#browser-optional">Browser (optional)</a></li>
+        <li><a href="#terminal-client-optional">Terminal client (optional)</a></li>
+      </ul>
+    </li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
@@ -50,12 +56,13 @@
 
 Messenger is a Material-3-designed, cross-platform LLM chat application built with Kotlin Multiplatform and Jetpack Compose. It is fully open-source, free, and offline-capable, using a BYOK (Bring Your Own Key) model.
 
-Chat with your favourite AI models on your phone, tablet, or desktop — with a clean, modern interface that feels great to use. A shared Kotlin Multiplatform core keeps Android and Desktop in lockstep, and the Wear OS companion keeps chat simple by syncing your agents from mobile and using your phone as the configured AI backend.
+The same agent core powers four surfaces: a Kotlin Multiplatform app for Android and desktop, a Wear OS companion, a browser client compiled to WebAssembly, and a native Rust terminal client. Chat with your favourite AI models wherever you are — with a clean, modern interface that feels great to use. A shared Kotlin Multiplatform core keeps Android and Desktop in lockstep, the Wear OS companion keeps chat simple by syncing your agents from mobile and using your phone as the configured AI backend, and the two Rust targets link the core crates directly.
 
 Key highlights:
 
-- **Chat anywhere** — Works on your phone, tablet, Wear OS watch, and desktop (JVM)
-- **Chat in your terminal too** — `messenger-tui` is a native Rust client that links the same agent core directly (no Kotlin, no bridge): the same agents, providers, MCP servers and cloud account, rendered for an ANSI terminal, with its own store and an optional one-shot import of the Desktop app's data
+- **Chat anywhere** — Works on your phone, tablet, Wear OS watch, desktop (JVM), and in your browser
+- **In your browser too** — the web client is the same Compose UI compiled to WebAssembly on the Rust core, served from the account server at `/app`; sign in and your agents, providers and conversations sync like everywhere else
+- **In your terminal too** — `messenger-tui` is a native Rust client that links the same agent core directly (no Kotlin, no bridge): the same agents, providers, MCP servers and cloud account, rendered for an ANSI terminal, with its own store and an optional one-shot import of the Desktop app's data
 - **Bring your own key** — Use API keys from your preferred AI providers, no middleman
 - **Custom AI agents** — Create and switch between different AI personas and assistants
 - **Built-in terminal tool** — Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
@@ -77,6 +84,10 @@ Key highlights:
 * [![Room][Room-badge]][Room-url]
 * [![Retrofit][Retrofit-badge]][Retrofit-url]
 * [![OkHttp][OkHttp-badge]][OkHttp-url]
+* [![Rust][Rust-badge]][Rust-url]
+* [![Ratatui][Ratatui-badge]][Ratatui-url]
+* [![Crossterm][Crossterm-badge]][Crossterm-url]
+* [![Rust / Kotlin-Wasm][Wasm-badge]][Wasm-url]
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -89,6 +100,11 @@ To get a local copy up and running, follow these simple steps.
 * JDK 17
 * Android SDK (Compile SDK 37, Target SDK 36, Min SDK 30)
 * Gradle wrapper is included in the repository
+* Rust toolchain (only for the terminal client and the browser build — the Gradle builds do not need it)
+  ```sh
+  rustup target add wasm32-unknown-unknown                            # browser build
+  cargo install wasm-bindgen-cli --version 0.2.129 --locked            # must match core/rust/Cargo.lock
+  ```
 
 ### Installation
 
@@ -112,6 +128,15 @@ To get a local copy up and running, follow these simple steps.
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
    Android release builds produce the same three ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+5. Build the browser client and the terminal client (optional)
+   ```sh
+   ./gradlew :webApp:wasmJsBrowserDevelopmentRun   # browser dev server (COOP/COEP on)
+   ./gradlew :webApp:wasmJsBrowserDistribution     # production bundle under webApp/build/dist
+   ./gradlew :webApp:copyWebAppDistribution        # local: serve it from server/public/app/
+
+   cd core/rust && cargo build -p messenger-tui     # terminal client
+   ```
+   The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI republishes it to a rolling `web-client` GitHub release, and the account server (`server/`) downloads and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
 6. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
    git remote set-url origin ECSDevs/Messenger
@@ -122,22 +147,27 @@ To get a local copy up and running, follow these simple steps.
 
 ## Usage
 
-1. Install Messenger on your phone, tablet, desktop, or Wear OS watch
+1. Install Messenger on your phone, tablet, desktop, Wear OS watch, or browser
 2. Add your API key from your preferred AI provider
 3. Pick a model and start chatting
 4. Create custom agents for different tasks
-5. Enable **Tools** for an agent when terminal access is needed. Terminal commands are deliberately read-only: shell operators, interpreters, redirection, absolute paths, and path traversal are rejected. In manual mode, Messenger asks for confirmation before each tool call; use the explicit workspace edit/create tools for file changes.
+5. Enable **Tools** for an agent when terminal access is needed. On Android, terminal commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI — no separate Termux installation is required. Read-only mode (the default) exposes inspection commands only; switch an agent to writable mode to let it edit and create files in that workspace.
 6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
+7. (Optional) Sign in to a Messenger account to sync agents, providers and conversations across every client. Each client seeds its own local store and mirrors the account's data into it, so the same conversation is available on your phone, in your browser and in your terminal.
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.
 
+### Browser (optional)
+
+The browser client is the same UI as the desktop app, compiled to WebAssembly and backed by the same Rust agent core (its SQLite store is persisted in the browser's origin-private file system). The production bundle is served by the account server at `/app` alongside the website and console — sign in there and your agents, providers and conversations sync like everywhere else. Because it runs in a browser sandbox it has no shell or filesystem access, so tools are disabled there (remote MCP servers over SSE still work); the terminal and desktop clients are the ones with tools.
+
 ### Terminal client (optional)
 
-`messenger-tui` is a native Rust terminal client built on the same agent core as the mobile and desktop apps — it links the Rust crates directly, with no bridge. It keeps its own store at `~/.messenger/tui/store.db`, reads `settings.toml` next to it, and can import an existing Desktop database once:
+`messenger-tui` is a native Rust terminal client built on the same agent core — it links the Rust crates directly, with no bridge. It keeps its own store at `~/.messenger/tui/store.db`, reads `settings.toml` next to it, and can import an existing Desktop database once:
 
 ```sh
 cd core/rust
-cargo run -p messenger-tui                                   # start it
+cargo run -p messenger-tui                                    # start it
 cargo run -p messenger-tui -- --import-desktop               # also import the Desktop app's data (one-shot)
 cargo run -p messenger-tui -- --help                         # every flag
 ```
@@ -189,6 +219,9 @@ ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.co
 * [Jetpack Compose](https://developer.android.com/jetpack/compose)
 * [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/)
 * [Material 3](https://m3.material.io/)
+* [Ratatui](https://ratatui.rs/) / [Crossterm](https://github.com/crossterm-rs/crossterm) — terminal rendering and input for the Rust terminal client
+* [syntect](https://github.com/trishume/syntect) — Sublime Text syntax engine behind code highlighting in all clients
+* [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) — Rust ↔ JavaScript boundary for the browser client
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -221,3 +254,11 @@ ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.co
 [Retrofit-url]: https://square.github.io/retrofit/
 [OkHttp-badge]: https://img.shields.io/badge/OkHttp-48B883?style=for-the-badge&logo=square&logoColor=white
 [OkHttp-url]: https://square.github.io/okhttp/
+[Rust-badge]: https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white
+[Rust-url]: https://www.rust-lang.org/
+[Ratatui-badge]: https://img.shields.io/badge/Ratatui-000000?style=for-the-badge&logo=rust&logoColor=white
+[Ratatui-url]: https://ratatui.rs/
+[Crossterm-badge]: https://img.shields.io/badge/Crossterm-000000?style=for-the-badge&logo=rust&logoColor=white
+[Crossterm-url]: https://github.com/crossterm-rs/crossterm
+[Wasm-badge]: https://img.shields.io/badge/Kotlin%2Fwasm-2BDE21?style=for-the-badge&logo=kotlin&logoColor=white
+[Wasm-url]: https://kotlinlang.org/docs/multiplatform.html
