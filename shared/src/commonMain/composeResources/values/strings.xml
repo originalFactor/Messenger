@@ -402,7 +402,6 @@
     <string name="tool_terminal_desc">Run commands in the Agent workspace</string>
     <string name="chat_mode_readonly">Read-only mode</string>
     <string name="chat_mode_writable">Writable mode</string>
-    <string name="error_tool_rounds_exceeded">Tool call rounds exceeded the limit</string>
 
     <!-- Errors / Validation -->
     <string name="error_title_generate_failed">Title generation failed; fell back to a truncated title</string>

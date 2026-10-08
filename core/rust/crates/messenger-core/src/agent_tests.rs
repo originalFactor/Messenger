@@ -3,7 +3,7 @@
 //! text turn, verifying store persistence, event ordering, title fallback,
 //! and cancellation finalization.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use messenger_llm::client::OpenAiClient;
 use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredProvider};
@@ -20,7 +20,7 @@ struct ScriptedResponder {
 
 impl wiremock::Respond for ScriptedResponder {
     fn respond(&self, _request: &wiremock::Request) -> wiremock::ResponseTemplate {
-        let mut bodies = self.bodies.lock().unwrap();
+        let mut bodies = self.bodies.lock();
         let body = bodies.pop_front().unwrap_or_else(|| "data: [DONE]\n\n".to_string());
         wiremock::ResponseTemplate::new(200).set_body_string(body)
     }
@@ -32,7 +32,7 @@ struct RecordingSink(Mutex<Vec<AgentEvent>>);
 
 impl TurnSink for RecordingSink {
     fn on_event(&self, event: &AgentEvent) {
-        self.0.lock().unwrap().push(event.clone());
+        self.0.lock().push(event.clone());
     }
 }
 
@@ -243,7 +243,7 @@ async fn full_tool_round_persists_rows_and_finishes() {
     assert_eq!(final_row.status, "sent");
     assert_eq!(final_row.content, "Here are the files.");
 
-    let events = sink.0.lock().unwrap();
+    let events = sink.0.lock();
     eprintln!("EVENTS: {events:?}");
     let messages_dbg: Vec<_> = store.list_messages_by_conversation("c1").unwrap();
     eprintln!("ROWS: {messages_dbg:?}");
@@ -296,7 +296,7 @@ async fn plain_text_turn_sets_fallback_title() {
 
     let conversation = store.get_conversation("c1").unwrap().unwrap();
     assert_eq!(conversation.title, "list the files");
-    let events = sink.0.lock().unwrap();
+    let events = sink.0.lock();
     assert!(events
         .iter()
         .any(|e| matches!(e, AgentEvent::TitleGenerated { title } if title == "list the files")));
@@ -328,7 +328,7 @@ async fn cancellation_finalizes_partial_rows() {
         .await
         .unwrap();
 
-    let events = sink.0.lock().unwrap();
+    let events = sink.0.lock();
     eprintln!("EVENTS: {events:?}");
     assert!(matches!(events.last(), Some(AgentEvent::Cancelled)));
     // No error bubble row was written by the turn itself.
@@ -339,6 +339,52 @@ async fn cancellation_finalizes_partial_rows() {
         .filter(|m| m.status == "error")
         .collect();
     assert!(error_rows.is_empty());
+}
+
+/// The turn loop has no round-count cap: many consecutive tool rounds must
+/// still end on the model's final text round instead of an
+/// `error_tool_rounds_exceeded` failure.
+#[tokio::test]
+async fn many_tool_rounds_are_unbounded_and_still_finish() {
+    const ROUNDS: usize = 25;
+
+    let server = wiremock::MockServer::start().await;
+    let mut bodies: VecDeque<String> = (0..ROUNDS)
+        .map(|i| tool_call_stream("terminal", &format!("call_{i}")))
+        .collect();
+    bodies.push_back(text_stream("Done after many rounds."));
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ScriptedResponder {
+            bodies: Mutex::new(bodies),
+        })
+        .mount(&server)
+        .await;
+
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    run_chat_turn(
+        &store,
+        &StaticToolHost,
+        &sink,
+        &turn_request(&server.uri()),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let messages = store.list_messages_by_conversation("c1").unwrap();
+    // user + (assistant tool-call round + tool result) × ROUNDS + final text
+    assert_eq!(messages.len(), 1 + ROUNDS * 2 + 1);
+
+    let final_row = messages.last().unwrap();
+    assert_eq!(final_row.role, "assistant");
+    assert_eq!(final_row.status, "sent");
+    assert_eq!(final_row.content, "Done after many rounds.");
+
+    assert!(messages.iter().all(|m| m.status != "error"));
+    let events = sink.0.lock();
+    assert!(matches!(events.last(), Some(AgentEvent::Finished { .. })));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error { .. })));
 }
 
 /// The LLM client handles plain HTTP; smoke-check OpenAiClient construction

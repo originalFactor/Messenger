@@ -401,7 +401,6 @@
     <string name="tool_terminal_desc">在 Agent 工作区中运行命令</string>
     <string name="chat_mode_readonly">只读模式</string>
     <string name="chat_mode_writable">可写模式</string>
-    <string name="error_tool_rounds_exceeded">工具调用轮数超出上限</string>
 
     <!-- Errors / Validation -->
     <string name="error_title_generate_failed">标题生成失败，已回退为截断标题</string>

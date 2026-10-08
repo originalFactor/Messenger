@@ -70,7 +70,6 @@ import cc.ptoe.messenger.generated.resources.error_configure_model_first
 import cc.ptoe.messenger.generated.resources.error_context_summarize_failed
 import cc.ptoe.messenger.generated.resources.error_no_available_model
 import cc.ptoe.messenger.generated.resources.error_read_image_failed
-import cc.ptoe.messenger.generated.resources.error_tool_rounds_exceeded
 import cc.ptoe.messenger.generated.resources.error_unknown
 import cc.ptoe.messenger.generated.resources.tool_interrupted_result
 import cc.ptoe.messenger.generated.resources.tool_unknown_tool
@@ -723,7 +722,7 @@ class ChatViewModel(
      * 单次发送的代理循环（generateResponse / retrySend 共用核心）：
      * 流式一轮 → 模型请求工具调用（[ChatStreamEvent.Done.toolCalls] 非空）时
      * 逐个确认并执行工具、把结果以 role=TOOL 行写回历史 → 重建上下文进入下一轮，
-     * 直到模型给出最终文本（写入 [targetMessage] 行）或出错/超出轮数上限。
+     * 直到模型给出最终文本（写入 [targetMessage] 行）或出错/取消；工具轮数不设上限。
      *
      * 工具轮的 assistant 消息（轮内文本 + ToolCall parts）以独立行落库，
      * [targetMessage] 始终承载最终文本；因此工具配对在历史中保持完整，
@@ -783,10 +782,8 @@ class ChatViewModel(
                 val toolsByName = toolsForRequest?.associateBy { it.name } ?: emptyMap()
                 var excludeId: String? = if (excludeTargetFromHistory) targetMessage.id else null
 
-                var round = 0
                 var turnComplete = false
                 while (!turnComplete) {
-                    round++
                     hasFinished = false
                     // 本轮是否为工具调用轮（Done 事件写回；一轮流会因 finish_reason
                     // 块与 [DONE] 各发一次 Done，须防重复处理）
@@ -923,22 +920,6 @@ class ChatViewModel(
                         return@launch
                     }
                     val calls = toolRoundCalls ?: return@launch
-                    if (round >= MAX_TOOL_ROUNDS) {
-                        // 防失控：轮数上限后不再执行工具，按错误收尾
-                        val errorMsg = getString(Res.string.error_tool_rounds_exceeded)
-                        saveStreamResult(
-                            targetMessage,
-                            "",
-                            conversationId,
-                            errorMsg,
-                            bumpedFinalTimestamp()
-                        )
-                        setError(errorMsg)
-                        _streamingContent.value = null
-                        _streamingMessageId.value = null
-                        _isGenerating.value = false
-                        return@launch
-                    }
                     executeToolCalls(
                         conversationId = conversationId,
                         calls = calls,
@@ -1401,8 +1382,6 @@ class ChatViewModel(
         private const val SUMMARY_KEEP_COUNT = 10
         /** 注入请求的折叠摘要 system 消息的占位 id。 */
         private const val SUMMARY_MESSAGE_ID = "context-summary"
-        /** 单次发送的代理循环工具调用轮数上限（防失控）。 */
-        private const val MAX_TOOL_ROUNDS = 10
 
         fun provideFactory(
             messageRepository: MessageRepository,

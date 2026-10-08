@@ -29,9 +29,6 @@ use crate::title::{
     build_title_transcript, fallback_title, is_untitled_conversation, sanitize_generated_title,
 };
 
-/// Max tool rounds per turn before failing with `error_tool_rounds_exceeded`.
-pub const MAX_TOOL_ROUNDS: u32 = 10;
-
 /// Events the turn reports to the UI. Errors carry stable codes; the FFI
 /// facade maps them to localized strings.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,7 +165,9 @@ pub async fn run_chat_turn(
     let mut current_content = String::new();
     let mut round: u32 = 0;
 
-    while round < MAX_TOOL_ROUNDS {
+    // Unbounded: the turn ends on the model's final text round, an API error,
+    // or user cancellation — tool rounds are never cut off by a round count.
+    loop {
         if cancel.is_cancelled() {
             return finalize_cancellation(store, sink, &placeholder_id).await;
         }
@@ -399,17 +398,6 @@ pub async fn run_chat_turn(
             });
         }
     }
-
-    // Round limit exhausted: fail the turn.
-    let mut failed = placeholder.clone();
-    failed.status = "error".into();
-    failed.error_message = Some("error_tool_rounds_exceeded".into());
-    let _ = store.upsert_message(&failed);
-    sink.on_event(&AgentEvent::Error {
-        code: "error_tool_rounds_exceeded".into(),
-        message: String::new(),
-    });
-    Ok(())
 }
 
 /// Unknown-name handling lives in the loop, matching Kotlin
