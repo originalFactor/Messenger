@@ -270,7 +270,16 @@ internal object TermuxRuntime {
         val abi = supportedAbi() ?: return null
         val target = File(File(baseDir(context), "runtime-$abi"), "bin/rg")
         if (target.isFile && target.canExecute()) return target
-        val source = ripgrepSource(context, abi) ?: return null
+        // Resolve AND copy defensively: any failure here must degrade to a
+        // null binary (grep reports it as an error result), never an
+        // exception — one escaping through the AIDL binder would surface in
+        // the caller as a foreign-callback failure ("tool host cancelled").
+        val source = try {
+            ripgrepSource(context, abi)
+        } catch (e: Exception) {
+            android.util.Log.w("ShellRT", "ripgrep source resolve failed", e)
+            null
+        } ?: return null
         try {
             target.parentFile?.mkdirs()
             source.inputStream().use { input ->
@@ -297,7 +306,8 @@ internal object TermuxRuntime {
             val apk = java.util.zip.ZipFile(apkPath)
             try {
                 val entry = apk.getEntry(entryPath) ?: continue
-                val tmp = File.createTempFile("rg", ".so", baseDir(context))
+                // createTempFile requires a prefix of 3+ chars ("rg" throws).
+                val tmp = File.createTempFile("rgbin", ".so", baseDir(context))
                 apk.getInputStream(entry).use { input ->
                     tmp.outputStream().use { output -> input.copyTo(output) }
                 }

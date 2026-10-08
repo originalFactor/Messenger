@@ -164,8 +164,21 @@ class ShellService : Service() {
     private fun isCallerAllowed(): Boolean =
         checkCallingPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED
 
-    private fun ifCallerAllowed(block: () -> ToolResult): ToolResult =
-        if (isCallerAllowed()) block() else ToolResult("Caller is not permitted to use the shell runtime.", isError = true)
+    private fun ifCallerAllowed(block: () -> ToolResult): ToolResult {
+        if (!isCallerAllowed()) {
+            return ToolResult("Caller is not permitted to use the shell runtime.", isError = true)
+        }
+        // Any uncaught exception escaping a synchronous binder method surfaces
+        // on the caller as a RuntimeException, which the main app's tool host
+        // rethrows through the JNI upcall → Rust panic ("tool host
+        // cancelled"). Convert failures into error results instead.
+        return try {
+            block()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "workspace op failed", e)
+            ToolResult("Runtime workspace operation failed: ${e.message ?: e::class.simpleName}", isError = true)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder = binder
 

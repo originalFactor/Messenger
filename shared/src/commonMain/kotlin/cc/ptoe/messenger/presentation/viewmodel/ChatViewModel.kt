@@ -76,6 +76,8 @@ import cc.ptoe.messenger.generated.resources.tool_interrupted_result
 import cc.ptoe.messenger.generated.resources.tool_unknown_tool
 import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.data.util.randomUuid
+import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
+import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 
 import cc.ptoe.messenger.core.CoreBridge
@@ -216,7 +218,10 @@ class ChatViewModel(
     /** 切换本会话的 Agent 只读/可写模式（写回 Conversation，不改动 updatedAt）。 */
     fun setAgentWritable(writable: Boolean) {
         viewModelScope.launch {
-            val conv = conversation.value ?: return@launch
+            val id = _conversationId.value ?: return@launch
+            // 读数据库行而不是 conversation.value：该 StateFlow 在无订阅 5 秒后
+            // 会重置，且整行 copy 回写时旧值会覆盖并发写入的其他字段。
+            val conv = conversationRepository.getById(id).first() ?: return@launch
             conversationRepository.update(conv.copy(writable = writable))
         }
     }
@@ -537,7 +542,9 @@ class ChatViewModel(
         if (_isGenerating.value) return
 
         viewModelScope.launch {
-            val conv = conversation.value ?: return@launch
+            // 会话快照读数据库行：conversation 是 WhileSubscribed 流，无订阅 5 秒
+            // 即重置，.value 的 writable/override 等业务决策字段不可信。
+            val conv = conversationRepository.getById(convId).first() ?: return@launch
             val rawAgent = agent.value ?: run {
                 setError(getString(Res.string.error_agent_not_found_chat))
                 return@launch
@@ -592,7 +599,9 @@ class ChatViewModel(
         conversationId: String,
         agent: Agent
     ) {
-        val conv = conversation.value ?: return
+        // 会话快照读数据库行而不是 conversation.value：模式（writable）等业务
+        // 决策不能依赖 WhileSubscribed 的 StateFlow（无订阅 5 秒即重置）。
+        val conv = conversationRepository.getById(conversationId).first() ?: return
         val result = getActiveModelAndProvider(conv, agent)
         if (result == null) {
             setError(getString(Res.string.error_configure_model_first))
@@ -608,6 +617,10 @@ class ChatViewModel(
             } else {
                 emptyList()
             }
+            // 可执行工具表：执行不做参数预筛（沙盒按实际操作约束），与 Rust 侧
+            // 请求声明共用 per-tool 开关。写入类工具（edit/create）的声明由
+            // Rust 按 writable 过滤，此处保留全量映射，模型误调未声明工具时
+            // 由核心回路返回错误自纠。
             val toolsByName = enabledTools.associateBy { it.name }
             val config = TurnConfigBridge(
                 conversationId = conversationId,
@@ -640,8 +653,19 @@ class ChatViewModel(
                         toolExecutor = { name, argumentsJson ->
                             val tool = toolsByName[name]
                             if (tool != null) {
-                                val r = kotlinx.coroutines.runBlocking { tool.execute(argumentsJson) }
-                                r.output to r.isError
+                                // NEVER let an exception escape into the JNI
+                                // upcall: a foreign callback exception turns
+                                // into a Rust panic (spawn_blocking JoinError
+                                // → "tool host cancelled"). Report it to the
+                                // model as an error result for self-correction.
+                                try {
+                                    val r = kotlinx.coroutines.runBlocking { tool.execute(argumentsJson) }
+                                    r.output to r.isError
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    ("tool execution failed: ${e.message ?: e::class.simpleName}") to true
+                                }
                             } else {
                                 "Unknown tool: $name" to true
                             }
@@ -736,8 +760,9 @@ class ChatViewModel(
                 // 并按 Agent 的每工具开关过滤（配置缺失的键视为开启）。
                 //（不按 supportsToolCalling 门控 — 元数据缺失时该值为 false，
                 //  会让功能看似失效；不支持的服务商会给出可见错误。）
-                // Agent 模式：只读时排除写入类工具（edit/create）且终端保持
-                // 只读策略；可写时终端解除策略、写入类工具恢复声明。
+                // Agent 模式：只读时不声明写入类工具（edit/create），终端声明
+                // 换检查用途描述；可写时全量声明。执行不做参数预筛——沙盒
+                // （Android 为伴随 runtime 的独立 UID）按实际操作约束。
                 val toolsForRequest = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
                     val enabledTools = builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
                     // 发送时的会话快照（launchChatTurn 的 conversation 参数来自
@@ -746,7 +771,7 @@ class ChatViewModel(
                     // .value 会退回 false，不能作为回合内的模式决策依据。
                     if (conversation.writable) {
                         enabledTools.map { tool ->
-                            if (tool is TerminalTool) TerminalTool(enforceReadOnly = false) else tool
+                            if (tool is TerminalTool) TerminalTool(readOnly = false) else tool
                         }
                     } else {
                         enabledTools.filter { !it.writeAccess }
@@ -1097,7 +1122,8 @@ class ChatViewModel(
             if (_isGenerating.value) return@launch
 
             val rawAgent = agent.value ?: return@launch
-            val conv = conversation.value ?: return@launch
+            // 会话快照读数据库行（同 sendMessage，.value 的业务字段不可信）
+            val conv = conversationRepository.getById(message.conversationId).first() ?: return@launch
             val currentAgent = resolveEffectiveAgent(rawAgent, conv)
 
             if (currentAgent.defaultModelId == null) {
@@ -1150,11 +1176,13 @@ class ChatViewModel(
         if (_isGenerating.value) return
 
         viewModelScope.launch {
-            val message = messages.value.find { it.id == messageId } ?: return@launch
+            val currentMessages = messageRepository.getByConversationId(convId).first()
+            val message = currentMessages.find { it.id == messageId } ?: return@launch
             if (message.role != MessageRole.ASSISTANT) return@launch
 
             val rawAgent = agent.value ?: return@launch
-            val conv = conversation.value ?: return@launch
+            // 会话快照读数据库行（同 sendMessage，.value 的业务字段不可信）
+            val conv = conversationRepository.getById(convId).first() ?: return@launch
             val currentAgent = resolveEffectiveAgent(rawAgent, conv)
 
             if (currentAgent.defaultModelId == null) {
@@ -1162,7 +1190,23 @@ class ChatViewModel(
                 return@launch
             }
 
-            messageRepository.delete(messageId)
+            // 查找该消息所属回合的所有关联消息（包括工具轮行、TOOL 结果行、最终文本行）
+            val chatItems = buildChatItems(currentMessages)
+            val toolGroup = chatItems.filterIsInstance<ChatListItem.ToolGroupItem>()
+                .firstOrNull { tg ->
+                    tg.finalMessage?.id == messageId ||
+                    tg.rounds.any { it.id == messageId } ||
+                    tg.toolMessages.any { it.id == messageId }
+                }
+            val idsToDelete = if (toolGroup != null) {
+                (toolGroup.rounds.map { it.id } + toolGroup.toolMessages.map { it.id } + listOfNotNull(toolGroup.finalMessage?.id)).distinct()
+            } else {
+                listOf(messageId)
+            }
+
+            for (id in idsToDelete) {
+                messageRepository.delete(id)
+            }
 
             generateResponse(convId, currentAgent)
         }
@@ -1174,17 +1218,30 @@ class ChatViewModel(
 
     fun deleteMessage(messageId: String) {
         viewModelScope.launch {
-            // Capture the image paths before the row is gone so we can
-            // reap the cached bitmaps from disk.
-            val target = messages.value.find { it.id == messageId }
-            messageRepository.delete(messageId)
-            target?.parts?.forEach { part ->
-                if (part is ContentPart.Image) {
-                    chatImageStore.deleteIfExists(part.image.localPath)
+            val convId = _conversationId.value ?: return@launch
+            val currentMessages = messageRepository.getByConversationId(convId).first()
+            val chatItems = buildChatItems(currentMessages)
+            val toolGroup = chatItems.filterIsInstance<ChatListItem.ToolGroupItem>()
+                .firstOrNull { tg ->
+                    tg.finalMessage?.id == messageId ||
+                    tg.rounds.any { it.id == messageId } ||
+                    tg.toolMessages.any { it.id == messageId }
+                }
+            val targets = if (toolGroup != null) {
+                (toolGroup.rounds + toolGroup.toolMessages + listOfNotNull(toolGroup.finalMessage)).distinctBy { it.id }
+            } else {
+                listOfNotNull(currentMessages.find { it.id == messageId })
+            }
+
+            for (target in targets) {
+                messageRepository.delete(target.id)
+                target.parts.forEach { part ->
+                    if (part is ContentPart.Image) {
+                        chatImageStore.deleteIfExists(part.image.localPath)
+                    }
                 }
             }
 
-            val convId = _conversationId.value ?: return@launch
             val remainingMessages = messageRepository.getByConversationId(convId).first()
             val lastMessage = remainingMessages.lastOrNull()
             updateConversationLastMessage(

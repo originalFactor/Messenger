@@ -46,6 +46,16 @@ internal object WorkspaceOps {
         val rg = rgBinary?.takeIf { it.isFile && it.canExecute() }
             ?: return@guarded ToolResult("ripgrep is not available in the runtime.", isError = true)
         val base = resolve(root, path, mustExist = true)
+        // Run rg with the workspace as cwd and a workspace-relative search
+        // path so output paths arrive workspace-relative verbatim; absolute
+        // roots outside the workspace keep absolute (forward-slashed) paths.
+        val workspaceRoot = root.canonicalFile
+        val insideWorkspace = base.canonicalFile.path.startsWith(workspaceRoot.path + File.separator)
+        val searchPath = if (insideWorkspace) {
+            workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/').ifEmpty { "." }
+        } else {
+            base.absolutePath.replace('\\', '/')
+        }
         val command = buildList {
             add(rg.absolutePath)
             add("--no-heading")
@@ -53,6 +63,8 @@ internal object WorkspaceOps {
             add("--no-config")
             add("--hidden")
             add("--no-ignore")
+            add("--path-separator")
+            add("/")
             add("-g")
             add("!.git")
             if (!caseSensitive) add("--ignore-case")
@@ -60,15 +72,33 @@ internal object WorkspaceOps {
             fileGlob?.let { add("-g"); add(it) }
             add("--")
             add(pattern)
-            add(base.absolutePath)
+            add(searchPath)
         }
         val process = ProcessBuilder(command)
+            .directory(workspaceRoot)
             .redirectErrorStream(false)
             .start()
+        // When the search root is a single FILE, rg prints `line:text`
+        // without any filename — prefix the workspace-relative file so rows
+        // keep the contract ("dir/a.txt:2:...").
+        val fileRootPrefix = if (base.isFile) {
+            if (insideWorkspace) {
+                workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/')
+            } else {
+                base.absolutePath.replace('\\', '/')
+            }
+        } else {
+            null
+        }
         val rows = mutableListOf<String>()
         process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
             for (line in lines) {
-                rows += dropVimgrepColumn(line)
+                rows += if (fileRootPrefix != null) {
+                    val lineNo = line.indexOf(':')
+                    if (lineNo > 0) "$fileRootPrefix:$line" else normalizePath(line)
+                } else {
+                    normalizePath(dropVimgrepColumn(line))
+                }
                 if (rows.size > maxResults) break
             }
         }
@@ -81,6 +111,25 @@ internal object WorkspaceOps {
         if (truncated) rows.removeAt(rows.lastIndex)
         val body = if (rows.isEmpty()) "No matches." else rows.joinToString("\n")
         ToolResult(body + if (truncated) "\n(results truncated at $maxResults)" else "", isError = false)
+    }
+
+    /** Normalizes row path separators to forward slashes. */
+    private fun normalizePath(row: String): String {
+        val separator = row.indexOf(':')
+        if (separator < 0) return row
+        val rawPath = row.substring(0, separator).replace('\\', '/')
+        return rawPath + row.substring(separator)
+    }
+
+    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
+    private fun dropVimgrepColumn(row: String): String {
+        val first = row.indexOf(':')
+        if (first < 0) return row
+        val second = row.indexOf(':', first + 1)
+        if (second < 0) return row
+        val third = row.indexOf(':', second + 1)
+        if (third < 0) return row
+        return row.substring(0, second) + row.substring(third)
     }
 
     fun read(root: File, path: String, startLine: Int, maxLines: Int): ToolResult = guarded {
@@ -157,17 +206,6 @@ internal object WorkspaceOps {
 
     private fun relative(root: File, path: Path): String =
         root.canonicalFile.toPath().relativize(path.toFile().canonicalFile.toPath()).toString().replace('\\', '/')
-
-    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
-    private fun dropVimgrepColumn(row: String): String {
-        val first = row.indexOf(':')
-        if (first < 0) return row
-        val second = row.indexOf(':', first + 1)
-        if (second < 0) return row
-        val third = row.indexOf(':', second + 1)
-        if (third < 0) return row
-        return row.substring(0, second) + row.substring(third)
-    }
 
     private fun boundedList(rows: List<String>, limit: Int, empty: String): ToolResult =
         ToolResult(
