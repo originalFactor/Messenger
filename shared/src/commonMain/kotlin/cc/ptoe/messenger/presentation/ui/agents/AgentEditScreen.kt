@@ -1011,7 +1011,7 @@ private fun ReasoningEffortDropdown(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AgentToolsPage(
+internal fun AgentToolsPage(
     state: AgentEditUiState,
     tools: List<ChatTool>,
     onBack: () -> Unit,
@@ -1071,7 +1071,10 @@ private fun AgentToolsPage(
                         title = stringResource(Res.string.agent_edit_enable_tools),
                         subtitle = null,
                         checked = toolsMasterChecked,
-                        enabled = state.toolsEnabled && !following,
+                        // 总开关自身不能以 toolsEnabled 为启用条件，否则关闭状态下
+                        // 永远点不开（自锁死循环）。仅在跟随默认 Agent 的接管蒙层
+                        // 下只读。
+                        enabled = !following,
                         onCheckedChange = onToolsEnabledChange
                     )
 

@@ -111,6 +111,14 @@ kotlin {
             }
         }
 
+        getByName("desktopTest") {
+            dependencies {
+                @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+                implementation(compose.uiTest)
+                implementation(kotlin("test"))
+            }
+        }
+
         getByName("commonTest") {
             dependencies {
                 implementation(kotlin("test"))
