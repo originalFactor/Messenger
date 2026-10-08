@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandMore
@@ -137,6 +138,7 @@ sealed class DesktopBlock {
     data class Quote(
         override val id: Long,
         val text: String,
+        val inlines: List<DesktopInline>,
         override val isFinalized: Boolean
     ) : DesktopBlock()
 
@@ -151,6 +153,7 @@ sealed class DesktopBlock {
         val indent: Int,
         val ordered: Boolean,
         val number: Int,
+        val task: Boolean? = null,
         val text: String
     )
 
@@ -197,29 +200,8 @@ object DesktopDocumentParser {
 
         return when (kind) {
             "paragraph" -> {
-                val inlines = obj["inlines"]?.jsonArray?.mapNotNull { el ->
-                    val o = el as? JsonObject ?: return@mapNotNull null
-                    val t = o["type"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                    val textVal = o["text"]?.jsonPrimitive?.contentOrNull ?: ""
-                    when (t) {
-                        "text" -> DesktopInline.Text(textVal)
-                        "bold" -> DesktopInline.Bold(textVal)
-                        "italic" -> DesktopInline.Italic(textVal)
-                        "code" -> DesktopInline.Code(textVal)
-                        "math" -> DesktopInline.Math(textVal)
-                        else -> DesktopInline.Text(textVal)
-                    }
-                } ?: emptyList()
-                val plainText = inlines.joinToString("") {
-                    when (it) {
-                        is DesktopInline.Text -> it.text
-                        is DesktopInline.Bold -> it.text
-                        is DesktopInline.Italic -> it.text
-                        is DesktopInline.Code -> it.code
-                        is DesktopInline.Math -> it.formula
-                    }
-                }
-                DesktopBlock.Paragraph(id, plainText, inlines, isFinalized)
+                val inlines = parseInlinesJson(obj["inlines"]?.jsonArray)
+                DesktopBlock.Paragraph(id, plainInlinesText(inlines), inlines, isFinalized)
             }
             "heading" -> {
                 val level = obj["level"]?.jsonPrimitive?.intOrNull ?: 1
@@ -248,8 +230,9 @@ object DesktopDocumentParser {
                 DesktopBlock.ToolCall(id, callId, name, arguments, output, isError, isFinalized)
             }
             "quote" -> {
-                val text = obj["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                DesktopBlock.Quote(id, text, isFinalized)
+                // Quote content carries parsed inlines (bold/italic/code/math)
+                val inlines = parseInlinesJson(obj["inlines"]?.jsonArray)
+                DesktopBlock.Quote(id, plainInlinesText(inlines), inlines, isFinalized)
             }
             "table" -> {
                 val head = obj["head"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
@@ -273,6 +256,7 @@ object DesktopDocumentParser {
                         indent = itemObj["indent"]?.jsonPrimitive?.intOrNull ?: 0,
                         ordered = itemObj["ordered"]?.jsonPrimitive?.booleanOrNull ?: false,
                         number = itemObj["number"]?.jsonPrimitive?.intOrNull ?: 0,
+                        task = itemObj["task"]?.jsonPrimitive?.booleanOrNull,
                         text = plain
                     )
                 } ?: emptyList()
@@ -284,6 +268,33 @@ object DesktopDocumentParser {
     }
 
     private val inlineTokenRegex = Regex("""(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\$[^$]+\$)""")
+
+    /** Inlines from the Rust core wire format: text-bearing types carry `text`,
+     *  code carries `code`, math carries `formula`. */
+    private fun parseInlinesJson(array: JsonArray?): List<DesktopInline> =
+        array?.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val text = o["text"]?.jsonPrimitive?.contentOrNull ?: ""
+            when (o["type"]?.jsonPrimitive?.contentOrNull) {
+                "bold" -> DesktopInline.Bold(text)
+                "italic" -> DesktopInline.Italic(text)
+                "code" -> DesktopInline.Code(o["code"]?.jsonPrimitive?.contentOrNull ?: "")
+                "math" -> DesktopInline.Math(o["formula"]?.jsonPrimitive?.contentOrNull ?: "")
+                else -> DesktopInline.Text(text)
+            }
+        } ?: emptyList()
+
+    /** Flatten parsed inlines to their human-visible plain text. */
+    private fun plainInlinesText(inlines: List<DesktopInline>): String =
+        inlines.joinToString("") {
+            when (it) {
+                is DesktopInline.Text -> it.text
+                is DesktopInline.Bold -> it.text
+                is DesktopInline.Italic -> it.text
+                is DesktopInline.Code -> it.code
+                is DesktopInline.Math -> it.formula
+            }
+        }
 
     fun parseInlines(text: String): List<DesktopInline> {
         if (text.isEmpty()) return emptyList()
@@ -455,7 +466,7 @@ object DesktopDocumentParser {
                 }
             }
 
-            // 6. Blockquote: > ...
+            // 6. Blockquote: > text (inline markup parsed like paragraphs)
             if (line.trimStart().startsWith(">")) {
                 val quoteBuilder = StringBuilder()
                 while (i < lines.size && lines[i].trimStart().startsWith(">")) {
@@ -464,7 +475,16 @@ object DesktopDocumentParser {
                     quoteBuilder.append(quoteLine)
                     i++
                 }
-                blocks.add(DesktopBlock.Quote(id = currentId++, text = quoteBuilder.toString(), isFinalized = true))
+                val quoteText = quoteBuilder.toString()
+                val quoteInlines = parseInlines(quoteText)
+                blocks.add(
+                    DesktopBlock.Quote(
+                        id = currentId++,
+                        text = plainInlinesText(quoteInlines),
+                        inlines = quoteInlines,
+                        isFinalized = true
+                    )
+                )
                 continue
             }
 
@@ -531,11 +551,13 @@ object DesktopDocumentParser {
         val indent = (line.takeWhile { it == ' ' || it == '\t' }.length / 2).coerceAtMost(4)
         val trimmed = line.trimStart()
         if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
+            val (task, text) = splitTaskMarker(trimmed.substring(2).trim())
             return DesktopBlock.ListItem(
                 indent = indent,
                 ordered = false,
                 number = 0,
-                text = trimmed.substring(2).trim()
+                task = task,
+                text = text
             )
         }
         val digitPrefix = trimmed.takeWhile { it.isDigit() }
@@ -543,15 +565,27 @@ object DesktopDocumentParser {
             val num = digitPrefix.toIntOrNull() ?: 0
             val delim = trimmed[digitPrefix.length]
             if ((delim == '.' || delim == ')') && trimmed[digitPrefix.length + 1] == ' ') {
+                val (task, text) = splitTaskMarker(trimmed.substring(digitPrefix.length + 2).trim())
                 return DesktopBlock.ListItem(
                     indent = indent,
                     ordered = true,
                     number = num,
-                    text = trimmed.substring(digitPrefix.length + 2).trim()
+                    task = task,
+                    text = text
                 )
             }
         }
         return null
+    }
+
+    /** GFM task-list marker: `[ ]` unchecked / `[x]`-`[X]` checked, followed by
+     *  whitespace (or ending the item). Anything else stays literal text. */
+    private fun splitTaskMarker(text: String): Pair<Boolean?, String> = when {
+        text.startsWith("[ ] ") -> false to text.removePrefix("[ ] ").trim()
+        text.startsWith("[x] ") || text.startsWith("[X] ") -> true to text.substring(4).trim()
+        text == "[ ]" -> false to ""
+        text == "[x]" || text == "[X]" -> true to ""
+        else -> null to text
     }
 }
 
@@ -608,47 +642,7 @@ fun DesktopDocumentView(
 @Composable
 private fun RenderParagraph(block: DesktopBlock.Paragraph) {
     val annotated = remember(block.inlines, block.text) {
-        if (block.inlines.isEmpty()) {
-            AnnotatedString(block.text)
-        } else {
-            buildAnnotatedString {
-                for (inline in block.inlines) {
-                    when (inline) {
-                        is DesktopInline.Text -> append(inline.text)
-                        is DesktopInline.Bold -> {
-                            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append(inline.text)
-                            }
-                        }
-                        is DesktopInline.Italic -> {
-                            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                                append(inline.text)
-                            }
-                        }
-                        is DesktopInline.Code -> {
-                            withStyle(
-                                SpanStyle(
-                                    fontFamily = FontFamily.Monospace,
-                                    background = Color(0x1F000000)
-                                )
-                            ) {
-                                append(" ${inline.code} ")
-                            }
-                        }
-                        is DesktopInline.Math -> {
-                            withStyle(
-                                SpanStyle(
-                                    fontStyle = FontStyle.Italic,
-                                    color = Color(0xFF1565C0)
-                                )
-                            ) {
-                                append("$${inline.formula}$")
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        buildInlineAnnotatedString(block.inlines, block.text)
     }
 
     Text(
@@ -938,8 +932,55 @@ private fun toolDisplayName(name: String): String = when (name) {
     else -> name
 }
 
+/** Inline spans → AnnotatedString, shared by paragraph and blockquote rendering. */
+private fun buildInlineAnnotatedString(inlines: List<DesktopInline>, plainText: String): AnnotatedString =
+    if (inlines.isEmpty()) {
+        AnnotatedString(plainText)
+    } else {
+        buildAnnotatedString {
+            for (inline in inlines) {
+                when (inline) {
+                    is DesktopInline.Text -> append(inline.text)
+                    is DesktopInline.Bold -> {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(inline.text)
+                        }
+                    }
+                    is DesktopInline.Italic -> {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                            append(inline.text)
+                        }
+                    }
+                    is DesktopInline.Code -> {
+                        withStyle(
+                            SpanStyle(
+                                fontFamily = FontFamily.Monospace,
+                                background = Color(0x1F000000)
+                            )
+                        ) {
+                            append(" ${inline.code} ")
+                        }
+                    }
+                    is DesktopInline.Math -> {
+                        withStyle(
+                            SpanStyle(
+                                fontStyle = FontStyle.Italic,
+                                color = Color(0xFF1565C0)
+                            )
+                        ) {
+                            append("$${inline.formula}$")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 @Composable
 private fun RenderQuote(block: DesktopBlock.Quote) {
+    val annotated = remember(block.inlines, block.text) {
+        buildInlineAnnotatedString(block.inlines, block.text)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -953,7 +994,7 @@ private fun RenderQuote(block: DesktopBlock.Quote) {
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = block.text,
+            text = annotated,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontStyle = FontStyle.Italic,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -977,13 +1018,51 @@ private fun RenderList(block: DesktopBlock.ListBlock) {
                         start = (item.indent.coerceAtMost(4) * 18).dp,
                         top = 2.dp,
                         bottom = 2.dp
-                    )
+                    ),
+                verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    text = if (item.ordered) "${item.number}." else "•",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.width(20.dp)
-                )
+                if (item.task != null) {
+                    val boxShape = RoundedCornerShape(4.dp)
+                    Box(
+                        modifier = Modifier
+                            .width(20.dp)
+                            .padding(top = 4.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(boxShape)
+                                .then(
+                                    if (item.task) {
+                                        Modifier.background(MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        Modifier.border(
+                                            2.dp,
+                                            MaterialTheme.colorScheme.outlineVariant,
+                                            boxShape
+                                        )
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (item.task) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = if (item.ordered) "${item.number}." else "•",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(20.dp)
+                    )
+                }
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = item.text,

@@ -433,3 +433,18 @@ class MessageView(context: Context) : LinearLayout(context) {
         private val FINAL_ID_BASE = 11L * DocumentView.STATIC_ID_BASE
     }
 }
+
+/**
+ * Bubbles long-click events up the view hierarchy to the first ancestor
+ * that handles long-clicks (such as [MessageView.bubbleContainer]).
+ */
+internal fun View.bubbleLongClick(): Boolean {
+    var p = parent
+    while (p != null) {
+        if (p is View && p.isLongClickable) {
+            if (p.performLongClick()) return true
+        }
+        p = p.parent
+    }
+    return false
+}

@@ -48,7 +48,7 @@ sealed class RenderBlock {
 
     data class Quote(
         override val id: Long,
-        val text: String,
+        val text: CharSequence,
         override val isFinalized: Boolean
     ) : RenderBlock()
 
@@ -75,11 +75,13 @@ sealed class RenderBlock {
         override val isFinalized: Boolean
     ) : RenderBlock()
 
-    /** One rendered list entry (marker kind + text). */
+    /** One rendered list entry (marker kind + text). `task` != null marks a
+     *  GFM task item (checked state), rendering a checkbox instead of a bullet. */
     data class ListItemData(
         val indent: Int,
         val ordered: Boolean,
         val number: Int,
+        val task: Boolean? = null,
         val text: CharSequence
     )
 

@@ -248,9 +248,10 @@ impl IncrementalParser {
                 if let Some(quote_content) = line.strip_prefix("> ") {
                     text.push_str(quote_content);
                     text.push('\n');
+                    let inlines = parse_inlines(&text.clone());
                     let block = Block::Quote {
                         id,
-                        text: text.clone(),
+                        inlines,
                         status: BlockStatus::Streaming,
                     };
                     if let Some(diff) = doc.update(block) {
@@ -286,10 +287,12 @@ impl IncrementalParser {
                     }
                     self.state = ParserState::Idle;
                 } else if let Some((indent, ordered, number, text)) = parse_list_marker(line) {
+                    let (task, text) = split_task_marker(text);
                     items.push(ListItem {
                         indent,
                         ordered,
                         number,
+                        task,
                         inlines: parse_inlines(text),
                     });
                     let block = Block::List {
@@ -607,25 +610,25 @@ impl IncrementalParser {
                 // Blockquote: > text
                 if let Some(quote_content) = line.strip_prefix("> ") {
                     let id = doc.next_id();
+                    let text = format!("{quote_content}\n");
                     let block = Block::Quote {
                         id,
-                        text: format!("{quote_content}\n"),
+                        inlines: parse_inlines(&text),
                         status: BlockStatus::Streaming,
                     };
                     diffs.push(doc.append(block));
-                    self.state = ParserState::InQuote {
-                        id,
-                        text: format!("{quote_content}\n"),
-                    };
+                    self.state = ParserState::InQuote { id, text };
                     return;
                 }
 
                 // List item: `- `/`* `/`+ ` bullet or `1. `/`1) ` ordinal
                 if let Some((indent, ordered, number, text)) = parse_list_marker(line) {
+                    let (task, text) = split_task_marker(text);
                     let item = ListItem {
                         indent,
                         ordered,
                         number,
+                        task,
                         inlines: parse_inlines(text),
                     };
                     let id = doc.next_id();
@@ -827,7 +830,7 @@ impl IncrementalParser {
             ParserState::InQuote { id, text } => {
                 let block = Block::Quote {
                     id,
-                    text,
+                    inlines: parse_inlines(&text),
                     status: BlockStatus::Finalized,
                 };
                 if let Some(diff) = doc.update(block) {
@@ -931,6 +934,26 @@ fn is_partial_ordered_marker(buffer: &str) -> bool {
     }
     let rest = &t[digits..];
     rest.is_empty() || rest == "." || rest == ")" || rest.starts_with(". ") || rest.starts_with(") ")
+}
+
+/// Split a leading GFM task-list marker off list-item text: `[ ]` = unchecked,
+/// `[x]`/`[X]` = checked. Per GFM the bracket group must be followed by
+/// whitespace (or end the item) — `[x](url)` and `[x]text` stay literal.
+/// Returns `(task, remaining text)`.
+fn split_task_marker(text: &str) -> (Option<bool>, &str) {
+    if let Some(rest) = text.strip_prefix("[ ] ") {
+        return (Some(false), rest);
+    }
+    if let Some(rest) = text.strip_prefix("[x] ").or_else(|| text.strip_prefix("[X] ")) {
+        return (Some(true), rest);
+    }
+    if text == "[ ]" {
+        return (Some(false), "");
+    }
+    if text == "[x]" || text == "[X]" {
+        return (Some(true), "");
+    }
+    (None, text)
 }
 
 /// Parse a list-item marker: bullet (`- ` / `* ` / `+ `) or ordinal
@@ -1148,6 +1171,44 @@ mod tests {
         assert!(doc.blocks()[1].is_finalized());
     }
 
+    /// Block quotes carry parsed inlines — nested `**bold**` and `` `code` ``
+    /// markup must not show through as literal markers.
+    #[test]
+    fn parse_quote_inlines() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed(
+            "> Bold with **nested emphasis** and `code`.\n> second line\n\n",
+            &mut doc,
+        );
+
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(doc.blocks()[0].is_finalized());
+        if let Block::Quote { inlines, .. } = &doc.blocks()[0] {
+            assert!(
+                inlines
+                    .iter()
+                    .any(|i| matches!(i, Inline::Bold { text } if text == "nested emphasis")),
+                "bold inline missing: {inlines:?}"
+            );
+            assert!(
+                inlines
+                    .iter()
+                    .any(|i| matches!(i, Inline::Code { code } if code == "code")),
+                "code inline missing: {inlines:?}"
+            );
+            assert!(
+                inlines
+                    .iter()
+                    .any(|i| matches!(i, Inline::Text { text } if text.contains("Bold with"))),
+                "plain text missing: {inlines:?}"
+            );
+        } else {
+            panic!("expected quote");
+        }
+    }
+
     #[test]
     fn parse_streaming_table() {
         let mut doc = Document::new();
@@ -1319,5 +1380,73 @@ mod tests {
         assert!(matches!(doc.blocks()[0], Block::List { .. }));
         assert!(doc.blocks()[0].is_finalized());
         assert!(matches!(doc.blocks()[1], Block::Paragraph { .. }));
+    }
+
+    /// GFM task lists: `[ ] ` / `[x] ` / `[X] ` markers are stripped from the
+    /// item text and surfaced as `task`; plain items stay `None`.
+    #[test]
+    fn parse_task_list() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed(
+            "- [ ] Todo item\n- [x] Done item\n- [X] Upper done\n- plain item\n\n",
+            &mut doc,
+        );
+
+        assert_eq!(doc.blocks().len(), 1);
+        assert!(doc.blocks()[0].is_finalized());
+        if let Block::List { items, .. } = &doc.blocks()[0] {
+            assert_eq!(items.len(), 4);
+            assert_eq!(items[0].task, Some(false));
+            assert_eq!(inline_text(&items[0].inlines), "Todo item");
+            assert_eq!(items[1].task, Some(true));
+            assert_eq!(inline_text(&items[1].inlines), "Done item");
+            assert_eq!(items[2].task, Some(true));
+            assert_eq!(items[3].task, None);
+            assert_eq!(inline_text(&items[3].inlines), "plain item");
+        } else {
+            panic!("expected list");
+        }
+    }
+
+    /// Ordered task lists parse the same way; a `[x]` without a following
+    /// space is literal text (a link, not a checkbox), and token-by-token
+    /// streaming feeds land the same task item.
+    #[test]
+    fn task_list_streaming_and_literals() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+
+        parser.feed("1. [x] ordered task\n", &mut doc);
+        parser.feed("2. [ ] open task\n", &mut doc);
+        parser.feed("- [x]no-space stays literal\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        if let Block::List { items, .. } = &doc.blocks()[0] {
+            assert_eq!(items[0].task, Some(true));
+            assert_eq!(inline_text(&items[0].inlines), "ordered task");
+            assert_eq!(items[1].task, Some(false));
+            assert_eq!(items[2].task, None);
+            assert_eq!(inline_text(&items[2].inlines), "[x]no-space stays literal");
+        } else {
+            panic!("expected list");
+        }
+
+        // Streaming: partial feeds buffer (bullet prefix), then parse intact
+        let mut doc2 = Document::new();
+        let mut parser2 = IncrementalParser::new();
+        parser2.feed("- [", &mut doc2);
+        assert_eq!(doc2.blocks().len(), 0, "partial bullet must buffer");
+        parser2.feed(" ] ta", &mut doc2);
+        parser2.feed("sk\n", &mut doc2);
+        parser2.feed("\n", &mut doc2);
+        if let Block::List { items, .. } = &doc2.blocks()[0] {
+            assert_eq!(items[0].task, Some(false));
+            assert_eq!(inline_text(&items[0].inlines), "task");
+        } else {
+            panic!("expected list");
+        }
     }
 }

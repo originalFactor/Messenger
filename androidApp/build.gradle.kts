@@ -37,19 +37,12 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    flavorDimensions += "runtimeAbi"
-    productFlavors {
-        create("arm64V8a") {
-            dimension = "runtimeAbi"
-            ndk { abiFilters += "arm64-v8a" }
-        }
-        create("armeabiV7a") {
-            dimension = "runtimeAbi"
-            ndk { abiFilters += "armeabi-v7a" }
-        }
-        create("x86_64") {
-            dimension = "runtimeAbi"
-            ndk { abiFilters += "x86_64" }
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false
         }
     }
 
@@ -98,8 +91,7 @@ android {
     }
 }
 
-// The per-ABI flavors keep producing split APKs for distribution; the shell
-// runtime itself is the Android system shell, so nothing is bundled per-ABI.
+// Per-ABI split APKs are produced via splits.abi for distribution.
 
 dependencies {
     implementation(project(":shared"))

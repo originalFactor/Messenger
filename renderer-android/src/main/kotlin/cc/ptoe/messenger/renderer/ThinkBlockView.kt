@@ -49,6 +49,9 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
         headerLayout.setOnClickListener {
             toggle()
         }
+        headerLayout.setOnLongClickListener {
+            headerLayout.bubbleLongClick()
+        }
 
         titleLabel.textSize = 12f
         val titleLp = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
@@ -65,6 +68,8 @@ class ThinkBlockView(context: Context) : LinearLayout(context) {
         contentText.setPadding(padH, 0, padH, padV)
         contentText.visibility = GONE
         addView(contentText)
+
+        setOnLongClickListener { bubbleLongClick() }
 
         updateTheme(null)
     }

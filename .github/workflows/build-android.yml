@@ -112,10 +112,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: androidApp-release
-          path: androidApp/build/outputs/apk/*/release/androidApp-*-release.apk
+          path: androidApp/build/outputs/apk/release/androidApp-*-release.apk
 
       - name: Upload runtime release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: runtime-release
-          path: runtime/build/outputs/apk/*/release/runtime-*-release.apk
+          path: runtime/build/outputs/apk/release/runtime-*-release.apk

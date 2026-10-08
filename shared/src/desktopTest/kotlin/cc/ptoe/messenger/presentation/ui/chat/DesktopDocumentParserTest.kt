@@ -40,7 +40,7 @@ class DesktopDocumentParserTest {
                 "inlines": [
                   {"type": "text", "text": "Testing "},
                   {"type": "bold", "text": "immutable block "},
-                  {"type": "code", "text": "key(block.id)"}
+                  {"type": "code", "code": "key(block.id)"}
                 ],
                 "status": "finalized"
               },
@@ -105,6 +105,51 @@ class DesktopDocumentParserTest {
         assertEquals(106L, tc.id)
         assertEquals("workspace_read", tc.name)
         assertEquals(false, tc.isError)
+    }
+
+    @Test
+    fun testParseMarkdownTaskList() {
+        // JSON from the Rust core carries the stripped task marker as `task`
+        val blocksJson = """
+            [
+              {
+                "kind": "list",
+                "id": 201,
+                "items": [
+                  {"indent": 0, "ordered": false, "number": 0, "task": false, "inlines": [{"type": "text", "text": "Todo item"}]},
+                  {"indent": 0, "ordered": false, "number": 0, "task": true, "inlines": [{"type": "text", "text": "Done item"}]},
+                  {"indent": 0, "ordered": false, "number": 0, "inlines": [{"type": "text", "text": "Plain item"}]}
+                ],
+                "status": "finalized"
+              }
+            ]
+        """.trimIndent()
+        val jsonBlocks = DesktopDocumentParser.parseBlocksJson(blocksJson)
+        val jsonList = jsonBlocks[0] as DesktopBlock.ListBlock
+        assertEquals(false, jsonList.items[0].task)
+        assertEquals("Todo item", jsonList.items[0].text)
+        assertEquals(true, jsonList.items[1].task)
+        assertEquals(null, jsonList.items[2].task)
+
+        // The built-in Kotlin markdown parser strips the same markers
+        val markdown = """
+            - [ ] Todo item
+            - [x] Done item
+            - [X] Upper done
+            1. [ ] Ordered todo
+            - [x]no-space stays literal
+        """.trimIndent()
+        val blocks = DesktopDocumentParser.parseMarkdown(markdown)
+        val list = blocks[0] as DesktopBlock.ListBlock
+        assertEquals(5, list.items.size)
+        assertEquals(false, list.items[0].task)
+        assertEquals("Todo item", list.items[0].text)
+        assertEquals(true, list.items[1].task)
+        assertEquals(true, list.items[2].task)
+        assertEquals(false, list.items[3].task)
+        assertEquals("Ordered todo", list.items[3].text)
+        assertEquals(null, list.items[4].task)
+        assertEquals("[x]no-space stays literal", list.items[4].text)
     }
 
     @Test
@@ -262,5 +307,35 @@ class DesktopDocumentParserTest {
 
         val divider = blocks[4] as DesktopBlock.Divider
         assertTrue(divider.isFinalized)
+    }
+
+    @Test
+    fun testParseQuoteInlines() {
+        // Rust core wire format: quote content carries parsed inlines
+        val blocksJson = """
+            [
+              {
+                "kind": "quote",
+                "id": 301,
+                "inlines": [
+                  {"type": "text", "text": "Quote with "},
+                  {"type": "bold", "text": "bold"},
+                  {"type": "text", "text": " and "},
+                  {"type": "code", "code": "code"}
+                ],
+                "status": "finalized"
+              }
+            ]
+        """.trimIndent()
+        val jsonQuote = DesktopDocumentParser.parseBlocksJson(blocksJson)[0] as DesktopBlock.Quote
+        assertEquals("Quote with bold and code", jsonQuote.text)
+        assertTrue(jsonQuote.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
+        assertTrue(jsonQuote.inlines.any { it is DesktopInline.Code && it.code == "code" })
+
+        // The built-in Kotlin parser strips the same markers
+        val mdQuote = DesktopDocumentParser.parseMarkdown("> Quote with **bold** and `code`.")[0] as DesktopBlock.Quote
+        assertEquals("Quote with bold and code.", mdQuote.text)
+        assertTrue(mdQuote.inlines.any { it is DesktopInline.Bold && it.text == "bold" })
+        assertTrue(mdQuote.inlines.any { it is DesktopInline.Code && it.code == "code" })
     }
 }

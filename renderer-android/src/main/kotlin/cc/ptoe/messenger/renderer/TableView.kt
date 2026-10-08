@@ -47,6 +47,7 @@ class TableView(context: Context) : HorizontalScrollView(context) {
     init {
         isHorizontalScrollBarEnabled = false
         addView(table, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        setOnLongClickListener { bubbleLongClick() }
     }
 
     fun updateTheme(theme: RendererTheme?) {

@@ -109,4 +109,35 @@ class DocumentParserTest {
         assertEquals(6L, m.id)
         assertEquals("\\sum_{i=0}^n x_i", m.formula)
     }
+
+    @Test
+    fun testParseTaskList() {
+        val json = """
+            [
+              {
+                "kind": "list",
+                "id": 7,
+                "items": [
+                  {"indent": 0, "ordered": false, "number": 0, "task": false, "inlines": [{"type": "text", "text": "Todo item"}]},
+                  {"indent": 0, "ordered": false, "number": 0, "task": true, "inlines": [{"type": "text", "text": "Done item"}]},
+                  {"indent": 0, "ordered": false, "number": 0, "inlines": [{"type": "text", "text": "Plain item"}]}
+                ],
+                "status": "finalized"
+              }
+            ]
+        """.trimIndent()
+
+        val blocks = DocumentParser.parseBlocksJson(json)
+        assertEquals(1, blocks.size)
+
+        // Task flags ride the list item; text content is a SpannableStringBuilder
+        // (not assertable in a plain-JVM unit test — see testParseBlocksJson)
+        val list = blocks[0] as RenderBlock.ListBlock
+        assertEquals(3, list.items.size)
+        assertEquals(false, list.items[0].task)
+        assertEquals(true, list.items[1].task)
+        assertEquals(null, list.items[2].task)
+        assertEquals(0, list.items[2].number)
+        assertFalse(list.items[0].ordered)
+    }
 }

@@ -25,12 +25,17 @@ pub enum Inline {
 }
 
 /// One list entry: `indent` counts nesting levels (0 = top level), `ordered`
-/// selects the bullet style, `number` is the item's literal ordinal.
+/// selects the bullet style, `number` is the item's literal ordinal. GFM task
+/// list items (`- [ ] ` / `- [x] `) carry `task = Some(checked)`; plain items
+/// are `None`. `#[serde(default)]` keeps older payloads (without the field)
+/// deserializing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItem {
     pub indent: u8,
     pub ordered: bool,
     pub number: u32,
+    #[serde(default)]
+    pub task: Option<bool>,
     pub inlines: Vec<Inline>,
 }
 
@@ -67,9 +72,12 @@ pub enum Block {
         items: Vec<ListItem>,
         status: BlockStatus,
     },
+    /// Blockquote. Content carries parsed inlines like paragraphs, so nested
+    /// bold/italic/code/math markup renders inside the quote instead of
+    /// showing literal markers.
     Quote {
         id: BlockId,
-        text: String,
+        inlines: Vec<Inline>,
         status: BlockStatus,
     },
     ToolCall {

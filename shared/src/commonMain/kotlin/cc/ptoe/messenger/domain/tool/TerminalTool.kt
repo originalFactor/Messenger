@@ -22,37 +22,36 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The built-in terminal tool. Runs one command in the app-private workspace.
- * In read-only Agent mode (default) a policy restricts it to approved
- * inspection commands and file mutation is exposed separately through the
- * consent-gated workspace edit/create tools; in writable mode the policy is
- * lifted and arbitrary commands run inside the companion sandbox.
+ * The built-in terminal tool. Runs one command in the app-private workspace
+ * sandbox — arguments are never pre-screened (no shell-operator allowlist,
+ * no path checks); the sandbox confines what the command can actually touch.
+ * In read-only Agent mode the declaration steers the model toward inspection
+ * and file mutation is exposed separately through the workspace edit/create
+ * tools; in writable mode the description reflects full access.
  */
 class TerminalTool(
     private val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-    /** false lifts the read-only command policy (writable Agent mode). */
-    private val enforceReadOnly: Boolean = true
+    /**
+     * true = read-only Agent mode declaration: the description steers the
+     * model toward inspection. Execution is identical in both modes.
+     */
+    private val readOnly: Boolean = true
 ) : ChatTool {
 
     override val name: String = TOOL_NAME
 
     override val description: String =
-        if (enforceReadOnly) {
-            "Run one read-only inspection command in Messenger's isolated app-private workspace and return its combined output and exit code. " +
-                "Do not use shell operators, interpreters, redirection, or commands that modify files. File changes use the workspace edit/create tools."
+        if (readOnly) {
+            "Run one command in Messenger's sandboxed app-private workspace and return its combined output and exit code. " +
+                "The agent is in read-only mode, so use this for inspection; do not modify files."
         } else {
-            "Run one command in Messenger's isolated app-private workspace and return its combined output and exit code. " +
-                "The command can create, modify, or delete files inside the workspace."
+            "Run one command in Messenger's sandboxed app-private workspace and return its combined output and exit code. " +
+                "The command can create, modify, or delete files."
         }
 
     override val parametersJson: String =
-        if (enforceReadOnly) {
-            """{"type":"object","properties":{"command":{"type":"string",""" +
-                """"description":"One read-only inspection command to execute"}},"required":["command"]}"""
-        } else {
-            """{"type":"object","properties":{"command":{"type":"string",""" +
-                """"description":"One command to execute"}},"required":["command"]}"""
-        }
+        """{"type":"object","properties":{"command":{"type":"string",""" +
+            """"description":"One command to execute"}},"required":["command"]}"""
 
     override suspend fun execute(argumentsJson: String): ToolExecutionResult {
         val command = parseCommand(argumentsJson)
@@ -60,14 +59,6 @@ class TerminalTool(
                 output = "Invalid arguments: expected a JSON object with a string \"command\" field.",
                 isError = true
             )
-        if (enforceReadOnly) {
-            ShellCommandPolicy.rejectionReason(command)?.let { reason ->
-                return ToolExecutionResult(
-                    output = "Command rejected: $reason. File changes use the workspace edit/create tools.",
-                    isError = true
-                )
-            }
-        }
         val result = executeShellCommand(command, timeoutMs, workingDir = null, onOutput = null)
         val exitNote = if (result.exitCode == 0) "Exit code: 0" else "Exit code: ${result.exitCode} (command failed)"
         return ToolExecutionResult(

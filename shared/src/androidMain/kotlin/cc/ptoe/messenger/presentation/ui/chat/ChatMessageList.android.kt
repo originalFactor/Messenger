@@ -27,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -144,6 +145,7 @@ internal actual fun ChatMessageList(
             onSecondaryContainer = colorScheme.onSecondaryContainer.toArgb(),
             outlineVariant = colorScheme.outlineVariant.toArgb(),
             primary = colorScheme.primary.toArgb(),
+            onPrimary = colorScheme.onPrimary.toArgb(),
             isDark = colorScheme.surface.luminance() < 0.5f,
             errorTitle = errorTitle,
             retryAction = retryAction,
@@ -160,25 +162,36 @@ internal actual fun ChatMessageList(
         )
     }
 
-    LaunchedEffect(adapter, onRetryClick, onMessageLongClick) {
+    val currentChatItems by rememberUpdatedState(chatItems)
+    val currentOnMessageLongClick by rememberUpdatedState(onMessageLongClick)
+    val currentOnRetryClick by rememberUpdatedState(onRetryClick)
+
+    LaunchedEffect(adapter) {
         adapter.onMessageClickListener = { item ->
             if (item.status.equals("ERROR", ignoreCase = true)) {
-                onRetryClick(item.id)
+                currentOnRetryClick(item.id)
             }
         }
         adapter.onRetryClickListener = { item ->
-            onRetryClick(item.id)
+            currentOnRetryClick(item.id)
         }
         adapter.onMessageLongClickListener = { item, _ ->
-            val msg = chatItems.mapNotNull {
-                when (it) {
-                    is ChatListItem.MessageItem -> it.message
-                    is ChatListItem.ToolGroupItem -> it.finalMessage ?: it.rounds.lastOrNull()
-                    else -> null
+            val items = currentChatItems
+            val toolGroup = items.filterIsInstance<ChatListItem.ToolGroupItem>()
+                .firstOrNull { tg ->
+                    tg.finalMessage?.id == item.id ||
+                    tg.rounds.any { it.id == item.id } ||
+                    tg.toolMessages.any { it.id == item.id } ||
+                    item.id == ("tool_" + (tg.rounds.firstOrNull()?.id ?: "0"))
                 }
-            }.firstOrNull { it.id == item.id }
+            val msg = if (toolGroup != null) {
+                toolGroup.finalMessage ?: toolGroup.rounds.lastOrNull() ?: toolGroup.toolMessages.lastOrNull()
+            } else {
+                items.filterIsInstance<ChatListItem.MessageItem>()
+                    .firstOrNull { it.message.id == item.id }?.message
+            }
             if (msg != null) {
-                onMessageLongClick(msg)
+                currentOnMessageLongClick(msg)
             }
         }
     }

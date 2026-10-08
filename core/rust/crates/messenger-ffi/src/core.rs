@@ -10,7 +10,7 @@ use messenger_store::{import_legacy, Store};
 use messenger_sync::{
     AvatarManager, Session, SyncEngine, KV_SESSION, KV_SESSION_HOST,
 };
-use messenger_tools::ToolExecutionResult;
+use messenger_tools::{ToolExecutionResult, apply_writable_mode};
 
 /// The handle the app shell holds: store + paths.
 #[derive(uniffi::Object)]
@@ -595,10 +595,17 @@ fn to_message_row(m: StoredMessage) -> MessageRow {
 
 fn build_turn_request(config: &TurnConfig) -> TurnRequest {
     let registry = messenger_tools::builtin_registry();
-    let resolved: Vec<_> = registry
-        .into_iter()
-        .filter(|tool| config.tool_names.iter().any(|n| n == &tool.name))
-        .collect();
+    // `tool_names` only carries the per-tool agent config; the
+    // read-only/writable mode (write-tool exclusion + terminal description
+    // swap) is applied here so the declared list matches what the platform's
+    // tool host actually executes.
+    let resolved = apply_writable_mode(
+        registry
+            .into_iter()
+            .filter(|tool| config.tool_names.iter().any(|n| n == &tool.name))
+            .collect(),
+        config.writable,
+    );
     TurnRequest {
         conversation_id: config.conversation_id.clone(),
         model_id: config.model_id.clone(),

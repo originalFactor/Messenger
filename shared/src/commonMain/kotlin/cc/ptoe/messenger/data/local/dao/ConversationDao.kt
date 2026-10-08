@@ -28,9 +28,6 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
     fun getAll(): Flow<List<ConversationEntity>>
 
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC LIMIT :limit OFFSET :offset")
-    suspend fun getPaged(limit: Int, offset: Int): List<ConversationEntity>
-
     @Query("SELECT * FROM conversations WHERE agentId = :agentId ORDER BY updatedAt DESC")
     fun getByAgentId(agentId: String): Flow<List<ConversationEntity>>
 

@@ -54,6 +54,7 @@ class DocumentView @JvmOverloads constructor(
 
     init {
         orientation = VERTICAL
+        setOnLongClickListener { bubbleLongClick() }
     }
 
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
@@ -154,6 +155,7 @@ class DocumentView @JvmOverloads constructor(
                     maxWidth = maxTextWidth()
                     // Not selectable: long-press must reach the bubble's context menu
                     text = block.text
+                    setOnLongClickListener { bubbleLongClick() }
                 }
             }
             is RenderBlock.Heading -> {
@@ -171,6 +173,7 @@ class DocumentView @JvmOverloads constructor(
                     setTextColor(bodyColor)
                     maxWidth = maxTextWidth()
                     text = block.text
+                    setOnLongClickListener { bubbleLongClick() }
                 }
             }
             is RenderBlock.Code -> {
@@ -202,6 +205,7 @@ class DocumentView @JvmOverloads constructor(
                             maxWidth = maxTextWidth()
                             setPadding(dp(10f).toInt(), 0, 0, 0)
                             text = block.text
+                            setOnLongClickListener { bubbleLongClick() }
                         },
                         LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
                     )

@@ -13,11 +13,9 @@ crate-type = ["lib", "cdylib"]
 # async runtime for exported async methods.
 uniffi = { version = "0.29", features = ["cli", "tokio"] }
 messenger-core = { path = "../messenger-core" }
-messenger-llm = { path = "../messenger-llm" }
 messenger-store = { path = "../messenger-store" }
 messenger-tools = { path = "../messenger-tools" }
 messenger-sync = { path = "../messenger-sync" }
-messenger-document = { path = "../messenger-document" }
 messenger-markdown = { path = "../messenger-markdown" }
 messenger-highlight = { path = "../messenger-highlight" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

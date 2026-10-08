@@ -87,6 +87,7 @@ import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
+import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ChatViewModel
@@ -353,9 +354,28 @@ fun ChatScreen(
             },
             messageRole = selectedMessageRole,
             onCopyClick = {
-                val message = messages.find { it.id == selectedMessageId }
-                if (message != null) {
-                    viewModel.copyMessage(message.content)
+                val currentMessages = messages
+                val chatItems = buildChatItems(currentMessages)
+                val toolGroup = chatItems.filterIsInstance<ChatListItem.ToolGroupItem>()
+                    .firstOrNull { tg ->
+                        tg.finalMessage?.id == selectedMessageId ||
+                        tg.rounds.any { it.id == selectedMessageId } ||
+                        tg.toolMessages.any { it.id == selectedMessageId }
+                    }
+                val copyText = if (toolGroup != null) {
+                    val finalContent = toolGroup.finalMessage?.content?.takeIf { it.isNotBlank() }
+                    if (finalContent != null) {
+                        stripThinkBlock(finalContent)
+                    } else {
+                        val roundTexts = toolGroup.rounds.map { stripThinkBlock(it.content) }.filter { it.isNotBlank() }
+                        roundTexts.joinToString("\n\n")
+                    }
+                } else {
+                    val msg = currentMessages.find { it.id == selectedMessageId }
+                    if (msg != null) stripThinkBlock(msg.content) else ""
+                }
+                if (copyText.isNotBlank()) {
+                    viewModel.copyMessage(copyText)
                     showPlatformToast(copiedToastText)
                 }
             },
@@ -423,12 +443,65 @@ internal sealed class ChatListItem {
     ) : ChatListItem()
 }
 
+/** 是否为代理回合的工具轮行（含 ToolCall parts 的 assistant 行）。 */
+private fun Message?.isToolRound(): Boolean =
+    this != null && role == MessageRole.ASSISTANT && parts.any { it is ContentPart.ToolCall }
+
+/**
+ * 从 [startIndex] 起收编一个完整代理回合：连续的 工具轮行 → TOOL 结果行 →
+ * （首个非 ERROR 的）最终文本行。ERROR 占位行不并入，独立渲染错误气泡。
+ * [presetFinal] 非空时（回合占位行排在工具轮行之前的形态）直接作为回合的
+ * 最终文本行。返回收编结果与越过回合末尾的下标。
+ */
+private fun collapseAgentTurn(
+    messages: List<Message>,
+    startIndex: Int,
+    presetFinal: Message?
+): Pair<ChatListItem.ToolGroupItem, Int> {
+    val rounds = mutableListOf<Message>()
+    val toolMessages = mutableListOf<Message>()
+    var finalMessage: Message? = presetFinal
+    var cursor = startIndex
+    while (cursor < messages.size) {
+        val current = messages[cursor]
+        when {
+            current.isToolRound() -> {
+                rounds.add(current)
+                cursor++
+            }
+            current.role == MessageRole.TOOL -> {
+                toolMessages.add(current)
+                cursor++
+            }
+            finalMessage == null &&
+                current.role == MessageRole.ASSISTANT &&
+                rounds.isNotEmpty() &&
+                current.status != MessageStatus.ERROR -> {
+                finalMessage = current
+                cursor++
+            }
+            else -> break
+        }
+    }
+    val isLastInGroup = cursor >= messages.size ||
+        messages[cursor].role != MessageRole.ASSISTANT
+    return ChatListItem.ToolGroupItem(
+        rounds = rounds,
+        toolMessages = toolMessages,
+        finalMessage = finalMessage,
+        isLastInGroup = isLastInGroup
+    ) to cursor
+}
+
 /**
  * 构建聊天列表项：在每天首条消息前插入日期分隔符（Google Messages 风格），
  * 同时计算每条消息是否为同发送者组内的最后一条（用于气泡尾巴样式）。
- * assistant 工具轮消息、其 TOOL 结果行与随后的最终文本行收编为一个
- * [ChatListItem.ToolGroupItem]（整个回合一条消息），孤儿 TOOL 行（历史异常）
- * 也以工具组兜底渲染而不是静默丢弃。
+ * assistant 工具轮消息、其 TOOL 结果行与最终文本行收编为一个
+ * [ChatListItem.ToolGroupItem]（整个回合一条消息）。最终文本行通常排在
+ * 工具轮行之后；回合进行中（以及取消的回合）Rust 循环在回合开始就落库
+ * 承载最终文本的占位行，时间戳早于工具轮行——该形态同样收编为同一回合，
+ * 否则流式期间会拆成两个气泡且不跟随滚动。孤儿 TOOL 行（历史异常）
+ * 以工具组兜底渲染而不是静默丢弃。
  */
 internal fun buildChatItems(messages: List<Message>): List<ChatListItem> {
     if (messages.isEmpty()) return emptyList()
@@ -445,47 +518,17 @@ internal fun buildChatItems(messages: List<Message>): List<ChatListItem> {
             lastDay = message.timestamp
         }
         when {
-            message.role == MessageRole.ASSISTANT &&
-                message.parts.any { it is ContentPart.ToolCall } -> {
-                // 收编整个代理回合：连续的 工具轮行 → TOOL 结果行 →（首个非 ERROR 的）
-                // 最终文本占位行。ERROR 占位行不并入，独立渲染错误气泡。
-                val rounds = mutableListOf<Message>()
-                val toolMessages = mutableListOf<Message>()
-                var finalMessage: Message? = null
-                var cursor = index
-                while (cursor < messages.size) {
-                    val current = messages[cursor]
-                    when {
-                        current.role == MessageRole.ASSISTANT &&
-                            current.parts.any { it is ContentPart.ToolCall } -> {
-                            rounds.add(current)
-                            cursor++
-                        }
-                        current.role == MessageRole.TOOL -> {
-                            toolMessages.add(current)
-                            cursor++
-                        }
-                        current.role == MessageRole.ASSISTANT &&
-                            rounds.isNotEmpty() &&
-                            finalMessage == null &&
-                            current.status != MessageStatus.ERROR -> {
-                            finalMessage = current
-                            cursor++
-                        }
-                        else -> break
-                    }
-                }
-                val isLastInGroup = cursor >= messages.size ||
-                    messages[cursor].role != MessageRole.ASSISTANT
-                items.add(
-                    ChatListItem.ToolGroupItem(
-                        rounds = rounds,
-                        toolMessages = toolMessages,
-                        finalMessage = finalMessage,
-                        isLastInGroup = isLastInGroup
-                    )
-                )
-                index = cursor
+            message.isToolRound() -> {
+                val (item, next) = collapseAgentTurn(messages, index, presetFinal = null)
+                items.add(item)
+                index = next
+            }
+            message.role == MessageRole.ASSISTANT && messages.getOrNull(index + 1).isToolRound() -> {
+                // 回合占位行在工具轮行之前（回合进行中 / 取消的回合）：
+                // 占位行承载最终文本，与随后的工具轮行收编为同一回合。
+                val (item, next) = collapseAgentTurn(messages, index + 1, presetFinal = message)
+                items.add(item)
+                index = next
             }
             message.role == MessageRole.TOOL -> {
                 items.add(

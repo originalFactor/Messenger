@@ -103,6 +103,7 @@ class ToolCallView(context: Context) : LinearLayout(context) {
         addView(expandedSection)
 
         setOnClickListener { toggleExpanded() }
+        setOnLongClickListener { bubbleLongClick() }
     }
 
     private fun toggleExpanded() {

@@ -29,7 +29,6 @@ import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.createMessengerDataStore
 import cc.ptoe.messenger.data.repository.AgentRepositoryImpl
 import cc.ptoe.messenger.data.repository.ApiRepositoryImpl
-import cc.ptoe.messenger.data.repository.ChatRepositoryImpl
 import cc.ptoe.messenger.data.repository.ConversationRepositoryImpl
 import cc.ptoe.messenger.data.repository.CurrentAgentRepositoryImpl
 import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
@@ -47,7 +46,6 @@ import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ApiRepository
-import cc.ptoe.messenger.domain.repository.ChatRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
@@ -128,8 +126,6 @@ class AppContainer(
      * 每工具的启用与否由各 Agent 的 toolsConfig 决定（见 [Agent.effectiveToolEnabled]）。
      */
     val availableTools: List<ChatTool> get() = builtinTools + mcpManager.activeTools.value
-
-    val chatRepository: ChatRepository = ChatRepositoryImpl()
 
     val cloudSyncRepository = CloudSyncRepository(
         appPreferences = appPreferences,

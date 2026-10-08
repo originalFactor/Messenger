@@ -84,8 +84,14 @@ object DocumentParser {
                 RenderBlock.Math(id, formula, isFinalized)
             }
             "quote" -> {
-                val text = obj["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                RenderBlock.Quote(id, text, isFinalized)
+                // Quote content carries parsed inlines (bold/italic/code/math),
+                // rendered as spans over the italic base typeface
+                val inlines = obj["inlines"]?.jsonArray
+                RenderBlock.Quote(
+                    id,
+                    text = if (inlines != null) buildInlinesSpanned(inlines, context) else "",
+                    isFinalized
+                )
             }
             "think" -> {
                 val content = obj["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -114,6 +120,7 @@ object DocumentParser {
                         indent = itemObj["indent"]?.jsonPrimitive?.intOrNull ?: 0,
                         ordered = itemObj["ordered"]?.jsonPrimitive?.booleanOrNull ?: false,
                         number = itemObj["number"]?.jsonPrimitive?.intOrNull ?: 0,
+                        task = itemObj["task"]?.jsonPrimitive?.booleanOrNull,
                         text = if (inlines != null) buildInlinesSpanned(inlines, context) else ""
                     )
                 } ?: emptyList()

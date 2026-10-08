@@ -343,7 +343,8 @@ async fn cancellation_finalizes_partial_rows() {
 
 /// The LLM client handles plain HTTP; smoke-check OpenAiClient construction
 /// to keep the import used in non-test builds.
-#[allow(dead_code)]
-fn client_constructs() -> OpenAiClient {
-    OpenAiClient::new("http://localhost", "sk")
+#[test]
+fn client_constructs_smoke() {
+    let client = OpenAiClient::new("http://localhost", "sk");
+    let _ = client;
 }
