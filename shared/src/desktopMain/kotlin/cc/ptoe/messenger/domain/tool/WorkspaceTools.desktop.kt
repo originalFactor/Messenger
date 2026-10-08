@@ -19,18 +19,25 @@ import java.nio.file.StandardOpenOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+internal actual suspend fun executeWorkspaceOperation(
+    operation: WorkspaceOperation,
+    root: String
+): ToolExecutionResult = withContext(Dispatchers.IO) {
+    try {
+        DesktopWorkspaceFiles(File(root)).execute(operation)
+    } catch (e: Exception) {
+        ToolExecutionResult("Workspace operation failed: ${e.message ?: "I/O error"}", isError = true)
+    }
+}
+
+/**
+ * Default workspace, shared with `ShellExecutor.desktop.kt`. It backs the
+ * tool-config screens' tool inventory only; a conversation's actual working
+ * directory always comes from its project.
+ */
 internal val agentWorkspace: File by lazy {
     File(System.getProperty("user.home"), ".messenger/agent-runtime/workspace").apply { mkdirs() }
 }
-
-internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
-    withContext(Dispatchers.IO) {
-        try {
-            DesktopWorkspaceFiles(agentWorkspace).execute(operation)
-        } catch (e: Exception) {
-            ToolExecutionResult("Workspace operation failed: ${e.message ?: "I/O error"}", isError = true)
-        }
-    }
 
 private class DesktopWorkspaceFiles(private val root: File) {
     private val rootPath = root.canonicalFile.toPath()

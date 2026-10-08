@@ -47,6 +47,8 @@ import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.ConversationListItem
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.InputDialog
+import cc.ptoe.messenger.presentation.ui.components.SectionHeader
+import cc.ptoe.messenger.presentation.ui.components.projectSection
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
@@ -58,6 +60,7 @@ import cc.ptoe.messenger.generated.resources.action_confirm
 import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.agent_conversations_empty
 import cc.ptoe.messenger.generated.resources.agent_edit_title_edit
+import cc.ptoe.messenger.generated.resources.projects_recent_section
 import cc.ptoe.messenger.generated.resources.conversations_delete_confirm
 import cc.ptoe.messenger.generated.resources.conversations_delete_title
 import cc.ptoe.messenger.generated.resources.conversations_new
@@ -78,6 +81,9 @@ import cc.ptoe.messenger.di.AppContainerHolder
 fun AgentConversationsScreen(
     agentId: String,
     onBackClick: () -> Unit,
+    onProjectClick: (String) -> Unit = {},
+    onProjectEditClick: (String) -> Unit = {},
+    onProjectDeleteClick: (String) -> Unit = {},
     onEditClick: () -> Unit,
     onConversationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -89,13 +95,17 @@ fun AgentConversationsScreen(
             conversationRepository = AppContainerHolder.instance.conversationRepository,
             messageRepository = AppContainerHolder.instance.messageRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository
+            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
+            projectRepository = AppContainerHolder.instance.projectRepository
         )
     )
 ) {
     val agent by viewModel.agent.collectAsStateWithLifecycle()
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
+    val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
+    val recentConversations by viewModel.recentConversations.collectAsStateWithLifecycle()
 
     var renameConversationId by remember { mutableStateOf<String?>(null) }
     var deleteConversationId by remember { mutableStateOf<String?>(null) }
@@ -147,7 +157,7 @@ fun AgentConversationsScreen(
                 }
             }
         ) { innerPadding ->
-            if (conversations.isEmpty()) {
+            if (conversations.isEmpty() && projects.isEmpty()) {
                 EmptyState(
                     icon = Icons.Default.ChatBubbleOutline,
                     message = stringResource(Res.string.agent_conversations_empty),
@@ -162,6 +172,39 @@ fun AgentConversationsScreen(
                         .padding(innerPadding)
                         .navigationBarsPadding()
                 ) {
+                    projectSection(
+                        projects = projects,
+                        conversationCounts = projectCounts,
+                        onProjectClick = onProjectClick,
+                        onProjectEditClick = onProjectEditClick,
+                        onProjectDeleteClick = onProjectDeleteClick,
+                        enableContextMenu = enableContextMenu
+                    )
+                    if (recentConversations.isNotEmpty()) {
+                        item(key = "section_recent") {
+                            SectionHeader(stringResource(Res.string.projects_recent_section))
+                        }
+                        items(recentConversations, key = { "recent_${it.id}" }) { conversation ->
+                            ConversationListItem(
+                                conversation = conversation,
+                                avatar = agent?.avatar,
+                                enableContextMenu = enableContextMenu,
+                                onClick = { onConversationClick(conversation.id) },
+                                onLongClick = {},
+                                onCloneClick = {
+                                    viewModel.cloneConversation(conversation.id, onConversationClick)
+                                },
+                                onRenameClick = {
+                                    renameInitialTitle = conversation.title
+                                    renameConversationId = conversation.id
+                                },
+                                onDeleteClick = { deleteConversationId = conversation.id },
+                                onSwitchAgentClick = {
+                                    switchAgentTargetIds = listOf(conversation.id)
+                                }
+                            )
+                        }
+                    }
                     items(conversations, key = { it.id }) { conversation ->
                         ConversationListItem(
                             conversation = conversation,

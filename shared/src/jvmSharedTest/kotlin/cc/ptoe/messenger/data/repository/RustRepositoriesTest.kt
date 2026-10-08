@@ -22,11 +22,13 @@ import cc.ptoe.messenger.core.StoredConversationDto
 import cc.ptoe.messenger.core.StoredMessageDto
 import cc.ptoe.messenger.core.StoredModelDto
 import cc.ptoe.messenger.core.StoredProviderDto
+import cc.ptoe.messenger.core.StoredProjectDto
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Conversation
+import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
@@ -106,6 +108,24 @@ class RustRepositoriesTest {
             agents.remove(id)
             notify("Agent", id)
         }
+
+        // Project
+        val projects = mutableMapOf<String, StoredProjectDto>()
+        override fun listProjectsJson(): String = NetworkClient.json.encodeToString(projects.values.toList())
+        override fun getProjectJson(id: String): String? = projects[id]?.let { NetworkClient.json.encodeToString(it) }
+        override fun upsertProjectJson(json: String) {
+            val dto = NetworkClient.json.decodeFromString<StoredProjectDto>(json)
+            projects[dto.id] = dto
+            notify("Project", dto.id)
+        }
+        override fun deleteProject(id: String) {
+            // Matches the store's ON DELETE SET NULL: the conversations stay.
+            conversations.values.filter { it.projectId == id }.forEach { conversations[it.id] = it.copy(projectId = null) }
+            projects.remove(id)
+            notify("Project", id)
+        }
+        override fun listConversationsByProjectJson(projectId: String): String =
+            NetworkClient.json.encodeToString(conversations.values.filter { it.projectId == projectId })
 
         // Conversation
         override fun listConversationsJson(): String = NetworkClient.json.encodeToString(conversations.values.toList())
@@ -371,5 +391,49 @@ class RustRepositoriesTest {
 
         currentRepo.setCurrentAgentId(null)
         assertNull(currentRepo.currentAgentId.first())
+    }
+
+    /**
+     * A project groups conversations, and deleting it leaves them behind as
+     * plain conversations — that is what makes "no project ⇒ no workspace
+     * tools" reachable without losing chat history.
+     */
+    @Test
+    fun testProjectRepositoryGroupsConversationsAndDeleteUnassigns() = runBlocking {
+        val bridge = FakeCoreBridge()
+        val projectRepo = RustProjectRepository(bridge)
+        val conversationRepo = RustConversationRepository(bridge)
+
+        projectRepo.insert(Project("proj1", "Messenger", "/w/messenger", 1, 1))
+        val conversation = Conversation(
+            id = "c1",
+            title = "Refactor",
+            providerId = "p1",
+            agentId = "a1",
+            projectId = "proj1",
+            createdAt = 1,
+            updatedAt = 1,
+            lastMessage = null
+        )
+        conversationRepo.insert(conversation)
+
+        assertEquals("/w/messenger", projectRepo.getById("proj1").first()?.workspace)
+        assertEquals(listOf("c1"), conversationRepo.getByProjectId("proj1").first().map { it.id })
+
+        projectRepo.delete("proj1")
+
+        assertTrue(projectRepo.getAll().first().isEmpty())
+        val orphan = conversationRepo.getById("c1").first()
+        assertNotNull(orphan)
+        assertNull(orphan!!.projectId, "the conversation survives as a plain chat")
+    }
+
+    /** The workspace folder name is derived from the project name. */
+    @Test
+    fun testProjectWorkspaceFolderNameIsNormalized() {
+        assertEquals("messenger", Project("p", "Messenger", "", 1, 1).workspaceFolderName)
+        assertEquals("messenger-ui", Project("p", "  Messenger   UI ", "", 1, 1).workspaceFolderName)
+        assertEquals("a-b", Project("p", "a//b", "", 1, 1).workspaceFolderName)
+        assertEquals("project", Project("p", "///", "", 1, 1).workspaceFolderName)
     }
 }

@@ -61,6 +61,9 @@ pub struct Engine {
     /// Cached MCP tool list (the resolver is sync; `McpClient::tools()` is not).
     mcp_tools: Arc<std::sync::Mutex<Vec<McpChatTool>>>,
     workspace: std::path::PathBuf,
+    /// The UI loop runs on the main thread, which is NOT inside a Tokio
+    /// context, so background work must spawn through this handle.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Engine {
@@ -68,6 +71,7 @@ impl Engine {
         store: Arc<Store>,
         tx: mpsc::UnboundedSender<UiMsg>,
         workspace: std::path::PathBuf,
+        runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
             store,
@@ -76,7 +80,18 @@ impl Engine {
             mcp: Arc::new(Mutex::new(Vec::new())),
             mcp_tools: Arc::new(std::sync::Mutex::new(Vec::new())),
             workspace,
+            runtime,
         }
+    }
+
+    /// A spawner for detached background work, decoupled from `self`.
+    ///
+    /// Never call `tokio::spawn` directly from UI code: key handling runs
+    /// outside a runtime context and would panic with "there is no reactor
+    /// running". The returned handle is a cheap clone, so the spawned task
+    /// can still own the `Arc<Engine>` it was written against.
+    pub fn spawner(&self) -> tokio::runtime::Handle {
+        self.runtime.clone()
     }
 
     fn log(&self, message: impl Into<String>) {
@@ -111,7 +126,7 @@ impl Engine {
             log: tx.clone(),
         });
         let request = resolved.request;
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let sink = ChannelSink(tx.clone());
             if let Err(error) = run_chat_turn(&store, host.as_ref(), &sink, &request, cancel).await {
                 let _ = tx.send(UiMsg::ToolLog(format!("Turn failed: {error}")));
@@ -213,11 +228,26 @@ mod tests {
     use super::*;
     use messenger_store::Store;
 
+    /// Engine under a real runtime, mirroring how `main` wires it.
+    fn engine_for(store: Arc<Store>) -> (Engine, tokio::runtime::Runtime) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let engine = Engine::new(
+            store,
+            tx,
+            std::path::PathBuf::from("."),
+            runtime.handle().clone(),
+        );
+        (engine, runtime)
+    }
+
     #[test]
     fn engine_exposes_initially_empty_mcp_state() {
         let store = Arc::new(Store::open_memory().unwrap());
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let engine = Engine::new(store, tx, std::path::PathBuf::from("."));
+        let (engine, _runtime) = engine_for(store);
         assert!(engine.mcp_tools().is_empty());
     }
 

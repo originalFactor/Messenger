@@ -64,3 +64,9 @@ actual fun openRuntimeTerminal(): Boolean {
     if (context.packageManager.resolveActivity(intent, 0) == null) return false
     return runCatching { context.startActivity(intent) }.isSuccess
 }
+
+/**
+ * 伴随 runtime 应用自己的工作区，仅用于枚举内置工具（会话的实际工作目录
+ * 来自其所属项目）。
+ */
+actual fun defaultWorkspaceRoot(): String? = null

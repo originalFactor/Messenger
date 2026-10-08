@@ -30,6 +30,8 @@ import cc.ptoe.messenger.data.local.entity.ConversationEntity
 import cc.ptoe.messenger.data.local.entity.MessageEntity
 import cc.ptoe.messenger.data.local.entity.ModelEntity
 import cc.ptoe.messenger.data.local.entity.ProviderEntity
+import cc.ptoe.messenger.data.local.dao.ProjectDao
+import cc.ptoe.messenger.data.local.entity.ProjectEntity
 
 @Database(
     entities = [
@@ -37,9 +39,10 @@ import cc.ptoe.messenger.data.local.entity.ProviderEntity
         ModelEntity::class,
         AgentEntity::class,
         ConversationEntity::class,
-        MessageEntity::class
+        MessageEntity::class,
+        ProjectEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -48,6 +51,7 @@ abstract class MessengerDatabase : RoomDatabase() {
     abstract fun agentDao(): AgentDao
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+    abstract fun projectDao(): ProjectDao
 
     companion object {
         /**
@@ -152,6 +156,31 @@ abstract class MessengerDatabase : RoomDatabase() {
             override fun migrate(connection: SQLiteConnection) {
                 connection.prepare(
                     "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+                ).step()
+            }
+        }
+
+        /**
+         * v21：新增 projects 表（项目即工作区）+ conversations.projectId 列。
+         * 删除项目时 projectId 置空，会话保留为普通会话（与 Rust store 的
+         * `ON DELETE SET NULL` 同语义）。
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    """
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        workspace TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                ).step()
+                connection.prepare("ALTER TABLE conversations ADD COLUMN projectId TEXT").step()
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_conversations_projectId ON conversations(projectId)"
                 ).step()
             }
         }

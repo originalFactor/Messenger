@@ -48,3 +48,6 @@ actual fun deleteAvatarFile(path: String?) = Unit
 actual val runtimeTerminalSupported: Boolean = false
 
 actual fun openRuntimeTerminal(): Boolean = false
+
+/** A browser has no filesystem, so there is no workspace directory. */
+actual fun defaultWorkspaceRoot(): String? = null

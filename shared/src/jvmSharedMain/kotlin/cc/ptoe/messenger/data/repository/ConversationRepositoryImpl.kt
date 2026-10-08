@@ -41,6 +41,12 @@ class ConversationRepositoryImpl(
         }
     }
 
+    override fun getByProjectId(projectId: String): Flow<List<Conversation>> {
+        return conversationDao.getByProjectId(projectId).map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
     override fun getById(id: String): Flow<Conversation?> {
         return conversationDao.getById(id).map { entity ->
             entity?.toDomain()
@@ -71,6 +77,7 @@ class ConversationRepositoryImpl(
         return Conversation(
             id = id,
             title = title,
+            projectId = projectId,
             providerId = providerId,
             agentId = agentId,
             overrideModelId = overrideModelId,
@@ -96,6 +103,7 @@ class ConversationRepositoryImpl(
         return ConversationEntity(
             id = id,
             title = title,
+            projectId = projectId,
             providerId = providerId,
             agentId = agentId,
             overrideModelId = overrideModelId,

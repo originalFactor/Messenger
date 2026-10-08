@@ -18,15 +18,18 @@ import kotlin.test.assertTrue
 class WorkspaceToolTest {
     @Test
     fun `workspace tools expose bounded schemas`() {
-        assertEquals(listOf("glob", "grep", "read", "edit", "create"), WorkspaceTool.all.map { it.name })
+        assertEquals(
+            listOf("glob", "grep", "read", "edit", "create"),
+            WorkspaceTool.allFor("/w").map { it.name }
+        )
     }
 
     @Test
     fun `schemas are objects and invalid arguments are tool errors`() {
-        WorkspaceTool.all.forEach { tool ->
+        WorkspaceTool.allFor("/w").forEach { tool ->
             assertTrue(kotlinx.serialization.json.Json.parseToJsonElement(tool.parametersJson) is kotlinx.serialization.json.JsonObject)
         }
-        val tool = WorkspaceTool(WorkspaceTool.READ)
+        val tool = WorkspaceTool(WorkspaceTool.READ, "/w")
         val result = runBlocking {
             tool.execute("{\"path\":123}")
         }

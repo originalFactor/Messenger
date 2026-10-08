@@ -16,6 +16,9 @@ package cc.ptoe.messenger.domain.tool
  * against a workspace no shell can reach. Empty list disables the whole
  * agent-tools feature until the companion is installed.
  */
-actual fun createBuiltinChatTools(): List<ChatTool> =
-    if (ShellRuntimeRegistry.bridge?.isInstalled() == true) listOf(TerminalTool()) + WorkspaceTool.all
-    else emptyList()
+actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> =
+    if (workspaceRoot == null || ShellRuntimeRegistry.bridge?.isInstalled() != true) {
+        emptyList()
+    } else {
+        listOf(TerminalTool(workspaceRoot = workspaceRoot)) + WorkspaceTool.allFor(workspaceRoot)
+    }

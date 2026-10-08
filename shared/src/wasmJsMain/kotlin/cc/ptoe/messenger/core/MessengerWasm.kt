@@ -79,8 +79,14 @@ external class WasmCoreJs {
     fun upsert_agent_json(json: String)
     fun delete_agent(id: String)
 
+    fun list_projects_json(): String
+    fun get_project_json(id: String): String?
+    fun upsert_project_json(json: String)
+    fun delete_project(id: String)
+
     fun list_conversations_json(): String
     fun list_conversations_by_agent_json(agentId: String): String
+    fun list_conversations_by_project_json(projectId: String): String
     fun get_conversation_json(id: String): String?
     fun upsert_conversation_json(json: String)
     fun update_conversation_last_message(id: String, lastMessage: String?, updatedAt: Double)

@@ -46,8 +46,15 @@ class AndroidCoreBridge(
     override fun upsertAgentJson(json: String) = core.upsertAgentJson(json)
     override fun deleteAgent(id: String) = core.deleteAgent(id)
 
+    override fun listProjectsJson(): String = core.listProjectsJson()
+    override fun getProjectJson(id: String): String? = core.getProjectJson(id)
+    override fun upsertProjectJson(json: String) = core.upsertProjectJson(json)
+    override fun deleteProject(id: String) = core.deleteProject(id)
+
     override fun listConversationsJson(): String = core.listConversationsJson()
     override fun listConversationsByAgentJson(agentId: String): String = core.listConversationsByAgentJson(agentId)
+    override fun listConversationsByProjectJson(projectId: String): String =
+        core.listConversationsByProjectJson(projectId)
     override fun getConversationJson(id: String): String? = core.getConversationJson(id)
     override fun upsertConversationJson(json: String) = core.upsertConversationJson(json)
     override fun updateConversationLastMessage(id: String, lastMessage: String?, updatedAt: Long) =
@@ -155,6 +162,8 @@ class AndroidCoreBridge(
             titleAgentId = config.titleAgentId,
             titleAgentSystemPrompt = config.titleAgentSystemPrompt,
             titleAgentModelId = config.titleAgentModelId,
+            hasWorkspace = config.hasWorkspace,
+            workspaceNote = config.workspaceNote,
         )
         val toolHost = object : PlatformToolHost {
             override fun execute(name: String, argumentsJson: String): ToolResultFfi {

@@ -17,7 +17,10 @@
 package cc.ptoe.messenger.domain.tool
 
 /** Unreachable in practice (no tools are declared); fails visibly if it is. */
-internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult =
+internal actual suspend fun executeWorkspaceOperation(
+    operation: WorkspaceOperation,
+    root: String
+): ToolExecutionResult =
     ToolExecutionResult(
         output = "Workspace operations are not supported in the browser.",
         isError = true

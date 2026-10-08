@@ -18,6 +18,7 @@ package cc.ptoe.messenger.presentation.platform
 
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import cc.ptoe.messenger.domain.tool.agentWorkspace
 
 actual fun showPlatformToast(message: String) {
     // Desktop has no toast facility; errors also surface in the UI.
@@ -39,3 +40,10 @@ actual val sendOnEnterShortcut: Boolean = true
 actual val runtimeTerminalSupported: Boolean = false
 
 actual fun openRuntimeTerminal(): Boolean = false
+
+
+/**
+ * 与 `ShellExecutor.desktop.kt` / `WorkspaceTools.desktop.kt` 共享的默认
+ * 工作区，仅用于枚举内置工具（会话的实际工作目录来自其所属项目）。
+ */
+actual fun defaultWorkspaceRoot(): String? = agentWorkspace.absolutePath

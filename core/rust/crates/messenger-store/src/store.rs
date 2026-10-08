@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 
 use crate::model::{
-    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider,
+    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
 };
 use crate::schema::{CREATE_TABLES, SCHEMA_VERSION};
 
@@ -22,6 +22,7 @@ pub(crate) fn log_snapshot_failure(detail: &str) {
 /// Which entity a change notification is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityKind {
+    Project,
     Provider,
     Model,
     Agent,
@@ -108,6 +109,13 @@ impl Store {
         for ddl in CREATE_TABLES {
             conn.execute_batch(ddl)?;
         }
+        // v1 databases predate `conversations.projectId`; CREATE_TABLES only
+        // adds it to a table it creates itself, so an existing one needs the
+        // ALTER (guarded so v2 files are left untouched).
+        if !crate::schema::has_project_id_column(&conn)? {
+            conn.execute_batch(crate::schema::ADD_PROJECT_ID_COLUMN)?;
+        }
+        conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -296,6 +304,51 @@ impl Store {
     }
 
     // ------------------------------------------------------------------
+    // projects
+    // ------------------------------------------------------------------
+
+    pub fn list_projects(&self) -> Result<Vec<StoredProject>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {PROJECT_COLUMNS} FROM projects ORDER BY updatedAt DESC"
+            ))?;
+            let rows = stmt.query_map([], map_project)?;
+            rows.collect()
+        })
+    }
+
+    pub fn get_project(&self, id: &str) -> Result<Option<StoredProject>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"))?;
+            let mut rows = stmt.query_map([id], map_project)?;
+            rows.next().transpose()
+        })
+    }
+
+    pub fn upsert_project(&self, p: &StoredProject) -> Result<(), rusqlite::Error> {
+        self.with_conn(|conn| upsert_project_sql(conn, p))?;
+        self.emit(StoreEvent { kind: EntityKind::Project, ids: vec![p.id.clone()] });
+        Ok(())
+    }
+
+    /// Deleting a project leaves its conversations in place: the `projectId`
+    /// FK is `ON DELETE SET NULL`. They are notified alongside the project so
+    /// chat lists re-group immediately.
+    pub fn delete_project(&self, id: &str) -> Result<(), rusqlite::Error> {
+        let orphan_ids: Vec<String> = self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached("SELECT id FROM conversations WHERE projectId = ?1")?;
+            let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+            Ok(rows.flatten().collect::<Vec<String>>())
+        })?;
+        self.with_conn(|conn| conn.execute("DELETE FROM projects WHERE id = ?1", [id]))?;
+        if !orphan_ids.is_empty() {
+            self.emit(StoreEvent { kind: EntityKind::Conversation, ids: orphan_ids });
+        }
+        self.emit(StoreEvent { kind: EntityKind::Project, ids: vec![id.to_string()] });
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
     // conversations
     // ------------------------------------------------------------------
 
@@ -315,6 +368,16 @@ impl Store {
                 "SELECT {CONVERSATION_COLUMNS} FROM conversations WHERE agentId = ?1 ORDER BY updatedAt DESC"
             ))?;
             let rows = stmt.query_map([agent_id], map_conversation)?;
+            rows.collect()
+        })
+    }
+
+    pub fn list_conversations_by_project(&self, project_id: &str) -> Result<Vec<StoredConversation>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {CONVERSATION_COLUMNS} FROM conversations WHERE projectId = ?1 ORDER BY updatedAt DESC"
+            ))?;
+            let rows = stmt.query_map([project_id], map_conversation)?;
             rows.collect()
         })
     }
@@ -530,20 +593,45 @@ impl StoreTx<'_, '_> {
 // column lists & helpers
 // ---------------------------------------------------------------------------
 
+const PROJECT_COLUMNS: &str = "id, name, workspace, createdAt, updatedAt";
+const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5";
+const PROJECT_UPDATES: &str = "name=?2, workspace=?3, updatedAt=?5";
+
 const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt";
 
 const AGENT_COLUMNS: &str = "id, name, avatar, systemPrompt, description, defaultModelId, temperature, topP, maxTokens, reasoningEffort, isDefault, followDefaultSystemPrompt, followDefaultModel, followDefaultTemperature, followDefaultTopP, followDefaultMaxTokens, followDefaultReasoningEffort, marketAgentId, marketAgentVersion, marketAgentRole, role, toolsEnabled, toolsFollowDefault, toolsConfig, createdAt, updatedAt";
 const AGENT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26";
 const AGENT_UPDATES: &str = "name=?2, avatar=?3, systemPrompt=?4, description=?5, defaultModelId=?6, temperature=?7, topP=?8, maxTokens=?9, reasoningEffort=?10, isDefault=?11, followDefaultSystemPrompt=?12, followDefaultModel=?13, followDefaultTemperature=?14, followDefaultTopP=?15, followDefaultMaxTokens=?16, followDefaultReasoningEffort=?17, marketAgentId=?18, marketAgentVersion=?19, marketAgentRole=?20, role=?21, toolsEnabled=?22, toolsFollowDefault=?23, toolsConfig=?24, createdAt=?25, updatedAt=?26";
 
-const CONVERSATION_COLUMNS: &str = "id, title, providerId, agentId, overrideModelId, overrideTemperature, overrideTopP, overrideMaxTokens, overrideReasoningEffort, overrideToolsEnabled, overrideToolsConfig, writable, createdAt, updatedAt, lastMessage, reasoningFormat, contextSummary, contextSummaryUntil, contextTokens, contextTokensAt";
-const CONVERSATION_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20";
-const CONVERSATION_UPDATES: &str = "title=?2, providerId=?3, agentId=?4, overrideModelId=?5, overrideTemperature=?6, overrideTopP=?7, overrideMaxTokens=?8, overrideReasoningEffort=?9, overrideToolsEnabled=?10, overrideToolsConfig=?11, writable=?12, createdAt=?13, updatedAt=?14, lastMessage=?15, reasoningFormat=?16, contextSummary=?17, contextSummaryUntil=?18, contextTokens=?19, contextTokensAt=?20";
+const CONVERSATION_COLUMNS: &str = "id, title, providerId, agentId, projectId, overrideModelId, overrideTemperature, overrideTopP, overrideMaxTokens, overrideReasoningEffort, overrideToolsEnabled, overrideToolsConfig, writable, createdAt, updatedAt, lastMessage, reasoningFormat, contextSummary, contextSummaryUntil, contextTokens, contextTokensAt";
+const CONVERSATION_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21";
+const CONVERSATION_UPDATES: &str = "title=?2, providerId=?3, agentId=?4, projectId=?5, overrideModelId=?6, overrideTemperature=?7, overrideTopP=?8, overrideMaxTokens=?9, overrideReasoningEffort=?10, overrideToolsEnabled=?11, overrideToolsConfig=?12, writable=?13, createdAt=?14, updatedAt=?15, lastMessage=?16, reasoningFormat=?17, contextSummary=?18, contextSummaryUntil=?19, contextTokens=?20, contextTokensAt=?21";
 
 const MESSAGE_COLUMNS: &str = "id, conversationId, role, content, partsJson, timestamp, status, errorMessage";
 const MESSAGE_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8";
 const MESSAGE_UPDATES: &str = "conversationId=?2, role=?3, content=?4, partsJson=?5, timestamp=?6, status=?7, errorMessage=?8";
 
+
+fn map_project(row: &rusqlite::Row<'_>) -> Result<StoredProject, rusqlite::Error> {
+    Ok(StoredProject {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        workspace: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+fn upsert_project_sql(conn: &Connection, p: &StoredProject) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        &format!(
+            "INSERT INTO projects ({PROJECT_COLUMNS}) VALUES ({PROJECT_PLACEHOLDERS})
+             ON CONFLICT(id) DO UPDATE SET {PROJECT_UPDATES}"
+        ),
+        rusqlite::params![p.id, p.name, p.workspace, p.created_at, p.updated_at],
+    )?;
+    Ok(())
+}
 fn map_provider(row: &rusqlite::Row<'_>) -> Result<StoredProvider, rusqlite::Error> {
     Ok(StoredProvider {
         id: row.get(0)?,
@@ -623,32 +711,33 @@ fn map_conversation(row: &rusqlite::Row<'_>) -> Result<StoredConversation, rusql
         title: row.get(1)?,
         provider_id: row.get(2)?,
         agent_id: row.get(3)?,
-        override_model_id: row.get(4)?,
-        override_temperature: row.get(5)?,
-        override_top_p: row.get(6)?,
-        override_max_tokens: row.get(7)?,
-        override_reasoning_effort: row.get(8)?,
-        override_tools_enabled: row.get::<_, Option<i64>>(9)?.map(|v| v != 0),
-        override_tools_config: row.get(10)?,
-        writable: row.get::<_, i64>(11)? != 0,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
-        last_message: row.get(14)?,
-        reasoning_format: row.get(15)?,
-        context_summary: row.get(16)?,
-        context_summary_until: row.get(17)?,
-        context_tokens: row.get(18)?,
-        context_tokens_at: row.get(19)?,
+        project_id: row.get(4)?,
+        override_model_id: row.get(5)?,
+        override_temperature: row.get(6)?,
+        override_top_p: row.get(7)?,
+        override_max_tokens: row.get(8)?,
+        override_reasoning_effort: row.get(9)?,
+        override_tools_enabled: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+        override_tools_config: row.get(11)?,
+        writable: row.get::<_, i64>(12)? != 0,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+        last_message: row.get(15)?,
+        reasoning_format: row.get(16)?,
+        context_summary: row.get(17)?,
+        context_summary_until: row.get(18)?,
+        context_tokens: row.get(19)?,
+        context_tokens_at: row.get(20)?,
     })
 }
 
 fn conversation_params(c: &StoredConversation) -> Result<Vec<&dyn rusqlite::ToSql>, rusqlite::Error> {
     Ok(vec![
-        &c.id, &c.title, &c.provider_id, &c.agent_id, &c.override_model_id, &c.override_temperature,
-        &c.override_top_p, &c.override_max_tokens, &c.override_reasoning_effort,
-        &c.override_tools_enabled, &c.override_tools_config, &c.writable, &c.created_at,
-        &c.updated_at, &c.last_message, &c.reasoning_format, &c.context_summary,
-        &c.context_summary_until, &c.context_tokens, &c.context_tokens_at,
+        &c.id, &c.title, &c.provider_id, &c.agent_id, &c.project_id, &c.override_model_id,
+        &c.override_temperature, &c.override_top_p, &c.override_max_tokens,
+        &c.override_reasoning_effort, &c.override_tools_enabled, &c.override_tools_config,
+        &c.writable, &c.created_at, &c.updated_at, &c.last_message, &c.reasoning_format,
+        &c.context_summary, &c.context_summary_until, &c.context_tokens, &c.context_tokens_at,
     ])
 }
 

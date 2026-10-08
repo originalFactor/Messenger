@@ -64,6 +64,16 @@ pub fn default_workspace_dir() -> PathBuf {
     home_dir().join(DEFAULT_WORKSPACE)
 }
 
+
+/// The process's current working directory, as a string. The TUI's default
+/// project workspace: a terminal client is normally launched inside the tree
+/// the user wants to work on.
+pub fn current_dir_string() -> String {
+    std::env::current_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| home_dir().to_string_lossy().to_string())
+}
+
 /// `~/.messenger/tui/store.db`.
 pub fn default_store_path() -> PathBuf {
     home_dir().join(".messenger").join("tui").join("store.db")

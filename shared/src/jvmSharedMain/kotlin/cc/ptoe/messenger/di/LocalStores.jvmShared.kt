@@ -29,6 +29,7 @@ import cc.ptoe.messenger.data.repository.ConversationRepositoryImpl
 import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
 import cc.ptoe.messenger.data.repository.ModelRepositoryImpl
 import cc.ptoe.messenger.data.repository.ProviderRepositoryImpl
+import cc.ptoe.messenger.data.repository.ProjectRepositoryImpl
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.ioDispatcher
 import kotlinx.coroutines.flow.first
@@ -58,7 +59,8 @@ actual fun createLocalStores(appDirs: AppDirs): LocalStores {
             MessengerDatabase.MIGRATION_16_17,
             MessengerDatabase.MIGRATION_17_18,
             MessengerDatabase.MIGRATION_18_19,
-            MessengerDatabase.MIGRATION_19_20
+            MessengerDatabase.MIGRATION_19_20,
+            MessengerDatabase.MIGRATION_20_21
         )
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
@@ -100,6 +102,9 @@ actual fun createRoomRepositories(
         conversations = ConversationRepositoryImpl(database.conversationDao()) { id, deleted ->
             hooks.onConversationChanged(id, deleted)
         },
+        projects = ProjectRepositoryImpl(database.projectDao()) { id, deleted ->
+            hooks.onProjectChanged(id, deleted)
+        },
         messages = MessageRepositoryImpl(database.messageDao()) { conversationId ->
             hooks.onMessagesChanged(conversationId)
         },
@@ -118,6 +123,7 @@ actual suspend fun clearLocalData(appDirs: AppDirs, stores: LocalStores) =
         room.database.modelDao().deleteAll()
         room.database.agentDao().deleteAll()
         room.database.conversationDao().deleteAll()
+        room.database.projectDao().deleteAll()
         room.database.messageDao().deleteAll()
         room.appPreferences.clearAll()
         FileKit.deleteRecursively(appDirs.filesDir)

@@ -25,6 +25,8 @@ import cc.ptoe.messenger.data.repository.CurrentAgentRepositoryImpl
 import cc.ptoe.messenger.data.repository.createModelsDevRepository
 import cc.ptoe.messenger.data.repository.RustAgentRepository
 import cc.ptoe.messenger.data.repository.RustConversationRepository
+import cc.ptoe.messenger.data.repository.RustProjectRepository
+
 import cc.ptoe.messenger.data.repository.RustCurrentAgentRepository
 import cc.ptoe.messenger.data.repository.RustMessageRepository
 import cc.ptoe.messenger.data.repository.RustModelRepository
@@ -42,6 +44,7 @@ import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
+import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
@@ -49,6 +52,7 @@ import cc.ptoe.messenger.domain.mcp.McpManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import cc.ptoe.messenger.presentation.platform.defaultWorkspaceRoot
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -86,18 +90,33 @@ class AppContainer(
 
     val cloud: CloudFacade = stores.cloud
 
-    /** Platform built-in tools: desktop and Android both register the terminal tool. */
-    // Re-evaluated on access: Android's tool set depends on whether the
-    // companion runtime app is installed (may change during a session).
-    val builtinTools: List<ChatTool> get() = createBuiltinChatTools()
+    /**
+     * 平台内置工具工厂。参数是所属项目的 workspace 绝对路径（无项目时
+     * 传 null，此时不注册终端与工作区工具）。
+     * Re-evaluated on access: Android's tool set depends on whether the
+     * companion runtime app is installed (may change during a session).
+     */
+    val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) }
 
     val mcpManager = McpManager(appPreferences)
 
     /**
-     * Returns active tools: built-in tools + active MCP tools.
-     * 每工具的启用与否由各 Agent 的 toolsConfig 决定（见 [Agent.effectiveToolEnabled]）。
+     * Returns active tools: built-in tools for [workspaceRoot] + active MCP
+     * tools. 每工具的启用与否由各 Agent 的 toolsConfig 决定
+     * （见 [Agent.effectiveToolEnabled]）。
      */
-    val availableTools: List<ChatTool> get() = builtinTools + mcpManager.activeTools.value
+    fun availableTools(workspaceRoot: String?): List<ChatTool> =
+        builtinTools(workspaceRoot) + mcpManager.activeTools.value
+
+    /**
+     * The platform's whole tool inventory (built-in + active MCP), used by the
+     * Agent tool-config and conversation-override screens. They are about
+     * WHICH tools can be toggled, not about one conversation's workspace, so
+     * workspace-bound tools are listed even though they only run inside a
+     * project.
+     */
+    fun allTools(): List<ChatTool> =
+        createBuiltinChatTools(defaultWorkspaceRoot()) + mcpManager.activeTools.value
 
     val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
 
@@ -126,6 +145,7 @@ class AppContainer(
         onModelChanged = ::modelChanged,
         onAgentChanged = ::agentChanged,
         onConversationChanged = { id, deleted -> cloud.requestLocalChange("conversation", id, deleted) },
+        onProjectChanged = { id, deleted -> cloud.requestLocalChange("project", id, deleted) },
         onMessagesChanged = { conversationId -> cloud.requestLocalChange("conversation", conversationId) },
     )
 
@@ -154,6 +174,10 @@ class AppContainer(
             cloud.requestLocalChange("conversation", id, deleted)
         }
     } ?: roomRepositories!!.conversations
+
+    val projectRepository: ProjectRepository = coreBridge?.let {
+        RustProjectRepository(it) { id, deleted -> cloud.requestLocalChange("project", id, deleted) }
+    } ?: roomRepositories!!.projects
 
     val messageRepository: MessageRepository = coreBridge?.let {
         RustMessageRepository(it, chatImageStore) { conversationId ->

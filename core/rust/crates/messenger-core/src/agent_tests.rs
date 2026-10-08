@@ -137,6 +137,7 @@ fn seeded_store() -> Store {
             provider_id: "p1".into(),
             agent_id: "a1".into(),
             override_model_id: None,
+            project_id: None,
             override_temperature: None,
             override_top_p: None,
             override_max_tokens: None,
@@ -181,6 +182,7 @@ fn turn_request(base_url: &str) -> TurnRequest {
         max_tokens: None,
         reasoning_effort: None,
         tools: messenger_tools::builtin_registry(),
+        workspace_note: String::new(),
         context_window: 0,
         summarize_prompt: "summarize".into(),
         title: None,
@@ -385,6 +387,50 @@ async fn many_tool_rounds_are_unbounded_and_still_finish() {
     let events = sink.0.lock();
     assert!(matches!(events.last(), Some(AgentEvent::Finished { .. })));
     assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error { .. })));
+}
+
+/// The workspace note reaches the provider's `system` message: the model has
+/// to learn the project's working directory from the request, since nothing
+/// else in the payload carries it. An empty note must leave the agent's own
+/// prompt untouched.
+#[tokio::test]
+async fn the_workspace_note_is_appended_to_the_system_prompt() {
+    let server = wiremock::MockServer::start().await;
+    let mut bodies: VecDeque<String> = VecDeque::new();
+    bodies.push_back(text_stream("ok"));
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ScriptedResponder {
+            bodies: Mutex::new(bodies),
+        })
+        .mount(&server)
+        .await;
+
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    let mut request = turn_request(&server.uri());
+    request.workspace_note = "Working directory: /w/proj".into();
+    run_chat_turn(
+        &store,
+        &StaticToolHost,
+        &sink,
+        &request,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("provider body is JSON");
+    let system = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "system")
+        .expect("a system message is sent");
+    let prompt = system["content"].as_str().unwrap();
+    assert!(prompt.starts_with("be helpful"), "{prompt}");
+    assert!(prompt.ends_with("Working directory: /w/proj"), "{prompt}");
 }
 
 /// The LLM client handles plain HTTP; smoke-check OpenAiClient construction

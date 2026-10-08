@@ -16,9 +16,9 @@ use messenger_llm::domain::ContentPart;
 use messenger_mcp::config::{encode_server_list, McpServerConfig, McpTransportType};
 use messenger_markdown::StreamingSession;
 use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider};
+use messenger_store::StoredProject;
 use ratatui::text::Line;
-
-use crate::config::TuiConfig;
+use crate::config::{self, TuiConfig};
 use crate::engine::{load_mcp_servers, CardSnapshot, Engine, UiMsg};
 use crate::render::{self, RenderOpts};
 use crate::store_ops::{self, TurnError};
@@ -188,6 +188,9 @@ pub enum FormPurpose {
     EditServerUrl,
     FilterConversations,
     EditWorkspace,
+    NewProject,
+    EditProject(String),
+    NewProjectConversation(String),
 }
 
 #[derive(Debug, Clone)]
@@ -414,6 +417,13 @@ pub struct App {
     pub conversation_selection: usize,
     pub conversation_filter: Option<String>,
 
+    /// Projects section of the Conversations view (a project IS a workspace).
+    pub projects: Vec<StoredProject>,
+    pub project_selection: usize,
+    /// True while the Conversations list is scrolled into the projects block,
+    /// so Up/Down move between projects and conversations respectively.
+    pub list_showing_projects: bool,
+
     pub chat: ChatState,
 
     pub agents: Vec<StoredAgent>,
@@ -437,6 +447,9 @@ pub struct App {
     pub last_list_message: Option<String>,
     /// Agent ids backing the Agent switcher modal (its form indexes into this).
     pending_agent_picker: Option<Vec<String>>,
+    /// Project a new conversation should be created in (set when Enter is
+    /// pressed on a project row, consumed by the Agent picker).
+    pub pending_project: Option<String>,
     /// Providers view: true when the model pane owns the selection.
     pub provider_focus_models: bool,
 }
@@ -472,6 +485,9 @@ impl App {
             conversations: Vec::new(),
             conversation_selection: 0,
             conversation_filter: None,
+            projects: Vec::new(),
+            project_selection: 0,
+            list_showing_projects: false,
             chat: ChatState {
                 follow: true,
                 ..ChatState::default()
@@ -490,6 +506,7 @@ impl App {
             cloud_user: None,
             last_list_message: None,
             pending_agent_picker: None,
+            pending_project: None,
             provider_focus_models: false,
         };
         app.reload_all();
@@ -510,6 +527,7 @@ impl App {
 
     pub fn reload_all(&mut self) {
         self.reload_conversations();
+        self.reload_projects();
         self.reload_agents();
         self.reload_providers();
         self.reload_mcp();
@@ -533,6 +551,16 @@ impl App {
                     .min(self.conversations.len().saturating_sub(1));
             }
             Err(error) => self.status = error,
+        }
+    }
+
+    pub fn reload_projects(&mut self) {
+        match self.engine.store.list_projects() {
+            Ok(projects) => {
+                self.projects = projects;
+                self.project_selection = self.project_selection.min(self.projects.len().saturating_sub(1));
+            }
+            Err(error) => self.status = error.to_string(),
         }
     }
 
@@ -813,6 +841,20 @@ impl App {
     // ------------------------------------------------------------------
 
     fn create_conversation(&mut self) -> Option<String> {
+        self.create_conversation_for(None, true)
+    }
+
+    /// Create a conversation inside [project_id] and open it — the path taken
+    /// when the user presses Enter on a project row.
+    fn create_conversation_in(&mut self, project_id: &str) -> Option<String> {
+        self.create_conversation_for(Some(project_id), false)
+    }
+
+
+    /// Create a conversation, optionally inside a project (which supplies the
+    /// workspace the terminal/workspace tools run in). [open] is false when
+    /// the caller opens the conversation itself.
+    fn create_conversation_for(&mut self, project_id: Option<&str>, open: bool) -> Option<String> {
         let Ok(Some(agent)) = store_ops::current_agent(&self.engine.store) else {
             self.status = "No Agent available.".into();
             return None;
@@ -822,10 +864,12 @@ impl App {
         let provider_id = self
             .effective_provider_id(&agent)
             .unwrap_or_default();
-        match store_ops::create_conversation(&self.engine.store, &agent, &provider_id) {
+        match store_ops::create_conversation(&self.engine.store, &agent, &provider_id, project_id) {
             Ok(conversation) => {
                 self.reload_conversations();
-                self.open_conversation(&conversation.id);
+                if open {
+                    self.open_conversation(&conversation.id);
+                }
                 Some(conversation.id)
             }
             Err(error) => {
@@ -1060,7 +1104,8 @@ impl App {
         }
         let engine = Arc::clone(&self.engine);
         let servers = self.mcp_servers.clone();
-        tokio::spawn(async move { engine.connect_mcp(servers).await });
+        let spawner = engine.spawner();
+        spawner.spawn(async move { engine.connect_mcp(servers).await });
     }
 
     // ------------------------------------------------------------------
@@ -1069,7 +1114,8 @@ impl App {
 
     fn login(&mut self, email: String, password: String, server_url: Option<String>) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             if let Some(url) = server_url.filter(|url| !url.trim().is_empty()) {
                 if let Err(error) = engine
                     .store
@@ -1112,7 +1158,8 @@ impl App {
 
     fn logout(&mut self) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             {
                 let session = store_ops::session_from_kv(&engine.store);
                 let sync = messenger_sync::SyncEngine::new(&engine.store, session);
@@ -1126,7 +1173,8 @@ impl App {
 
     fn sync_now(&mut self) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             if let Err(error) = sync.refresh_user().await {
@@ -1152,7 +1200,8 @@ impl App {
 
     fn redeem_card(&mut self, code: String) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             let preview = match sync.preview_redeem_card(&code).await {
@@ -1171,7 +1220,8 @@ impl App {
 
     fn confirm_redeem(&mut self, code: String) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             match sync.redeem_card(&code).await {
@@ -1193,7 +1243,8 @@ impl App {
 
     fn change_password(&mut self, current: String, new: String) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             match sync.change_password(&current, &new).await {
@@ -1211,7 +1262,8 @@ impl App {
 
     fn delete_account(&mut self, password: String) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             match sync.delete_account(&password).await {
@@ -1230,7 +1282,8 @@ impl App {
 
     fn set_server_url(&mut self, url: String) {
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             {
                 let sync = messenger_sync::SyncEngine::new(
                     &engine.store,
@@ -1274,9 +1327,19 @@ impl App {
                         .pending_agent_picker
                         .take()
                         .and_then(|ids| ids.get(index).cloned());
-                    match picked {
-                        Some(id) => self.switch_agent(&id),
-                        None => self.status = "No Agent selected.".into(),
+                    // Enter on a project row routes through the same picker:
+                    // create the conversation inside that project instead of
+                    // switching the current Agent.
+                    let project_id = self.pending_project.take();
+                    match (picked, project_id) {
+                        (Some(agent_id), Some(project_id)) => {
+                            self.switch_agent(&agent_id);
+                            if let Some(id) = self.create_conversation_in(&project_id) {
+                                self.open_conversation(&id);
+                            }
+                        }
+                        (Some(agent_id), None) => self.switch_agent(&agent_id),
+                        (None, _) => self.status = "No Agent selected.".into(),
                     }
                 }
             }
@@ -1474,6 +1537,56 @@ impl App {
                 self.config.workspace_dir = workspace;
                 self.save_config();
                 self.status = "Workspace updated (restart to apply to the tool host).".into();
+            }
+            FormPurpose::NewProject | FormPurpose::EditProject(_) => {
+                let name = form.value("Project name");
+                if name.trim().is_empty() {
+                    self.status = "Project name cannot be empty.".into();
+                    self.form = Some(form);
+                    return;
+                }
+                // An empty workspace defaults to the current directory: in a
+                // terminal client the working directory is the one the user
+                // launched from, which is exactly what they mean by "this
+                // project".
+                let workspace = {
+                    let typed = form.value("Workspace directory");
+                    let trimmed = typed.trim();
+                    if trimmed.is_empty() {
+                        config::current_dir_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                };
+                let existing = match &form.purpose {
+                    FormPurpose::EditProject(id) => {
+                        self.engine.store.get_project(id).ok().flatten()
+                    }
+                    _ => None,
+                };
+                let now = messenger_store::now_ms();
+                let project = StoredProject {
+                    id: existing
+                        .as_ref()
+                        .map(|project| project.id.clone())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    name,
+                    workspace,
+                    created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
+                    updated_at: now,
+                };
+                match self.engine.store.upsert_project(&project) {
+                    Ok(()) => {
+                        self.status = format!("Saved project {}.", project.name);
+                        self.reload_projects();
+                    }
+                    Err(error) => self.status = error.to_string(),
+                }
+            }
+            FormPurpose::NewProjectConversation(project_id) => {
+                if let Some(id) = self.create_conversation_in(&project_id) {
+                    self.open_conversation(&id);
+                }
             }
         }
     }
@@ -2086,20 +2199,53 @@ impl App {
     fn handle_conversations_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+            // The list is [projects | conversations]; Tab crosses the boundary
+            // and Up/Down then move inside the active block.
+            KeyCode::Tab => {
+                if !self.projects.is_empty() && !self.conversations.is_empty() {
+                    self.list_showing_projects = !self.list_showing_projects;
+                }
+            }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !self.conversations.is_empty() {
+                if self.list_showing_projects {
+                    self.project_selection =
+                        (self.project_selection + 1).min(self.projects.len().saturating_sub(1));
+                } else if !self.conversations.is_empty() {
                     self.conversation_selection =
                         (self.conversation_selection + 1).min(self.conversations.len() - 1);
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.conversation_selection = self.conversation_selection.saturating_sub(1);
+                if self.list_showing_projects {
+                    self.project_selection = self.project_selection.saturating_sub(1);
+                } else {
+                    self.conversation_selection = self.conversation_selection.saturating_sub(1);
+                }
             }
             KeyCode::Enter => {
-                if let Some(conversation) = self.conversations.get(self.conversation_selection) {
+                if self.list_showing_projects {
+                    if let Some(project) = self.projects.get(self.project_selection) {
+                        // Enter on a project opens the Agent picker scoped to it:
+                        // the project decides the workspace, the Agent the voice.
+                        self.pending_project = Some(project.id.clone());
+                        self.open_agent_picker();
+                    }
+                } else if let Some(conversation) = self.conversations.get(self.conversation_selection)
+                {
                     let id = conversation.id.clone();
                     self.open_conversation(&id);
                 }
+            }
+            KeyCode::Char('p') => {
+                self.form = Some(Form::new(
+                    "New project",
+                    FormPurpose::NewProject,
+                    vec![
+                        Field::text("Project name", ""),
+                        // Empty = the terminal's current directory.
+                        Field::text("Workspace directory", ""),
+                    ],
+                ));
             }
             KeyCode::Char('n') => {
                 self.form = Some(Form::new(
@@ -2380,7 +2526,8 @@ impl App {
             return;
         };
         let engine = Arc::clone(&self.engine);
-        tokio::spawn(async move {
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
             let client = messenger_llm::client::OpenAiClient::new(&provider.base_url, &provider.api_key);
             match client.get_models().await {
                 Ok(response) => {

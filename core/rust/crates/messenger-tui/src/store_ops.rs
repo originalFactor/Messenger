@@ -166,6 +166,7 @@ pub fn create_conversation(
     store: &Store,
     agent: &StoredAgent,
     provider_id: &str,
+    project_id: Option<&str>,
 ) -> Result<StoredConversation, String> {
     let now = messenger_store::now_ms();
     let conversation = StoredConversation {
@@ -173,6 +174,7 @@ pub fn create_conversation(
         title: "新对话".into(),
         provider_id: provider_id.to_string(),
         agent_id: agent.id.clone(),
+        project_id: project_id.map(str::to_string),
         override_model_id: None,
         override_temperature: None,
         override_top_p: None,
@@ -323,7 +325,14 @@ pub fn resolve_turn(
         provider.api_key.clone()
     };
 
-    let tools = resolve_tools(&effective, &conversation, mcp_tools);
+    // A project IS a workspace: only a conversation inside one may call the
+    // terminal and workspace tools, and their cwd is that project's folder.
+    let workspace = conversation
+        .project_id
+        .as_deref()
+        .and_then(|project_id| store.get_project(project_id).ok().flatten())
+        .map(|project| project.workspace);
+    let tools = resolve_tools(&effective, &conversation, mcp_tools, workspace.is_some());
 
     let title_agent = store
         .get_title_agent()
@@ -354,6 +363,10 @@ pub fn resolve_turn(
             max_tokens: effective.max_tokens,
             reasoning_effort: effective.reasoning_effort.clone(),
             tools,
+            workspace_note: workspace
+                .as_ref()
+                .map(|dir| format!("Working directory: {dir}"))
+                .unwrap_or_default(),
             context_window: model.context_window,
             summarize_prompt: SUMMARIZE_PROMPT.to_string(),
             title: title_agent,
@@ -368,12 +381,14 @@ pub fn resolve_tools(
     agent: &StoredAgent,
     conversation: &StoredConversation,
     mcp_tools: &[McpChatTool],
+    workspace_available: bool,
 ) -> Vec<BuiltinTool> {
     let mut tools = messenger_tools::resolve_request_tools(
         &messenger_tools::builtin_registry(),
         agent.tools_enabled,
         &tools_config_map(&agent.tools_config),
         conversation.writable,
+        workspace_available,
     );
     for tool in mcp_tools {
         tools.push(BuiltinTool {
@@ -381,6 +396,7 @@ pub fn resolve_tools(
             description: tool.description.clone(),
             write_access: false,
             parameters_json: tool.parameters_json.clone(),
+            workspace_required: false,
             read_only: false,
         });
     }

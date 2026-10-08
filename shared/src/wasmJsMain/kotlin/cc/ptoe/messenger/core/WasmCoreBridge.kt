@@ -70,9 +70,17 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
     override fun upsertAgentJson(json: String) = core.upsert_agent_json(json)
     override fun deleteAgent(id: String) = core.delete_agent(id)
 
+    override fun listProjectsJson(): String = core.list_projects_json()
+    override fun getProjectJson(id: String): String? = core.get_project_json(id)
+    override fun upsertProjectJson(json: String) = core.upsert_project_json(json)
+    override fun deleteProject(id: String) = core.delete_project(id)
+
     override fun listConversationsJson(): String = core.list_conversations_json()
     override fun listConversationsByAgentJson(agentId: String): String =
         core.list_conversations_by_agent_json(agentId)
+
+    override fun listConversationsByProjectJson(projectId: String): String =
+        core.list_conversations_by_project_json(projectId)
 
     override fun getConversationJson(id: String): String? = core.get_conversation_json(id)
     override fun upsertConversationJson(json: String) = core.upsert_conversation_json(json)
@@ -270,7 +278,10 @@ internal data class TurnConfigJson(
     val titleAgentId: String? = null,
     val titleAgentSystemPrompt: String? = null,
     val titleAgentModelId: String? = null,
+    val hasWorkspace: Boolean = false,
+    val workspaceNote: String = "",
 ) {
+
     companion object {
         fun of(config: TurnConfigBridge) = TurnConfigJson(
             conversationId = config.conversationId,
@@ -289,6 +300,8 @@ internal data class TurnConfigJson(
             titleAgentId = config.titleAgentId,
             titleAgentSystemPrompt = config.titleAgentSystemPrompt,
             titleAgentModelId = config.titleAgentModelId,
+            hasWorkspace = config.hasWorkspace,
+            workspaceNote = config.workspaceNote,
         )
     }
 }

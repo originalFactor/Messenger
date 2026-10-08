@@ -47,8 +47,14 @@ interface CoreBridge {
     fun upsertAgentJson(json: String)
     fun deleteAgent(id: String)
 
+    fun listProjectsJson(): String
+    fun getProjectJson(id: String): String?
+    fun upsertProjectJson(json: String)
+    fun deleteProject(id: String)
+
     fun listConversationsJson(): String
     fun listConversationsByAgentJson(agentId: String): String
+    fun listConversationsByProjectJson(projectId: String): String
     fun getConversationJson(id: String): String?
     fun upsertConversationJson(json: String)
     fun updateConversationLastMessage(id: String, lastMessage: String?, updatedAt: Long)
@@ -151,7 +157,11 @@ data class TurnConfigBridge(
     val summarizePrompt: String,
     val titleAgentId: String?,
     val titleAgentSystemPrompt: String?,
-    val titleAgentModelId: String?
+    val titleAgentModelId: String?,
+    /** 会话是否属于某个可用工作区的项目；false 时不声明终端/工作区工具。 */
+    val hasWorkspace: Boolean,
+    /** 追加到 system prompt 的工作目录说明（本地化，无项目时为空）。 */
+    val workspaceNote: String
 )
 
 object CoreBridgeRegistry {
@@ -223,11 +233,21 @@ data class StoredAgentDto(
 )
 
 @Serializable
+data class StoredProjectDto(
+    val id: String,
+    val name: String,
+    val workspace: String,
+    @SerialName("created_at") val createdAt: Long,
+    @SerialName("updated_at") val updatedAt: Long,
+)
+
+@Serializable
 data class StoredConversationDto(
     val id: String,
     val title: String,
     @SerialName("provider_id") val providerId: String,
     @SerialName("agent_id") val agentId: String,
+    @SerialName("project_id") val projectId: String? = null,
     @SerialName("override_model_id") val overrideModelId: String? = null,
     @SerialName("override_temperature") val overrideTemperature: Float? = null,
     @SerialName("override_top_p") val overrideTopP: Float? = null,

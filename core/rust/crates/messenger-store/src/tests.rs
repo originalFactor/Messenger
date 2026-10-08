@@ -53,6 +53,42 @@ fn sample_agent(id: &str, is_default: bool) -> StoredAgent {
     }
 }
 
+fn sample_project(id: &str) -> StoredProject {
+    StoredProject {
+        id: id.to_string(),
+        name: "Messenger".into(),
+        workspace: "/home/me/src/Messenger".into(),
+        created_at: 1_000,
+        updated_at: 1_000,
+    }
+}
+
+fn sample_conversation(id: &str, project_id: Option<&str>) -> StoredConversation {
+    StoredConversation {
+        id: id.to_string(),
+        title: "Refactor".into(),
+        provider_id: "p1".into(),
+        agent_id: "a1".into(),
+        project_id: project_id.map(str::to_string),
+        override_model_id: None,
+        override_temperature: None,
+        override_top_p: None,
+        override_max_tokens: None,
+        override_reasoning_effort: None,
+        override_tools_enabled: None,
+        override_tools_config: None,
+        writable: false,
+        created_at: 1_000,
+        updated_at: 1_000,
+        last_message: None,
+        reasoning_format: None,
+        context_summary: None,
+        context_summary_until: 0,
+        context_tokens: 0,
+        context_tokens_at: 0,
+    }
+}
+
 #[test]
 fn crud_round_trips_all_five_entities() {
     let store = Store::open_memory().unwrap();
@@ -82,6 +118,7 @@ fn crud_round_trips_all_five_entities() {
         id: "c1".into(),
         title: "新对话".into(),
         provider_id: "p1".into(),
+        project_id: None,
         agent_id: "a1".into(),
         override_model_id: Some("p1:gpt-x".into()),
         override_temperature: Some(0.3),
@@ -169,6 +206,152 @@ fn change_events_fire_with_ids() {
         ]
     );
 }
+
+#[test]
+fn project_crud_and_conversation_membership() {
+    let store = Store::open_memory().unwrap();
+    store.upsert_provider(&sample_provider("p1")).unwrap();
+    store.upsert_agent(&sample_agent("a1", true)).unwrap();
+
+    let project = StoredProject {
+        id: "proj1".into(),
+        name: "Messenger".into(),
+        workspace: "/home/me/src/Messenger".into(),
+        created_at: 1_000,
+        updated_at: 1_000,
+    };
+    store.upsert_project(&project).unwrap();
+    assert_eq!(store.list_projects().unwrap().len(), 1);
+    assert_eq!(
+        store.get_project("proj1").unwrap().unwrap().workspace,
+        "/home/me/src/Messenger"
+    );
+
+    let mut conversation = sample_conversation("c1", Some("proj1"));
+    store.upsert_conversation(&conversation).unwrap();
+    assert_eq!(store.list_conversations_by_project("proj1").unwrap().len(), 1);
+
+    // Re-pointing the project re-groups the list.
+    store.upsert_project(&StoredProject { id: "proj2".into(), ..project.clone() }).unwrap();
+    conversation.project_id = Some("proj2".into());
+    store.upsert_conversation(&conversation).unwrap();
+    assert!(store.list_conversations_by_project("proj1").unwrap().is_empty());
+    assert_eq!(store.list_conversations_by_project("proj2").unwrap().len(), 1);
+
+    // Deleting a project keeps its conversations, unattached.
+    store.delete_project("proj2").unwrap();
+    assert_eq!(store.get_project("proj2").unwrap(), None);
+    let orphan = store.get_conversation("c1").unwrap().unwrap();
+    assert_eq!(orphan.project_id, None);
+    assert_eq!(orphan.title, "Refactor");
+}
+
+/// Deleting a project notifies the conversations it orphaned, so a reactive
+/// chat list re-groups without waiting for the next conversation write.
+#[test]
+fn deleting_a_project_emits_a_conversation_event_for_its_orphans() {
+    let store = Store::open_memory().unwrap();
+    store.upsert_provider(&sample_provider("p1")).unwrap();
+    store.upsert_agent(&sample_agent("a1", true)).unwrap();
+    store.upsert_project(&sample_project("proj1")).unwrap();
+    store.upsert_conversation(&sample_conversation("c1", Some("proj1"))).unwrap();
+
+    let events = std::sync::Arc::new(Mutex::new(VecDeque::<(EntityKind, Vec<String>)>::new()));
+    {
+        let sink = std::sync::Arc::clone(&events);
+        store.subscribe(Box::new(move |event| {
+            sink.lock().unwrap().push_back((event.kind.clone(), event.ids.clone()));
+        }));
+    }
+    store.delete_project("proj1").unwrap();
+
+    let drained: Vec<_> = events.lock().unwrap().drain(..).collect();
+    assert_eq!(
+        drained,
+        vec![
+            (EntityKind::Conversation, vec!["c1".to_string()]),
+            (EntityKind::Project, vec!["proj1".to_string()]),
+        ]
+    );
+}
+
+/// An on-disk v1 database has a `conversations` table without `projectId`;
+/// opening it must add the column instead of failing (or silently keeping the
+/// old shape, which would make every project query fail later).
+#[test]
+fn opening_a_v1_database_adds_the_project_id_column() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v1.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        // `messages` declares a FK to `conversations`, so the v1 table has to
+        // exist before the rest of the v1 DDL runs.
+        conn.execute(V1_CONVERSATIONS_DDL, []).unwrap();
+        // The v1 shape: every remaining CREATE_TABLES entry, plus a
+        // `conversations` table without projectId.
+        for ddl in crate::schema::CREATE_TABLES {
+            if ddl.contains("CREATE TABLE IF NOT EXISTS conversations")
+                || ddl.contains("CREATE TABLE IF NOT EXISTS projects")
+                || ddl.contains("index_conversations_projectId")
+            {
+                continue;
+            }
+            conn.execute_batch(ddl).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO conversations (id, title, providerId, agentId, createdAt, updatedAt)
+             VALUES ('c1','t','p1','a1',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1_i64).unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get_conversation("c1").unwrap().unwrap().project_id, None);
+    store.upsert_project(&sample_project("proj1")).unwrap();
+    assert!(store.list_conversations_by_project("proj1").unwrap().is_empty());
+}
+
+/// Reopening a migrated database must not re-run the ALTER (SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`), so the guard is load-bearing.
+#[test]
+fn reopening_an_already_migrated_database_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v2.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.upsert_provider(&sample_provider("p1")).unwrap();
+        store.upsert_agent(&sample_agent("a1", true)).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.list_providers().unwrap().len(), 1);
+    assert_eq!(store.list_projects().unwrap().len(), 0);
+}
+
+/// The v1 `conversations` layout: identical to v2 minus `projectId`.
+const V1_CONVERSATIONS_DDL: &str = "CREATE TABLE conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    providerId TEXT NOT NULL,
+    agentId TEXT NOT NULL,
+    overrideModelId TEXT,
+    overrideTemperature REAL,
+    overrideTopP REAL,
+    overrideMaxTokens INTEGER,
+    overrideReasoningEffort TEXT,
+    overrideToolsEnabled INTEGER,
+    overrideToolsConfig TEXT,
+    writable INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    lastMessage TEXT,
+    reasoningFormat TEXT,
+    contextSummary TEXT,
+    contextSummaryUntil INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0,
+    contextTokensAt INTEGER NOT NULL DEFAULT 0
+)";
 
 #[test]
 fn kv_and_sync_meta_round_trip() {

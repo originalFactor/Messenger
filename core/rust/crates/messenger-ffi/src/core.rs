@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use messenger_core::agent::{run_chat_turn, AgentEvent, TitleConfig, ToolHost, TurnRequest};
-use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider};
+use messenger_store::model::{
+    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
+};
 use messenger_store::{import_legacy, Store};
 use messenger_sync::{
     AvatarManager, Session, SyncEngine, KV_SESSION, KV_SESSION_HOST,
@@ -117,6 +119,13 @@ pub struct TurnConfig {
     pub title_agent_id: Option<String>,
     pub title_agent_system_prompt: Option<String>,
     pub title_agent_model_id: Option<String>,
+    /// True when the conversation belongs to a project whose workspace is
+    /// usable, which is the precondition for declaring the terminal and
+    /// workspace tools. Set together with [Self::workspace_note].
+    pub has_workspace: bool,
+    /// Localized note appended to the system prompt naming the project's
+    /// workspace (empty when the conversation belongs to no project).
+    pub workspace_note: String,
 }
 
 #[uniffi::export(callback_interface)]
@@ -239,6 +248,36 @@ impl CoreHandle {
     }
 
     // -- Store CRUD via JSON --
+    pub fn list_projects_json(&self) -> Result<String, CoreError> {
+        let rows = self.store.list_projects().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn get_project_json(&self, id: String) -> Result<Option<String>, CoreError> {
+        let row = self.store.get_project(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        match row {
+            Some(r) => Ok(Some(serde_json::to_string(&r).map_err(|e| CoreError::Generic { detail: e.to_string() })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_project_json(&self, json: String) -> Result<(), CoreError> {
+        let row: StoredProject = serde_json::from_str(&json).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        self.store.upsert_project(&row).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn delete_project(&self, id: String) -> Result<(), CoreError> {
+        self.store.delete_project(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_conversations_by_project_json(&self, project_id: String) -> Result<String, CoreError> {
+        let rows = self
+            .store
+            .list_conversations_by_project(&project_id)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
 
     pub fn list_providers_json(&self) -> Result<String, CoreError> {
         let rows = self.store.list_providers().map_err(|e| CoreError::Generic { detail: e.to_string() })?;
@@ -726,6 +765,9 @@ impl CoreHandle {
         for agent in self.store.list_agents().map_err(|e| CoreError::Generic { detail: e.to_string() })? {
             self.store.delete_agent(&agent.id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
         }
+        for project in self.store.list_projects().map_err(|e| CoreError::Generic { detail: e.to_string() })? {
+            self.store.delete_project(&project.id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        }
         for key in [
             messenger_sync::KV_SESSION,
             messenger_sync::KV_SESSION_HOST,
@@ -800,10 +842,17 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
     // read-only/writable mode (write-tool exclusion + terminal description
     // swap) is applied here so the declared list matches what the platform's
     // tool host actually executes.
+    //
+    // A conversation outside any project has no workspace, so the
+    // workspace-bound tools (terminal + glob/grep/read/edit/create) are
+    // dropped from the declared list no matter what the platform resolved:
+    // the model must not be offered a tool whose cwd does not exist.
+    let workspace_available = config.has_workspace;
     let resolved = apply_writable_mode(
         registry
             .into_iter()
             .filter(|tool| config.tool_names.iter().any(|n| n == &tool.name))
+            .filter(|tool| workspace_available || !tool.workspace_required)
             .collect(),
         config.writable,
     );
@@ -818,6 +867,7 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
         max_tokens: config.max_tokens,
         reasoning_effort: config.reasoning_effort.clone(),
         tools: resolved,
+        workspace_note: config.workspace_note.clone(),
         context_window: config.context_window,
         summarize_prompt: config.summarize_prompt.clone(),
         title: config.title_agent_id.as_ref().map(|id| TitleConfig {

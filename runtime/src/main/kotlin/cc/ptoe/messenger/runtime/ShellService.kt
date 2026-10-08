@@ -84,40 +84,62 @@ class ShellService : Service() {
             active.remove(requestId)?.cancel()
         }
 
-        override fun workspaceGlob(pattern: String?, maxResults: Int): ToolResult? = ifCallerAllowed {
-            runBlocking { TermuxRuntime.workspaceGlob(applicationContext, pattern.orEmpty(), maxResults) }
-        }
+        override fun workspaceGlob(root: String?, pattern: String?, maxResults: Int): ToolResult? =
+            ifCallerAllowed(root) {
+                runBlocking { TermuxRuntime.workspaceGlob(applicationContext, root, pattern.orEmpty(), maxResults) }
+            }
 
         override fun workspaceGrep(
+            root: String?,
             pattern: String?,
             path: String?,
             fileGlob: String?,
             caseSensitive: Boolean,
             fixedString: Boolean,
             maxResults: Int
-        ): ToolResult? = ifCallerAllowed {
+        ): ToolResult? = ifCallerAllowed(root) {
             runBlocking {
-                TermuxRuntime.workspaceGrep(applicationContext, pattern.orEmpty(), path.orEmpty(), fileGlob, caseSensitive, fixedString, maxResults)
+                TermuxRuntime.workspaceGrep(
+                    applicationContext, root, pattern.orEmpty(), path.orEmpty(), fileGlob,
+                    caseSensitive, fixedString, maxResults
+                )
             }
         }
 
-        override fun workspaceRead(path: String?, startLine: Int, maxLines: Int): ToolResult? = ifCallerAllowed {
-            runBlocking { TermuxRuntime.workspaceRead(applicationContext, path.orEmpty(), startLine, maxLines) }
+        override fun workspaceRead(
+            root: String?,
+            path: String?,
+            startLine: Int,
+            maxLines: Int
+        ): ToolResult? = ifCallerAllowed(root) {
+            runBlocking {
+                TermuxRuntime.workspaceRead(applicationContext, root, path.orEmpty(), startLine, maxLines)
+            }
         }
 
         override fun workspaceEdit(
+            root: String?,
             path: String?,
             oldText: String?,
             newText: String?,
             replaceAll: Boolean
-        ): ToolResult? = ifCallerAllowed {
+        ): ToolResult? = ifCallerAllowed(root) {
             runBlocking {
-                TermuxRuntime.workspaceEdit(applicationContext, path.orEmpty(), oldText.orEmpty(), newText.orEmpty(), replaceAll)
+                TermuxRuntime.workspaceEdit(
+                    applicationContext, root, path.orEmpty(), oldText.orEmpty(), newText.orEmpty(), replaceAll
+                )
             }
         }
 
-        override fun workspaceCreate(path: String?, content: String?, overwrite: Boolean): ToolResult? = ifCallerAllowed {
-            runBlocking { TermuxRuntime.workspaceCreate(applicationContext, path.orEmpty(), content.orEmpty(), overwrite) }
+        override fun workspaceCreate(
+            root: String?,
+            path: String?,
+            content: String?,
+            overwrite: Boolean
+        ): ToolResult? = ifCallerAllowed(root) {
+            runBlocking {
+                TermuxRuntime.workspaceCreate(applicationContext, root, path.orEmpty(), content.orEmpty(), overwrite)
+            }
         }
 
         override fun startMcpProcess(
@@ -164,10 +186,18 @@ class ShellService : Service() {
     private fun isCallerAllowed(): Boolean =
         checkCallingPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED
 
-    private fun ifCallerAllowed(block: () -> ToolResult): ToolResult {
+    /**
+     * Guards a synchronous workspace call: the signature permission first,
+     * then the workspace root itself. A project created on another device (or
+     * whose folder was removed) names a directory this UID cannot reach, and
+     * falling back to the default workspace would run the agent's file
+     * operations somewhere it never asked for.
+     */
+    private fun ifCallerAllowed(root: String?, block: () -> ToolResult): ToolResult {
         if (!isCallerAllowed()) {
             return ToolResult("Caller is not permitted to use the shell runtime.", isError = true)
         }
+        TermuxRuntime.resolveWorkspace(applicationContext, root)?.let { return it }
         // Any uncaught exception escaping a synchronous binder method surfaces
         // on the caller as a RuntimeException, which the main app's tool host
         // rethrows through the JNI upcall → Rust panic ("tool host

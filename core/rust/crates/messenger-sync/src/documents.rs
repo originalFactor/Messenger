@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::models::*;
 use messenger_store::model::{
-    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider,
+    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
 };
 
 /// Extract `error.message` / `message` from an error body (server errors all
@@ -32,6 +32,17 @@ pub fn extract_error_message(body: &str) -> String {
 // ---------------------------------------------------------------------------
 // pull side: document → row
 // ---------------------------------------------------------------------------
+
+pub fn project_document_to_row(doc: &CloudProjectDocument) -> StoredProject {
+    StoredProject {
+        id: doc.id.clone(),
+        name: doc.name.clone(),
+        workspace: doc.workspace.clone(),
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+    }
+}
+
 
 pub fn agent_document_to_row(doc: &CloudAgentDocument, avatar_override: Option<String>) -> StoredAgent {
     StoredAgent {
@@ -87,6 +98,7 @@ pub fn conversation_document_to_row(doc: &CloudConversationDocument) -> StoredCo
         title: doc.title.clone(),
         provider_id: doc.provider_id.clone(),
         agent_id: doc.agent_id.clone(),
+        project_id: doc.project_id.clone(),
         override_model_id: doc.override_model_id.clone(),
         override_temperature: doc.override_temperature,
         override_top_p: doc.override_top_p,
@@ -151,6 +163,16 @@ fn parse_tools_config(json: &str) -> HashMap<String, bool> {
     serde_json::from_str(json).unwrap_or_default()
 }
 
+pub fn project_row_to_request(row: &StoredProject) -> CloudProjectRequest {
+    CloudProjectRequest {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        workspace: row.workspace.clone(),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }
+}
+
 pub fn agent_row_to_request(row: &StoredAgent) -> CloudAgentRequest {
     CloudAgentRequest {
         id: row.id.clone(),
@@ -203,6 +225,7 @@ pub fn conversation_row_to_request(
         title: row.title.clone(),
         agent_id: row.agent_id.clone(),
         provider_id: row.provider_id.clone(),
+        project_id: row.project_id.clone(),
         override_model_id: row.override_model_id.clone(),
         override_temperature: row.override_temperature,
         override_top_p: row.override_top_p,

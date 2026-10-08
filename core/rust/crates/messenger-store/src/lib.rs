@@ -22,7 +22,7 @@ pub mod wasm;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use import::{import_legacy, ImportSummary};
-pub use model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider};
+pub use model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider};
 pub use store::{EntityKind, Store, StoreEvent};
 
 /// Wall-clock milliseconds since the Unix epoch.

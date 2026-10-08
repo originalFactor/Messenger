@@ -44,6 +44,7 @@ fn delta_body() -> serde_json::Value {
         "conversations": [
             // Conversation whose agent exists (a1) → replace-all messages.
             {"_id": "c1", "agentId": "a1", "title": "t", "providerId": "p1",
+             "projectId": "proj1",
              "writable": true,
              "messages": [
                  {"id": "m1", "role": "user", "content": "hi", "timestamp": 1, "status": "sent"},
@@ -62,6 +63,10 @@ fn delta_body() -> serde_json::Value {
             // Builtin provider never syncs — a remote copy is ignored.
             {"_id": "builtin-messenger-cloud-ai", "name": "x", "baseUrl": "u", "apiKey": "k",
              "models": [], "createdAt": 1, "updatedAt": 2, "version": 15}
+        ],
+        "projects": [
+            {"_id": "proj1", "name": "Messenger", "workspace": "/w/messenger",
+             "createdAt": 1, "updatedAt": 2, "version": 16}
         ],
         "latestVersion": 20
     })
@@ -165,6 +170,12 @@ async fn pull_applies_delta_with_guards() {
         .respond_with(page_response(delta_body()["providers"].clone(), 20))
         .mount(&server)
         .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/sync"))
+        .and(wiremock::matchers::query_param("collection", "projects"))
+        .respond_with(page_response(delta_body()["projects"].clone(), 20))
+        .mount(&server)
+        .await;
 
     let store = Store::open_memory().unwrap();
     seed_title_holder(&store);
@@ -187,6 +198,16 @@ async fn pull_applies_delta_with_guards() {
     assert!(store.get_conversation("c1").unwrap().is_some());
     assert_eq!(store.list_messages_by_conversation("c1").unwrap().len(), 2);
     assert!(store.get_conversation("c2").unwrap().is_none());
+
+    // The pulled project landed and the conversation kept its membership —
+    // applying projects before conversations is what makes the FK hold.
+    let project = store.get_project("proj1").unwrap().unwrap();
+    assert_eq!(project.workspace, "/w/messenger");
+    assert_eq!(
+        store.get_conversation("c1").unwrap().unwrap().project_id.as_deref(),
+        Some("proj1")
+    );
+    assert_eq!(store.list_conversations_by_project("proj1").unwrap().len(), 1);
 
     // Provider models reinserted; builtin provider NOT created from the delta.
     assert!(store.get_provider("p1").unwrap().is_some());
@@ -242,8 +263,8 @@ async fn push_sends_pending_upserts_and_deletes_then_pulls_since_pushed() {
         })
         .mount(&server)
         .await;
-    // Post-push pull: all three collections return empty with latest 31.
-    for collection in ["agents", "conversations", "providers"] {
+    // Post-push pull: every collection returns empty with latest 31.
+    for collection in ["agents", "conversations", "providers", "projects"] {
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/sync"))
             .and(wiremock::matchers::query_param("collection", collection))
@@ -356,7 +377,7 @@ async fn replace_local_restores_from_cloud() {
         .respond_with(page_response(delta_body()["agents"].clone(), 40))
         .mount(&server)
         .await;
-    for collection in ["conversations", "providers"] {
+    for collection in ["conversations", "providers", "projects"] {
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/sync"))
             .and(wiremock::matchers::query_param("collection", collection))

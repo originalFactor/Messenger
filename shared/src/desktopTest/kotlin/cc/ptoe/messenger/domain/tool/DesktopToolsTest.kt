@@ -46,13 +46,13 @@ class DesktopToolsTest {
     @Test
     fun terminalRunsInTheAgentWorkspace(): Unit = runBlocking {
         val unique = "tools-test-${System.nanoTime()}"
-        val created = WorkspaceTool(WorkspaceTool.CREATE)
+        val created = WorkspaceTool(WorkspaceTool.CREATE, workspace().absolutePath)
             .execute(args("path" to "$unique/marker.txt", "content" to "workspace-marker\n"))
         assertTrue(!created.isError, "create failed: ${created.output}")
 
         // A command referencing the workspace-relative path must resolve:
         // the terminal process cwd is the workspace, not the app's directory.
-        val terminal = TerminalTool().execute(args("command" to "cat $unique/marker.txt"))
+        val terminal = TerminalTool(workspaceRoot = workspace().absolutePath).execute(args("command" to "cat $unique/marker.txt"))
         assertTrue(
             terminal.output.contains("workspace-marker") && !terminal.isError,
             "terminal did not run inside the workspace: ${terminal.output}"
@@ -64,11 +64,11 @@ class DesktopToolsTest {
     @Test
     fun grepPreservesColonsInsideMatchedLines(): Unit = runBlocking {
         val unique = "grep-test-${System.nanoTime()}"
-        val created = WorkspaceTool(WorkspaceTool.CREATE)
+        val created = WorkspaceTool(WorkspaceTool.CREATE, workspace().absolutePath)
             .execute(args("path" to "$unique/colon.txt", "content" to "key: value needle\nplain needle\n"))
         assertTrue(!created.isError, "create failed: ${created.output}")
 
-        val result = WorkspaceTool(WorkspaceTool.GREP)
+        val result = WorkspaceTool(WorkspaceTool.GREP, workspace().absolutePath)
             .execute(args("pattern" to "needle", "path" to unique))
         assertTrue(!result.isError, "grep failed: ${result.output}")
         assertTrue(

@@ -32,19 +32,27 @@ actual suspend fun executeShellCommand(
         ?: ShellResult(output = "Messenger Runtime companion app is not available.", exitCode = -1)
 }
 
-internal actual suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult {
-    // The workspace lives in the companion runtime app's own data directory;
-    // file operations are brokered over AIDL. The agent tools only exist
-    // when the companion is installed, so a missing bridge is defensive.
+internal actual suspend fun executeWorkspaceOperation(
+    operation: WorkspaceOperation,
+    root: String
+): ToolExecutionResult {
+    // The workspace lives in the companion runtime app's own data directory
+    // (own UID), so the main app reaches it only through these calls; `root`
+    // names the owning project's folder on a shared volume.
     val bridge = ShellRuntimeRegistry.bridge
         ?: return ToolExecutionResult("Messenger Runtime companion app is not installed.", isError = true)
     return when (operation) {
-        is WorkspaceOperation.Glob -> bridge.workspaceGlob(operation.pattern, operation.maxResults)
+        is WorkspaceOperation.Glob -> bridge.workspaceGlob(root, operation.pattern, operation.maxResults)
         is WorkspaceOperation.Grep -> bridge.workspaceGrep(
-            operation.pattern, operation.path, operation.fileGlob, operation.caseSensitive, operation.fixedString, operation.maxResults
+            root, operation.pattern, operation.path, operation.fileGlob,
+            operation.caseSensitive, operation.fixedString, operation.maxResults
         )
-        is WorkspaceOperation.Read -> bridge.workspaceRead(operation.path, operation.startLine, operation.maxLines)
-        is WorkspaceOperation.Edit -> bridge.workspaceEdit(operation.path, operation.oldText, operation.newText, operation.replaceAll)
-        is WorkspaceOperation.Create -> bridge.workspaceCreate(operation.path, operation.content, operation.overwrite)
+        is WorkspaceOperation.Read -> bridge.workspaceRead(root, operation.path, operation.startLine, operation.maxLines)
+        is WorkspaceOperation.Edit -> bridge.workspaceEdit(
+            root, operation.path, operation.oldText, operation.newText, operation.replaceAll
+        )
+        is WorkspaceOperation.Create -> bridge.workspaceCreate(
+            root, operation.path, operation.content, operation.overwrite
+        )
     }
 }

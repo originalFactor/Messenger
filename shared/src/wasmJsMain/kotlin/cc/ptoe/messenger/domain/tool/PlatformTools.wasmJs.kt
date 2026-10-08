@@ -22,4 +22,4 @@ package cc.ptoe.messenger.domain.tool
  * tools", the chat input's tool panel disappears, and requests carry no
  * `tools` array.
  */
-actual fun createBuiltinChatTools(): List<ChatTool> = emptyList()
+actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> = emptyList()

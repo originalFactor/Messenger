@@ -19,7 +19,11 @@ import kotlinx.serialization.json.intOrNull
 /** File-navigation and file-mutation tools for the Agent. Paths are relative
  * to the agent workspace unless absolute; the sandbox confines what the
  * operations can actually touch — arguments are never path-checked. */
-class WorkspaceTool(private val operationName: String) : ChatTool {
+class WorkspaceTool(
+    private val operationName: String,
+    /** 该项目的 workspace 绝对路径；相对路径按它解析。 */
+    private val workspaceRoot: String
+) : ChatTool {
     override val name: String = operationName
 
     override val description: String = when (name) {
@@ -80,7 +84,7 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
             )
             else -> return ToolExecutionResult("Unknown workspace tool: $name", isError = true)
         }
-        return executeWorkspaceOperation(operation)
+        return executeWorkspaceOperation(operation, workspaceRoot)
     }
 
     private fun invalidArguments() = ToolExecutionResult("Invalid arguments for $name.", isError = true)
@@ -104,6 +108,9 @@ class WorkspaceTool(private val operationName: String) : ChatTool {
             CREATE to """{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["path","content"]}"""
         )
 
-        val all: List<WorkspaceTool> = listOf(GLOB, GREP, READ, EDIT, CREATE).map(::WorkspaceTool)
+        /** 五个工作区工具（glob/grep/read/edit/create），绑定到同一 workspace。 */
+        fun allFor(workspaceRoot: String): List<WorkspaceTool> =
+            listOf(GLOB, GREP, READ, EDIT, CREATE).map { WorkspaceTool(it, workspaceRoot) }
     }
+
 }

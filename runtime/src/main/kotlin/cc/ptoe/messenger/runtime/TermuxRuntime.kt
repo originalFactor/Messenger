@@ -123,11 +123,32 @@ internal object TermuxRuntime {
     fun workspace(context: Context): File =
         File(baseDir(context), "workspace").apply { mkdirs() }
 
-    suspend fun workspaceGlob(context: Context, pattern: String, maxResults: Int): ToolResult =
-        withContext(Dispatchers.IO) { WorkspaceOps.glob(workspace(context), pattern, maxResults) }
+    /**
+     * Resolves a project's workspace root. An empty/absent root is this app's
+     * own workspace; a supplied path must be an existing directory, otherwise
+     * the project was created on another device (or the folder was removed)
+     * and we report that instead of silently operating somewhere else.
+     */
+    fun resolveWorkspace(context: Context, root: String?): ToolResult? =
+        when {
+            root.isNullOrBlank() -> null
+            File(root).isDirectory -> null
+            else -> ToolResult(
+                "Workspace directory is not available: $root",
+                isError = true
+            )
+        }
+
+    /** Workspace root for [root]: the project folder, or this app's own. */
+    private fun workspaceRoot(context: Context, root: String?): File =
+        root?.takeIf { it.isNotBlank() }?.let(::File) ?: workspace(context)
+
+    suspend fun workspaceGlob(context: Context, root: String?, pattern: String, maxResults: Int): ToolResult =
+        withContext(Dispatchers.IO) { WorkspaceOps.glob(workspaceRoot(context, root), pattern, maxResults) }
 
     suspend fun workspaceGrep(
         context: Context,
+        root: String?,
         pattern: String,
         path: String,
         fileGlob: String?,
@@ -136,26 +157,41 @@ internal object TermuxRuntime {
         maxResults: Int
     ): ToolResult = withContext(Dispatchers.IO) {
         WorkspaceOps.grep(
-            workspace(context), pattern, path, fileGlob, caseSensitive, fixedString, maxResults,
+            workspaceRoot(context, root), pattern, path, fileGlob, caseSensitive, fixedString, maxResults,
             ripgrepBinary(context)
         )
     }
 
-    suspend fun workspaceRead(context: Context, path: String, startLine: Int, maxLines: Int): ToolResult =
-        withContext(Dispatchers.IO) { WorkspaceOps.read(workspace(context), path, startLine, maxLines) }
+    suspend fun workspaceRead(
+        context: Context,
+        root: String?,
+        path: String,
+        startLine: Int,
+        maxLines: Int
+    ): ToolResult = withContext(Dispatchers.IO) {
+        WorkspaceOps.read(workspaceRoot(context, root), path, startLine, maxLines)
+    }
 
     suspend fun workspaceEdit(
         context: Context,
+        root: String?,
         path: String,
         oldText: String,
         newText: String,
         replaceAll: Boolean
     ): ToolResult = withContext(Dispatchers.IO) {
-        WorkspaceOps.edit(workspace(context), path, oldText, newText, replaceAll)
+        WorkspaceOps.edit(workspaceRoot(context, root), path, oldText, newText, replaceAll)
     }
 
-    suspend fun workspaceCreate(context: Context, path: String, content: String, overwrite: Boolean): ToolResult =
-        withContext(Dispatchers.IO) { WorkspaceOps.create(workspace(context), path, content, overwrite) }
+    suspend fun workspaceCreate(
+        context: Context,
+        root: String?,
+        path: String,
+        content: String,
+        overwrite: Boolean
+    ): ToolResult = withContext(Dispatchers.IO) {
+        WorkspaceOps.create(workspaceRoot(context, root), path, content, overwrite)
+    }
 
     suspend fun execute(
         context: Context,

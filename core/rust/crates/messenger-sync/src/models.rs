@@ -135,6 +135,25 @@ pub struct CloudMessageDocument {
     pub error_message: Option<String>,
 }
 
+/// A project document: a named workspace plus its identity. The workspace
+/// path is device-local state, but it syncs like the other collections so a
+/// project shows up on the other device's chat lists before the user has
+/// pointed it at a folder there.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudProjectDocument {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub name: String,
+    pub workspace: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+    pub version: i64,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudConversationDocument {
@@ -143,6 +162,8 @@ pub struct CloudConversationDocument {
     #[serde(rename = "agentId")]
     pub agent_id: String,
     pub title: String,
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
     #[serde(rename = "providerId")]
     pub provider_id: String,
     #[serde(rename = "overrideModelId")]
@@ -236,6 +257,7 @@ pub struct CloudSyncResponse {
     pub agents: Vec<CloudAgentDocument>,
     pub conversations: Vec<CloudConversationDocument>,
     pub providers: Vec<CloudProviderDocument>,
+    pub projects: Vec<CloudProjectDocument>,
     #[serde(rename = "latestVersion")]
     pub latest_version: i64,
 }
@@ -485,6 +507,8 @@ pub struct CloudConversationRequest {
     pub agent_id: String,
     #[serde(rename = "providerId")]
     pub provider_id: String,
+    #[serde(rename = "projectId", skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     #[serde(rename = "overrideModelId", skip_serializing_if = "Option::is_none")]
     pub override_model_id: Option<String>,
     #[serde(rename = "overrideTemperature", skip_serializing_if = "Option::is_none")]
@@ -511,6 +535,17 @@ pub struct CloudConversationRequest {
     #[serde(rename = "contextTokensAt")]
     pub context_tokens_at: i64,
     pub messages: Vec<CloudMessageRequest>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudProjectRequest {
+    pub id: String,
+    pub name: String,
+    pub workspace: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
@@ -617,6 +652,7 @@ impl Default for CloudConversationRequest {
             title: String::new(),
             agent_id: String::new(),
             provider_id: String::new(),
+            project_id: None,
             override_model_id: None,
             override_temperature: None,
             override_top_p: None,

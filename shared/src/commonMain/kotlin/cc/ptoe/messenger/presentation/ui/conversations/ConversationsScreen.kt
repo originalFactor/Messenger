@@ -17,6 +17,9 @@
 package cc.ptoe.messenger.presentation.ui.conversations
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -25,9 +28,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -42,11 +47,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.ui.projects.ProjectEditorDialog
+import cc.ptoe.messenger.presentation.viewmodel.ProjectEditorState
+import cc.ptoe.messenger.presentation.viewmodel.ProjectsViewModel
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
+import cc.ptoe.messenger.presentation.ui.components.ProjectListItem
+import cc.ptoe.messenger.presentation.ui.components.SectionHeader
+import cc.ptoe.messenger.presentation.ui.components.projectSection
 import cc.ptoe.messenger.presentation.ui.components.ConversationListItem
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.InputDialog
@@ -59,11 +71,17 @@ import cc.ptoe.messenger.presentation.viewmodel.ConversationsViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_confirm
+import cc.ptoe.messenger.generated.resources.projects_create_title
+import cc.ptoe.messenger.generated.resources.projects_delete_confirm
+import cc.ptoe.messenger.generated.resources.projects_delete_title
+import cc.ptoe.messenger.generated.resources.projects_edit_title
+import cc.ptoe.messenger.generated.resources.projects_new
 import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.conversations_delete_batch_confirm
 import cc.ptoe.messenger.generated.resources.conversations_delete_confirm
 import cc.ptoe.messenger.generated.resources.conversations_delete_title
 import cc.ptoe.messenger.generated.resources.conversations_empty
+import cc.ptoe.messenger.generated.resources.projects_recent_section
 import cc.ptoe.messenger.generated.resources.conversations_new
 import cc.ptoe.messenger.generated.resources.conversations_rename_hint
 import cc.ptoe.messenger.generated.resources.conversations_rename_title
@@ -82,6 +100,10 @@ import cc.ptoe.messenger.di.AppContainerHolder
 fun ConversationsScreen(
     onConversationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onProjectClick: (String) -> Unit = {},
+    onProjectCreateClick: () -> Unit = {},
+    onProjectEditClick: (String) -> Unit = {},
+    onProjectDeleteClick: (String) -> Unit = {},
     selectedConversationId: String? = null,
     viewModel: ConversationsViewModel = viewModel(
         factory = ConversationsViewModel.provideFactory(
@@ -89,7 +111,8 @@ fun ConversationsScreen(
             messageRepository = AppContainerHolder.instance.messageRepository,
             currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
             agentRepository = AppContainerHolder.instance.agentRepository,
-            modelRepository = AppContainerHolder.instance.modelRepository
+            modelRepository = AppContainerHolder.instance.modelRepository,
+            projectRepository = AppContainerHolder.instance.projectRepository
         )
     )
 ) {
@@ -97,6 +120,9 @@ fun ConversationsScreen(
     val currentAgent by viewModel.currentAgent.collectAsStateWithLifecycle()
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
+    val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
+    val recentConversations by viewModel.recentConversations.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy(Agent::id) }
     // 可选为聊天对象的 Agent：内置标题生成等功能型角色不出现在选择器中。
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
@@ -107,6 +133,14 @@ fun ConversationsScreen(
     var showAgentPicker by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var switchAgentTargetIds by remember { mutableStateOf<List<String>?>(null) }
+    var projectEditor by remember { mutableStateOf<ProjectEditorState?>(null) }
+    var deleteProjectId by remember { mutableStateOf<String?>(null) }
+    val projectsViewModel: ProjectsViewModel = viewModel(
+        factory = ProjectsViewModel.provideFactory(
+            projectRepository = AppContainerHolder.instance.projectRepository,
+            conversationRepository = AppContainerHolder.instance.conversationRepository
+        )
+    )
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val sizeClass = windowSizeClassFor(maxWidth)
@@ -158,21 +192,32 @@ fun ConversationsScreen(
                     // Keep the FAB above the floating bottom navigation pill
                     // (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
                     // rail layout (desktop / large windows), which has no pill.
-                    androidx.compose.foundation.layout.Box(
-                        modifier = Modifier
-                            .navigationBarsPadding()
-                            .padding(bottom = LocalBottomNavClearance.current)
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         FloatingActionButton(
                             onClick = { showAgentPicker = true }
                         ) {
-                            Icon(imageVector = Icons.Default.Add, contentDescription = stringResource(Res.string.conversations_new))
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = stringResource(Res.string.conversations_new)
+                            )
+                        }
+                        // 项目（= 工作区）入口：只有项目里的对话能用终端与文件工具。
+                        Spacer(Modifier.width(12.dp))
+                        SmallFloatingActionButton(
+                            onClick = { projectEditor = projectsViewModel.startCreate() }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CreateNewFolder,
+                                contentDescription = stringResource(Res.string.projects_new)
+                            )
                         }
                     }
                 }
             }
         ) { innerPadding ->
-            if (conversations.isEmpty()) {
+            // 项目列表在下方单独展示会话；Recent 区提供快捷入口，因此即使有会话
+            // 也走 LazyColumn（projects/recent/conversations 三段）。
+            if (conversations.isEmpty() && projects.isEmpty()) {
                 EmptyState(
                     icon = Icons.Default.ChatBubbleOutline,
                     message = stringResource(Res.string.conversations_empty),
@@ -191,6 +236,43 @@ fun ConversationsScreen(
                         bottom = LocalBottomNavClearance.current
                     )
                 ) {
+                    projectSection(
+                        projects = projects,
+                        conversationCounts = projectCounts,
+                        onProjectClick = onProjectClick,
+                        onProjectEditClick = { projectId ->
+                            projects.firstOrNull { it.id == projectId }?.let {
+                                projectEditor = projectsViewModel.startEdit(it)
+                            }
+                        },
+                        onProjectDeleteClick = { deleteProjectId = it },
+                        enableContextMenu = enableContextMenu
+                    )
+                    if (recentConversations.isNotEmpty()) {
+                        item(key = "section_recent") {
+                            SectionHeader(stringResource(Res.string.projects_recent_section))
+                        }
+                        items(recentConversations, key = { "recent_${it.id}" }) { conversation ->
+                            ConversationListItem(
+                                conversation = conversation,
+                                avatar = agentsById[conversation.agentId]?.avatar,
+                                enableContextMenu = enableContextMenu,
+                                onClick = { onConversationClick(conversation.id) },
+                                onLongClick = { viewModel.enterMultiSelectMode(conversation.id) },
+                                onCloneClick = {
+                                    viewModel.cloneConversation(conversation.id, onConversationClick)
+                                },
+                                onRenameClick = {
+                                    renameInitialTitle = conversation.title
+                                    renameConversationId = conversation.id
+                                },
+                                onDeleteClick = { deleteConversationId = conversation.id },
+                                onSwitchAgentClick = {
+                                    switchAgentTargetIds = listOf(conversation.id)
+                                }
+                            )
+                        }
+                    }
                     items(conversations, key = { it.id }) { conversation ->
                         ConversationListItem(
                             conversation = conversation,
@@ -313,6 +395,39 @@ fun ConversationsScreen(
                         switchAgentTargetIds = null
                     },
                     onDismiss = { switchAgentTargetIds = null }
+                )
+            }
+
+            projectEditor?.let { editor ->
+                ProjectEditorDialog(
+                    title = stringResource(
+                        if (editor.id == null) Res.string.projects_create_title
+                        else Res.string.projects_edit_title
+                    ),
+                    state = editor,
+                    onNameChange = { projectEditor = projectsViewModel.nameChanged(editor, it) },
+                    onWorkspaceChange = { projectEditor = projectsViewModel.workspaceChanged(editor, it) },
+                    // 文件夹选择依赖平台实现；未接入的平台保持手动输入。
+                    onPickWorkspace = {},
+                    onConfirm = {
+                        projectsViewModel.save(editor)
+                        projectEditor = null
+                    },
+                    onDismiss = { projectEditor = null }
+                )
+            }
+
+            if (deleteProjectId != null) {
+                ConfirmationDialog(
+                    title = stringResource(Res.string.projects_delete_title),
+                    text = stringResource(Res.string.projects_delete_confirm),
+                    confirmButtonText = stringResource(Res.string.action_delete),
+                    dismissButtonText = stringResource(Res.string.action_cancel),
+                    onConfirm = {
+                        deleteProjectId?.let { projectsViewModel.delete(it) }
+                        deleteProjectId = null
+                    },
+                    onDismiss = { deleteProjectId = null }
                 )
             }
         }

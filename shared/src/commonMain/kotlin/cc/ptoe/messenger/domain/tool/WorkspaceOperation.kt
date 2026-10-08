@@ -35,5 +35,13 @@ sealed class WorkspaceOperation {
     data class Create(val path: String, val content: String, val overwrite: Boolean) : WorkspaceOperation()
 }
 
-/** Executes an operation against the platform's app-private agent workspace. */
-internal expect suspend fun executeWorkspaceOperation(operation: WorkspaceOperation): ToolExecutionResult
+/**
+ * Executes an operation against the project's workspace directory [root].
+ * There is deliberately no default: a conversation outside any project
+ * declares no workspace tools, so no caller has one to pass.
+ */
+internal expect suspend fun executeWorkspaceOperation(
+    operation: WorkspaceOperation,
+    root: String
+): ToolExecutionResult
+

@@ -17,7 +17,9 @@
 package cc.ptoe.messenger.domain.tool
 
 /**
- * Platform-built-in chat tools. Both desktop and Android register the
- * consent-gated terminal plus bounded app-private workspace file tools.
+ * Platform-built-in chat tools bound to [workspaceRoot], the owning project's
+ * workspace directory. `null` means the conversation belongs to no project:
+ * there is no working directory, so NO tool is registered (in particular not
+ * the workspace-bound ones) rather than falling back to a default.
  */
-expect fun createBuiltinChatTools(): List<ChatTool>
+expect fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool>

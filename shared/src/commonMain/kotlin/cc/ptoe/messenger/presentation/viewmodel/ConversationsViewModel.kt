@@ -24,6 +24,8 @@ import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Conversation
+import cc.ptoe.messenger.domain.model.Project
+import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
@@ -37,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.conversations_clone_suffix
@@ -56,7 +59,8 @@ class ConversationsViewModel(
     private val messageRepository: MessageRepository,
     private val currentAgentRepository: CurrentAgentRepository,
     private val agentRepository: AgentRepository,
-    private val modelRepository: ModelRepository
+    private val modelRepository: ModelRepository,
+    private val projectRepository: ProjectRepository
 ) : ViewModel() {
 
     val currentAgent: StateFlow<Agent?> = currentAgentRepository.currentAgent
@@ -78,6 +82,35 @@ class ConversationsViewModel(
 
     /** 会话主页固定展示全部聊天（按 Agent 过滤在 Agent 聊天列表子页）。 */
     val conversations: StateFlow<List<Conversation>> = conversationRepository.getAll()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /** 聊天列表顶部的 Projects 区。 */
+    val projects: StateFlow<List<Project>> = projectRepository.getAll()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /** 每个项目的会话数（项目行副标题）。 */
+    val projectConversationCounts: StateFlow<Map<String, Int>> = conversations
+        .map { all -> all.mapNotNull { it.projectId }.groupingBy { it }.eachCount() }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyMap()
+        )
+
+    /**
+     * Recent Chats：最近 [RECENT_CONVERSATION_LIMIT] 个会话（无论是否属于
+     * 项目），让用户从聊天列表一键回到上一次的对话。
+     */
+    val recentConversations: StateFlow<List<Conversation>> = conversations
+        .map { all -> all.take(RECENT_CONVERSATION_LIMIT) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -244,12 +277,15 @@ class ConversationsViewModel(
     }
 
     companion object {
+        /** Recent Chats 区展示的会话条数。 */
+        const val RECENT_CONVERSATION_LIMIT = 10
         fun provideFactory(
             conversationRepository: ConversationRepository,
             messageRepository: MessageRepository,
             currentAgentRepository: CurrentAgentRepository,
             agentRepository: AgentRepository,
-            modelRepository: ModelRepository
+            modelRepository: ModelRepository,
+            projectRepository: ProjectRepository
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -258,7 +294,8 @@ class ConversationsViewModel(
                     messageRepository,
                     currentAgentRepository,
                     agentRepository,
-                    modelRepository
+                    modelRepository,
+                    projectRepository
                 ) as T
             }
         }

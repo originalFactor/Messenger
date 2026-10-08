@@ -56,6 +56,13 @@ class RustConversationRepository(
         }.getOrDefault(emptyList())
     }
 
+    override fun getByProjectId(projectId: String): Flow<List<Conversation>> = version.map {
+        val json = coreBridge.listConversationsByProjectJson(projectId)
+        runCatching {
+            NetworkClient.json.decodeFromString<List<StoredConversationDto>>(json).map { it.toDomain() }
+        }.getOrDefault(emptyList())
+    }
+
     override fun getById(id: String): Flow<Conversation?> = version.map {
         val json = coreBridge.getConversationJson(id) ?: return@map null
         runCatching {
@@ -100,6 +107,7 @@ class RustConversationRepository(
         overrideTopP = overrideTopP,
         overrideMaxTokens = overrideMaxTokens,
         overrideReasoningEffort = overrideReasoningEffort,
+        projectId = projectId,
         overrideToolsEnabled = overrideToolsEnabled,
         overrideToolsConfig = overrideToolsConfig?.let { ToolsConfigCodec.decode(it) },
         writable = writable,
@@ -118,6 +126,7 @@ class RustConversationRepository(
         title = title,
         providerId = providerId,
         agentId = agentId,
+        projectId = projectId,
         overrideModelId = overrideModelId,
         overrideTemperature = overrideTemperature,
         overrideTopP = overrideTopP,

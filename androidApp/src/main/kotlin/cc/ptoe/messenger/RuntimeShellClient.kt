@@ -158,10 +158,11 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     // Workspace file operations
     // ---------------------------------------------------------------------
 
-    override suspend fun workspaceGlob(pattern: String, maxResults: Int): ToolExecutionResult =
-        workspaceCall { it.workspaceGlob(pattern, maxResults) }
+    override suspend fun workspaceGlob(root: String, pattern: String, maxResults: Int): ToolExecutionResult =
+        workspaceCall { it.workspaceGlob(root, pattern, maxResults) }
 
     override suspend fun workspaceGrep(
+        root: String,
         pattern: String,
         path: String,
         fileGlob: String?,
@@ -169,21 +170,34 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         fixedString: Boolean,
         maxResults: Int
     ): ToolExecutionResult = workspaceCall {
-        it.workspaceGrep(pattern, path, fileGlob, caseSensitive, fixedString, maxResults)
+        it.workspaceGrep(root, pattern, path, fileGlob, caseSensitive, fixedString, maxResults)
     }
 
-    override suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult =
-        workspaceCall { it.workspaceRead(path, startLine, maxLines) }
+    override suspend fun workspaceRead(
+        root: String,
+        path: String,
+        startLine: Int,
+        maxLines: Int
+    ): ToolExecutionResult = workspaceCall { it.workspaceRead(root, path, startLine, maxLines) }
 
     override suspend fun workspaceEdit(
+        root: String,
         path: String,
         oldText: String,
         newText: String,
         replaceAll: Boolean
-    ): ToolExecutionResult = workspaceCall { it.workspaceEdit(path, oldText, newText, replaceAll) }
+    ): ToolExecutionResult = workspaceCall {
+        it.workspaceEdit(root, path, oldText, newText, replaceAll)
+    }
 
-    override suspend fun workspaceCreate(path: String, content: String, overwrite: Boolean): ToolExecutionResult =
-        workspaceCall { it.workspaceCreate(path, content, overwrite) }
+    override suspend fun workspaceCreate(
+        root: String,
+        path: String,
+        content: String,
+        overwrite: Boolean
+    ): ToolExecutionResult = workspaceCall {
+        it.workspaceCreate(root, path, content, overwrite)
+    }
 
     private suspend fun workspaceCall(call: (IShellService) -> ToolResult?): ToolExecutionResult =
         withContext(Dispatchers.IO) {

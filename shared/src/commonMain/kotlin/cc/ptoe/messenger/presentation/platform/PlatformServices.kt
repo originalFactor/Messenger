@@ -56,6 +56,17 @@ expect fun copyAvatarToInternal(sourcePath: String, subdir: String): String?
  */
 expect val runtimeTerminalSupported: Boolean
 
+
+/**
+ * The platform's default agent workspace directory, used to enumerate the
+ * built-in tools for the Agent/conversation tool-config screens. It is NOT a
+ * conversation's working directory — that always comes from the owning
+ * project — only a concrete directory so the tool factory can construct the
+ * workspace-bound tool declarations.
+ */
+expect fun defaultWorkspaceRoot(): String?
+
+
 /**
  * Opens the Messenger Runtime terminal app's terminal screen. Returns false
  * when the companion app is not installed, so the caller can tell the user

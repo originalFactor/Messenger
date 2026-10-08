@@ -31,6 +31,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE agentId = :agentId ORDER BY updatedAt DESC")
     fun getByAgentId(agentId: String): Flow<List<ConversationEntity>>
 
+    @Query("SELECT * FROM conversations WHERE projectId = :projectId ORDER BY updatedAt DESC")
+    fun getByProjectId(projectId: String): Flow<List<ConversationEntity>>
+
     @Query("SELECT * FROM conversations WHERE id = :id")
     fun getById(id: String): Flow<ConversationEntity?>
 

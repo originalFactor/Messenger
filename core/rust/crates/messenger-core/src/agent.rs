@@ -89,6 +89,11 @@ pub struct TurnRequest {
     pub reasoning_effort: Option<String>,
     /// Pre-resolved tool list (per-tool config + writable mode applied).
     pub tools: Vec<messenger_tools::BuiltinTool>,
+    /// Localized note appended to the system prompt describing the working
+    /// directory of the conversation's project (or stating that it has none),
+    /// so the model knows where relative paths land. The workspace itself is
+    /// never resolved here: tool execution is the platform ToolHost's job.
+    pub workspace_note: String,
     pub context_window: i64,
     /// Localized summarization prompt (`context_summarize_prompt`).
     pub summarize_prompt: String,
@@ -190,7 +195,7 @@ pub async fn run_chat_turn(
             max_tokens: request.max_tokens,
             reasoning_effort: request.reasoning_effort.clone(),
             reasoning_format: conversation.reasoning_format.clone(),
-            system_prompt: Some(request.system_prompt.clone()),
+            system_prompt: Some(with_workspace_note(&request.system_prompt, &request.workspace_note)),
             tools: Some(
                 request
                     .tools
@@ -398,6 +403,20 @@ pub async fn run_chat_turn(
 
 /// Unknown-name handling lives in the loop, matching Kotlin
 /// (`tools.firstOrNull { it.name == name }`).
+
+/// Append the caller's workspace note to the agent's system prompt.
+/// An empty note (a caller that has nothing to say about the working
+/// directory) leaves the prompt untouched, so the request stays byte-identical
+/// to what the agent configured.
+fn with_workspace_note(system_prompt: &str, workspace_note: &str) -> String {
+    if workspace_note.is_empty() {
+        return system_prompt.to_string();
+    }
+    if system_prompt.is_empty() {
+        return workspace_note.to_string();
+    }
+    format!("{system_prompt}\n\n{workspace_note}")
+}
 
 /// 80% context summarization; returns Ok(()) when nothing to do.
 async fn maybe_summarize_context(

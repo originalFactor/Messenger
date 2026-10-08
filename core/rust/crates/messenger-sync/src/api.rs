@@ -148,6 +148,18 @@ impl CloudApiClient {
         self.get_json(&full).await
     }
 
+    pub async fn sync_projects_page(
+        &self,
+        url: &str,
+        since: i64,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> CloudResult<CloudSyncPage<CloudProjectDocument>> {
+        let full = with_query(url, &sync_params(since, "projects", cursor, limit));
+        self.get_json(&full).await
+    }
+
+
     // -- entity push --
 
     pub async fn put_agent(&self, url: &str, body: &CloudAgentRequest) -> CloudResult<CloudUpsertResponse> {
@@ -155,6 +167,15 @@ impl CloudApiClient {
     }
 
     pub async fn delete_agent(&self, url: &str) -> CloudResult<CloudUpsertResponse> {
+        self.delete_json(url).await
+    }
+
+
+    pub async fn put_project(&self, url: &str, body: &CloudProjectRequest) -> CloudResult<CloudUpsertResponse> {
+        self.put_json(url, body).await
+    }
+
+    pub async fn delete_project(&self, url: &str) -> CloudResult<CloudUpsertResponse> {
         self.delete_json(url).await
     }
 

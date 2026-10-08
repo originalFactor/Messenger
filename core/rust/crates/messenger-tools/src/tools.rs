@@ -32,6 +32,11 @@ pub struct BuiltinTool {
     /// identical in both modes — the sandbox confines actual operations,
     /// never arguments.
     pub read_only: bool,
+    /// True when the tool operates on a project's workspace directory
+    /// (the terminal and the five workspace tools). Such tools are only
+    /// declared when the conversation belongs to a project — a conversation
+    /// without one has no workspace to act on.
+    pub workspace_required: bool,
 }
 
 impl BuiltinTool {
@@ -53,6 +58,7 @@ impl BuiltinTool {
             write_access: false,
             parameters_json: r#"{"type":"object","properties":{"command":{"type":"string","description":"One command to execute"}},"required":["command"]}"#.to_string(),
             read_only,
+            workspace_required: true,
         }
     }
 
@@ -130,6 +136,7 @@ pub fn workspace_tools() -> Vec<BuiltinTool> {
             write_access,
             parameters_json,
             read_only: false,
+            workspace_required: true,
         }
     })
     .collect()

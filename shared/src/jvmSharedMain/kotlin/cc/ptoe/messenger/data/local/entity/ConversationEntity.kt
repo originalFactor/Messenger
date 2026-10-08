@@ -29,15 +29,23 @@ import androidx.room.PrimaryKey
             parentColumns = ["id"],
             childColumns = ["agentId"],
             onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = ProjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["projectId"],
+            onDelete = ForeignKey.SET_NULL
         )
     ],
-    indices = [Index("agentId")]
+    indices = [Index("agentId"), Index("projectId")]
 )
 data class ConversationEntity(
     @PrimaryKey val id: String,
     val title: String,
     val providerId: String,
     val agentId: String,
+    /** 所属项目；null = 普通会话（不声明工作区工具）。 */
+    val projectId: String? = null,
     val overrideModelId: String? = null,
     val overrideTemperature: Float? = null,
     val overrideTopP: Float? = null,

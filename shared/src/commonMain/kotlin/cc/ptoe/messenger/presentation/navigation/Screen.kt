@@ -54,6 +54,13 @@ sealed class Screen(val route: String) {
         fun createRoute(agentId: String) = "agent_conversations/$agentId"
     }
 
+    /** 聊天列表点击项目进入的二级页；agentId 非空时只显示该 Agent 的会话。 */
+    data object ProjectConversations : Screen("project_conversations/{projectId}?agentId={agentId}") {
+        fun createRoute(projectId: String, agentId: String? = null) =
+            if (agentId != null) "project_conversations/$projectId?agentId=$agentId"
+            else "project_conversations/$projectId"
+    }
+
     data object ConversationRename : Screen("conversation_rename/{conversationId}") {
         fun createRoute(conversationId: String) = "conversation_rename/$conversationId"
     }

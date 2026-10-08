@@ -10,7 +10,8 @@ use crate::api::{CloudApiClient, CloudError, CloudResult, Session};
 use crate::documents::{
     agent_document_to_row, agent_row_to_request, conversation_document_to_row,
     conversation_row_to_request, message_document_to_row, model_document_to_row,
-    provider_document_to_row, provider_row_to_request,
+    project_document_to_row, project_row_to_request, provider_document_to_row,
+    provider_row_to_request,
 };
 use crate::models::*;
 
@@ -272,6 +273,7 @@ impl<'a> SyncEngine<'a> {
                 "agent" => self.client.delete_agent(&url).await?,
                 "provider" => self.client.delete_provider(&url).await?,
                 "conversation" => self.client.delete_conversation(&url).await?,
+                "project" => self.client.delete_project(&url).await?,
                 _ => continue,
             };
             latest_version = latest_version.max(response.version);
@@ -318,6 +320,25 @@ impl<'a> SyncEngine<'a> {
             self.remove_pending_upsert(&account.id, "provider", &provider.id)?;
         }
 
+
+        // Projects before conversations: a pushed conversation carries the
+        // `projectId` reference the server stores verbatim.
+        for project in self
+            .store
+            .list_projects()
+            .map_err(|e| CloudError::Network(e.to_string()))?
+        {
+            if !should_push("project", &project.id, &pending_upserts) {
+                continue;
+            }
+            let url = self.endpoint(&format!("api/projects/{}", project.id));
+            let response = self
+                .client
+                .put_project(&url, &project_row_to_request(&project))
+                .await?;
+            latest_version = latest_version.max(response.version);
+            self.remove_pending_upsert(&account.id, "project", &project.id)?;
+        }
         // Conversations with their messages embedded.
         for conversation in self
             .store
@@ -513,13 +534,31 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
+        let mut projects = Vec::new();
+        let mut projects_latest = since;
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .client
+                .sync_projects_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE)
+                .await?;
+            projects.extend(page.documents);
+            projects_latest = projects_latest.max(page.latest_version);
+            cursor = if page.has_more { page.next_cursor } else { None };
+            if cursor.is_none() {
+                break;
+            }
+        }
+
         let response = CloudSyncResponse {
             agents,
             conversations,
             providers,
+            projects,
             latest_version: agents_latest
                 .max(conversations_latest)
-                .max(providers_latest),
+                .max(providers_latest)
+                .max(projects_latest),
         };
         Ok((response, raw_server_latest))
     }
@@ -607,6 +646,18 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
+        // Projects first: a pulled conversation may reference one, and the
+        // `projectId` FK would otherwise reject the row.
+        for remote in &delta.projects {
+            if remote.deleted {
+                self.store.delete_project(&remote.id).map_err(|e| e.to_string())?;
+            } else {
+                self.store
+                    .upsert_project(&project_document_to_row(remote))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
         // Conversations: replace-all semantics per conversation.
         for remote in &delta.conversations {
             if remote.deleted {
@@ -665,6 +716,9 @@ impl<'a> SyncEngine<'a> {
         }
         for agent in self.store.list_agents().map_err(|e| CloudError::Network(e.to_string()))? {
             self.store.delete_agent(&agent.id).map_err(|e| CloudError::Network(e.to_string()))?;
+        }
+        for project in self.store.list_projects().map_err(|e| CloudError::Network(e.to_string()))? {
+            self.store.delete_project(&project.id).map_err(|e| CloudError::Network(e.to_string()))?;
         }
         self.store.kv_set("current_agent_id", "").map_err(|e| CloudError::Network(e.to_string()))?;
         let _ = account_id;

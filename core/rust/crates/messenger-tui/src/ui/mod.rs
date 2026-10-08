@@ -61,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn hint_for(view: View) -> String {
     match view {
         View::Conversations => {
-            "Enter open · n new · r rename · d delete · / filter · F2 chat".to_string()
+            "Enter open · Tab projects/chats · p new project · n new · r rename · d delete · / filter".to_string()
         }
         View::Chat => {
             "Enter send · Alt+Enter newline · Esc cancel · ^W mode · ^A agent · ^N new".to_string()

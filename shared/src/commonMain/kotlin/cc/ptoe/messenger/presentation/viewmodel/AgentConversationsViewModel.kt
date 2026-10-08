@@ -24,11 +24,16 @@ import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.Conversation
 import cc.ptoe.messenger.domain.model.MessageStatus
+import cc.ptoe.messenger.domain.model.Project
+import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -45,13 +50,15 @@ import cc.ptoe.messenger.data.util.randomUuid
  * Agent 聊天列表子页的 ViewModel：固定展示某个 Agent 名下的全部会话
  * （主页聊天列表不再做 Agent 筛选，本页是唯一的按 Agent 过滤入口）。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AgentConversationsViewModel(
     private val agentId: String,
     private val agentRepository: AgentRepository,
     private val conversationRepository: ConversationRepository,
     private val messageRepository: MessageRepository,
     private val modelRepository: ModelRepository,
-    private val currentAgentRepository: CurrentAgentRepository
+    private val currentAgentRepository: CurrentAgentRepository,
+    private val projectRepository: ProjectRepository
 ) : ViewModel() {
 
     val agent: StateFlow<Agent?> = agentRepository.getById(agentId)
@@ -62,6 +69,36 @@ class AgentConversationsViewModel(
         )
 
     val conversations: StateFlow<List<Conversation>> = conversationRepository.getByAgentId(agentId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /**
+     * 该 Agent 名下的项目（用于聊天列表顶部的 Projects 区）；从会话列表按
+     * agentId 过滤，所以项目进入的是"该项目里该 Agent 的会话"二级页。
+     */
+    val projects: StateFlow<List<Project>> = conversations
+        .map { all -> all.mapNotNull { it.projectId }.toSet() }
+        .flatMapLatest { ids -> projectRepository.getAll().map { all -> all.filter { it.id in ids } } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val projectConversationCounts: StateFlow<Map<String, Int>> = conversations
+        .map { all -> all.mapNotNull { it.projectId }.groupingBy { it }.eachCount() }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyMap()
+        )
+
+    /** Recent Chats：该 Agent 最近 [RECENT_CONVERSATION_LIMIT] 个会话。 */
+    val recentConversations: StateFlow<List<Conversation>> = conversations
+        .map { all -> all.take(RECENT_CONVERSATION_LIMIT) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -172,13 +209,17 @@ class AgentConversationsViewModel(
     }
 
     companion object {
+        /** Recent Chats 区展示的会话条数。 */
+        const val RECENT_CONVERSATION_LIMIT = 10
+
         fun provideFactory(
             agentId: String,
             agentRepository: AgentRepository,
             conversationRepository: ConversationRepository,
             messageRepository: MessageRepository,
             modelRepository: ModelRepository,
-            currentAgentRepository: CurrentAgentRepository
+            currentAgentRepository: CurrentAgentRepository,
+            projectRepository: ProjectRepository
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -188,7 +229,8 @@ class AgentConversationsViewModel(
                     conversationRepository,
                     messageRepository,
                     modelRepository,
-                    currentAgentRepository
+                    currentAgentRepository,
+                    projectRepository
                 ) as T
             }
         }

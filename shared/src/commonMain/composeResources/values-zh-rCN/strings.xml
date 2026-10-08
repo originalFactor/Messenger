@@ -176,6 +176,31 @@
     <string name="conversations_new_chat">新对话</string>
     <string name="conversations_clone_suffix">（副本）</string>
 
+    <!-- Projects -->
+    <string name="projects_title">项目</string>
+    <string name="projects_new">新建项目</string>
+    <string name="projects_empty">还没有项目\n项目即工作区 —— 其中的对话可使用终端与文件工具</string>
+    <string name="projects_section">项目</string>
+    <string name="projects_recent_section">最近对话</string>
+    <string name="projects_no_recent">没有最近的对话</string>
+    <string name="projects_create_title">新建项目</string>
+    <string name="projects_name_label">项目名称</string>
+    <string name="projects_name_hint">输入项目名称</string>
+    <string name="projects_workspace_label">工作区文件夹（可选）</string>
+    <string name="projects_workspace_hint">留空则按项目名称自动创建文件夹</string>
+    <string name="projects_workspace_auto">自动：%1$s</string>
+    <string name="projects_pick_workspace">选择文件夹</string>
+    <string name="projects_edit_title">编辑项目</string>
+    <string name="projects_delete_title">删除项目</string>
+    <string name="projects_delete_confirm">删除该项目？其中的对话会保留并变为普通对话。</string>
+    <string name="projects_count">%1$d 个对话</string>
+    <string name="projects_chats_title">对话</string>
+    <string name="projects_moved_to_chat">已转为普通对话</string>
+
+    <!-- Chat workspace note -->
+    <string name="chat_workspace_note">本对话属于一个项目，其工作目录为 %1$s —— 终端与文件工具中的相对路径以此解析。</string>
+    <string name="projects_moved_to_chat_confirm">将本对话移出项目？对话会保留并变为普通对话。</string>
+
     <!-- Conversation Settings -->
     <string name="conversation_settings_title">对话设置</string>
     <string name="conversation_settings_title_label">对话标题</string>

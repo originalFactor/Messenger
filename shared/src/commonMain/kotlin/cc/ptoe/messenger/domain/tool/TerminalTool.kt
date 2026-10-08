@@ -35,7 +35,9 @@ class TerminalTool(
      * true = read-only Agent mode declaration: the description steers the
      * model toward inspection. Execution is identical in both modes.
      */
-    private val readOnly: Boolean = true
+    private val readOnly: Boolean = true,
+    /** 该项目的 workspace 绝对路径；命令以此为工作目录。 */
+    private val workspaceRoot: String? = null
 ) : ChatTool {
 
     override val name: String = TOOL_NAME
@@ -59,7 +61,7 @@ class TerminalTool(
                 output = "Invalid arguments: expected a JSON object with a string \"command\" field.",
                 isError = true
             )
-        val result = executeShellCommand(command, timeoutMs, workingDir = null, onOutput = null)
+        val result = executeShellCommand(command, timeoutMs, workingDir = workspaceRoot, onOutput = null)
         val exitNote = if (result.exitCode == 0) "Exit code: 0" else "Exit code: ${result.exitCode} (command failed)"
         return ToolExecutionResult(
             output = "$exitNote\n${truncateOutput(result.output)}",

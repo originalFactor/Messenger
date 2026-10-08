@@ -25,6 +25,10 @@ data class Conversation(
     val overrideTemperature: Float? = null,
     val overrideTopP: Float? = null,
     val overrideMaxTokens: Int? = null,
+    /**
+     * 所属项目；null = 普通会话（不声明工作区工具）。项目即工作区。
+     */
+    val projectId: String? = null,
     val overrideReasoningEffort: String? = null,
     /** 工具总开关的会话级覆盖；null = 跟随 Agent 生效值。 */
     val overrideToolsEnabled: Boolean? = null,

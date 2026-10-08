@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.Flow
 interface ConversationRepository {
     fun getAll(): Flow<List<Conversation>>
     fun getByAgentId(agentId: String): Flow<List<Conversation>>
+
+    /** 项目下的会话；项目页的二级列表用它。 */
+    fun getByProjectId(projectId: String): Flow<List<Conversation>>
     fun getById(id: String): Flow<Conversation?>
     suspend fun insert(conversation: Conversation)
     suspend fun update(conversation: Conversation)

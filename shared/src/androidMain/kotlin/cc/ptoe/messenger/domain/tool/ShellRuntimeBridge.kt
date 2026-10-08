@@ -43,8 +43,9 @@ interface ShellRuntimeBridge {
     // Workspace-confined file operations. The workspace lives in the
     // companion's own data directory (own UID), so the main app reaches it
     // only through these calls.
-    suspend fun workspaceGlob(pattern: String, maxResults: Int): ToolExecutionResult
+    suspend fun workspaceGlob(root: String, pattern: String, maxResults: Int): ToolExecutionResult
     suspend fun workspaceGrep(
+        root: String,
         pattern: String,
         path: String,
         fileGlob: String?,
@@ -52,9 +53,20 @@ interface ShellRuntimeBridge {
         fixedString: Boolean,
         maxResults: Int
     ): ToolExecutionResult
-    suspend fun workspaceRead(path: String, startLine: Int, maxLines: Int): ToolExecutionResult
-    suspend fun workspaceEdit(path: String, oldText: String, newText: String, replaceAll: Boolean): ToolExecutionResult
-    suspend fun workspaceCreate(path: String, content: String, overwrite: Boolean): ToolExecutionResult
+    suspend fun workspaceRead(root: String, path: String, startLine: Int, maxLines: Int): ToolExecutionResult
+    suspend fun workspaceEdit(
+        root: String,
+        path: String,
+        oldText: String,
+        newText: String,
+        replaceAll: Boolean
+    ): ToolExecutionResult
+    suspend fun workspaceCreate(
+        root: String,
+        path: String,
+        content: String,
+        overwrite: Boolean
+    ): ToolExecutionResult
 
     // MCP command server process management
     suspend fun startMcpProcess(

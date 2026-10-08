@@ -139,7 +139,11 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     summarizePrompt = "Please summarize the conversation so far.",
                     titleAgentId = titleHolder?.id,
                     titleAgentSystemPrompt = titleHolder?.systemPrompt,
-                    titleAgentModelId = titleHolder?.defaultModelId
+                    titleAgentModelId = titleHolder?.defaultModelId,
+                    // The watch declares no tools at all (see toolNames), so it
+                    // has no workspace either.
+                    hasWorkspace = false,
+                    workspaceNote = ""
                 )
 
                 var currentContent = ""

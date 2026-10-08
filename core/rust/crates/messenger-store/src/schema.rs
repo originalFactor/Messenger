@@ -1,7 +1,30 @@
-//! DDL for schema version 1. Column names intentionally mirror the legacy
-//! Room v20 schema so the import can copy rows verbatim.
+//! DDL for schema version 2. Column names intentionally mirror the legacy
+//! Room v20 schema so the import can copy rows verbatim; `projects` and
+//! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// v1 → v2: add the `projectId` column to an existing `conversations`
+/// table. Applied only when the column is absent (fresh databases get it
+/// from [`CREATE_TABLES`]).
+pub const ADD_PROJECT_ID_COLUMN: &str = "ALTER TABLE conversations ADD COLUMN projectId TEXT REFERENCES projects(id) ON DELETE SET NULL";
+
+/// Whether `conversations` already carries the v2 `projectId` column.
+pub fn has_project_id_column(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(conversations)")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "projectId" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Created after the v1 → v2 ALTER, so a fresh database (whose table already
+/// has the column) and a migrated one converge on the same index.
+pub const CREATE_PROJECT_ID_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS index_conversations_projectId ON conversations(projectId)";
 
 pub const CREATE_TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS providers (
@@ -58,11 +81,19 @@ pub const CREATE_TABLES: &[&str] = &[
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
     )",
+    "CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        workspace TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+    )",
     "CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY NOT NULL,
         title TEXT NOT NULL,
         providerId TEXT NOT NULL,
         agentId TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        projectId TEXT REFERENCES projects(id) ON DELETE SET NULL,
         overrideModelId TEXT,
         overrideTemperature REAL,
         overrideTopP REAL,

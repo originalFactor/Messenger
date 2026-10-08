@@ -37,6 +37,8 @@ import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.AgentRepository
+import cc.ptoe.messenger.domain.model.Project
+import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
@@ -44,6 +46,7 @@ import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
+import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -63,6 +66,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.chat_picture
+import cc.ptoe.messenger.generated.resources.chat_workspace_note
 import cc.ptoe.messenger.generated.resources.context_summarize_prompt
 import cc.ptoe.messenger.generated.resources.error_agent_not_found_chat
 import cc.ptoe.messenger.generated.resources.error_api_no_valid_response
@@ -99,8 +103,13 @@ class ChatViewModel(
     private val providerRepository: ProviderRepository,
     private val chatImageStore: ChatImageStore,
     private val conversationTitleGenerator: ConversationTitleGenerator,
-    /** 平台内置工具注册表；为空（如 Android）时即使 Agent 开启开关也不发 tools。 */
-    private val builtinTools: List<ChatTool> = emptyList(),
+    /**
+     * 平台内置工具工厂；参数是所属项目的 workspace 绝对路径（无项目时
+     * 传 null，此时不声明工作区工具）。为空工厂（如 Android 未安装伴随
+     * runtime）时即使 Agent 开启开关也不发 tools。
+     */
+    private val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
+    private val projectRepository: ProjectRepository? = null,
     private val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
 ) : ViewModel() {
 
@@ -213,8 +222,51 @@ class ChatViewModel(
             initialValue = false
         )
 
-    /** Platform has registered at least one built-in tool. */
-    val toolsAvailable: Boolean get() = builtinTools.isNotEmpty()
+    /**
+     * 本会话所属项目的 workspace；null 表示该会话不属于任何项目，因此
+     * 不声明终端与工作区工具（MCP 工具不受项目约束）。
+     */
+    val project: StateFlow<Project?> = conversation
+        .flatMapLatest { conv ->
+            val projectId = conv?.projectId
+            val projects = projectRepository
+            if (projectId != null && projects != null) {
+                projects.getById(projectId)
+            } else {
+                flowOf(null)
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
+
+    /** 本会话可用的内置工具（工作区工具仅在属于项目时存在）。 */
+    val builtinToolsForConversation: StateFlow<List<ChatTool>> = conversation
+        .flatMapLatest { conv -> flowOf(builtinTools(resolveWorkspaceFor(conv))) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /**
+     * 平台是否具备内置工具能力（与本会话是否属于项目无关 —— 项目只决定
+     * 工作区工具是否可用，聊天输入栏的 "+" 面板据此显示）。
+     */
+    val toolsAvailable: Boolean get() = builtinTools(null).isNotEmpty()
+
+    /**
+     * 回合内的工作目录决策读新鲜数据库行，而不是 [project] 这个
+     * WhileSubscribed 的 StateFlow（无订阅 5 秒即重置）：workspace 决定
+     * 工具能否执行，不能依赖一个会被回收的 UI 状态。
+     */
+    private suspend fun resolveWorkspaceFor(conv: Conversation?): String? {
+        val projectId = conv?.projectId ?: return null
+        val projects = projectRepository ?: return null
+        return projects.getById(projectId).first()?.workspace
+    }
 
     /** 切换本会话的 Agent 只读/可写模式（写回 Conversation，不改动 updatedAt）。 */
     fun setAgentWritable(writable: Boolean) {
@@ -613,8 +665,10 @@ class ChatViewModel(
         val bridge = coreBridge
         if (bridge != null) {
             val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-            val enabledTools = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
-                builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
+            val workspace = resolveWorkspaceFor(conv)
+            val availableTools = builtinTools(workspace)
+            val enabledTools = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
+                availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
             } else {
                 emptyList()
             }
@@ -640,6 +694,10 @@ class ChatViewModel(
                 titleAgentId = titleHolder?.id,
                 titleAgentSystemPrompt = titleHolder?.systemPrompt,
                 titleAgentModelId = titleHolder?.defaultModelId,
+                hasWorkspace = workspace != null,
+                workspaceNote = workspace?.let {
+                    getString(Res.string.chat_workspace_note, it)
+                }.orEmpty(),
             )
 
             _isGenerating.value = true
@@ -764,15 +822,22 @@ class ChatViewModel(
                 // Agent 模式：只读时不声明写入类工具（edit/create），终端声明
                 // 换检查用途描述；可写时全量声明。执行不做参数预筛——沙盒
                 // （Android 为伴随 runtime 的独立 UID）按实际操作约束。
-                val toolsForRequest = if (agent.toolsEnabled && builtinTools.isNotEmpty()) {
-                    val enabledTools = builtinTools.filter { (agent.toolsConfig[it.name]) ?: true }
+                // 普通会话没有 workspace，终端与工作区工具不存在（MCP 不受约束）。
+                val workspace = resolveWorkspaceFor(conversation)
+                val availableTools = builtinTools(workspace)
+                val toolsForRequest = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
+                    val enabledTools = availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
                     // 发送时的会话快照（launchChatTurn 的 conversation 参数来自
                     // 发送时的新鲜 DB 读取）。agentWritable StateFlow 由 UI 订阅
                     // 驱动（WhileSubscribed 5 秒无订阅即重置），App 切后台后其
                     // .value 会退回 false，不能作为回合内的模式决策依据。
                     if (conversation.writable) {
                         enabledTools.map { tool ->
-                            if (tool is TerminalTool) TerminalTool(readOnly = false) else tool
+                            if (tool is TerminalTool) {
+                                TerminalTool(readOnly = false, workspaceRoot = workspace)
+                            } else {
+                                tool
+                            }
                         }
                     } else {
                         enabledTools.filter { !it.writeAccess }
@@ -1394,7 +1459,8 @@ class ChatViewModel(
             providerRepository: ProviderRepository,
             chatImageStore: ChatImageStore,
             conversationTitleGenerator: ConversationTitleGenerator,
-            builtinTools: List<ChatTool> = emptyList(),
+            builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
+            projectRepository: ProjectRepository? = null,
             coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -1409,6 +1475,7 @@ class ChatViewModel(
                     chatImageStore,
                     conversationTitleGenerator,
                     builtinTools,
+                    projectRepository,
                     coreBridge
                 ) as T
             }

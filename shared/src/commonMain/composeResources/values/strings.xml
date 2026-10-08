@@ -177,6 +177,31 @@
     <string name="conversations_new_chat">New Chat</string>
     <string name="conversations_clone_suffix"> (copy)</string>
 
+    <!-- Projects -->
+    <string name="projects_title">Projects</string>
+    <string name="projects_new">New project</string>
+    <string name="projects_empty">No projects yet\nA project is a workspace — its chats can use the terminal and file tools</string>
+    <string name="projects_section">Projects</string>
+    <string name="projects_recent_section">Recent Chats</string>
+    <string name="projects_no_recent">No recent chats</string>
+    <string name="projects_create_title">New project</string>
+    <string name="projects_name_label">Project name</string>
+    <string name="projects_name_hint">Enter a project name</string>
+    <string name="projects_workspace_label">Workspace folder (optional)</string>
+    <string name="projects_workspace_hint">Leave empty to create a folder from the project name</string>
+    <string name="projects_workspace_auto">Auto: %1$s</string>
+    <string name="projects_pick_workspace">Choose folder</string>
+    <string name="projects_edit_title">Edit project</string>
+    <string name="projects_delete_title">Delete project</string>
+    <string name="projects_delete_confirm">Delete this project? Its chats are kept and become plain chats.</string>
+    <string name="projects_count">%1$d chats</string>
+    <string name="projects_chats_title">Chats</string>
+    <string name="projects_moved_to_chat">Moved to plain chats</string>
+
+    <!-- Chat workspace note -->
+    <string name="chat_workspace_note">This conversation belongs to a project. Its working directory is %1$s — relative paths in the terminal and file tools resolve there.</string>
+    <string name="projects_moved_to_chat_confirm">Remove this chat from the project? It stays and becomes a plain chat.</string>
+
     <!-- Conversation Settings -->
     <string name="conversation_settings_title">Conversation Settings</string>
     <string name="conversation_settings_title_label">Conversation title</string>

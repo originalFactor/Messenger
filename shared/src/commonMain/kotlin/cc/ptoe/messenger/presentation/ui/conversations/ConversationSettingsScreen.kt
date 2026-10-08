@@ -143,7 +143,7 @@ fun ConversationSettingsScreen(
     var showToolsPage by remember { mutableStateOf(false) }
 
     // 平台注册的可用工具（内置 + MCP）；会话级每工具开关在工具配置子页中维护
-    val tools = remember { AppContainerHolder.instance.availableTools }
+    val tools = remember { AppContainerHolder.instance.allTools() }
 
     LaunchedEffect(uiState.isSaved) {
         if (uiState.isSaved) {

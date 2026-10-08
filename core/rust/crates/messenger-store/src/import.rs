@@ -226,6 +226,8 @@ fn read_conversations(legacy: &Connection) -> Result<Vec<StoredConversation>, ru
             title: row.get(1)?,
             provider_id: row.get(2)?,
             agent_id: row.get(3)?,
+            // Room v20 had no projects; imported conversations start unattached.
+            project_id: None,
             override_model_id: row.get(4)?,
             override_temperature: row.get(5)?,
             override_top_p: row.get(6)?,

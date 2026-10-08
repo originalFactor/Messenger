@@ -106,6 +106,19 @@ fn default_agent_role() -> String {
     "chat".to_string()
 }
 
+/// `projects` row: a named workspace that owns a set of conversations.
+/// A conversation may only call the workspace-bound tools (terminal,
+/// glob/grep/read/edit/create) while it belongs to a project.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StoredProject {
+    pub id: String,
+    pub name: String,
+    /// Absolute workspace directory the project's tools operate in.
+    pub workspace: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// `conversations` row with the per-conversation override columns.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StoredConversation {
@@ -113,6 +126,8 @@ pub struct StoredConversation {
     pub title: String,
     pub provider_id: String,
     pub agent_id: String,
+    /// Owning project, or `None` for a plain conversation (no workspace tools).
+    pub project_id: Option<String>,
     pub override_model_id: Option<String>,
     pub override_temperature: Option<f64>,
     pub override_top_p: Option<f64>,

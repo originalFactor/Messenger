@@ -37,6 +37,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.savedstate.read
 import cc.ptoe.messenger.presentation.ui.agents.AgentConversationsScreen
+import cc.ptoe.messenger.presentation.ui.projects.ProjectConversationsScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentEditScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentsScreen
@@ -101,6 +102,9 @@ fun NavGraph(
                     ConversationsScreen(
                         onConversationClick = { conversationId ->
                             navController.navigate(Screen.Chat.createRoute(conversationId))
+                        },
+                        onProjectClick = { projectId ->
+                            navController.navigate(Screen.ProjectConversations.createRoute(projectId))
                         }
                     )
                 }
@@ -330,6 +334,32 @@ fun NavGraph(
                 onEditClick = {
                     navController.navigate(Screen.AgentEdit.createRoute(agentId))
                 },
+                onConversationClick = { conversationId ->
+                    navController.navigate(Screen.Chat.createRoute(conversationId))
+                },
+                onProjectClick = { projectId ->
+                    navController.navigate(Screen.ProjectConversations.createRoute(projectId, agentId))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.ProjectConversations.route,
+            arguments = listOf(
+                navArgument("projectId") { type = NavType.StringType },
+                navArgument("agentId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val projectId = backStackEntry.arguments?.read { getStringOrNull("projectId") } ?: return@composable
+            val agentId = backStackEntry.arguments?.read { getStringOrNull("agentId") }
+            ProjectConversationsScreen(
+                projectId = projectId,
+                agentId = agentId,
+                onBackClick = { navController.popBackStack() },
                 onConversationClick = { conversationId ->
                     navController.navigate(Screen.Chat.createRoute(conversationId))
                 }

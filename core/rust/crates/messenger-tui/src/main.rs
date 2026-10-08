@@ -163,6 +163,7 @@ fn run() -> Result<(), String> {
         Arc::clone(&store),
         tx,
         PathBuf::from(&config.workspace_dir),
+        runtime.handle().clone(),
     ));
 
     // Offline title-agent seeding + optional startup sync, both in the

@@ -237,7 +237,7 @@ fun AgentEditScreen(
     var showToolsPage by remember { mutableStateOf(false) }
 
     // 平台注册的可用工具（内置 + MCP）；每工具开关在工具配置子页中维护
-    val tools = remember { AppContainerHolder.instance.availableTools }
+    val tools = remember { AppContainerHolder.instance.allTools() }
 
     val strPublishedSuccess = stringResource(Res.string.agent_edit_published_success)
     val strPublishFailed = stringResource(Res.string.agent_edit_publish_failed)

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use js_sys::{Function, Promise};
 use messenger_core::agent::{run_chat_turn, AgentEvent, TitleConfig, ToolHost, TurnRequest, TurnSink};
 use messenger_store::model::{
-    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider,
+    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
 };
 use messenger_store::Store;
 use messenger_sync::{CloudMarketAgent, Session, SyncEngine, KV_SESSION, KV_SESSION_HOST};
@@ -84,6 +84,10 @@ struct TurnConfig {
     title_agent_system_prompt: Option<String>,
     #[serde(rename = "titleAgentModelId")]
     title_agent_model_id: Option<String>,
+    #[serde(rename = "hasWorkspace")]
+    has_workspace: bool,
+    #[serde(rename = "workspaceNote")]
+    workspace_note: String,
 }
 
 impl Default for TurnConfig {
@@ -105,6 +109,8 @@ impl Default for TurnConfig {
             title_agent_id: None,
             title_agent_system_prompt: None,
             title_agent_model_id: None,
+            has_workspace: false,
+            workspace_note: String::new(),
         }
     }
 }
@@ -324,6 +330,27 @@ impl WasmCore {
         self.store.delete_agent(&id).map_err(js_error)
     }
 
+    pub fn list_projects_json(&self) -> Result<String, JsValue> {
+        json(&self.store.list_projects().map_err(js_error)?)
+    }
+
+    pub fn get_project_json(&self, id: String) -> Result<Option<String>, JsValue> {
+        optional(self.store.get_project(&id).map_err(js_error)?)
+    }
+
+    pub fn upsert_project_json(&self, json: String) -> Result<(), JsValue> {
+        let row: StoredProject = parse(&json)?;
+        self.store.upsert_project(&row).map_err(js_error)
+    }
+
+    pub fn delete_project(&self, id: String) -> Result<(), JsValue> {
+        self.store.delete_project(&id).map_err(js_error)
+    }
+
+    pub fn list_conversations_by_project_json(&self, project_id: String) -> Result<String, JsValue> {
+        json(&self.store.list_conversations_by_project(&project_id).map_err(js_error)?)
+    }
+
     pub fn list_conversations_json(&self) -> Result<String, JsValue> {
         json(&self.store.list_conversations().map_err(js_error)?)
     }
@@ -406,6 +433,9 @@ impl WasmCore {
         }
         for agent in self.store.list_agents().map_err(js_error)? {
             self.store.delete_agent(&agent.id).map_err(js_error)?;
+        }
+        for project in self.store.list_projects().map_err(js_error)? {
+            self.store.delete_project(&project.id).map_err(js_error)?;
         }
         for key in [
             messenger_sync::KV_SESSION,
@@ -833,10 +863,17 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
     // `tool_names` carries the per-tool agent config; the writable mode
     // (write-tool exclusion + terminal description swap) is applied here so
     // the declared list matches what the platform host actually executes.
+    //
+    // A conversation outside any project has no workspace, so the
+    // workspace-bound tools (terminal + glob/grep/read/edit/create) are
+    // dropped from the declared list whatever the platform resolved. The
+    // web client declares no built-in tools at all, so in practice this list
+    // is already empty here — the gate keeps the boundary honest.
     let resolved = apply_writable_mode(
         registry
             .into_iter()
             .filter(|tool| config.tool_names.iter().any(|n| n == &tool.name))
+            .filter(|tool| config.has_workspace || !tool.workspace_required)
             .collect(),
         config.writable,
     );
@@ -851,6 +888,7 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
         max_tokens: config.max_tokens,
         reasoning_effort: config.reasoning_effort.clone(),
         tools: resolved,
+        workspace_note: config.workspace_note.clone(),
         context_window: config.context_window,
         summarize_prompt: config.summarize_prompt.clone(),
         title: config.title_agent_id.as_ref().map(|id| TitleConfig {

@@ -21,6 +21,7 @@ pub fn resolve_request_tools(
     tools_enabled: bool,
     tools_config: &HashMap<String, bool>,
     writable: bool,
+    workspace_available: bool,
 ) -> Vec<BuiltinTool> {
     if !tools_enabled {
         return Vec::new();
@@ -28,6 +29,10 @@ pub fn resolve_request_tools(
     let filtered: Vec<BuiltinTool> = registry
         .iter()
         .filter(|tool| tools_config.get(&tool.name).copied().unwrap_or(true))
+        // A conversation outside any project has no workspace, so the
+        // terminal and workspace tools are not declared at all — the model
+        // cannot ask for something it could not be executed against.
+        .filter(|tool| workspace_available || !tool.workspace_required)
         .cloned()
         .collect();
     apply_writable_mode(filtered, writable)
@@ -59,12 +64,12 @@ mod tests {
 
     #[test]
     fn master_switch_off_yields_empty() {
-        assert!(resolve_request_tools(&builtin_registry(), false, &HashMap::new(), true).is_empty());
+        assert!(resolve_request_tools(&builtin_registry(), false, &HashMap::new(), true, true).is_empty());
     }
 
     #[test]
     fn read_only_mode_excludes_write_tools_and_keeps_inspection_terminal() {
-        let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), false);
+        let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), false, true);
         let names: Vec<&str> = resolved.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"terminal"));
         assert!(!names.contains(&EDIT));
@@ -75,7 +80,7 @@ mod tests {
 
     #[test]
     fn writable_mode_includes_write_tools_and_unrestricted_terminal() {
-        let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), true);
+        let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), true, true);
         let names: Vec<&str> = resolved.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&EDIT) && names.contains(&CREATE));
         let terminal = resolved.iter().find(|t| t.name == "terminal").unwrap();
@@ -87,7 +92,7 @@ mod tests {
         let mut config = HashMap::new();
         config.insert("grep".to_string(), false);
         config.insert("terminal".to_string(), false);
-        let resolved = resolve_request_tools(&builtin_registry(), true, &config, true);
+        let resolved = resolve_request_tools(&builtin_registry(), true, &config, true, true);
         let names: Vec<&str> = resolved.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"grep"));
         assert!(!names.contains(&"terminal"));
@@ -97,10 +102,30 @@ mod tests {
     #[test]
     fn apply_writable_mode_matches_resolve_in_both_modes() {
         for writable in [false, true] {
-            let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), writable);
+            let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), writable, true);
             let applied = apply_writable_mode(builtin_registry(), writable);
             assert_eq!(resolved, applied, "writable={writable}");
         }
+    }
+
+    /// A conversation outside any project declares no workspace-bound tool,
+    /// in either Agent mode and whatever the per-tool config says.
+    #[test]
+    fn without_a_workspace_no_terminal_or_workspace_tools_are_declared() {
+        for writable in [false, true] {
+            let resolved = resolve_request_tools(&builtin_registry(), true, &HashMap::new(), writable, false);
+            assert!(resolved.is_empty(), "writable={writable} leaked {:?}", resolved);
+        }
+    }
+
+    /// The workspace gate is independent of the per-tool config: switching a
+    /// workspace tool off does not make it available without a project.
+    #[test]
+    fn the_workspace_gate_ignores_the_per_tool_config() {
+        let mut config = HashMap::new();
+        config.insert("terminal".to_string(), false);
+        let resolved = resolve_request_tools(&builtin_registry(), true, &config, true, false);
+        assert!(resolved.is_empty());
     }
 
     #[test]

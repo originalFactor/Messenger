@@ -23,6 +23,7 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
+import cc.ptoe.messenger.domain.repository.ProjectRepository
 
 /**
  * The Room-backed repository bundle. Constructed only on Android/Desktop:
@@ -33,6 +34,7 @@ class RoomRepositories(
     val models: ModelRepository,
     val agents: AgentRepository,
     val conversations: ConversationRepository,
+    val projects: ProjectRepository,
     val messages: MessageRepository,
 )
 
@@ -42,6 +44,7 @@ class LocalChangeHooks(
     val onModelChanged: (providerId: String) -> Unit,
     val onAgentChanged: (previous: Agent?, current: Agent?) -> Unit,
     val onConversationChanged: (id: String, deleted: Boolean) -> Unit,
+    val onProjectChanged: (id: String, deleted: Boolean) -> Unit,
     val onMessagesChanged: (conversationId: String) -> Unit,
 )
 
