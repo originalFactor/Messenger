@@ -153,6 +153,8 @@ external class WasmCoreJs {
 
     fun cloud_delete_agent_avatar(agentId: String): JsAny
 
+    fun subscribe(listener: (String, String) -> Unit)
+
     fun cancel_turn()
     fun run_turn(
         configJson: String,

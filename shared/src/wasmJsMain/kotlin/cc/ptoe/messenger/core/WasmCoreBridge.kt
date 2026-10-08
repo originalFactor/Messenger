@@ -19,6 +19,8 @@
 package cc.ptoe.messenger.core
 
 import cc.ptoe.messenger.data.remote.NetworkClient
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.Serializable
 
 /**
@@ -35,10 +37,12 @@ import kotlinx.serialization.Serializable
 class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
 
     override fun subscribe(listener: (kind: String, ids: List<String>) -> Unit) {
-        // The wasm store has no push channel: Rust's `Store::subscribe` takes
-        // a Rust closure, which cannot be handed a JS callback across the
-        // boundary. Repository version flows are re-read on demand instead,
-        // and `RustCloudFacade` refreshes its own state after each call.
+        // The store's Rust listener is handed a JS callback through the same
+        // Send/Sync shim the tool host uses (wasm32 has one thread). `ids`
+        // arrives as a JSON array because only strings cross the boundary.
+        core.subscribe { kind, idsJson ->
+            listener(kind, parseIdsJson(idsJson))
+        }
     }
 
     // -- store CRUD --
@@ -317,3 +321,9 @@ private fun jsIntArray(bytes: ByteArray): JsAny {
     }
     return array
 }
+
+private val idsSerializer = ListSerializer(String.serializer())
+
+/** The store sends affected row ids as a JSON array string. */
+private fun parseIdsJson(json: String): List<String> =
+    runCatching { NetworkClient.json.decodeFromString(idsSerializer, json) }.getOrDefault(emptyList())

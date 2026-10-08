@@ -237,6 +237,24 @@ pub struct WasmCore {
 
 #[wasm_bindgen]
 impl WasmCore {
+    /// Subscribes to store changes. The Rust listener is a `Fn` closure, so a
+    /// JS function is wrapped in the same single-threaded `Send`/`Sync` shim
+    /// the tool host uses. `kind` is the entity kind; `ids` a JSON array.
+    ///
+    /// Subscriptions live for the store's lifetime (the app keeps one).
+    pub fn subscribe(&self, listener: Function) -> Result<(), JsValue> {
+        let listener = SendFn(listener);
+        self.store.subscribe(Box::new(move |event| {
+            let ids = serde_json::to_string(&event.ids).unwrap_or_else(|_| "[]".into());
+            let _ = listener.0.call2(
+                &JsValue::NULL,
+                &JsValue::from_str(&format!("{:?}", event.kind)),
+                &JsValue::from_str(&ids),
+            );
+        }));
+        Ok(())
+    }
+
     // -- store CRUD (JSON in / JSON out) --
 
     pub fn list_providers_json(&self) -> Result<String, JsValue> {
