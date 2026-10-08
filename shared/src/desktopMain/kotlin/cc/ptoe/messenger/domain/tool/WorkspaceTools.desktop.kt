@@ -69,6 +69,11 @@ private class DesktopWorkspaceFiles(private val root: File) {
             add(rg.absolutePath)
             add("--no-heading")
             add("-n")
+            // NUL terminates the path field so a colon inside a matched line
+            // stays part of the text: `--no-heading -n` prints
+            // `path:line:text`, which is ambiguous when the text contains a
+            // colon (every later ':' then reads as a field separator).
+            add("--null")
             add("--no-config")
             add("--hidden")
             add("--no-ignore")
@@ -108,10 +113,16 @@ private class DesktopWorkspaceFiles(private val root: File) {
                     rows += if (fileRootPrefix != null) {
                         // Row shape: `line:text` (rg omits the filename for a
                         // single-file search root).
-                        val lineNo = line.indexOf(':')
-                        if (lineNo > 0) "$fileRootPrefix:$line" else line
+                        if (line.isNotEmpty()) "$fileRootPrefix:$line" else line
                     } else {
-                        normalizePath(dropVimgrepColumn(line))
+                        // Row shape: `path\0line:text` — the NUL is the field
+                        // separator, so colons inside the matched text survive.
+                        val nul = line.indexOf('\u0000')
+                        if (nul >= 0) {
+                            normalizePath(line.substring(0, nul)) + ":" + line.substring(nul + 1)
+                        } else {
+                            line
+                        }
                     }
                     if (rows.size > op.maxResults) break
                 }
@@ -133,26 +144,9 @@ private class DesktopWorkspaceFiles(private val root: File) {
     /**
      * rg with the workspace cwd emits relative paths inside the workspace
      * and absolute paths (under `--path-separator /`) for absolute roots
-     * outside it. Windows drive prefixes in row paths are normalized to
-     * forward slashes.
+     * outside it. Row paths are normalized to forward slashes.
      */
-    private fun normalizePath(row: String): String {
-        val separator = row.indexOf(':')
-        if (separator < 0) return row
-        val rawPath = row.substring(0, separator).replace('\\', '/')
-        return rawPath + row.substring(separator)
-    }
-
-    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
-    private fun dropVimgrepColumn(row: String): String {
-        val first = row.indexOf(':')
-        if (first < 0) return row
-        val second = row.indexOf(':', first + 1)
-        if (second < 0) return row
-        val third = row.indexOf(':', second + 1)
-        if (third < 0) return row
-        return row.substring(0, second) + row.substring(third)
-    }
+    private fun normalizePath(path: String): String = path.replace('\\', '/')
 
     private fun read(op: WorkspaceOperation.Read): ToolExecutionResult {
         val file = resolve(op.path, true).toFile()

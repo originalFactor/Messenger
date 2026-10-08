@@ -60,6 +60,11 @@ internal object WorkspaceOps {
             add(rg.absolutePath)
             add("--no-heading")
             add("-n")
+            // NUL terminates the path field so a colon inside a matched line
+            // stays part of the text: `--no-heading -n` prints
+            // `path:line:text`, which is ambiguous when the text contains a
+            // colon (every later ':' then reads as a field separator).
+            add("--null")
             add("--no-config")
             add("--hidden")
             add("--no-ignore")
@@ -94,10 +99,16 @@ internal object WorkspaceOps {
         process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
             for (line in lines) {
                 rows += if (fileRootPrefix != null) {
-                    val lineNo = line.indexOf(':')
-                    if (lineNo > 0) "$fileRootPrefix:$line" else normalizePath(line)
+                    if (line.isNotEmpty()) "$fileRootPrefix:$line" else line
                 } else {
-                    normalizePath(dropVimgrepColumn(line))
+                    // Row shape: `path\0line:text` — the NUL is the field
+                    // separator, so colons inside the matched text survive.
+                    val nul = line.indexOf('\u0000')
+                    if (nul >= 0) {
+                        normalizePath(line.substring(0, nul)) + ":" + line.substring(nul + 1)
+                    } else {
+                        normalizePath(line)
+                    }
                 }
                 if (rows.size > maxResults) break
             }
@@ -114,23 +125,7 @@ internal object WorkspaceOps {
     }
 
     /** Normalizes row path separators to forward slashes. */
-    private fun normalizePath(row: String): String {
-        val separator = row.indexOf(':')
-        if (separator < 0) return row
-        val rawPath = row.substring(0, separator).replace('\\', '/')
-        return rawPath + row.substring(separator)
-    }
-
-    /** Normalizes `path:line:col:text` (vimgrep) to the contract `path:line:text`. */
-    private fun dropVimgrepColumn(row: String): String {
-        val first = row.indexOf(':')
-        if (first < 0) return row
-        val second = row.indexOf(':', first + 1)
-        if (second < 0) return row
-        val third = row.indexOf(':', second + 1)
-        if (third < 0) return row
-        return row.substring(0, second) + row.substring(third)
-    }
+    private fun normalizePath(path: String): String = path.replace('\\', '/')
 
     fun read(root: File, path: String, startLine: Int, maxLines: Int): ToolResult = guarded {
         val file = resolve(root, path, mustExist = true)
