@@ -55,6 +55,72 @@ on:
       - .github/workflows/**
 
 jobs:
+  # Publishes the web client archive to the GitHub Release the server consumes.
+  # `:webApp:wasmJsBrowserDistribution` output is NOT committed, so the release
+  # asset is how server/ (a separate repository) obtains it.
+  publish-web-client:
+    name: Publish web client archive
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Set up Rust with the wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/rust
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+          gradle-home-cache-cleanup: true
+
+      - name: Build web distribution
+        run: ./gradlew :webApp:wasmJsBrowserDistribution
+
+      - name: Package web distribution
+        run: |
+          cd webApp/build/dist/wasmJs/productionExecutable
+          zip -qr "$RUNNER_TEMP/messenger-web.zip" .
+
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # One ROLLING release holds the asset the server fetches via
+          # /releases/latest, so a failed or interrupted run can never point the
+          # server at a half-built artifact.
+          gh release delete web-client --cleanup-tag --yes || true
+          gh release create web-client \
+            --title "Web client (main)" \
+            --notes "Rolling build of the Compose Multiplatform web client, consumed by the Messenger server at /app. Published automatically from main." \
+            "$RUNNER_TEMP/messenger-web.zip#messenger-web-main.zip"
+
   build-all:
     name: Build All
     uses: ./.github/workflows/build-all.yml
