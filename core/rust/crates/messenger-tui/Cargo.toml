@@ -28,8 +28,9 @@ messenger-sync = { path = "../messenger-sync" }
 messenger-mcp = { path = "../messenger-mcp" }
 # Implementing `messenger_core::agent::ToolHost` requires the same attribute.
 async-trait = "0.1"
-ratatui = "0.29"
-crossterm = "0.28"
+# `bracketed-paste` keeps a multi-line paste from being read as one giant
+# key press, which the editor would submit as a single message.
+crossterm = { version = "0.28", features = ["bracketed-paste"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }

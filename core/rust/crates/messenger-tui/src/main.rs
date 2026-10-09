@@ -5,7 +5,7 @@
 //! window):
 //! ```text
 //! loop {
-//!     terminal.draw(|f| ui::draw(f, &mut app))?;
+//!     screen.render(&ui::compose(&mut app, w, h).lines)?;
 //!     if event::poll(30ms)? { if Key => app.handle_key(key) }
 //!     while let Ok(msg) = rx.try_recv() { app.apply(msg) }
 //!     app.tick();
@@ -22,6 +22,7 @@ use messenger_store::Store;
 use messenger_tui::app::App;
 use messenger_tui::config::{self, TuiConfig};
 use messenger_tui::engine::{load_mcp_servers, Engine};
+use messenger_tui::screen::Screen;
 use messenger_tui::store_ops;
 use messenger_tui::ui;
 use tokio::sync::mpsc;
@@ -223,22 +224,41 @@ fn run() -> Result<(), String> {
     }
 
     let mut app = App::new(engine, config, config_path, store_path);
+    // Agentic entry point: land directly in the project for the directory the
+    // client was launched in, with a fresh conversation and the default Agent.
+    app.bootstrap_session();
 
     // ---- terminal --------------------------------------------------------
-    let mut terminal = ratatui::try_init().map_err(|e| format!("terminal: {e}"))?;
-    let result = event_loop(&mut terminal, &mut app, &mut rx);
-    ratatui::restore();
+    // `TerminalGuard` restores the terminal on every exit path, panic
+    // included; `run` calls `stop` explicitly so the restore happens before
+    // the process exits rather than at scope teardown.
+    let screen = Screen::start().map_err(|e| format!("terminal: {e}"))?;
+    let mut guard = TerminalGuard(screen);
+    let result = event_loop(&mut guard.0, &mut app, &mut rx);
+    guard.0.stop();
     result
 }
 
+/// Owns the [`Screen`] so a panic anywhere in the loop still puts the
+/// terminal back the way it was found.
+struct TerminalGuard(Screen);
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
 fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+    screen: &mut Screen,
     app: &mut App,
     rx: &mut mpsc::UnboundedReceiver<messenger_tui::engine::UiMsg>,
 ) -> Result<(), String> {
     loop {
-        terminal
-            .draw(|frame| ui::draw(frame, app))
+        let (width, height) = screen.size().map_err(|e| e.to_string())?;
+        let frame = ui::compose(app, width, height);
+        screen
+            .render(&frame.lines, frame.cursor, frame.scrolled)
             .map_err(|e| e.to_string())?;
 
         // 30 ms doubles as the streaming batch window (TARGET.md §6).

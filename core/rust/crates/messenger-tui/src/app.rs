@@ -1,9 +1,11 @@
-//! Application state, key handling, modals/forms, and view switching.
+//! Application state, key routing, slash-command dispatch, and the popup
+//! stack.
 //!
-//! The whole UI is one `match` over `(view, modal, key)`; while a form or a
-//! confirmation is open it exclusively consumes input except `Esc` and
-//! `Ctrl+C`. Everything the agent loop reports arrives as a [`UiMsg`] and is
-//! applied by [`App::apply`], so the render side never touches async state.
+//! There is exactly ONE surface: the chat. Everything else — picking an
+//! Agent, editing a provider, confirming a delete, reading the keys — is a
+//! [`Popup`] pushed on a stack. `handle_key` therefore has two branches: the
+//! topmost popup consumes input, otherwise the chat editor does. No view
+//! enum, no per-view key handlers, no mode flags.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,305 +17,67 @@ use messenger_document::Block;
 use messenger_llm::domain::ContentPart;
 use messenger_mcp::config::{encode_server_list, McpServerConfig, McpTransportType};
 use messenger_markdown::StreamingSession;
-use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider};
+use messenger_store::model::{
+    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider,
+};
 use messenger_store::StoredProject;
-use ratatui::text::Line;
+
+use crate::commands::{self, SLASH_COMMANDS};
 use crate::config::{self, TuiConfig};
 use crate::engine::{load_mcp_servers, CardSnapshot, Engine, UiMsg};
+use crate::popup::{
+    command_rows, Confirm, ConfirmPurpose, Field, Form, FormPurpose, Popup, Select, SelectItem,
+    SelectPurpose,
+};
 use crate::render::{self, RenderOpts};
 use crate::store_ops::{self, TurnError};
-
-/// The six top-level views (F1–F6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Conversations,
-    Chat,
-    Agents,
-    Providers,
-    Mcp,
-    Settings,
-}
-
-impl View {
-    pub fn all() -> [View; 6] {
-        [
-            View::Conversations,
-            View::Chat,
-            View::Agents,
-            View::Providers,
-            View::Mcp,
-            View::Settings,
-        ]
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            View::Conversations => "Conversations",
-            View::Chat => "Chat",
-            View::Agents => "Agents",
-            View::Providers => "Providers",
-            View::Mcp => "MCP",
-            View::Settings => "Settings",
-        }
-    }
-
-    pub fn index(&self) -> usize {
-        match self {
-            View::Conversations => 0,
-            View::Chat => 1,
-            View::Agents => 2,
-            View::Providers => 3,
-            View::Mcp => 4,
-            View::Settings => 5,
-        }
-    }
-
-    fn from_function_key(code: KeyCode) -> Option<View> {
-        View::all()
-            .get(match code {
-                KeyCode::F(1) => 0,
-                KeyCode::F(2) => 1,
-                KeyCode::F(3) => 2,
-                KeyCode::F(4) => 3,
-                KeyCode::F(5) => 4,
-                KeyCode::F(6) => 5,
-                _ => return None,
-            })
-            .copied()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// forms & modals
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Field {
-    Text {
-        label: String,
-        value: String,
-        multiline: bool,
-        secret: bool,
-    },
-    Bool {
-        label: String,
-        value: bool,
-    },
-    Choice {
-        label: String,
-        options: Vec<String>,
-        selected: usize,
-    },
-}
-
-impl Field {
-    pub fn text(label: &str, value: impl Into<String>) -> Self {
-        Field::Text {
-            label: label.to_string(),
-            value: value.into(),
-            multiline: false,
-            secret: false,
-        }
-    }
-
-    pub fn multiline(label: &str, value: impl Into<String>) -> Self {
-        Field::Text {
-            label: label.to_string(),
-            value: value.into(),
-            multiline: true,
-            secret: false,
-        }
-    }
-
-    pub fn secret(label: &str, value: impl Into<String>) -> Self {
-        Field::Text {
-            label: label.to_string(),
-            value: value.into(),
-            multiline: false,
-            secret: true,
-        }
-    }
-
-    pub fn boolean(label: &str, value: bool) -> Self {
-        Field::Bool {
-            label: label.to_string(),
-            value,
-        }
-    }
-
-    pub fn choice(label: &str, options: Vec<String>, selected: usize) -> Self {
-        Field::Choice {
-            label: label.to_string(),
-            options,
-            selected,
-        }
-    }
-
-    pub fn label(&self) -> &str {
-        match self {
-            Field::Text { label, .. } | Field::Bool { label, .. } | Field::Choice { label, .. } => {
-                label
-            }
-        }
-    }
-
-    fn as_text(&self) -> String {
-        match self {
-            Field::Text { value, .. } => value.clone(),
-            Field::Bool { value, .. } => value.to_string(),
-            Field::Choice { options, selected, .. } => {
-                options.get(*selected).cloned().unwrap_or_default()
-            }
-        }
-    }
-}
-
-/// What a submitted form does.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FormPurpose {
-    NewConversation,
-    RenameConversation(String),
-    NewProvider,
-    EditProvider(String),
-    NewModel(String),
-    EditModel { provider_id: String, model_id: String },
-    NewAgent,
-    EditAgent(String),
-    NewMcpServer,
-    EditMcpServer(String),
-    SignIn,
-    RedeemCard,
-    ChangePassword,
-    DeleteAccountForm,
-    EditServerUrl,
-    FilterConversations,
-    EditWorkspace,
-    NewProject,
-    EditProject(String),
-    NewProjectConversation(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct Form {
-    pub title: String,
-    pub purpose: FormPurpose,
-    pub fields: Vec<Field>,
-    pub focus: usize,
-}
-
-impl Form {
-    pub fn new(title: &str, purpose: FormPurpose, fields: Vec<Field>) -> Self {
-        Self {
-            title: title.to_string(),
-            purpose,
-            fields,
-            focus: 0,
-        }
-    }
-
-    pub fn value(&self, label: &str) -> String {
-        self.fields
-            .iter()
-            .find(|field| field.label() == label)
-            .map(Field::as_text)
-            .unwrap_or_default()
-    }
-
-    pub fn boolean(&self, label: &str) -> bool {
-        self.fields
-            .iter()
-            .find_map(|field| match field {
-                Field::Bool { label: name, value } if name == label => Some(*value),
-                _ => None,
-            })
-            .unwrap_or(false)
-    }
-
-    pub fn index(&self, label: &str) -> Option<usize> {
-        self.fields.iter().position(|field| {
-            matches!(field, Field::Choice { label: name, .. } if name == label)
-        })
-        .and_then(|position| match &self.fields[position] {
-            Field::Choice { selected, .. } => Some(*selected),
-            _ => None,
-        })
-    }
-
-    /// Parse a numeric field, treating blank as "unset".
-    pub fn number(&self, label: &str) -> Option<f64> {
-        let raw = self.value(label);
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        trimmed.parse::<f64>().ok()
-    }
-
-    fn focused(&self) -> Option<&Field> {
-        self.fields.get(self.focus)
-    }
-
-    fn focused_mut(&mut self) -> Option<&mut Field> {
-        self.fields.get_mut(self.focus)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConfirmPurpose {
-    DeleteConversation(String),
-    DeleteProvider(String),
-    DeleteModel { provider_id: String, model_id: String },
-    DeleteAgent(String),
-    DeleteMcpServer(String),
-    RedeemCard(String),
-    /// Account deletion carries the password the user typed in the form.
-    DeleteAccount(String),
-    SignOut,
-}
-
-#[derive(Debug, Clone)]
-pub struct Confirm {
-    pub title: String,
-    pub message: String,
-    pub purpose: ConfirmPurpose,
-    /// When set, the user must type this text verbatim to confirm.
-    pub requires_typing: Option<String>,
-    pub typed: String,
-}
-
-impl Confirm {
-    pub fn new(title: &str, message: impl Into<String>, purpose: ConfirmPurpose) -> Self {
-        Self {
-            title: title.to_string(),
-            message: message.into(),
-            purpose,
-            requires_typing: None,
-            typed: String::new(),
-        }
-    }
-
-    pub fn requires(&self, text: &str) -> Self {
-        let mut confirm = self.clone();
-        confirm.requires_typing = Some(text.to_string());
-        confirm
-    }
-
-    pub fn can_confirm(&self) -> bool {
-        match &self.requires_typing {
-            Some(expected) => self.typed.trim() == expected,
-            None => true,
-        }
-    }
-}
+use crate::text::Line;
 
 // ---------------------------------------------------------------------------
 // chat state
 // ---------------------------------------------------------------------------
 
 struct LiveStream {
-    message_id: String,
     session: StreamingSession,
     last_rendered: usize,
+}
+
+/// A local, non-persisted transcript note: the visible outcome of a slash
+/// command, a tool failure, or any other event the agent loop never sees.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatNote {
+    pub text: String,
+    pub kind: NoteKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    Info,
+    Warn,
+    Error,
+}
+
+impl ChatNote {
+    pub fn info(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: NoteKind::Info,
+        }
+    }
+
+    pub fn warn(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: NoteKind::Warn,
+        }
+    }
+
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: NoteKind::Error,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -356,45 +120,29 @@ pub struct ChatState {
     pub conversation_id: Option<String>,
     pub messages: Vec<StoredMessage>,
     pub input: String,
-    pub input_lines: usize,
     pub scroll: u16,
     pub follow: bool,
     pub is_generating: bool,
     pub error: Option<String>,
+    /// Local notes rendered inline in the transcript (slash-command
+    /// outcomes, tool failures). Never persisted: they belong to this
+    /// session, not to the conversation.
+    pub notes: Vec<ChatNote>,
+    /// True while the `/` palette owns the input line.
+    pub palette_open: bool,
+
     live: Option<LiveStream>,
     cache: RenderedCache,
 }
 
-impl ChatState {
-    pub fn streaming_message_id(&self) -> Option<&str> {
-        self.live.as_ref().map(|live| live.message_id.as_str())
-    }
-}
-
-/// One setting row in F6.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingRow {
-    Theme,
-    ShowThink,
-    ShowToolDetails,
-    AutoScroll,
-    Workspace,
-    ServerUrl,
-    Session,
-}
-
-impl SettingRow {
-    pub fn all() -> [SettingRow; 7] {
-        [
-            SettingRow::Theme,
-            SettingRow::ShowThink,
-            SettingRow::ShowToolDetails,
-            SettingRow::AutoScroll,
-            SettingRow::Workspace,
-            SettingRow::ServerUrl,
-            SettingRow::Session,
-        ]
-    }
+/// The subset of `CloudUser` the TUI shows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CloudUserInfo {
+    pub email: String,
+    pub role: String,
+    pub quota_balance: Option<i64>,
+    pub quota_expires_at: Option<i64>,
+    pub entitlements: Vec<(String, i64, Option<i64>)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -406,62 +154,30 @@ pub struct App {
     pub config: TuiConfig,
     pub config_path: PathBuf,
     pub store_path: PathBuf,
-    pub view: View,
     pub should_quit: bool,
     pub status: String,
-    pub help: bool,
     pub spinner: usize,
     pub tick_count: u64,
 
-    pub conversations: Vec<StoredConversation>,
-    pub conversation_selection: usize,
-    pub conversation_filter: Option<String>,
+    /// The whole non-chat UI. The topmost entry owns the keyboard.
+    pub popups: Vec<Popup>,
 
-    /// Projects section of the Conversations view (a project IS a workspace).
+    pub conversations: Vec<StoredConversation>,
+    pub conversation_filter: Option<String>,
     pub projects: Vec<StoredProject>,
-    pub project_selection: usize,
-    /// True while the Conversations list is scrolled into the projects block,
-    /// so Up/Down move between projects and conversations respectively.
-    pub list_showing_projects: bool,
+    pub agents: Vec<StoredAgent>,
+    pub providers: Vec<StoredProvider>,
+    pub models: Vec<StoredModel>,
+    pub mcp_servers: Vec<McpServerConfig>,
 
     pub chat: ChatState,
-
-    pub agents: Vec<StoredAgent>,
-    pub agent_selection: usize,
-
-    pub providers: Vec<StoredProvider>,
-    pub provider_selection: usize,
-    pub models: Vec<StoredModel>,
-    pub model_selection: usize,
-
-    pub mcp_servers: Vec<McpServerConfig>,
-    pub mcp_selection: usize,
-
-    pub setting_selection: usize,
-
-    pub form: Option<Form>,
-    pub confirm: Option<Confirm>,
     /// Current cloud user, refreshed from the store on demand.
     pub cloud_user: Option<CloudUserInfo>,
     /// Last status-line diagnostic (token totals etc.).
     pub last_list_message: Option<String>,
-    /// Agent ids backing the Agent switcher modal (its form indexes into this).
-    pending_agent_picker: Option<Vec<String>>,
-    /// Project a new conversation should be created in (set when Enter is
-    /// pressed on a project row, consumed by the Agent picker).
-    pub pending_project: Option<String>,
-    /// Providers view: true when the model pane owns the selection.
-    pub provider_focus_models: bool,
-}
-
-/// The subset of `CloudUser` the TUI shows.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CloudUserInfo {
-    pub email: String,
-    pub role: String,
-    pub quota_balance: Option<i64>,
-    pub quota_expires_at: Option<i64>,
-    pub entitlements: Vec<(String, i64, Option<i64>)>,
+    /// The directory the process was launched in: the session's default
+    /// project workspace.
+    pub cwd: PathBuf,
 }
 
 impl App {
@@ -476,38 +192,25 @@ impl App {
             config,
             config_path,
             store_path,
-            view: View::Conversations,
             should_quit: false,
             status: String::new(),
-            help: false,
             spinner: 0,
             tick_count: 0,
+            popups: Vec::new(),
             conversations: Vec::new(),
-            conversation_selection: 0,
             conversation_filter: None,
             projects: Vec::new(),
-            project_selection: 0,
-            list_showing_projects: false,
+            agents: Vec::new(),
+            providers: Vec::new(),
+            models: Vec::new(),
+            mcp_servers: Vec::new(),
             chat: ChatState {
                 follow: true,
                 ..ChatState::default()
             },
-            agents: Vec::new(),
-            agent_selection: 0,
-            providers: Vec::new(),
-            provider_selection: 0,
-            models: Vec::new(),
-            model_selection: 0,
-            mcp_servers: Vec::new(),
-            mcp_selection: 0,
-            setting_selection: 0,
-            form: None,
-            confirm: None,
             cloud_user: None,
             last_list_message: None,
-            pending_agent_picker: None,
-            pending_project: None,
-            provider_focus_models: false,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         };
         app.reload_all();
         app
@@ -518,6 +221,275 @@ impl App {
             dark: self.config.is_dark(),
             show_think: self.config.show_think,
             show_tool_details: self.config.show_tool_details,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // popups
+    // ------------------------------------------------------------------
+
+    pub fn push(&mut self, popup: Popup) {
+        self.popups.push(popup);
+    }
+
+    /// Close the topmost popup. Returns false when the stack is already
+    /// empty, so callers can leave the chat untouched.
+    pub fn close_popup(&mut self) -> bool {
+        self.popups.pop().is_some()
+    }
+
+    /// Close every popup (Esc from a nested stack, or a command that
+    /// supersedes what was open).
+    pub fn close_all_popups(&mut self) {
+        self.popups.clear();
+    }
+
+    fn push_form(&mut self, form: Form) {
+        self.push(Popup::Form(form));
+    }
+
+    fn push_confirm(&mut self, confirm: Confirm) {
+        self.push(Popup::Confirm(confirm));
+    }
+
+    /// Submit a form from inside the stack: on validation failure the form is
+    /// pushed back so the user keeps what they typed.
+    fn submit_form(&mut self, form: Form) {
+        let purpose = form.purpose.clone();
+        // Validation failures return the form to the top of the stack.
+        if let Some(reason) = self.reject_form(&form) {
+            self.note(ChatNote::warn(reason));
+            self.push_form(form);
+            return;
+        }
+        // Resolve the row being edited BEFORE the match destructures the
+        // purpose (a by-value binding would partially move it).
+        let existing_model = match &purpose {
+            FormPurpose::EditModel { model_id, .. } => self.engine.store.get_model(model_id).ok().flatten(),
+            _ => None,
+        };
+        let existing_provider = match &purpose {
+            FormPurpose::EditProvider(id) => self.engine.store.get_provider(id).ok().flatten(),
+            _ => None,
+        };
+        let existing_agent = match &purpose {
+            FormPurpose::EditAgent(id) => self.engine.store.get_agent(id).ok().flatten(),
+            _ => None,
+        };
+        match purpose {
+            FormPurpose::RenameConversation(id) => {
+                let title = form.value("Title");
+                if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&id) {
+                    conversation.title = title.clone();
+                    conversation.updated_at = messenger_store::now_ms();
+                    let _ = self.engine.store.upsert_conversation(&conversation);
+                    self.reload_conversations();
+                }
+                self.note_info(format!("Renamed to “{title}”."));
+            }
+            FormPurpose::NewProvider | FormPurpose::EditProvider(_) => {
+                let existing = existing_provider;
+                let now = messenger_store::now_ms();
+                let provider = StoredProvider {
+                    id: existing
+                        .as_ref()
+                        .map(|provider| provider.id.clone())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    name: form.value("Name"),
+                    base_url: form.value("Base URL"),
+                    api_key: form.value("API key"),
+                    created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
+                    updated_at: now,
+                };
+                let name = provider.name.clone();
+                match self.engine.store.upsert_provider(&provider) {
+                    Ok(()) => {
+                        self.reload_providers();
+                        self.note_info(format!("Saved provider {name}."));
+                    }
+                    Err(error) => self.note(ChatNote::error(error.to_string())),
+                }
+            }
+            FormPurpose::NewModel(provider_id) | FormPurpose::EditModel { provider_id, .. } => {
+                let provider_id = provider_id.clone();
+                let existing = existing_model;
+                let model_id = form.value("Model ID");
+                let now = messenger_store::now_ms();
+                let display_name = match form.value("Display name").trim() {
+                    "" => model_id.clone(),
+                    raw => raw.to_string(),
+                };
+                let model = StoredModel {
+                    id: existing
+                        .as_ref()
+                        .map(|model| model.id.clone())
+                        .unwrap_or_else(|| format!("{provider_id}:{model_id}")),
+                    provider_id: provider_id.clone(),
+                    model_id,
+                    display_name: display_name.clone(),
+                    is_enabled: form.boolean("Enabled"),
+                    context_window: form
+                        .number("Context window")
+                        .map(|value| value as i64)
+                        .unwrap_or(0),
+                    input_rate: existing.as_ref().and_then(|m| m.input_rate),
+                    output_rate: existing.as_ref().and_then(|m| m.output_rate),
+                    input_modalities: existing
+                        .as_ref()
+                        .map(|m| m.input_modalities.clone())
+                        .unwrap_or_else(|| "text".into()),
+                    output_modalities: existing
+                        .as_ref()
+                        .map(|m| m.output_modalities.clone())
+                        .unwrap_or_else(|| "text".into()),
+                    supports_tool_calling: existing.as_ref().is_some_and(|m| m.supports_tool_calling),
+                    supports_thinking: existing.as_ref().is_some_and(|m| m.supports_thinking),
+                    supports_json_output: existing.as_ref().is_some_and(|m| m.supports_json_output),
+                    supports_temperature: existing.as_ref().is_some_and(|m| m.supports_temperature),
+                    created_at: existing.as_ref().map(|m| m.created_at).unwrap_or(now),
+                };
+                match self.engine.store.upsert_model(&model) {
+                    Ok(()) => {
+                        self.reload_models();
+                        self.note_info(format!("Saved model {display_name}."));
+                    }
+                    Err(error) => self.note(ChatNote::error(error.to_string())),
+                }
+            }
+            FormPurpose::NewAgent | FormPurpose::EditAgent(_) => {
+                self.submit_agent_form(form, existing_agent)
+            }
+            FormPurpose::NewMcpServer | FormPurpose::EditMcpServer(_) => {
+                self.submit_mcp_form(form)
+            }
+            FormPurpose::SignIn => {
+                let server = form.value("Server URL");
+                self.login(
+                    form.value("Email"),
+                    form.value("Password"),
+                    Some(server),
+                );
+            }
+            FormPurpose::RedeemCard => {
+                self.status = "Previewing card…".into();
+                self.redeem_card(form.value("Card code"));
+            }
+            FormPurpose::DeleteAccountForm => {
+                self.push_confirm(
+                    Confirm::new(
+                        "Delete account",
+                        "This permanently deletes the cloud account and all synced data.",
+                        ConfirmPurpose::DeleteAccount(form.value("Current password")),
+                    )
+                    .requires("DELETE"),
+                );
+            }
+            FormPurpose::ChangePassword => {
+                self.change_password(form.value("Current password"), form.value("New password"));
+            }
+            FormPurpose::EditServerUrl => self.set_server_url(form.value("Server URL")),
+            FormPurpose::EditWorkspace => {
+                self.config.workspace_dir = form.value("Workspace directory");
+                self.save_config();
+                self.note_info(
+                    "Fallback workspace updated (project conversations use the project's own).",
+                );
+            }
+            FormPurpose::NewProject | FormPurpose::EditProject(_) => {
+                // An empty workspace defaults to the current directory: in a
+                // terminal client the working directory is the one the user
+                // launched from, which is exactly what they mean by "this
+                // project".
+                let workspace = match form.value("Workspace directory").trim() {
+                    "" => config::current_dir_string(),
+                    typed => typed.to_string(),
+                };
+                let existing = match &purpose {
+                    FormPurpose::EditProject(id) => self.engine.store.get_project(id).ok().flatten(),
+                    _ => None,
+                };
+                // A blank name means "name it after the directory", so the
+                // session's own project needs no typing at all.
+                let name = match form.value("Project name").trim() {
+                    typed if !typed.is_empty() => typed.to_string(),
+                    _ => PathBuf::from(&workspace)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| "project".into()),
+                };
+                let now = messenger_store::now_ms();
+                let project = StoredProject {
+                    id: existing
+                        .as_ref()
+                        .map(|project| project.id.clone())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    name: name.clone(),
+                    workspace,
+                    created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
+                    updated_at: now,
+                };
+                match self.engine.store.upsert_project(&project) {
+                    Ok(()) => {
+                        self.reload_projects();
+                        self.note_info(format!("Saved project “{name}”."));
+                    }
+                    Err(error) => self.note(ChatNote::error(error.to_string())),
+                }
+            }
+        }
+    }
+
+    /// The reason a form cannot be submitted, or `None` when it is valid.
+    fn reject_form(&self, form: &Form) -> Option<String> {
+        match &form.purpose {
+            FormPurpose::RenameConversation(_) if form.value("Title").trim().is_empty() => {
+                Some("Title cannot be empty.".into())
+            }
+            FormPurpose::NewProvider | FormPurpose::EditProvider(_) => {
+                if form.value("Name").trim().is_empty() {
+                    return Some("Provider name cannot be empty.".into());
+                }
+                let base_url = form.value("Base URL");
+                if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+                    return Some("Base URL must start with http:// or https://".into());
+                }
+                None
+            }
+            FormPurpose::NewModel(_) | FormPurpose::EditModel { .. }
+                if form.value("Model ID").trim().is_empty() =>
+            {
+                Some("Model ID cannot be empty.".into())
+            }
+            FormPurpose::NewAgent | FormPurpose::EditAgent(_)
+                if form.value("Name").trim().is_empty() =>
+            {
+                Some("Agent name cannot be empty.".into())
+            }
+            FormPurpose::NewMcpServer | FormPurpose::EditMcpServer(_)
+                if form.value("Name").trim().is_empty() =>
+            {
+                Some("Server name cannot be empty.".into())
+            }
+            FormPurpose::SignIn if form.value("Email").trim().is_empty() => {
+                Some("Email cannot be empty.".into())
+            }
+            FormPurpose::RedeemCard if form.value("Card code").trim().is_empty() => {
+                Some("Card code cannot be empty.".into())
+            }
+            FormPurpose::DeleteAccountForm if form.value("Current password").trim().is_empty() => {
+                Some("Password cannot be empty.".into())
+            }
+            FormPurpose::ChangePassword if form.value("New password").trim().is_empty() => {
+                Some("New password cannot be empty.".into())
+            }
+            FormPurpose::EditServerUrl if form.value("Server URL").trim().is_empty() => {
+                Some("Server URL cannot be empty.".into())
+            }
+            FormPurpose::EditWorkspace if form.value("Workspace directory").trim().is_empty() => {
+                Some("Workspace directory cannot be empty.".into())
+            }
+            _ => None,
         }
     }
 
@@ -546,9 +518,6 @@ impl App {
                     conversations.retain(|c| c.title.to_lowercase().contains(&needle));
                 }
                 self.conversations = conversations;
-                self.conversation_selection = self
-                    .conversation_selection
-                    .min(self.conversations.len().saturating_sub(1));
             }
             Err(error) => self.status = error,
         }
@@ -556,20 +525,14 @@ impl App {
 
     pub fn reload_projects(&mut self) {
         match self.engine.store.list_projects() {
-            Ok(projects) => {
-                self.projects = projects;
-                self.project_selection = self.project_selection.min(self.projects.len().saturating_sub(1));
-            }
+            Ok(projects) => self.projects = projects,
             Err(error) => self.status = error.to_string(),
         }
     }
 
     pub fn reload_agents(&mut self) {
         match self.engine.store.list_agents() {
-            Ok(agents) => {
-                self.agents = agents;
-                self.agent_selection = self.agent_selection.min(self.agents.len().saturating_sub(1));
-            }
+            Ok(agents) => self.agents = agents,
             Err(error) => self.status = error.to_string(),
         }
     }
@@ -578,31 +541,20 @@ impl App {
         match self.engine.store.list_providers() {
             Ok(providers) => {
                 self.providers = providers;
-                self.provider_selection = self
-                    .provider_selection
-                    .min(self.providers.len().saturating_sub(1));
+                self.reload_models();
             }
             Err(error) => self.status = error.to_string(),
         }
-        self.reload_models();
     }
 
+    /// Every model in the store — `/model` lists them all, so there is no
+    /// "selected provider" concept any more.
     pub fn reload_models(&mut self) {
-        let provider = self.providers.get(self.provider_selection);
-        self.models = match provider {
-            Some(provider) => self
-                .engine
-                .store
-                .list_models_by_provider(&provider.id)
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
-        self.model_selection = self.model_selection.min(self.models.len().saturating_sub(1));
+        self.models = self.engine.store.list_models().unwrap_or_default();
     }
 
     pub fn reload_mcp(&mut self) {
         self.mcp_servers = load_mcp_servers(&self.engine.store);
-        self.mcp_selection = self.mcp_selection.min(self.mcp_servers.len().saturating_sub(1));
     }
 
     pub fn reload_cloud_user(&mut self) {
@@ -634,19 +586,94 @@ impl App {
         });
     }
 
-    /// Load the conversation's messages into the chat view.
+    // ------------------------------------------------------------------
+    // transcript
+    // ------------------------------------------------------------------
+
+    /// Load a conversation's messages into the chat view.
     pub fn open_conversation(&mut self, conversation_id: &str) {
         match store_ops::load_messages(&self.engine.store, conversation_id) {
             Ok(messages) => {
                 self.chat.messages = messages;
                 self.chat.conversation_id = Some(conversation_id.to_string());
+                self.chat.notes.clear();
                 self.chat.scroll = 0;
                 self.chat.follow = true;
                 self.chat.error = None;
                 self.chat.cache.clear();
-                self.view = View::Chat;
             }
             Err(error) => self.status = error,
+        }
+    }
+
+    /// Append a session-local transcript note and pin the view to the tail
+    /// so the user actually sees it.
+    pub fn note(&mut self, note: ChatNote) {
+        self.chat.notes.push(note);
+        self.chat.follow = true;
+        self.chat.scroll = 0;
+    }
+
+    pub fn note_info(&mut self, text: impl Into<String>) {
+        self.note(ChatNote::info(text));
+    }
+
+    /// The project the open conversation belongs to, if any.
+    pub fn chat_project(&self) -> Option<StoredProject> {
+        let project_id = self
+            .chat
+            .conversation_id
+            .as_deref()
+            .and_then(|id| self.engine.store.get_conversation(id).ok().flatten())
+            .and_then(|conversation| conversation.project_id)?;
+        self.engine.store.get_project(&project_id).ok().flatten()
+    }
+
+    /// Open (or create) the project for the directory the process was
+    /// launched in and start a fresh conversation in it with the default
+    /// Agent — the state every session starts from.
+    ///
+    /// A project IS a workspace, so this is what gives the agent's terminal
+    /// and workspace tools a real working directory instead of the desktop
+    /// client's shared `~/.messenger` default.
+    pub fn bootstrap_session(&mut self) {
+        self.reload_all();
+        let agent_name = store_ops::current_agent(&self.engine.store)
+            .ok()
+            .flatten()
+            .map(|agent| agent.name);
+        let Some(agent) = store_ops::current_agent(&self.engine.store).ok().flatten() else {
+            self.note(ChatNote::error(
+                "No Agent available — configure a provider and model first.",
+            ));
+            return;
+        };
+        let project = match store_ops::ensure_cwd_project(&self.engine.store) {
+            Ok(project) => project,
+            Err(error) => {
+                self.note(ChatNote::error(format!(
+                    "Cannot use the current directory as a project: {error}"
+                )));
+                return;
+            }
+        };
+        let provider_id = self.effective_provider_id(&agent).unwrap_or_default();
+        match store_ops::create_conversation(
+            &self.engine.store,
+            &agent,
+            &provider_id,
+            Some(&project.id),
+        ) {
+            Ok(conversation) => {
+                self.reload_all();
+                self.open_conversation(&conversation.id);
+                let agent_label = agent_name.unwrap_or_else(|| agent.name.clone());
+                self.note(ChatNote::info(format!(
+                    "Project “{}” · agent {} · type a request, or / for commands.",
+                    project.name, agent_label
+                )));
+            }
+            Err(error) => self.note(ChatNote::error(error)),
         }
     }
 
@@ -673,14 +700,18 @@ impl App {
     pub fn apply(&mut self, msg: UiMsg) {
         match msg {
             UiMsg::Agent(event) => self.apply_agent_event(event),
-            UiMsg::ToolLog(message) => self.status = message,
+            UiMsg::ToolLog(message) => {
+                self.status = message.clone();
+                self.note(ChatNote::warn(message));
+            }
             UiMsg::CloudStatus(message) => {
-                self.status = message;
+                self.status = message.clone();
+                self.note_info(message);
                 self.reload_cloud_user();
             }
             UiMsg::CardPreview { code, preview } => match preview {
                 Ok(card) => {
-                    self.confirm = Some(Confirm::new(
+                    self.push_confirm(Confirm::new(
                         "Redeem card",
                         format!(
                             "{} — {} tokens, {} days validity.\nConfirm redemption of {code}?",
@@ -689,11 +720,9 @@ impl App {
                         ConfirmPurpose::RedeemCard(code),
                     ));
                 }
-                Err(error) => self.status = format!("Card preview failed: {error}"),
+                Err(error) => self.note(ChatNote::error(format!("Card preview failed: {error}"))),
             },
-            UiMsg::SyncFinished => {
-                self.reload_all();
-            }
+            UiMsg::SyncFinished => self.reload_all(),
         }
     }
 
@@ -703,9 +732,8 @@ impl App {
                 self.chat.is_generating = true;
                 self.chat.error = None;
             }
-            AgentEvent::StreamingStarted { message_id } => {
+            AgentEvent::StreamingStarted { .. } => {
                 self.chat.live = Some(LiveStream {
-                    message_id,
                     session: StreamingSession::new(),
                     last_rendered: 0,
                 });
@@ -725,10 +753,12 @@ impl App {
             }
             AgentEvent::TitleGenerated { title } => {
                 self.status = format!("Title: {title}");
+                self.note(ChatNote::info(format!("Title: {title}")));
                 self.reload_conversations();
             }
             AgentEvent::TitleFailed { code } => {
                 self.status = format!("Title generation failed ({code}).");
+                self.note(ChatNote::warn(format!("Title generation failed ({code}).")));
             }
             AgentEvent::UsageRecorded {
                 prompt_tokens,
@@ -771,6 +801,9 @@ impl App {
                 } else {
                     format!("{name} finished.")
                 };
+                if is_error {
+                    self.note(ChatNote::error(format!("Tool {name} failed.")));
+                }
                 self.reload_chat_messages();
             }
         }
@@ -782,14 +815,9 @@ impl App {
         self.tick_count = self.tick_count.wrapping_add(1);
         self.spinner = (self.spinner + 1) % 4;
         if self.chat.live.is_some() {
-            let block_count = if let Some(live) = self.chat.live.as_mut() {
-                let _ = live.session.drain_batch();
-                live.session.document().blocks().len()
-            } else {
-                0
-            };
             if let Some(live) = self.chat.live.as_mut() {
-                live.last_rendered = block_count;
+                let _ = live.session.drain_batch();
+                live.last_rendered = live.session.document().blocks().len();
             }
             if self.chat.follow {
                 self.chat.scroll = 0;
@@ -805,13 +833,6 @@ impl App {
             return None;
         }
         Some(render::blocks_to_lines(&blocks, width, &self.opts()))
-    }
-
-    pub fn cache(
-        &mut self,
-    ) -> &mut HashMap<String, (String, u16, (bool, bool), Vec<Line<'static>>)> {
-        // Only used by the ui module through `rendered_message`.
-        &mut self.chat.cache.entries
     }
 
     /// Render one stored message with caching keyed on its content fingerprint.
@@ -845,25 +866,22 @@ impl App {
     }
 
     /// Create a conversation inside [project_id] and open it — the path taken
-    /// when the user presses Enter on a project row.
+    /// when a project is picked from the picker.
     fn create_conversation_in(&mut self, project_id: &str) -> Option<String> {
         self.create_conversation_for(Some(project_id), false)
     }
-
 
     /// Create a conversation, optionally inside a project (which supplies the
     /// workspace the terminal/workspace tools run in). [open] is false when
     /// the caller opens the conversation itself.
     fn create_conversation_for(&mut self, project_id: Option<&str>, open: bool) -> Option<String> {
         let Ok(Some(agent)) = store_ops::current_agent(&self.engine.store) else {
-            self.status = "No Agent available.".into();
+            self.note(ChatNote::error("No Agent available."));
             return None;
         };
         // A brand-new conversation has no model binding yet, so the provider
         // is taken from the effective Agent's model when one is set.
-        let provider_id = self
-            .effective_provider_id(&agent)
-            .unwrap_or_default();
+        let provider_id = self.effective_provider_id(&agent).unwrap_or_default();
         match store_ops::create_conversation(&self.engine.store, &agent, &provider_id, project_id) {
             Ok(conversation) => {
                 self.reload_conversations();
@@ -873,7 +891,7 @@ impl App {
                 Some(conversation.id)
             }
             Err(error) => {
-                self.status = error;
+                self.note(ChatNote::error(error));
                 None
             }
         }
@@ -928,12 +946,12 @@ impl App {
             self.cloud_api_key().as_deref(),
         ) {
             Ok(resolved) => resolved,
-            Err(TurnError::ModelNotConfigured) | Err(TurnError::NoEnabledModel) => {
-                self.status = TurnError::ModelNotConfigured.message().into();
+            Err(error @ (TurnError::ModelNotConfigured | TurnError::NoEnabledModel)) => {
+                self.note(ChatNote::error(error.message()));
                 return;
             }
             Err(error) => {
-                self.status = error.message().into();
+                self.note(ChatNote::error(error.message()));
                 return;
             }
         };
@@ -957,21 +975,16 @@ impl App {
             error_message: None,
         };
         if let Err(error) = self.engine.store.upsert_message(&message) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
         if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id) {
-            conversation.last_message = Some(
-                text.chars()
-                    .take(80)
-                    .collect::<String>(),
-            );
+            conversation.last_message = Some(text.chars().take(80).collect::<String>());
             conversation.updated_at = messenger_store::now_ms();
             let _ = self.engine.store.upsert_conversation(&conversation);
         }
 
         self.chat.input.clear();
-        self.chat.input_lines = 1;
         self.chat.scroll = 0;
         self.chat.follow = true;
         self.chat.error = None;
@@ -983,23 +996,26 @@ impl App {
     pub fn toggle_think(&mut self) {
         self.config.show_think = !self.config.show_think;
         self.chat.cache.clear();
-        self.status = format!("Think blocks {}", if self.config.show_think { "expanded" } else { "collapsed" });
+        let label = if self.config.show_think { "expanded" } else { "collapsed" };
+        self.note_info(format!("Think blocks {label}"));
         self.save_config();
     }
 
     pub fn toggle_tool_details(&mut self) {
         self.config.show_tool_details = !self.config.show_tool_details;
         self.chat.cache.clear();
-        self.status = format!(
-            "Tool details {}",
-            if self.config.show_tool_details { "expanded" } else { "collapsed" }
-        );
+        let label = if self.config.show_tool_details {
+            "expanded"
+        } else {
+            "collapsed"
+        };
+        self.note_info(format!("Tool details {label}"));
         self.save_config();
     }
 
     pub fn switch_agent(&mut self, agent_id: &str) {
         if let Err(error) = self.engine.store.kv_set(store_ops::CURRENT_AGENT_KEY, agent_id) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
         if let Some(conversation_id) = self.chat.conversation_id.clone() {
@@ -1011,23 +1027,14 @@ impl App {
                 let _ = self.engine.store.upsert_conversation(&conversation);
             }
         }
-        self.status = "Agent switched.".into();
-    }
-
-    pub fn toggle_writable(&mut self) {
-        let Some(conversation_id) = self.chat.conversation_id.clone() else {
-            self.status = "Open a conversation first.".into();
-            return;
-        };
-        if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id) {
-            conversation.writable = !conversation.writable;
-            let writable = conversation.writable;
-            let _ = self.engine.store.upsert_conversation(&conversation);
-            self.status = format!(
-                "Agent mode: {}",
-                if writable { "writable" } else { "read-only" }
-            );
-        }
+        self.reload_agents();
+        let name = self
+            .agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .map(|agent| agent.name.clone())
+            .unwrap_or_else(|| agent_id.to_string());
+        self.note_info(format!("Agent: {name}"));
     }
 
     pub fn conversation_writable(&self) -> bool {
@@ -1041,11 +1048,11 @@ impl App {
 
     fn delete_conversation(&mut self, id: &str) {
         if let Err(error) = self.engine.store.delete_messages_by_conversation(id) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
         if let Err(error) = self.engine.store.delete_conversation(id) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
         if self.chat.conversation_id.as_deref() == Some(id) {
@@ -1054,52 +1061,57 @@ impl App {
             self.chat.live = None;
             self.chat.cache.clear();
         }
-        self.status = "Conversation deleted.".into();
+        self.note_info("Conversation deleted.");
         self.reload_conversations();
     }
 
     fn delete_agent(&mut self, id: &str) {
-        let agents = self.engine.store.list_agents().unwrap_or_default();
-        if let Some(agent) = agents.iter().find(|agent| agent.id == id) {
+        if let Some(agent) = self.engine.store.list_agents().unwrap_or_default().into_iter().find(|a| a.id == id) {
             if agent.is_default {
-                self.status = "The default Agent cannot be deleted.".into();
+                self.note(ChatNote::warn("The default Agent cannot be deleted."));
                 return;
             }
             if agent.role == messenger_sync::ROLE_TITLE {
-                self.status = "The title generator cannot be deleted (transfer the role first).".into();
+                self.note(ChatNote::warn(
+                    "The title generator cannot be deleted (transfer the role first).",
+                ));
                 return;
             }
             if agent.id == messenger_sync::BUILTIN_TITLE_AGENT_ID {
-                self.status = "The built-in title generator cannot be deleted.".into();
+                self.note(ChatNote::warn(
+                    "The built-in title generator cannot be deleted.",
+                ));
                 return;
             }
         }
         if let Err(error) = self.engine.store.delete_agent(id) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
-        self.status = "Agent deleted.".into();
+        self.note_info("Agent deleted.");
         self.reload_agents();
     }
 
     fn delete_provider(&mut self, id: &str) {
         if id == messenger_sync::BUILTIN_PROVIDER_ID {
-            self.status = "The built-in cloud provider is managed by sign-in.".into();
+            self.note(ChatNote::warn(
+                "The built-in cloud provider is managed by sign-in.",
+            ));
             return;
         }
         match self.engine.store.delete_provider(id) {
             Ok(()) => {
-                self.status = "Provider deleted.".into();
+                self.note_info("Provider deleted.");
                 self.reload_providers();
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => self.note(ChatNote::error(error.to_string())),
         }
     }
 
     fn persist_mcp_servers(&mut self) {
         let json = encode_server_list(&self.mcp_servers);
         if let Err(error) = self.engine.store.kv_set(store_ops::MCP_SERVERS_KEY, &json) {
-            self.status = error.to_string();
+            self.note(ChatNote::error(error.to_string()));
             return;
         }
         let engine = Arc::clone(&self.engine);
@@ -1144,13 +1156,17 @@ impl App {
                             )));
                         }
                         Err(error) => {
-                            let _ = engine.tx.send(UiMsg::CloudStatus(format!("Sync failed: {error}")));
+                            let _ = engine
+                                .tx
+                                .send(UiMsg::CloudStatus(format!("Sync failed: {error}")));
                         }
                     }
                     let _ = engine.tx.send(UiMsg::SyncFinished);
                 }
                 Err(error) => {
-                    let _ = engine.tx.send(UiMsg::CloudStatus(format!("Sign-in failed: {error}")));
+                    let _ = engine
+                        .tx
+                        .send(UiMsg::CloudStatus(format!("Sign-in failed: {error}")));
                 }
             }
         });
@@ -1191,7 +1207,9 @@ impl App {
                     )));
                 }
                 Err(error) => {
-                    let _ = engine.tx.send(UiMsg::CloudStatus(format!("Sync failed: {error}")));
+                    let _ = engine
+                        .tx
+                        .send(UiMsg::CloudStatus(format!("Sync failed: {error}")));
                 }
             }
             let _ = engine.tx.send(UiMsg::SyncFinished);
@@ -1212,9 +1230,7 @@ impl App {
                 })),
                 Err(error) => Err(error.to_string()),
             };
-            let _ = engine
-                .tx
-                .send(UiMsg::CardPreview { code, preview });
+            let _ = engine.tx.send(UiMsg::CardPreview { code, preview });
         });
     }
 
@@ -1232,9 +1248,9 @@ impl App {
                     )));
                 }
                 Err(error) => {
-                    let _ = engine
-                        .tx
-                        .send(UiMsg::CloudStatus(format!("Redemption failed: {error}")));
+                    let _ = engine.tx.send(UiMsg::CloudStatus(format!(
+                        "Redemption failed: {error}"
+                    )));
                 }
             }
             let _ = engine.tx.send(UiMsg::SyncFinished);
@@ -1291,7 +1307,7 @@ impl App {
                 );
                 let _ = sync.clear_session();
                 let _ = sync.remove_builtin_provider();
-                let _ = engine.store.kv_delete("current_agent_id");
+                let _ = engine.store.kv_delete(store_ops::CURRENT_AGENT_KEY);
                 match sync.set_server_url(&url) {
                     Ok(()) => {
                         let _ = engine
@@ -1307,339 +1323,37 @@ impl App {
         });
     }
 
-    // ------------------------------------------------------------------
-    // form submission
-    // ------------------------------------------------------------------
-
-    fn submit_form(&mut self) {
-        let Some(form) = self.form.take() else {
-            return;
-        };
-        match form.purpose.clone() {
-            FormPurpose::NewConversation => {
-                if form.value("Agent").is_empty() {
-                    self.create_conversation();
-                } else {
-                    // The Agent switcher reuses the NewConversation purpose;
-                    // its single Choice field selects an id from the picker.
-                    let index = form.index("Agent").unwrap_or(0);
-                    let picked = self
-                        .pending_agent_picker
-                        .take()
-                        .and_then(|ids| ids.get(index).cloned());
-                    // Enter on a project row routes through the same picker:
-                    // create the conversation inside that project instead of
-                    // switching the current Agent.
-                    let project_id = self.pending_project.take();
-                    match (picked, project_id) {
-                        (Some(agent_id), Some(project_id)) => {
-                            self.switch_agent(&agent_id);
-                            if let Some(id) = self.create_conversation_in(&project_id) {
-                                self.open_conversation(&id);
-                            }
-                        }
-                        (Some(agent_id), None) => self.switch_agent(&agent_id),
-                        (None, _) => self.status = "No Agent selected.".into(),
-                    }
-                }
-            }
-            FormPurpose::RenameConversation(id) => {
-                let title = form.value("Title");
-                if title.trim().is_empty() {
-                    self.status = "Title cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&id) {
-                    conversation.title = title;
-                    conversation.updated_at = messenger_store::now_ms();
-                    let _ = self.engine.store.upsert_conversation(&conversation);
-                    self.reload_conversations();
-                }
-            }
-            FormPurpose::NewProvider | FormPurpose::EditProvider(_) => {
-                let name = form.value("Name");
-                let base_url = form.value("Base URL");
-                let api_key = form.value("API key");
-                if name.trim().is_empty() {
-                    self.status = "Provider name cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
-                    self.status = "Base URL must start with http:// or https://".into();
-                    self.form = Some(form);
-                    return;
-                }
-                let existing = match &form.purpose {
-                    FormPurpose::EditProvider(id) => {
-                        self.engine.store.get_provider(id).ok().flatten()
-                    }
-                    _ => None,
-                };
-                let now = messenger_store::now_ms();
-                let provider = StoredProvider {
-                    id: existing
-                        .as_ref()
-                        .map(|provider| provider.id.clone())
-                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                    name,
-                    base_url,
-                    api_key,
-                    created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
-                    updated_at: now,
-                };
-                match self.engine.store.upsert_provider(&provider) {
-                    Ok(()) => {
-                        self.status = format!("Saved provider {}.", provider.name);
-                        self.reload_providers();
-                    }
-                    Err(error) => self.status = error.to_string(),
-                }
-            }
-            FormPurpose::NewModel(provider_id) | FormPurpose::EditModel { provider_id, .. } => {
-                let model_id = form.value("Model ID");
-                if model_id.trim().is_empty() {
-                    self.status = "Model ID cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                let display_name = {
-                    let raw = form.value("Display name");
-                    if raw.trim().is_empty() {
-                        model_id.clone()
-                    } else {
-                        raw
-                    }
-                };
-                let existing = match &form.purpose {
-                    FormPurpose::EditModel { model_id, .. } => {
-                        self.engine.store.get_model(model_id).ok().flatten()
-                    }
-                    _ => None,
-                };
-                let now = messenger_store::now_ms();
-                let model = StoredModel {
-                    id: existing
-                        .as_ref()
-                        .map(|model| model.id.clone())
-                        .unwrap_or_else(|| format!("{provider_id}:{model_id}")),
-                    provider_id: provider_id.clone(),
-                    model_id,
-                    display_name,
-                    is_enabled: form.boolean("Enabled"),
-                    context_window: form
-                        .number("Context window")
-                        .map(|value| value as i64)
-                        .unwrap_or(0),
-                    input_rate: existing.as_ref().and_then(|m| m.input_rate),
-                    output_rate: existing.as_ref().and_then(|m| m.output_rate),
-                    input_modalities: existing
-                        .as_ref()
-                        .map(|m| m.input_modalities.clone())
-                        .unwrap_or_else(|| "text".into()),
-                    output_modalities: existing
-                        .as_ref()
-                        .map(|m| m.output_modalities.clone())
-                        .unwrap_or_else(|| "text".into()),
-                    supports_tool_calling: existing.as_ref().is_some_and(|m| m.supports_tool_calling),
-                    supports_thinking: existing.as_ref().is_some_and(|m| m.supports_thinking),
-                    supports_json_output: existing.as_ref().is_some_and(|m| m.supports_json_output),
-                    supports_temperature: existing.as_ref().is_some_and(|m| m.supports_temperature),
-                    created_at: existing.as_ref().map(|m| m.created_at).unwrap_or(now),
-                };
-                match self.engine.store.upsert_model(&model) {
-                    Ok(()) => {
-                        self.status = format!("Saved model {}.", model.model_id);
-                        self.reload_models();
-                    }
-                    Err(error) => self.status = error.to_string(),
-                }
-            }
-            FormPurpose::NewAgent | FormPurpose::EditAgent(_) => {
-                self.submit_agent_form(form);
-            }
-            FormPurpose::NewMcpServer | FormPurpose::EditMcpServer(_) => {
-                self.submit_mcp_form(form);
-            }
-            FormPurpose::SignIn => {
-                let email = form.value("Email");
-                let password = form.value("Password");
-                if email.trim().is_empty() {
-                    self.status = "Email cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                let server = form.value("Server URL");
-                self.login(email, password, Some(server));
-            }
-            FormPurpose::RedeemCard => {
-                let code = form.value("Card code");
-                if code.trim().is_empty() {
-                    self.status = "Card code cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                self.status = "Previewing card…".into();
-                self.redeem_card(code);
-            }
-            FormPurpose::DeleteAccountForm => {
-                let password = form.value("Current password");
-                if password.trim().is_empty() {
-                    self.status = "Password cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                self.confirm = Some(
-                    Confirm::new(
-                        "Delete account",
-                        "This permanently deletes the cloud account and all synced data.",
-                        ConfirmPurpose::DeleteAccount(password),
-                    )
-                    .requires("DELETE"),
-                );
-            }
-            FormPurpose::ChangePassword => {
-                let current = form.value("Current password");
-                let new = form.value("New password");
-                if new.trim().is_empty() {
-                    self.status = "New password cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                self.change_password(current, new);
-            }
-            FormPurpose::EditServerUrl => {
-                let url = form.value("Server URL");
-                if url.trim().is_empty() {
-                    self.status = "Server URL cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                self.set_server_url(url);
-            }
-            FormPurpose::FilterConversations => {
-                let filter = form.value("Filter");
-                self.conversation_filter = if filter.trim().is_empty() {
-                    None
-                } else {
-                    Some(filter)
-                };
-                self.reload_conversations();
-            }
-            FormPurpose::EditWorkspace => {
-                let workspace = form.value("Workspace directory");
-                if workspace.trim().is_empty() {
-                    self.status = "Workspace directory cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                self.config.workspace_dir = workspace;
-                self.save_config();
-                self.status = "Workspace updated (restart to apply to the tool host).".into();
-            }
-            FormPurpose::NewProject | FormPurpose::EditProject(_) => {
-                let name = form.value("Project name");
-                if name.trim().is_empty() {
-                    self.status = "Project name cannot be empty.".into();
-                    self.form = Some(form);
-                    return;
-                }
-                // An empty workspace defaults to the current directory: in a
-                // terminal client the working directory is the one the user
-                // launched from, which is exactly what they mean by "this
-                // project".
-                let workspace = {
-                    let typed = form.value("Workspace directory");
-                    let trimmed = typed.trim();
-                    if trimmed.is_empty() {
-                        config::current_dir_string()
-                    } else {
-                        trimmed.to_string()
-                    }
-                };
-                let existing = match &form.purpose {
-                    FormPurpose::EditProject(id) => {
-                        self.engine.store.get_project(id).ok().flatten()
-                    }
-                    _ => None,
-                };
-                let now = messenger_store::now_ms();
-                let project = StoredProject {
-                    id: existing
-                        .as_ref()
-                        .map(|project| project.id.clone())
-                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                    name,
-                    workspace,
-                    created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
-                    updated_at: now,
-                };
-                match self.engine.store.upsert_project(&project) {
-                    Ok(()) => {
-                        self.status = format!("Saved project {}.", project.name);
-                        self.reload_projects();
-                    }
-                    Err(error) => self.status = error.to_string(),
-                }
-            }
-            FormPurpose::NewProjectConversation(project_id) => {
-                if let Some(id) = self.create_conversation_in(&project_id) {
-                    self.open_conversation(&id);
-                }
-            }
-        }
-    }
-
-    fn submit_agent_form(&mut self, form: Form) {
+    fn submit_agent_form(&mut self, form: Form, existing: Option<StoredAgent>) {
         let name = form.value("Name");
-        if name.trim().is_empty() {
-            self.status = "Agent name cannot be empty.".into();
-            self.form = Some(form);
-            return;
-        }
-        let existing = match &form.purpose {
-            FormPurpose::EditAgent(id) => self.engine.store.get_agent(id).ok().flatten(),
-            _ => None,
-        };
         let now = messenger_store::now_ms();
-        let model_index = form.index("Model").unwrap_or(0);
-        let model_id = if model_index == 0 {
-            None
-        } else {
+        let model_id = form.index("Model").and_then(|index| {
             self.engine
                 .store
                 .list_models()
                 .unwrap_or_default()
-                .get(model_index - 1)
+                .get(index.saturating_sub(1))
+                .filter(|_| index > 0)
                 .map(|model| model.id.clone())
-        };
-        let role_choice = form.index("Role").unwrap_or(0);
-        let (is_default, role) = match role_choice {
-            1 => (true, "chat".to_string()),
-            2 => (false, "title".to_string()),
+        });
+        let (is_default, role) = match form.index("Role") {
+            Some(1) => (true, "chat".to_string()),
+            Some(2) => (false, messenger_sync::ROLE_TITLE.to_string()),
             _ => (false, "chat".to_string()),
         };
-        let tools_enabled = form.boolean("Tools enabled");
-        let tools_follow_default = form.boolean("Follow default Agent tools");
 
         // Single-holder roles: the previous holder falls back to a regular
         // Agent (mirrors `AgentEditViewModel.save`).
-        let others: Vec<StoredAgent> = self
-            .engine
-            .store
-            .list_agents()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|agent| Some(agent.id.clone()) != existing.as_ref().map(|a| a.id.clone()))
-            .collect();
-        for mut other in others {
+        let existing_id = existing.as_ref().map(|agent| agent.id.clone());
+        for mut other in self.engine.store.list_agents().unwrap_or_default() {
             let mut changed = false;
+            if Some(other.id.clone()) == existing_id {
+                continue;
+            }
             if is_default && other.is_default {
                 other.is_default = false;
                 changed = true;
             }
-            if role == "title" && other.role == "title" {
+            if role == messenger_sync::ROLE_TITLE && other.role == messenger_sync::ROLE_TITLE {
                 other.role = "chat".into();
                 changed = true;
             }
@@ -1648,12 +1362,17 @@ impl App {
             }
         }
 
+        let tools_config: HashMap<String, bool> = messenger_tools::builtin_registry()
+            .iter()
+            .filter(|tool| !form.boolean(&format!("tool:{}", tool.name)))
+            .map(|tool| (tool.name.clone(), false))
+            .collect();
         let agent = StoredAgent {
             id: existing
                 .as_ref()
                 .map(|agent| agent.id.clone())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            name,
+            name: name.clone(),
             avatar: existing.as_ref().and_then(|agent| agent.avatar.clone()),
             system_prompt: form.value("System prompt"),
             description: form.value("Description"),
@@ -1661,13 +1380,9 @@ impl App {
             temperature: form.number("Temperature"),
             top_p: form.number("Top P"),
             max_tokens: form.number("Max tokens").map(|value| value as i64),
-            reasoning_effort: {
-                let raw = form.value("Reasoning effort");
-                if raw.trim().is_empty() {
-                    None
-                } else {
-                    Some(raw)
-                }
+            reasoning_effort: match form.value("Reasoning effort").trim() {
+                "" => None,
+                raw => Some(raw.to_string()),
             },
             is_default,
             follow_default_system_prompt: form.boolean("Follow default system prompt"),
@@ -1680,43 +1395,23 @@ impl App {
             market_agent_version: existing.as_ref().and_then(|agent| agent.market_agent_version),
             market_agent_role: existing.as_ref().and_then(|agent| agent.market_agent_role.clone()),
             role,
-            tools_enabled,
-            tools_follow_default,
-            tools_config: {
-                let mut config = std::collections::HashMap::new();
-                for tool in messenger_tools::builtin_registry() {
-                    let label = format!("tool:{}", tool.name);
-                    if !form.boolean(&label) {
-                        config.insert(tool.name.clone(), false);
-                    }
-                }
-                serde_json::to_string(&config).unwrap_or_else(|_| String::new())
-            },
+            tools_enabled: form.boolean("Tools enabled"),
+            tools_follow_default: form.boolean("Follow default Agent tools"),
+            tools_config: serde_json::to_string(&tools_config).unwrap_or_default(),
             created_at: existing.as_ref().map(|agent| agent.created_at).unwrap_or(now),
             updated_at: now,
         };
         match self.engine.store.upsert_agent(&agent) {
             Ok(()) => {
-                self.status = format!("Saved Agent {}.", agent.name);
                 self.reload_agents();
+                self.note_info(format!("Saved Agent “{name}”."));
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => self.note(ChatNote::error(error.to_string())),
         }
     }
 
     fn submit_mcp_form(&mut self, form: Form) {
         let name = form.value("Name");
-        if name.trim().is_empty() {
-            self.status = "Server name cannot be empty.".into();
-            self.form = Some(form);
-            return;
-        }
-        let transport_index = form.index("Transport").unwrap_or(0);
-        let transport_type = if transport_index == 1 {
-            McpTransportType::SSE
-        } else {
-            McpTransportType::STDIO
-        };
         let existing = match &form.purpose {
             FormPurpose::EditMcpServer(id) => {
                 self.mcp_servers.iter().find(|server| &server.id == id).cloned()
@@ -1727,17 +1422,14 @@ impl App {
             .as_ref()
             .map(|server| server.id.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let headers: std::collections::HashMap<String, String> = form
-            .value("Headers")
-            .split(',')
-            .filter_map(|pair| pair.split_once('='))
-            .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
-            .filter(|(key, _)| !key.is_empty())
-            .collect();
         let server = McpServerConfig {
             id: id.clone(),
             name,
-            transport_type,
+            transport_type: if form.index("Transport") == Some(1) {
+                McpTransportType::SSE
+            } else {
+                McpTransportType::STDIO
+            },
             is_enabled: form.boolean("Enabled"),
             command: form.value("Command"),
             args: form
@@ -1747,26 +1439,390 @@ impl App {
                 .collect(),
             env: existing.as_ref().map(|s| s.env.clone()).unwrap_or_default(),
             url: form.value("URL"),
-            headers,
+            headers: form
+                .value("Headers")
+                .split(',')
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+                .filter(|(key, _)| !key.is_empty())
+                .collect(),
         };
         match self.mcp_servers.iter_mut().find(|entry| entry.id == id) {
             Some(entry) => *entry = server,
             None => self.mcp_servers.push(server),
         }
         self.persist_mcp_servers();
-        self.status = "MCP servers updated.".into();
+        self.note_info("MCP servers updated.");
     }
 
     // ------------------------------------------------------------------
-    // form construction helpers
+    // select popups
+    // ------------------------------------------------------------------
+
+    fn open_agent_picker(&mut self) {
+        let current = store_ops::current_agent(&self.engine.store)
+            .ok()
+            .flatten()
+            .map(|agent| agent.id);
+        let agents: Vec<StoredAgent> = self
+            .agents
+            .iter()
+            .filter(|agent| agent.role != messenger_sync::ROLE_TITLE)
+            .cloned()
+            .collect();
+        if agents.is_empty() {
+            self.note(ChatNote::warn("No selectable Agent."));
+            return;
+        }
+        let cursor = agents
+            .iter()
+            .position(|agent| Some(&agent.id) == current.as_ref())
+            .unwrap_or(0);
+        let items = agents
+            .iter()
+            .map(|agent| {
+                let badge = if agent.is_default { " [default]" } else { "" };
+                let detail = agent
+                    .description
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let detail = if detail.is_empty() {
+                    format!("tools:{}", if agent.tools_enabled { "on" } else { "off" })
+                } else {
+                    detail
+                };
+                SelectItem::new(format!("{}{badge}", agent.name), agent.id.clone())
+                    .detail(detail)
+                    .selected(Some(&agent.id) == current.as_ref())
+            })
+            .collect();
+        self.push(Popup::Select(Select {
+            title: "Agents".into(),
+            items,
+            cursor,
+            purpose: SelectPurpose::Agent,
+        }));
+    }
+
+    fn open_project_picker(&mut self) {
+        if self.projects.is_empty() {
+            self.note(ChatNote::warn("No projects yet — /project new."));
+            return;
+        }
+        let current = self.chat_project().map(|project| project.id);
+        let items: Vec<SelectItem> = self
+            .projects
+            .iter()
+            .map(|project| {
+                SelectItem::new(project.name.clone(), project.id.clone())
+                    .detail(project.workspace.clone())
+                    .selected(Some(&project.id) == current.as_ref())
+            })
+            .collect();
+        let cursor = items
+            .iter()
+            .position(|item| Some(&item.id) == current.as_ref())
+            .unwrap_or(0);
+        self.push(Popup::Select(Select {
+            title: "Projects".into(),
+            items,
+            cursor,
+            purpose: SelectPurpose::Project,
+        }));
+    }
+
+    fn open_conversation_picker(&mut self) {
+        if self.conversations.is_empty() {
+            self.note(ChatNote::warn("No conversations yet."));
+            return;
+        }
+        let current = self.chat.conversation_id.clone();
+        let items = self
+            .conversations
+            .iter()
+            .map(|conversation| {
+                SelectItem::new(conversation.title.clone(), conversation.id.clone())
+                    .detail(conversation.last_message.clone().unwrap_or_default())
+                    .selected(Some(&conversation.id) == current.as_ref())
+            })
+            .collect();
+        self.push(Popup::Select(Select {
+            title: "Conversations".into(),
+            items,
+            cursor: 0,
+            purpose: SelectPurpose::Conversation,
+        }));
+    }
+
+    fn open_model_picker(&mut self, provider_id: Option<&str>) {
+        self.reload_models();
+        let models: Vec<&StoredModel> = self
+            .models
+            .iter()
+            .filter(|model| provider_id.is_none_or(|id| model.provider_id == id))
+            .collect();
+        if models.is_empty() {
+            self.note(ChatNote::warn("No models — /provider new, then fetch."));
+            return;
+        }
+        let bound = self.bound_model_id();
+        let items: Vec<SelectItem> = models
+            .iter()
+            .map(|model| {
+                let provider = self
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == model.provider_id)
+                    .map(|provider| provider.name.clone())
+                    .unwrap_or_else(|| model.provider_id.clone());
+                let detail = if model.is_enabled {
+                    provider
+                } else {
+                    format!("{provider} (disabled)")
+                };
+                SelectItem::new(model.display_name.clone(), model.id.clone())
+                    .detail(detail)
+                    .selected(Some(&model.id) == bound.as_ref())
+            })
+            .collect();
+        let cursor = items
+            .iter()
+            .position(|item| Some(&item.id) == bound.as_ref())
+            .unwrap_or(0);
+        self.push(Popup::Select(Select {
+            title: match provider_id {
+                Some(provider) => format!(
+                    "Models · {}",
+                    self.providers
+                        .iter()
+                        .find(|p| p.id == provider)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| provider.to_string())
+                ),
+                None => "Models".into(),
+            },
+            items,
+            cursor,
+            purpose: SelectPurpose::Model,
+        }));
+    }
+
+    fn open_provider_picker(&mut self) {
+        if self.providers.is_empty() {
+            self.note(ChatNote::warn("No providers — /provider new."));
+            return;
+        }
+        let items = self
+            .providers
+            .iter()
+            .map(|provider| {
+                let count = self
+                    .models
+                    .iter()
+                    .filter(|model| model.provider_id == provider.id)
+                    .count();
+                SelectItem::new(provider.name.clone(), provider.id.clone())
+                    .detail(format!("{} · {count} models", provider.base_url))
+            })
+            .collect();
+        self.push(Popup::Select(Select {
+            title: "Providers".into(),
+            items,
+            cursor: 0,
+            purpose: SelectPurpose::Provider,
+        }));
+    }
+
+    fn open_mcp_picker(&mut self) {
+        if self.mcp_servers.is_empty() {
+            self.note(ChatNote::warn("No MCP servers — /mcp new."));
+            return;
+        }
+        let connected = self.engine.mcp_tools().len();
+        let items = self
+            .mcp_servers
+            .iter()
+            .map(|server| {
+                let transport = match server.transport_type {
+                    McpTransportType::STDIO => {
+                        format!("stdio {}", server.command)
+                    }
+                    McpTransportType::SSE => format!("sse {}", server.url),
+                };
+                SelectItem::new(server.name.clone(), server.id.clone())
+                    .detail(format!(
+                        "{} · {}",
+                        if server.is_enabled { "on" } else { "off" },
+                        transport.trim()
+                    ))
+            })
+            .collect();
+        self.push(Popup::Select(Select {
+            title: format!("MCP servers ({connected} tools)"),
+            items,
+            cursor: 0,
+            purpose: SelectPurpose::McpServer,
+        }));
+    }
+
+    /// The model the open conversation actually resolves to (its override,
+    /// else the Agent's).
+    fn bound_model_id(&self) -> Option<String> {
+        let conversation = self
+            .chat
+            .conversation_id
+            .as_deref()
+            .and_then(|id| self.engine.store.get_conversation(id).ok().flatten())?;
+        conversation
+            .override_model_id
+            .clone()
+            .or_else(|| store_ops::current_agent(&self.engine.store).ok().flatten()?.default_model_id)
+    }
+
+    /// The model this session would actually call, for the footer.
+    pub fn bound_model_label(&self) -> Option<String> {
+        let id = self.bound_model_id()?;
+        self.models
+            .iter()
+            .find(|model| model.id == id)
+            .map(|model| model.display_name.clone())
+    }
+
+    /// React to a pick from a `Popup::Select`.
+    fn on_select(&mut self, purpose: &SelectPurpose, id: String) {
+        match purpose {
+            SelectPurpose::Agent => self.switch_agent(&id),
+            SelectPurpose::Project => match self.create_conversation_in(&id) {
+                Some(conversation_id) => self.open_conversation(&conversation_id),
+                None => self.note(ChatNote::error("Could not create a conversation.")),
+            },
+            SelectPurpose::Conversation => self.open_conversation(&id),
+            SelectPurpose::Provider => {
+                // A provider pick is a drill-down: its models are the next
+                // question, and fetching refreshes the list.
+                self.fetch_models(&id);
+                self.open_model_picker(Some(&id));
+            }
+            SelectPurpose::Model => {
+                let Some(conversation_id) = self.chat.conversation_id.clone() else {
+                    self.note(ChatNote::warn("No conversation open."));
+                    return;
+                };
+                let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id)
+                else {
+                    self.note(ChatNote::error("Conversation not found."));
+                    return;
+                };
+                conversation.override_model_id = Some(id.clone());
+                conversation.updated_at = messenger_store::now_ms();
+                match self.engine.store.upsert_conversation(&conversation) {
+                    Ok(()) => {
+                        let name = self
+                            .models
+                            .iter()
+                            .find(|model| model.id == id)
+                            .map(|model| model.display_name.clone())
+                            .unwrap_or(id);
+                        self.reload_models();
+                        self.note_info(format!("Model: {name}"));
+                    }
+                    Err(error) => self.note(ChatNote::error(error.to_string())),
+                }
+            }
+            SelectPurpose::McpServer => {
+                if let Some(server) = self.mcp_servers.iter_mut().find(|s| s.id == id) {
+                    server.is_enabled = !server.is_enabled;
+                    let enabled = server.is_enabled;
+                    self.persist_mcp_servers();
+                    self.note_info(format!("MCP server {}", if enabled { "enabled" } else { "disabled" }));
+                }
+            }
+            SelectPurpose::Setting => self.run_setting(&id),
+        }
+    }
+
+    /// Fetch a provider's `GET /models` and store every entry as a
+    /// currently-disabled model (mirrors `ProviderDetailViewModel.syncModels`).
+    fn fetch_models(&mut self, provider_id: &str) {
+        let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned()
+        else {
+            return;
+        };
+        let engine = Arc::clone(&self.engine);
+        let spawner = engine.spawner();
+        spawner.spawn(async move {
+            let client = messenger_llm::client::OpenAiClient::new(&provider.base_url, &provider.api_key);
+            match client.get_models().await {
+                Ok(response) => {
+                    let now = messenger_store::now_ms();
+                    let existing = engine
+                        .store
+                        .list_models_by_provider(&provider.id)
+                        .unwrap_or_default();
+                    let mut added = 0usize;
+                    for entry in response.data {
+                        let id = format!("{}:{}", provider.id, entry.id);
+                        let previous = existing.iter().find(|model| model.id == id);
+                        let model = StoredModel {
+                            id: id.clone(),
+                            provider_id: provider.id.clone(),
+                            model_id: entry.id.clone(),
+                            display_name: entry.id.clone(),
+                            is_enabled: previous.map(|m| m.is_enabled).unwrap_or(false),
+                            context_window: entry.context_window.unwrap_or_else(|| {
+                                previous.map(|m| m.context_window).unwrap_or(0)
+                            }),
+                            input_rate: entry.input_rate.or_else(|| previous.and_then(|m| m.input_rate)),
+                            output_rate: entry
+                                .output_rate
+                                .or_else(|| previous.and_then(|m| m.output_rate)),
+                            input_modalities: previous
+                                .map(|m| m.input_modalities.clone())
+                                .unwrap_or_else(|| "text".into()),
+                            output_modalities: previous
+                                .map(|m| m.output_modalities.clone())
+                                .unwrap_or_else(|| "text".into()),
+                            supports_tool_calling: previous.is_some_and(|m| m.supports_tool_calling),
+                            supports_thinking: previous.is_some_and(|m| m.supports_thinking),
+                            supports_json_output: previous.is_some_and(|m| m.supports_json_output),
+                            supports_temperature: previous.is_some_and(|m| m.supports_temperature),
+                            created_at: previous.map(|m| m.created_at).unwrap_or(now),
+                        };
+                        if engine.store.upsert_model(&model).is_ok() {
+                            added += 1;
+                        }
+                    }
+                    let _ = engine
+                        .tx
+                        .send(UiMsg::CloudStatus(format!("{added} models fetched.")));
+                    let _ = engine.tx.send(UiMsg::SyncFinished);
+                }
+                Err(error) => {
+                    let _ = engine
+                        .tx
+                        .send(UiMsg::CloudStatus(format!("Model fetch failed: {error}")));
+                }
+            }
+        });
+        self.status = "Fetching models…".into();
+    }
+
+    // ------------------------------------------------------------------
+    // form builders
     // ------------------------------------------------------------------
 
     fn open_agent_form(&mut self, agent_id: Option<&str>) {
         let models = self.engine.store.list_models().unwrap_or_default();
         let mut model_options = vec!["(none)".to_string()];
         model_options.extend(models.iter().map(|model| model.display_name.clone()));
-        let existing = agent_id
-            .and_then(|id| self.engine.store.get_agent(id).ok().flatten());
+        let existing = agent_id.and_then(|id| self.engine.store.get_agent(id).ok().flatten());
         let model_selected = existing
             .as_ref()
             .and_then(|agent| agent.default_model_id.as_ref())
@@ -1873,8 +1929,8 @@ impl App {
                 tools_config.get(&tool.name).copied().unwrap_or(true),
             ));
         }
-        self.form = Some(Form::new(
-            "Agent",
+        self.push_form(Form::new(
+            if agent_id.is_some() { "Edit Agent" } else { "New Agent" },
             match agent_id {
                 Some(id) => FormPurpose::EditAgent(id.to_string()),
                 None => FormPurpose::NewAgent,
@@ -1883,61 +1939,72 @@ impl App {
         ));
     }
 
-    fn open_provider_form(&mut self, provider_id: Option<&str>) {
-        let existing = provider_id.and_then(|id| self.engine.store.get_provider(id).ok().flatten());
+    /// The project editor.
+    ///
+    /// A new project prefills only the workspace — the session's own
+    /// directory. The name stays empty so typing replaces nothing; blank
+    /// still means "name it after the directory" on submit.
+    fn open_project_form(&mut self, project_id: Option<&str>, name_override: Option<&str>) {
+        let existing = project_id.and_then(|id| self.engine.store.get_project(id).ok().flatten());
         let fields = vec![
-            Field::text("Name", existing.as_ref().map(|p| p.name.clone()).unwrap_or_default()),
             Field::text(
-                "Base URL",
-                existing
-                    .as_ref()
-                    .map(|p| p.base_url.clone())
+                "Project name",
+                name_override
+                    .map(str::to_string)
+                    .or_else(|| existing.as_ref().map(|project| project.name.clone()))
                     .unwrap_or_default(),
             ),
-            Field::secret(
-                "API key",
-                existing.as_ref().map(|p| p.api_key.clone()).unwrap_or_default(),
+            Field::text(
+                "Workspace directory",
+                existing
+                    .as_ref()
+                    .map(|project| project.workspace.clone())
+                    .unwrap_or_else(|| self.cwd.to_string_lossy().to_string()),
             ),
         ];
-        self.form = Some(Form::new(
-            "Provider",
-            match provider_id {
-                Some(id) => FormPurpose::EditProvider(id.to_string()),
-                None => FormPurpose::NewProvider,
+        self.push_form(Form::new(
+            if existing.is_some() {
+                "Edit project"
+            } else {
+                "New project"
+            },
+            match project_id {
+                Some(id) => FormPurpose::EditProject(id.to_string()),
+                None => FormPurpose::NewProject,
             },
             fields,
         ));
     }
 
+    fn open_provider_form(&mut self, provider_id: Option<&str>) {
+        let existing = provider_id.and_then(|id| self.engine.store.get_provider(id).ok().flatten());
+        self.push_form(Form::new(
+            if provider_id.is_some() { "Edit provider" } else { "New provider" },
+            match provider_id {
+                Some(id) => FormPurpose::EditProvider(id.to_string()),
+                None => FormPurpose::NewProvider,
+            },
+            vec![
+                Field::text("Name", existing.as_ref().map(|p| p.name.clone()).unwrap_or_default()),
+                Field::text(
+                    "Base URL",
+                    existing
+                        .as_ref()
+                        .map(|p| p.base_url.clone())
+                        .unwrap_or_default(),
+                ),
+                Field::secret(
+                    "API key",
+                    existing.as_ref().map(|p| p.api_key.clone()).unwrap_or_default(),
+                ),
+            ],
+        ));
+    }
+
     fn open_model_form(&mut self, provider_id: &str, model_id: Option<&str>) {
         let existing = model_id.and_then(|id| self.engine.store.get_model(id).ok().flatten());
-        let fields = vec![
-            Field::text(
-                "Model ID",
-                existing
-                    .as_ref()
-                    .map(|m| m.model_id.clone())
-                    .unwrap_or_default(),
-            ),
-            Field::text(
-                "Display name",
-                existing
-                    .as_ref()
-                    .map(|m| m.display_name.clone())
-                    .unwrap_or_default(),
-            ),
-            Field::text(
-                "Context window",
-                existing
-                    .as_ref()
-                    .filter(|m| m.context_window > 0)
-                    .map(|m| m.context_window.to_string())
-                    .unwrap_or_default(),
-            ),
-            Field::boolean("Enabled", existing.as_ref().is_some_and(|m| m.is_enabled)),
-        ];
-        self.form = Some(Form::new(
-            "Model",
+        self.push_form(Form::new(
+            if model_id.is_some() { "Edit model" } else { "New model" },
             match model_id {
                 Some(model_id) => FormPurpose::EditModel {
                     provider_id: provider_id.to_string(),
@@ -1945,7 +2012,31 @@ impl App {
                 },
                 None => FormPurpose::NewModel(provider_id.to_string()),
             },
-            fields,
+            vec![
+                Field::text(
+                    "Model ID",
+                    existing
+                        .as_ref()
+                        .map(|m| m.model_id.clone())
+                        .unwrap_or_default(),
+                ),
+                Field::text(
+                    "Display name",
+                    existing
+                        .as_ref()
+                        .map(|m| m.display_name.clone())
+                        .unwrap_or_default(),
+                ),
+                Field::text(
+                    "Context window",
+                    existing
+                        .as_ref()
+                        .filter(|m| m.context_window > 0)
+                        .map(|m| m.context_window.to_string())
+                        .unwrap_or_default(),
+                ),
+                Field::boolean("Enabled", existing.as_ref().is_some_and(|m| m.is_enabled)),
+            ],
         ));
     }
 
@@ -1953,54 +2044,194 @@ impl App {
         let existing = server_id.and_then(|id| {
             self.mcp_servers
                 .iter()
-                .find(|server| server.id == id)
+                .find(|server| &server.id == id)
                 .cloned()
         });
-        let fields = vec![
-            Field::text("Name", existing.as_ref().map(|s| s.name.clone()).unwrap_or_default()),
-            Field::choice(
-                "Transport",
-                vec!["Command (stdio)".into(), "SSE / HTTP".into()],
-                match existing.as_ref().map(|s| s.transport_type) {
-                    Some(McpTransportType::SSE) => 1,
-                    _ => 0,
-                },
-            ),
-            Field::text(
-                "Command",
-                existing.as_ref().map(|s| s.command.clone()).unwrap_or_default(),
-            ),
-            Field::text(
-                "Arguments",
-                existing
-                    .as_ref()
-                    .map(|s| s.args.join(" "))
-                    .unwrap_or_default(),
-            ),
-            Field::text("URL", existing.as_ref().map(|s| s.url.clone()).unwrap_or_default()),
-            Field::text(
-                "Headers",
-                existing
-                    .as_ref()
-                    .map(|s| {
-                        s.headers
-                            .iter()
-                            .map(|(key, value)| format!("{key}={value}"))
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                    .unwrap_or_default(),
-            ),
-            Field::boolean("Enabled", existing.as_ref().is_none_or(|s| s.is_enabled)),
-        ];
-        self.form = Some(Form::new(
-            "MCP server",
+        self.push_form(Form::new(
+            if server_id.is_some() {
+                "Edit MCP server"
+            } else {
+                "New MCP server"
+            },
             match server_id {
                 Some(id) => FormPurpose::EditMcpServer(id.to_string()),
                 None => FormPurpose::NewMcpServer,
             },
-            fields,
+            vec![
+                Field::text("Name", existing.as_ref().map(|s| s.name.clone()).unwrap_or_default()),
+                Field::choice(
+                    "Transport",
+                    vec!["Command (stdio)".into(), "SSE / HTTP".into()],
+                    match existing.as_ref().map(|s| s.transport_type) {
+                        Some(McpTransportType::SSE) => 1,
+                        _ => 0,
+                    },
+                ),
+                Field::text(
+                    "Command",
+                    existing.as_ref().map(|s| s.command.clone()).unwrap_or_default(),
+                ),
+                Field::text(
+                    "Arguments",
+                    existing
+                        .as_ref()
+                        .map(|s| s.args.join(" "))
+                        .unwrap_or_default(),
+                ),
+                Field::text("URL", existing.as_ref().map(|s| s.url.clone()).unwrap_or_default()),
+                Field::text(
+                    "Headers",
+                    existing
+                        .as_ref()
+                        .map(|s| {
+                            s.headers
+                                .iter()
+                                .map(|(key, value)| format!("{key}={value}"))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default(),
+                ),
+                Field::boolean("Enabled", existing.as_ref().is_none_or(|s| s.is_enabled)),
+            ],
         ));
+    }
+
+    fn open_sign_in_form(&mut self) {
+        let url = self
+            .engine
+            .store
+            .kv_get(messenger_sync::KV_SERVER_URL)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| messenger_sync::DEFAULT_CLOUD_SERVER_URL.to_string());
+        self.push_form(Form::new(
+            "Sign in",
+            FormPurpose::SignIn,
+            vec![
+                Field::text("Email", ""),
+                Field::secret("Password", ""),
+                Field::text("Server URL", url),
+            ],
+        ));
+    }
+
+    /// `/settings` is a list of actions, not a form: each row performs
+    /// immediately, so toggling a flag is one Enter away.
+    fn open_settings_picker(&mut self) {
+        let on_off = |value: bool| if value { "on" } else { "off" };
+        let rows = [
+            ("Theme", format!("currently {}", self.config.theme)),
+            (
+                "Show think blocks",
+                on_off(self.config.show_think).to_string(),
+            ),
+            (
+                "Show tool details",
+                on_off(self.config.show_tool_details).to_string(),
+            ),
+            ("Auto-scroll", on_off(self.config.auto_scroll).to_string()),
+            (
+                "Cloud server URL",
+                self.engine
+                    .store
+                    .kv_get(messenger_sync::KV_SERVER_URL)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| messenger_sync::DEFAULT_CLOUD_SERVER_URL.to_string()),
+            ),
+            (
+                "Fallback workspace",
+                self.config.workspace_dir.clone(),
+            ),
+            ("Change password", String::new()),
+            ("Delete account", "irreversible".to_string()),
+            ("Account", self.cloud_account()),
+        ];
+        self.push(Popup::Select(Select {
+            title: "Settings".into(),
+            items: rows
+                .into_iter()
+                .map(|(label, detail)| {
+                    SelectItem::new(label, label).detail(detail)
+                })
+                .collect(),
+            cursor: 0,
+            purpose: SelectPurpose::Setting,
+        }));
+    }
+
+    /// Run the setting action behind a `SelectPurpose::Setting` row.
+    fn run_setting(&mut self, setting: &str) {
+        match setting {
+            "Theme" => {
+                self.config.theme = if self.config.is_dark() {
+                    "light".into()
+                } else {
+                    "dark".into()
+                };
+                self.save_config();
+                let theme = self.config.theme.clone();
+                self.note_info(format!("Theme: {theme}"));
+            }
+            "Show think blocks" => self.toggle_think(),
+            "Show tool details" => self.toggle_tool_details(),
+            "Auto-scroll" => {
+                self.config.auto_scroll = !self.config.auto_scroll;
+                self.save_config();
+                self.note_info(format!(
+                    "Auto-scroll {}",
+                    if self.config.auto_scroll { "on" } else { "off" }
+                ));
+            }
+            "Cloud server URL" => {
+                let current = self
+                    .engine
+                    .store
+                    .kv_get(messenger_sync::KV_SERVER_URL)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| messenger_sync::DEFAULT_CLOUD_SERVER_URL.to_string());
+                self.push_form(Form::new(
+                    "Cloud server URL",
+                    FormPurpose::EditServerUrl,
+                    vec![Field::text("Server URL", current)],
+                ));
+            }
+            "Fallback workspace" => self.push_form(Form::new(
+                "Fallback workspace",
+                FormPurpose::EditWorkspace,
+                vec![Field::text(
+                    "Workspace directory",
+                    self.config.workspace_dir.clone(),
+                )],
+            )),
+            "Change password" => self.push_form(Form::new(
+                "Change password",
+                FormPurpose::ChangePassword,
+                vec![
+                    Field::secret("Current password", ""),
+                    Field::secret("New password", ""),
+                ],
+            )),
+            "Delete account" => self.push_form(Form::new(
+                "Delete account",
+                FormPurpose::DeleteAccountForm,
+                vec![Field::secret("Current password", "")],
+            )),
+            "Account" => self.note_info(self.cloud_account()),
+            _ => {}
+        }
+    }
+
+    pub fn cloud_account(&self) -> String {
+        match &self.cloud_user {
+            Some(user) => match user.quota_balance {
+                Some(balance) => format!("{} · {balance} tokens", user.email),
+                None => user.email.clone(),
+            },
+            None => "signed out".into(),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2013,276 +2244,318 @@ impl App {
             self.should_quit = true;
             return;
         }
-        if let Some(confirm) = self.confirm.clone() {
-            self.handle_confirm_key(key, confirm);
+        // A modal takes the keyboard; Esc always peels one layer off.
+        if let Some(popup) = self.popups.pop() {
+            self.handle_popup_key(popup, key);
             return;
         }
-        if let Some(form) = self.form.take() {
-            self.handle_form_key(key, form);
-            return;
-        }
-        if self.help {
-            self.help = false;
-            return;
-        }
-        if let Some(view) = View::from_function_key(key.code) {
-            self.view = view;
-            return;
-        }
-        match key.code {
-            KeyCode::Char('?') => self.help = true,
-            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_think()
-            }
-            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_tool_details()
-            }
-            _ => match self.view {
-                View::Conversations => self.handle_conversations_key(key),
-                View::Chat => self.handle_chat_key(key),
-                View::Agents => self.handle_agents_key(key),
-                View::Providers => self.handle_providers_key(key),
-                View::Mcp => self.handle_mcp_key(key),
-                View::Settings => self.handle_settings_key(key),
-            },
-        }
+        self.handle_chat_key(key);
     }
 
-    fn handle_confirm_key(&mut self, key: KeyEvent, mut confirm: Confirm) {
-        match key.code {
-            KeyCode::Esc => {
-                self.confirm = None;
-                return;
-            }
-            KeyCode::Backspace => {
-                confirm.typed.pop();
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if confirm.requires_typing.is_some() {
-                    confirm.typed.push(ch);
+    fn handle_popup_key(&mut self, popup: Popup, key: KeyEvent) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match popup {
+            Popup::Help { scroll } => match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.push(Popup::Help {
+                        scroll: scroll.saturating_add(1),
+                    })
                 }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.push(Popup::Help {
+                        scroll: scroll.saturating_sub(1),
+                    })
+                }
+                KeyCode::PageDown => self.push(Popup::Help {
+                    scroll: scroll.saturating_add(10),
+                }),
+                KeyCode::PageUp => self.push(Popup::Help {
+                    scroll: scroll.saturating_sub(10),
+                }),
+                // Anything else dismisses it.
+                _ => {}
+            },
+            Popup::Commands { buffer, cursor } => self.handle_commands_key(buffer, cursor, key),
+            Popup::Select(mut select) => {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') if !control => {
+                        if !select.items.is_empty() {
+                            select.cursor = (select.cursor + 1).min(select.items.len() - 1);
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if !control => {
+                        select.cursor = select.cursor.saturating_sub(1);
+                    }
+                    KeyCode::Enter => {
+                        if let Some(item) = select.items.get(select.cursor).cloned() {
+                            let purpose = select.purpose.clone();
+                            self.on_select(&purpose, item.id);
+                        }
+                        return;
+                    }
+                    // Editing a row in place, the way pi's selectors work.
+                    KeyCode::Char('e') => {
+                        let id = select.items.get(select.cursor).map(|item| item.id.clone());
+                        match (select.purpose.clone(), id) {
+                            (SelectPurpose::Agent, Some(id)) => self.open_agent_form(Some(&id)),
+                            (SelectPurpose::Project, Some(id)) => {
+                                self.open_project_form(Some(&id), None)
+                            }
+                            (SelectPurpose::McpServer, Some(id)) => self.open_mcp_form(Some(&id)),
+                            _ => self.note(ChatNote::warn("This row has no editor.")),
+                        }
+                        return;
+                    }
+                    KeyCode::Char('d') => {
+                        let id = select.items.get(select.cursor).map(|item| item.id.clone());
+                        let label = select
+                            .items
+                            .get(select.cursor)
+                            .map(|item| item.label.clone())
+                            .unwrap_or_default();
+                        match (select.purpose.clone(), id) {
+                            (SelectPurpose::Agent, Some(id)) => self.push_confirm(
+                                Confirm::new(
+                                    "Delete Agent",
+                                    format!("Delete Agent “{label}”?"),
+                                    ConfirmPurpose::DeleteAgent(id),
+                                ),
+                            ),
+                            (SelectPurpose::Provider, Some(id)) => self.push_confirm(
+                                Confirm::new(
+                                    "Delete provider",
+                                    format!("Delete provider “{label}” and its models?"),
+                                    ConfirmPurpose::DeleteProvider(id),
+                                ),
+                            ),
+                            (SelectPurpose::McpServer, Some(id)) => self.push_confirm(
+                                Confirm::new(
+                                    "Delete MCP server",
+                                    format!("Remove MCP server “{label}”?"),
+                                    ConfirmPurpose::DeleteMcpServer(id),
+                                ),
+                            ),
+                            (SelectPurpose::Conversation, Some(id)) => self.push_confirm(
+                                Confirm::new(
+                                    "Delete conversation",
+                                    format!("Delete “{label}” and all its messages?"),
+                                    ConfirmPurpose::DeleteConversation(id),
+                                ),
+                            ),
+                            _ => self.note(ChatNote::warn("This row cannot be deleted here.")),
+                        }
+                        return;
+                    }
+                    KeyCode::Char('n') => match select.purpose {
+                        SelectPurpose::Agent => self.open_agent_form(None),
+                        SelectPurpose::Provider => self.open_provider_form(None),
+                        SelectPurpose::McpServer => self.open_mcp_form(None),
+                        SelectPurpose::Model => {
+                            let provider = self
+                                .providers
+                                .first()
+                                .map(|provider| provider.id.clone())
+                                .unwrap_or_default();
+                            if provider.is_empty() {
+                                self.note(ChatNote::warn("No providers yet — /provider new."));
+                            } else {
+                                self.open_model_form(&provider, None);
+                            }
+                        }
+                        SelectPurpose::Project => self.open_project_form(None, None),
+                        SelectPurpose::Conversation => {
+                            if let Some(id) = self.create_conversation() {
+                                self.open_conversation(&id);
+                            }
+                        }
+                        SelectPurpose::Setting => {
+                            self.note(ChatNote::warn("Settings have no entries to add."))
+                        }
+                    },
+                    _ => {}
+                }
+                self.push(Popup::Select(select));
             }
-            KeyCode::Enter => {
-                if !confirm.can_confirm() {
-                    self.status = format!(
-                        "Type {} to confirm.",
-                        confirm.requires_typing.clone().unwrap_or_default()
-                    );
-                    self.confirm = Some(confirm);
+            Popup::Form(mut form) => {
+                match key.code {
+                KeyCode::Tab | KeyCode::Down => {
+                    form.focus = (form.focus + 1) % form.fields.len().max(1);
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    form.focus = form.focus.checked_sub(1).unwrap_or(form.fields.len().saturating_sub(1));
+                }
+                KeyCode::Char('s') if control => {
+                    self.submit_form(form);
                     return;
                 }
-                self.confirm = None;
-                let purpose = confirm.purpose.clone();
-                match purpose {
-                    ConfirmPurpose::DeleteConversation(id) => self.delete_conversation(&id),
-                    ConfirmPurpose::DeleteProvider(id) => self.delete_provider(&id),
-                    ConfirmPurpose::DeleteModel {
-                        provider_id,
-                        model_id,
-                    } => {
-                        let _ = provider_id;
-                        if let Err(error) = self.engine.store.delete_model(&model_id) {
-                            self.status = error.to_string();
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                    if let Some(Field::Text { value, multiline: true, .. }) = form.focused_mut() {
+                        value.push('\n');
+                    }
+                }
+                KeyCode::Enter => {
+                    // A multiline field inserts a newline; a bool/choice
+                    // toggles; the last field submits.
+                    match form.focused() {
+                        Some(Field::Text { multiline: true, .. }) => {
+                            if let Some(Field::Text { value, .. }) = form.focused_mut() {
+                                value.push('\n');
+                            }
                         }
-                        self.reload_models();
-                    }
-                    ConfirmPurpose::DeleteAgent(id) => self.delete_agent(&id),
-                    ConfirmPurpose::DeleteMcpServer(id) => {
-                        self.mcp_servers.retain(|server| server.id != id);
-                        self.persist_mcp_servers();
-                        self.status = "MCP server removed.".into();
-                    }
-                    ConfirmPurpose::RedeemCard(code) => self.confirm_redeem(code),
-                    ConfirmPurpose::DeleteAccount(password) => self.delete_account(password),
-                    ConfirmPurpose::SignOut => self.logout(),
-                }
-                return;
-            }
-            _ => {}
-        }
-        self.confirm = Some(confirm);
-    }
-
-    fn handle_form_key(&mut self, key: KeyEvent, mut form: Form) {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        match key.code {
-            KeyCode::Esc => return,
-            KeyCode::Tab => {
-                form.focus = (form.focus + 1) % form.fields.len().max(1);
-            }
-            KeyCode::BackTab => {
-                form.focus = form
-                    .focus
-                    .checked_sub(1)
-                    .unwrap_or(form.fields.len().saturating_sub(1));
-            }
-            KeyCode::Down => {
-                form.focus = (form.focus + 1) % form.fields.len().max(1);
-            }
-            KeyCode::Up => {
-                form.focus = form
-                    .focus
-                    .checked_sub(1)
-                    .unwrap_or(form.fields.len().saturating_sub(1));
-            }
-            KeyCode::Char('s') if control => {
-                self.form = Some(form);
-                self.submit_form();
-                return;
-            }
-            KeyCode::Enter if alt => {
-                if let Some(Field::Text {
-                    value,
-                    multiline: true,
-                    ..
-                }) = form.focused_mut()
-                {
-                    value.push('\n');
-                }
-            }
-            KeyCode::Enter => {
-                // A multiline field inserts a newline; Ctrl+S submits from
-                // anywhere, and the last field's Enter also submits.
-                match form.focused() {
-                    Some(Field::Text { multiline: true, .. }) => {
-                        if let Some(Field::Text { value, .. }) = form.focused_mut() {
-                            value.push('\n');
+                        Some(Field::Bool { .. }) | Some(Field::Choice { .. }) => {
+                            crate::popup::toggle_field(&mut form);
+                        }
+                        _ => {
+                            if form.focus + 1 >= form.fields.len() {
+                                self.submit_form(form);
+                                return;
+                            }
+                            form.focus += 1;
                         }
                     }
+                }
+                KeyCode::Char(' ') => match form.focused() {
                     Some(Field::Bool { .. }) | Some(Field::Choice { .. }) => {
-                        toggle_field(&mut form);
+                        crate::popup::toggle_field(&mut form)
                     }
                     _ => {
-                        if form.focus + 1 >= form.fields.len() {
-                            self.form = Some(form);
-                            self.submit_form();
-                            return;
+                        if let Some(Field::Text { value, .. }) = form.focused_mut() {
+                            value.push(' ');
                         }
-                        form.focus += 1;
                     }
-                }
-            }
-            KeyCode::Char('j') if control => {
-                if let Some(Field::Text {
-                    value,
-                    multiline: true,
-                    ..
-                }) = form.focused_mut()
-                {
-                    value.push('\n');
-                }
-            }
-            KeyCode::Char(' ') => match form.focused() {
-                Some(Field::Bool { .. }) | Some(Field::Choice { .. }) => toggle_field(&mut form),
-                _ => {
+                },
+                KeyCode::Char(ch) if !control => {
                     if let Some(Field::Text { value, .. }) = form.focused_mut() {
-                        value.push(' ');
+                        value.push(ch);
                     }
                 }
-            },
-            KeyCode::Char(ch) if !control => {
-                if let Some(Field::Text { value, .. }) = form.focused_mut() {
-                    value.push(ch);
+                KeyCode::Backspace => {
+                    if let Some(Field::Text { value, .. }) = form.focused_mut() {
+                        value.pop();
+                    }
+                }
+                    _ => {}
+                }
+                // The form survives every key except an explicit submit,
+                // Esc, or the `return`s above.
+                self.push(Popup::Form(form));
+            }
+            Popup::Confirm(mut confirm) => {
+                match key.code {
+                KeyCode::Backspace => {
+                    confirm.typed.pop();
+                }
+                KeyCode::Char(ch) if !control => {
+                    if confirm.requires_typing.is_some() {
+                        confirm.typed.push(ch);
+                    }
+                }
+                KeyCode::Enter => {
+                    if !confirm.can_confirm() {
+                        let expected = confirm.requires_typing.clone().unwrap_or_default();
+                        self.note(ChatNote::warn(format!("Type {expected} to confirm.")));
+                        self.push(Popup::Confirm(confirm));
+                        return;
+                    }
+                    let purpose = confirm.purpose.clone();
+                    self.run_confirm(purpose);
+                    return;
+                }
+                    _ => {}
+                }
+                self.push(Popup::Confirm(confirm));
+            }
+        }
+    }
+
+    fn run_confirm(&mut self, purpose: ConfirmPurpose) {
+        match purpose {
+            ConfirmPurpose::DeleteConversation(id) => self.delete_conversation(&id),
+            ConfirmPurpose::DeleteProvider(id) => self.delete_provider(&id),
+            ConfirmPurpose::DeleteModel { model_id, .. } => {
+                if let Err(error) = self.engine.store.delete_model(&model_id) {
+                    self.note(ChatNote::error(error.to_string()));
+                }
+                self.reload_models();
+            }
+            ConfirmPurpose::DeleteAgent(id) => self.delete_agent(&id),
+            ConfirmPurpose::DeleteProject(id) => {
+                if let Err(error) = self.engine.store.delete_project(&id) {
+                    self.note(ChatNote::error(error.to_string()));
+                }
+                self.reload_projects();
+            }
+            ConfirmPurpose::DeleteMcpServer(id) => {
+                self.mcp_servers.retain(|server| server.id != id);
+                self.persist_mcp_servers();
+                self.note_info("MCP server removed.");
+            }
+            ConfirmPurpose::RedeemCard(code) => self.confirm_redeem(code),
+            ConfirmPurpose::DeleteAccount(password) => self.delete_account(password),
+            ConfirmPurpose::SignOut => self.logout(),
+        }
+    }
+
+    /// The `/` palette: a filter buffer with Tab completion. Everything is a
+    /// prefix of `SLASH_COMMANDS`, so completion can never fail to suggest.
+    fn handle_commands_key(&mut self, mut buffer: String, mut cursor: usize, key: KeyEvent) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            // Esc abandons the palette without running anything.
+            KeyCode::Esc => {
+                self.chat.palette_open = false;
+                return;
+            }
+            KeyCode::Enter => {
+                let line = buffer.clone();
+                self.chat.palette_open = false;
+                self.run_slash(&line);
+                return;
+            }
+            KeyCode::Tab => {
+                let rows = command_rows(&buffer);
+                match rows.as_slice() {
+                    [] => self.note(ChatNote::warn(format!("Unknown command /{buffer}"))),
+                    [(label, _)] => buffer = label.trim_start_matches('/').to_string(),
+                    many => {
+                        let names: Vec<String> = many
+                            .iter()
+                            .map(|(label, _)| label.trim_start_matches('/').to_string())
+                            .collect();
+                        self.note(ChatNote::info(format!("Commands: /{}", names.join("  /"))));
+                        buffer = shared_prefix(&names);
+                    }
+                }
+                cursor = 0;
+            }
+            KeyCode::Down | KeyCode::Up => {
+                let count = command_rows(&buffer).len();
+                if count > 0 {
+                    cursor = if key.code == KeyCode::Down {
+                        (cursor + 1).min(count - 1)
+                    } else {
+                        cursor.saturating_sub(1)
+                    };
+                    // The highlighted row is the command that runs.
+                    if let Some((label, _)) = command_rows(&buffer).get(cursor) {
+                        buffer = label.trim_start_matches('/').to_string();
+                    }
                 }
             }
             KeyCode::Backspace => {
-                if let Some(Field::Text { value, .. }) = form.focused_mut() {
-                    value.pop();
-                }
+                buffer.pop();
+                cursor = 0;
+            }
+            KeyCode::Char(ch) if !control && ch != ' ' => {
+                buffer.push(ch);
+                cursor = 0;
             }
             _ => {}
         }
-        self.form = Some(form);
-    }
-
-    fn handle_conversations_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            // The list is [projects | conversations]; Tab crosses the boundary
-            // and Up/Down then move inside the active block.
-            KeyCode::Tab => {
-                if !self.projects.is_empty() && !self.conversations.is_empty() {
-                    self.list_showing_projects = !self.list_showing_projects;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.list_showing_projects {
-                    self.project_selection =
-                        (self.project_selection + 1).min(self.projects.len().saturating_sub(1));
-                } else if !self.conversations.is_empty() {
-                    self.conversation_selection =
-                        (self.conversation_selection + 1).min(self.conversations.len() - 1);
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.list_showing_projects {
-                    self.project_selection = self.project_selection.saturating_sub(1);
-                } else {
-                    self.conversation_selection = self.conversation_selection.saturating_sub(1);
-                }
-            }
-            KeyCode::Enter => {
-                if self.list_showing_projects {
-                    if let Some(project) = self.projects.get(self.project_selection) {
-                        // Enter on a project opens the Agent picker scoped to it:
-                        // the project decides the workspace, the Agent the voice.
-                        self.pending_project = Some(project.id.clone());
-                        self.open_agent_picker();
-                    }
-                } else if let Some(conversation) = self.conversations.get(self.conversation_selection)
-                {
-                    let id = conversation.id.clone();
-                    self.open_conversation(&id);
-                }
-            }
-            KeyCode::Char('p') => {
-                self.form = Some(Form::new(
-                    "New project",
-                    FormPurpose::NewProject,
-                    vec![
-                        Field::text("Project name", ""),
-                        // Empty = the terminal's current directory.
-                        Field::text("Workspace directory", ""),
-                    ],
-                ));
-            }
-            KeyCode::Char('n') => {
-                self.form = Some(Form::new(
-                    "New conversation",
-                    FormPurpose::NewConversation,
-                    vec![Field::text("Title hint", "")],
-                ));
-            }
-            KeyCode::Char('r') => {
-                if let Some(conversation) = self.conversations.get(self.conversation_selection) {
-                    self.form = Some(Form::new(
-                        "Rename conversation",
-                        FormPurpose::RenameConversation(conversation.id.clone()),
-                        vec![Field::text("Title", conversation.title.clone())],
-                    ));
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(conversation) = self.conversations.get(self.conversation_selection) {
-                    self.confirm = Some(Confirm::new(
-                        "Delete conversation",
-                        format!("Delete “{}” and all its messages?", conversation.title),
-                        ConfirmPurpose::DeleteConversation(conversation.id.clone()),
-                    ));
-                }
-            }
-            KeyCode::Char('/') => {
-                self.form = Some(Form::new(
-                    "Filter conversations",
-                    FormPurpose::FilterConversations,
-                    vec![Field::text(
-                        "Filter",
-                        self.conversation_filter.clone().unwrap_or_default(),
-                    )],
-                ));
-            }
-            _ => {}
+        // An emptied palette returns to plain message typing.
+        self.chat.palette_open = !buffer.is_empty();
+        if !buffer.is_empty() {
+            self.push(Popup::Commands { buffer, cursor });
         }
     }
 
@@ -2296,31 +2569,27 @@ impl App {
                     self.status = "Cancelling…".into();
                 }
             }
+            // A leading `/` opens the command palette instead of the message
+            // box, so the interactive surface reads like a shell prompt.
+            KeyCode::Char('/') if !alt && !control && self.chat.input.is_empty() => {
+                self.chat.palette_open = true;
+                self.push(Popup::Commands {
+                    buffer: String::new(),
+                    cursor: 0,
+                });
+            }
             KeyCode::Enter if !alt && !control => self.send_message(),
             KeyCode::Enter => {
                 // Alt+Enter (and the terminal's Ctrl+J, which arrives as a
                 // plain '\n' char) inserts a newline instead of sending.
                 self.chat.input.push('\n');
-                self.chat.input_lines = self.chat.input.lines().count().clamp(1, 8);
             }
-            // Chat commands are all Ctrl-modified: every unmodified printable
-            // key belongs to the message input, otherwise the user could not
-            // type "n", "a", "w", "q"… in a message.
-            KeyCode::Char('n') if control => {
-                self.create_conversation();
-            }
-            KeyCode::Char('a') if control => self.open_agent_picker(),
-            KeyCode::Char('w') if control => self.toggle_writable(),
+            KeyCode::Char('?') if self.chat.input.is_empty() => self.push(Popup::Help { scroll: 0 }),
+            KeyCode::Char('t') if control => self.toggle_think(),
+            KeyCode::Char('o') if control => self.toggle_tool_details(),
             KeyCode::Char('g') if control => {
                 self.chat.scroll = u16::MAX;
                 self.chat.follow = false;
-            }
-            KeyCode::Char('u') if control => {
-                self.chat.scroll = self.chat.scroll.saturating_add(10);
-                self.chat.follow = false;
-            }
-            KeyCode::Char('d') if control => {
-                self.chat.scroll = self.chat.scroll.saturating_sub(10);
             }
             KeyCode::PageUp => {
                 self.chat.scroll = self.chat.scroll.saturating_add(10);
@@ -2346,409 +2615,313 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.chat.input.pop();
-                self.chat.input_lines = self.chat.input.lines().count().clamp(1, 8);
             }
-            KeyCode::Tab => {
-                self.chat.input.push('\t');
-            }
-            KeyCode::Char(ch) if !control => {
-                self.chat.input.push(ch);
-                self.chat.input_lines = self.chat.input.lines().count().clamp(1, 8);
-            }
+            KeyCode::Tab => self.chat.input.push('\t'),
+            KeyCode::Char(ch) if !control && !alt => self.chat.input.push(ch),
             _ => {}
         }
     }
 
-    fn open_agent_picker(&mut self) {
-        // The Agent switcher is implemented as a choice form so it reuses the
-        // modal keyboard handling (no separate modal type).
-        let agents: Vec<StoredAgent> = self
-            .agents
-            .iter()
-            .filter(|agent| agent.role != messenger_sync::ROLE_TITLE)
-            .cloned()
-            .collect();
-        if agents.is_empty() {
-            self.status = "No selectable Agent.".into();
-            return;
-        }
-        let current = store_ops::current_agent(&self.engine.store).ok().flatten();
-        let selected = current
-            .and_then(|agent| agents.iter().position(|candidate| candidate.id == agent.id))
-            .unwrap_or(0);
-        let options: Vec<String> = agents
-            .iter()
-            .map(|agent| format!("{} ({})", agent.name, agent.id))
-            .collect();
-        self.pending_agent_picker = Some(agents.iter().map(|agent| agent.id.clone()).collect());
-        self.form = Some(Form::new(
-            "Switch Agent",
-            FormPurpose::NewConversation,
-            vec![Field::choice("Agent", options, selected)],
-        ));
-    }
+    // ------------------------------------------------------------------
+    // slash commands
+    // ------------------------------------------------------------------
 
-    fn handle_agents_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.agents.is_empty() {
-                    self.agent_selection = (self.agent_selection + 1).min(self.agents.len() - 1);
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.agent_selection = self.agent_selection.saturating_sub(1);
-            }
-            KeyCode::Enter | KeyCode::Char('a') => {
-                let id = self.agents.get(self.agent_selection).map(|agent| agent.id.clone());
-                self.open_agent_form(id.as_deref());
-            }
-            KeyCode::Char('n') => self.open_agent_form(None),
-            KeyCode::Char('d') => {
-                if let Some(agent) = self.agents.get(self.agent_selection) {
-                    self.confirm = Some(Confirm::new(
-                        "Delete Agent",
-                        format!("Delete Agent “{}”?", agent.name),
-                        ConfirmPurpose::DeleteAgent(agent.id.clone()),
-                    ));
-                }
-            }
-            KeyCode::Char('s') => {
-                if let Some(agent) = self.agents.get(self.agent_selection) {
-                    let id = agent.id.clone();
-                    if let Err(error) = self.engine.store.kv_set(store_ops::CURRENT_AGENT_KEY, &id)
-                    {
-                        self.status = error.to_string();
-                    } else {
-                        self.status = format!("Selected Agent {}.", agent.name);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_providers_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Tab => {
-                // Switch focus between the list and the model pane.
-                self.provider_focus_models = !self.provider_focus_models;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.provider_focus_models {
-                    if !self.models.is_empty() {
-                        self.model_selection = (self.model_selection + 1).min(self.models.len() - 1);
-                    }
-                } else if !self.providers.is_empty() {
-                    self.provider_selection =
-                        (self.provider_selection + 1).min(self.providers.len() - 1);
-                    self.reload_models();
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.provider_focus_models {
-                    self.model_selection = self.model_selection.saturating_sub(1);
-                } else {
-                    self.provider_selection = self.provider_selection.saturating_sub(1);
-                    self.reload_models();
-                }
-            }
-            KeyCode::Char(' ') => {
-                if self.provider_focus_models {
-                    if let Some(model) = self.models.get(self.model_selection) {
-                        let enabled = !model.is_enabled;
-                        if let Err(error) = self.engine.store.set_model_enabled(&model.id, enabled) {
-                            self.status = error.to_string();
-                        } else {
-                            self.reload_models();
-                        }
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                if !self.provider_focus_models {
-                    let id = self
-                        .providers
-                        .get(self.provider_selection)
-                        .map(|provider| provider.id.clone());
-                    self.open_provider_form(id.as_deref());
-                } else {
-                    let provider_id = self
-                        .providers
-                        .get(self.provider_selection)
-                        .map(|provider| provider.id.clone());
-                    let model_id = self.models.get(self.model_selection).map(|m| m.id.clone());
-                    if let (Some(provider_id), Some(model_id)) = (provider_id, model_id) {
-                        self.open_model_form(&provider_id, Some(&model_id));
-                    }
-                }
-            }
-            KeyCode::Char('n') => self.open_provider_form(None),
-            KeyCode::Char('a') => {
-                if let Some(provider) = self.providers.get(self.provider_selection) {
-                    let id = provider.id.clone();
-                    self.open_model_form(&id, None);
-                }
-            }
-            KeyCode::Char('s') => self.fetch_models(),
-            KeyCode::Char('d') => {
-                if self.provider_focus_models {
-                    if let (Some(provider), Some(model)) = (
-                        self.providers.get(self.provider_selection),
-                        self.models.get(self.model_selection),
-                    ) {
-                        self.confirm = Some(Confirm::new(
-                            "Delete model",
-                            format!("Delete model “{}”?", model.display_name),
-                            ConfirmPurpose::DeleteModel {
-                                provider_id: provider.id.clone(),
-                                model_id: model.id.clone(),
-                            },
-                        ));
-                    }
-                } else if let Some(provider) = self.providers.get(self.provider_selection) {
-                    self.confirm = Some(Confirm::new(
-                        "Delete provider",
-                        format!("Delete provider “{}” and its models?", provider.name),
-                        ConfirmPurpose::DeleteProvider(provider.id.clone()),
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Fetch the provider's `GET /models` and store every entry as a
-    /// currently-disabled model (mirrors `ProviderDetailViewModel.syncModels`).
-    fn fetch_models(&mut self) {
-        let Some(provider) = self.providers.get(self.provider_selection).cloned() else {
+    /// Execute one `/` command line. Anything after the command name is its
+    /// free-form argument.
+    pub fn run_slash(&mut self, line: &str) {
+        let line = line.trim();
+        let (name, args) = line
+            .split_once(char::is_whitespace)
+            .map(|(name, args)| (name.trim_start_matches('/'), args.trim()))
+            .unwrap_or((line.trim_start_matches('/'), ""));
+        let Some(command) = commands::find(name) else {
+            self.note(ChatNote::warn(format!(
+                "Unknown command /{name} — /help lists them all"
+            )));
             return;
         };
-        let engine = Arc::clone(&self.engine);
-        let spawner = engine.spawner();
-        spawner.spawn(async move {
-            let client = messenger_llm::client::OpenAiClient::new(&provider.base_url, &provider.api_key);
-            match client.get_models().await {
-                Ok(response) => {
-                    let now = messenger_store::now_ms();
-                    let existing = engine
-                        .store
-                        .list_models_by_provider(&provider.id)
-                        .unwrap_or_default();
-                    let mut added = 0usize;
-                    for entry in response.data {
-                        let id = format!("{}:{}", provider.id, entry.id);
-                        let previous = existing.iter().find(|model| model.id == id);
-                        let model = StoredModel {
-                            id: id.clone(),
-                            provider_id: provider.id.clone(),
-                            model_id: entry.id.clone(),
-                            display_name: entry.id.clone(),
-                            is_enabled: previous.map(|m| m.is_enabled).unwrap_or(false),
-                            context_window: entry.context_window.unwrap_or_else(|| {
-                                previous.map(|m| m.context_window).unwrap_or(0)
-                            }),
-                            input_rate: entry.input_rate.or_else(|| previous.and_then(|m| m.input_rate)),
-                            output_rate: entry
-                                .output_rate
-                                .or_else(|| previous.and_then(|m| m.output_rate)),
-                            input_modalities: previous
-                                .map(|m| m.input_modalities.clone())
-                                .unwrap_or_else(|| "text".into()),
-                            output_modalities: previous
-                                .map(|m| m.output_modalities.clone())
-                                .unwrap_or_else(|| "text".into()),
-                            supports_tool_calling: previous.is_some_and(|m| m.supports_tool_calling),
-                            supports_thinking: previous.is_some_and(|m| m.supports_thinking),
-                            supports_json_output: previous.is_some_and(|m| m.supports_json_output),
-                            supports_temperature: previous.is_some_and(|m| m.supports_temperature),
-                            created_at: previous.map(|m| m.created_at).unwrap_or(now),
-                        };
-                        if engine.store.upsert_model(&model).is_ok() {
-                            added += 1;
-                        }
-                    }
-                    let _ = engine
-                        .tx
-                        .send(UiMsg::CloudStatus(format!("{added} models fetched.")));
-                    let _ = engine.tx.send(UiMsg::SyncFinished);
-                }
-                Err(error) => {
-                    let _ = engine
-                        .tx
-                        .send(UiMsg::CloudStatus(format!("Model fetch failed: {error}")));
-                }
-            }
-        });
-        self.status = "Fetching models…".into();
-    }
-
-    fn handle_mcp_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.mcp_servers.is_empty() {
-                    self.mcp_selection = (self.mcp_selection + 1).min(self.mcp_servers.len() - 1);
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.mcp_selection = self.mcp_selection.saturating_sub(1);
-            }
-            KeyCode::Enter | KeyCode::Char('a') => {
-                let id = self
-                    .mcp_servers
-                    .get(self.mcp_selection)
-                    .map(|server| server.id.clone());
-                self.open_mcp_form(id.as_deref());
-            }
-            KeyCode::Char('n') => self.open_mcp_form(None),
-            KeyCode::Char(' ') => {
-                if let Some(server) = self.mcp_servers.get_mut(self.mcp_selection) {
-                    server.is_enabled = !server.is_enabled;
-                    self.persist_mcp_servers();
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(server) = self.mcp_servers.get(self.mcp_selection) {
-                    self.confirm = Some(Confirm::new(
-                        "Delete MCP server",
-                        format!("Remove MCP server “{}”?", server.name),
-                        ConfirmPurpose::DeleteMcpServer(server.id.clone()),
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_settings_key(&mut self, key: KeyEvent) {
-        let rows = SettingRow::all();
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.setting_selection = (self.setting_selection + 1).min(rows.len() - 1);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.setting_selection = self.setting_selection.saturating_sub(1);
-            }
-            KeyCode::Char(' ') | KeyCode::Enter => match rows[self.setting_selection] {
-                SettingRow::Theme => {
-                    self.config.theme = if self.config.is_dark() {
-                        "light".into()
-                    } else {
-                        "dark".into()
-                    };
-                    self.save_config();
-                }
-                SettingRow::ShowThink => self.toggle_think(),
-                SettingRow::ShowToolDetails => self.toggle_tool_details(),
-                SettingRow::AutoScroll => {
-                    self.config.auto_scroll = !self.config.auto_scroll;
-                    self.save_config();
-                }
-                SettingRow::Workspace => {
-                    self.form = Some(Form::new(
-                        "Workspace directory",
-                        FormPurpose::EditWorkspace,
-                        vec![Field::text("Workspace directory", self.config.workspace_dir.clone())],
-                    ));
-                }
-                SettingRow::ServerUrl => {
-                    let current = self
-                        .engine
-                        .store
-                        .kv_get(messenger_sync::KV_SERVER_URL)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| messenger_sync::DEFAULT_CLOUD_SERVER_URL.to_string());
-                    self.form = Some(Form::new(
-                        "Cloud server URL",
-                        FormPurpose::EditServerUrl,
-                        vec![Field::text("Server URL", current)],
-                    ));
-                }
-                SettingRow::Session => {}
+        self.note_info(format!("/{command}", command = command.name));
+        match command.name {
+            "help" => self.push(Popup::Help { scroll: 0 }),
+            "new" => self.slash_new(),
+            "agent" => self.open_agent_picker(),
+            "model" => self.open_model_picker(None),
+            "provider" => match args {
+                "" | "list" => self.open_provider_picker(),
+                "new" => self.open_provider_form(None),
+                "fetch" => match self.providers.first().map(|p| p.id.clone()) {
+                    Some(id) => self.fetch_models(&id),
+                    None => self.note(ChatNote::warn("No providers yet — /provider new.")),
+                },
+                other => match self
+                    .providers
+                    .iter()
+                    .find(|provider| provider.name.eq_ignore_ascii_case(other))
+                    .map(|provider| provider.id.clone())
+                {
+                    Some(id) => self.fetch_models(&id),
+                    None => self.note(ChatNote::warn(format!("No provider named “{other}”."))),
+                },
             },
-            KeyCode::Char('l') => {
-                if self.cloud_user.is_some() {
-                    self.confirm = Some(Confirm::new(
-                        "Sign out",
-                        "Sign out and remove the built-in cloud provider?",
-                        ConfirmPurpose::SignOut,
-                    ));
-                } else {
-                    self.open_sign_in_form();
-                }
-            }
-            KeyCode::Char('s') => {
+            "mode" => self.slash_mode(args),
+            "project" => self.slash_project(args),
+            "resume" | "conversations" => match args {
+                "" => self.open_conversation_picker(),
+                n => self.slash_resume(n),
+            },
+            "rename" => self.slash_rename(args),
+            "delete" => self.slash_delete(),
+            "agent.new" => self.open_agent_form(None),
+            "agent.edit" => self.slash_nth_agent(args, false),
+            "agent.delete" => self.slash_nth_agent(args, true),
+            "mcp" => match args {
+                "" => self.open_mcp_picker(),
+                "new" => self.open_mcp_form(None),
+                other => self.note(ChatNote::warn(format!(
+                    "Unknown /mcp subcommand “{other}” — use /mcp new."
+                ))),
+            },
+            "settings" => self.open_settings_picker(),
+            "login" => self.open_sign_in_form(),
+            "logout" => self.push_confirm(Confirm::new(
+                "Sign out",
+                "Sign out and remove the built-in cloud provider?",
+                ConfirmPurpose::SignOut,
+            )),
+            "sync" => {
                 if self.cloud_user.is_some() {
                     self.sync_now();
                 } else {
-                    self.open_sign_in_form();
+                    self.note(ChatNote::warn("Not signed in — /login first."));
                 }
             }
-            KeyCode::Char('r') => {
-                self.form = Some(Form::new(
+            "card" => match args.is_empty() {
+                true => self.push_form(Form::new(
                     "Redeem card",
                     FormPurpose::RedeemCard,
                     vec![Field::text("Card code", "")],
-                ));
-            }
-            KeyCode::Char('p') => {
-                self.form = Some(Form::new(
-                    "Change password",
-                    FormPurpose::ChangePassword,
-                    vec![
-                        Field::secret("Current password", ""),
-                        Field::secret("New password", ""),
-                    ],
-                ));
-            }
-            KeyCode::Char('x') => {
-                self.form = Some(Form::new(
-                    "Delete account",
-                    FormPurpose::DeleteAccountForm,
-                    vec![Field::secret("Current password", "")],
-                ));
-            }
+                )),
+                false => self.redeem_card(args.to_string()),
+            },
+            "quit" => self.should_quit = true,
             _ => {}
         }
     }
 
-    fn open_sign_in_form(&mut self) {
-        let url = self
-            .engine
-            .store
-            .kv_get(messenger_sync::KV_SERVER_URL)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| messenger_sync::DEFAULT_CLOUD_SERVER_URL.to_string());
-        self.form = Some(Form::new(
-            "Sign in",
-            FormPurpose::SignIn,
-            vec![
-                Field::text("Email", ""),
-                Field::secret("Password", ""),
-                Field::text("Server URL", url),
-            ],
+    /// `/new` continues in the CURRENT project when there is one, so a
+    /// follow-up request keeps its workspace.
+    fn slash_new(&mut self) {
+        let project_id = self.chat_project().map(|project| project.id);
+        let created = match &project_id {
+            Some(project_id) => self.create_conversation_in(project_id),
+            None => self.create_conversation(),
+        };
+        match created {
+            Some(id) => self.open_conversation(&id),
+            None => self.note(ChatNote::error("Could not create a conversation.")),
+        }
+    }
+
+    fn slash_mode(&mut self, args: &str) {
+        let Some(conversation_id) = self.chat.conversation_id.clone() else {
+            self.note(ChatNote::warn("No conversation open."));
+            return;
+        };
+        let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id) else {
+            self.note(ChatNote::error("Conversation not found."));
+            return;
+        };
+        match args.to_lowercase().as_str() {
+            "" => conversation.writable = !conversation.writable,
+            "read-only" | "readonly" | "ro" => conversation.writable = false,
+            "writable" | "write" | "rw" => conversation.writable = true,
+            other => {
+                self.note(ChatNote::warn(format!(
+                    "Unknown mode “{other}” — use read-only or writable."
+                )));
+                return;
+            }
+        }
+        let writable = conversation.writable;
+        if let Err(error) = self.engine.store.upsert_conversation(&conversation) {
+            self.note(ChatNote::error(error.to_string()));
+            return;
+        }
+        self.note_info(format!(
+            "Agent mode: {}",
+            if writable { "writable" } else { "read-only" }
+        ));
+    }
+
+    fn slash_project(&mut self, args: &str) {
+        let current = self.chat_project();
+        if args.is_empty() {
+            self.open_project_picker();
+            return;
+        }
+        let (verb, rest) = args
+            .split_once(char::is_whitespace)
+            .unwrap_or((args, ""));
+        match verb {
+            "show" => match &current {
+                Some(project) => self.note_info(format!(
+                    "Project “{}” · workspace {}",
+                    project.name, project.workspace
+                )),
+                None => self.note_info("This conversation belongs to no project."),
+            },
+            // Defaults to the session's own directory and name; both fields
+            // stay editable before the project is saved.
+            "new" => self.open_project_form(None, (!rest.is_empty()).then_some(rest)),
+            "edit" => match &current {
+                Some(project) => {
+                    let id = project.id.clone();
+                    self.open_project_form(Some(&id), None);
+                }
+                None => self.note(ChatNote::warn("This conversation belongs to no project.")),
+            },
+            "delete" => match &current {
+                Some(project) => self.push_confirm(Confirm::new(
+                    "Delete project",
+                    format!(
+                        "Delete project “{}”? Its conversations stay, without a workspace.",
+                        project.name
+                    ),
+                    ConfirmPurpose::DeleteProject(project.id.clone()),
+                )),
+                None => self.note(ChatNote::warn("This conversation belongs to no project.")),
+            },
+            name => self.note(ChatNote::warn(format!(
+                "Unknown /project subcommand “{name}” — use new, edit, delete, or /project to pick."
+            ))),
+        }
+    }
+
+    fn slash_resume(&mut self, args: &str) {
+        let index: usize = match args.trim().parse::<usize>() {
+            Ok(value) if value >= 1 => value - 1,
+            Ok(_) => {
+                self.note(ChatNote::warn("/resume takes a 1-based index."));
+                return;
+            }
+            Err(_) => 0,
+        };
+        match self.conversations.get(index) {
+            Some(conversation) => {
+                let id = conversation.id.clone();
+                self.open_conversation(&id);
+            }
+            None => self.note(ChatNote::warn("No such conversation.")),
+        }
+    }
+
+    /// `/agent.edit n` / `/agent.delete n` address the n-th selectable Agent
+    /// (1-based) without opening the picker.
+    fn slash_nth_agent(&mut self, args: &str, delete: bool) {
+        let agents: Vec<&StoredAgent> = self
+            .agents
+            .iter()
+            .filter(|agent| agent.role != messenger_sync::ROLE_TITLE)
+            .collect();
+        let index: usize = match args.trim().parse::<usize>() {
+            Ok(value) if value >= 1 => value - 1,
+            _ => 0,
+        };
+        match agents.get(index) {
+            Some(agent) if delete => {
+                let id = agent.id.clone();
+                let name = agent.name.clone();
+                self.push_confirm(Confirm::new(
+                    "Delete Agent",
+                    format!("Delete Agent “{name}”?"),
+                    ConfirmPurpose::DeleteAgent(id),
+                ));
+            }
+            Some(agent) => self.open_agent_form(Some(&agent.id.clone())),
+            None => self.note(ChatNote::warn("No such Agent.")),
+        }
+    }
+
+    fn slash_rename(&mut self, args: &str) {
+        let Some(conversation_id) = self.chat.conversation_id.clone() else {
+            self.note(ChatNote::warn("No conversation open."));
+            return;
+        };
+        if args.is_empty() {
+            let title = self
+                .chat
+                .conversation_id
+                .as_deref()
+                .and_then(|id| self.engine.store.get_conversation(id).ok().flatten())
+                .map(|conversation| conversation.title)
+                .unwrap_or_default();
+            self.push_form(Form::new(
+                "Rename conversation",
+                FormPurpose::RenameConversation(conversation_id),
+                vec![Field::text("Title", title)],
+            ));
+            return;
+        }
+        if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id) {
+            conversation.title = args.to_string();
+            conversation.updated_at = messenger_store::now_ms();
+            let title = conversation.title.clone();
+            let _ = self.engine.store.upsert_conversation(&conversation);
+            self.reload_conversations();
+            self.note_info(format!("Renamed to “{title}”."));
+        }
+    }
+
+    fn slash_delete(&mut self) {
+        let Some(conversation) = self
+            .chat
+            .conversation_id
+            .as_deref()
+            .and_then(|id| self.engine.store.get_conversation(id).ok().flatten())
+        else {
+            self.note(ChatNote::warn("No conversation open."));
+            return;
+        };
+        let title = conversation.title.clone();
+        self.push_confirm(Confirm::new(
+            "Delete conversation",
+            format!("Delete “{title}” and all its messages?"),
+            ConfirmPurpose::DeleteConversation(conversation.id.clone()),
         ));
     }
 }
 
-/// Toggle a boolean/choice field in place.
-fn toggle_field(form: &mut Form) {
-    match form.focused_mut() {
-        Some(Field::Bool { value, .. }) => *value = !*value,
-        Some(Field::Choice {
-            options, selected, ..
-        }) => {
-            if !options.is_empty() {
-                *selected = (*selected + 1) % options.len();
+/// The longest common prefix of the given names, so an ambiguous Tab keeps
+/// typing `/pro` instead of discarding the buffer.
+fn shared_prefix(names: &[String]) -> String {
+    let Some(first) = names.first() else {
+        return String::new();
+    };
+    let mut prefix = first.clone();
+    for name in &names[1..] {
+        while !name.starts_with(&prefix) {
+            prefix.pop();
+            if prefix.is_empty() {
+                return prefix;
             }
         }
-        _ => {}
     }
+    prefix
+}
+
+/// Every command as `(label, summary)`, for the help popup.
+pub fn command_help_rows() -> Vec<(String, String)> {
+    SLASH_COMMANDS
+        .iter()
+        .map(|command| {
+            let label = if command.args.is_empty() {
+                format!("/{}", command.name)
+            } else {
+                format!("/{} {}", command.name, command.args)
+            };
+            (label, command.summary.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2756,38 +2929,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn form_helpers_read_typed_values() {
-        let form = Form::new(
-            "t",
-            FormPurpose::NewProvider,
-            vec![
-                Field::text("Name", "acme"),
-                Field::text("Temperature", "0.5"),
-                Field::boolean("Enabled", true),
-                Field::choice("Role", vec!["a".into(), "b".into()], 1),
-            ],
-        );
-        assert_eq!(form.value("Name"), "acme");
-        assert_eq!(form.number("Temperature"), Some(0.5));
-        assert_eq!(form.number("Missing"), None);
-        assert!(form.boolean("Enabled"));
-        assert_eq!(form.index("Role"), Some(1));
-    }
-
-    #[test]
-    fn confirm_requires_typed_text_when_configured() {
-        let confirm =
-            Confirm::new("t", "m", ConfirmPurpose::DeleteAccount("pw".into())).requires("DELETE");
-        assert!(!confirm.can_confirm());
-        let mut confirm = confirm;
-        confirm.typed = "DELETE".into();
-        assert!(confirm.can_confirm());
-    }
-
-    #[test]
-    fn function_keys_map_to_views() {
-        assert_eq!(View::from_function_key(KeyCode::F(1)), Some(View::Conversations));
-        assert_eq!(View::from_function_key(KeyCode::F(6)), Some(View::Settings));
-        assert_eq!(View::from_function_key(KeyCode::F(7)), None);
+    fn shared_prefix_narrows_an_ambiguous_completion() {
+        assert_eq!(shared_prefix(&["agent".into(), "agents".into()]), "agent");
+        assert_eq!(shared_prefix(&["mode".into()]), "mode");
+        assert_eq!(shared_prefix(&[]), "");
     }
 }

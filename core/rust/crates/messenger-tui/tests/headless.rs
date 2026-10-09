@@ -14,26 +14,26 @@
  * limitations under the License.
  */
 
-//! Headless end-to-end proof: render fixtures through `TestBackend` and
+//! Headless end-to-end proof: render fixtures through [`ui::compose`] and
 //! drive a full agent turn (streaming text + a real tool execution) against a
-//! scripted wiremock provider, asserting on the rendered buffer.
+//! scripted wiremock provider, asserting on the composed frame.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use messenger_core::agent::AgentEvent;
 use messenger_store::model::{
     StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
 };
 use messenger_store::Store;
-use messenger_tui::app::{App, View};
+use messenger_tui::app::App;
 use messenger_tui::config::TuiConfig;
 use messenger_tui::engine::{Engine, UiMsg};
+use messenger_tui::popup::Popup;
 use messenger_tui::ui;
-use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Terminal;
 
 /// Scripted provider: pops one SSE body per request.
 struct Scripted {
@@ -222,20 +222,22 @@ fn app_with(
     (app, engine, rx, runtime)
 }
 
-fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
-    let buffer = terminal.backend().buffer();
-    let width = buffer.area.width as usize;
-    let cells = buffer.content();
-    cells
-        .chunks(width)
-        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+/// The composed frame as plain text, one line per row — what a user would
+/// read off the screen, with every style stripped.
+fn frame_text(app: &mut App, width: u16, height: u16) -> String {
+    ui::compose(app, width, height)
+        .lines
+        .iter()
+        .map(|line| line.to_plain_string())
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// Drive the app until `predicate` holds or the deadline passes.
+///
+/// Compositing each round keeps the render caches exercised the same way the
+/// real loop does, so a stale-cache bug still shows up here.
 fn pump(
-    terminal: &mut Terminal<TestBackend>,
     app: &mut App,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<UiMsg>,
     predicate: impl Fn(&App) -> bool,
@@ -243,17 +245,17 @@ fn pump(
 ) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        terminal.draw(|frame| ui::draw(frame, app)).unwrap();
         while let Ok(msg) = rx.try_recv() {
             app.apply(msg);
         }
         app.tick();
+        let _ = ui::compose(app, 100, 24);
         if predicate(app) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    let _ = ui::compose(app, 100, 24);
     false
 }
 
@@ -263,15 +265,12 @@ fn writable_mode_toggle_persists_per_conversation() {
     messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
-    app.view = View::Chat;
-    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.bootstrap_session();
     let conversation_id = app.chat.conversation_id.clone().expect("conversation created");
 
     assert!(!app.conversation_writable());
-    app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert!(app.conversation_writable(), "Ctrl+W must flip the mode on");
-    assert!(app.status.contains("writable"), "{}", app.status);
+    app.run_slash("mode writable");
+    assert!(app.conversation_writable(), "/mode writable must flip it on");
 
     let row = app
         .engine
@@ -281,8 +280,8 @@ fn writable_mode_toggle_persists_per_conversation() {
         .unwrap();
     assert!(row.writable, "the toggle must be persisted on the conversation row");
 
-    app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert!(!app.conversation_writable(), "Ctrl+W must flip the mode back");
+    app.run_slash("mode read-only");
+    assert!(!app.conversation_writable(), "/mode read-only must flip it back");
     // A plain `w` must be typed into the message, not treated as a command.
     app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
     assert_eq!(app.chat.input, "w");
@@ -571,13 +570,9 @@ fn every_block_variant_renders_into_the_buffer() {
         status: "sent".into(),
         error_message: None,
     }];
-    app.view = View::Chat;
     let _ = blocks;
 
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    let text = frame_text(&mut app, 100, 30);
     assert!(text.contains("Title"), "{text}");
     assert!(text.contains("world"), "{text}");
     assert!(text.contains("fn main()"), "{text}");
@@ -613,15 +608,13 @@ fn streaming_turn_puts_the_text_and_the_tool_card_in_the_buffer() {
     app.open_conversation("c1");
     app.chat.input = "run echo".into();
 
-    let backend = TestBackend::new(120, 40);
-    let mut terminal = Terminal::new(backend).unwrap();
+    let (width, height) = (120u16, 40u16);
 
     // Drive the send through the real key path — deliberately WITHOUT entering
     // a runtime context, exactly like the real event loop.
     app.send_message();
 
     let finished = pump(
-        &mut terminal,
         &mut app,
         &mut rx,
         |app| !app.chat.is_generating && app.status.contains("finished"),
@@ -632,8 +625,7 @@ fn streaming_turn_puts_the_text_and_the_tool_card_in_the_buffer() {
     while let Ok(msg) = rx.try_recv() {
         app.apply(msg);
     }
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    let text = frame_text(&mut app, width, height);
 
     // The real NativeToolHost ran `echo hi`; the tool row must carry it.
     let messages = app
@@ -670,25 +662,36 @@ fn streaming_turn_puts_the_text_and_the_tool_card_in_the_buffer() {
     assert!(finished || app.chat.messages.len() >= 4, "turn did not settle: {}", app.status);
 }
 
+/// There is no view switch any more: `?` pushes the help popup and Esc peels
+/// one layer off the stack. Function keys are ordinary, unhandled input.
 #[test]
-fn key_path_switches_views_opens_help_and_toggles_think() {
+fn the_popup_stack_opens_and_unwinds_one_layer_at_a_time() {
     let store = Arc::new(Store::open_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
-
-    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
-    assert_eq!(app.view, View::Settings);
-    app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
-    assert_eq!(app.view, View::Conversations);
+    assert!(app.popups.is_empty(), "a session starts with no popup");
 
     app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-    assert!(app.help);
-    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!app.help);
+    assert!(matches!(app.popups.as_slice(), [Popup::Help { .. }]));
+    // Any key dismisses help.
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.popups.is_empty());
 
+    // A leading `/` opens the palette and the keys after it go there, not
+    // into the message box.
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert!(matches!(app.popups.as_slice(), [Popup::Commands { .. }]));
+    for ch in "new".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.chat.input, "", "the palette owns the input line");
+
+    // Esc peels the palette off; the chat owns the keyboard again.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.is_empty());
     let before = app.config.show_think;
     app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
-    assert_ne!(app.config.show_think, before);
+    assert_ne!(app.config.show_think, before, "Ctrl+T toggles think blocks");
 
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.should_quit);
@@ -740,7 +743,6 @@ fn chat_key_path_edits_and_sends_input() {
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
-    app.view = View::Chat;
     app.chat.conversation_id = Some("c1".into());
 
     for ch in "hello".chars() {
@@ -753,9 +755,12 @@ fn chat_key_path_edits_and_sends_input() {
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.chat.input, "hell");
     assert!(
-        app.status.contains("Set a model"),
-        "unexpected status: {}",
-        app.status
+        app.chat
+            .notes
+            .iter()
+            .any(|note| note.text.contains("Set a model")),
+        "an unbound model must abort the send: {:?}",
+        app.chat.notes
     );
     // The aborted send must not have inserted a user message.
     assert!(app
@@ -770,38 +775,45 @@ fn chat_key_path_edits_and_sends_input() {
     assert_eq!(app.chat.input, "hell\n");
 }
 
+/// The pickers replace the old F-key views: `/agent`, `/settings` and
+/// `/provider` each push a list, and `?` documents what a row does.
 #[test]
-fn agents_and_settings_views_render_their_rows() {
+fn the_pickers_render_their_rows_over_the_chat() {
     let store = Arc::new(Store::open_memory().unwrap());
     messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+    app.bootstrap_session();
 
-    let backend = TestBackend::new(100, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
+    let (width, height) = (100u16, 24u16);
 
-    app.view = View::Agents;
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    app.run_slash("agent");
+    let text = frame_text(&mut app, width, height);
     assert!(text.contains("Agents"), "{text}");
-    // Wide CJK glyphs occupy two buffer cells (with an empty trailing cell),
+    // Wide CJK glyphs occupy two terminal cells (with an empty trailing cell),
     // so match the ASCII parts and the default badge.
-    assert!(text.contains("Agent [default]"), "{text}");
+    assert!(text.contains("[default]"), "{text}");
     assert!(text.contains("tools:off"), "{text}");
+    // The chat is still there underneath — a popup never replaces it. The
+    // transcript has no box of its own; its presence is the editor and the
+    // context line, which a modal leaves untouched.
+    assert!(text.contains("message"), "{text}");
+    assert!(text.contains("read-only") || text.contains("writable"), "{text}");
 
-    app.view = View::Settings;
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    app.close_all_popups();
+    app.run_slash("settings");
+    let text = frame_text(&mut app, width, height);
     assert!(text.contains("Settings"), "{text}");
     assert!(text.contains("Theme"), "{text}");
-    assert!(text.contains("Workspace directory"), "{text}");
-    assert!(text.contains("Signed out"), "{text}");
+    assert!(text.contains("signed out"), "{text}");
 
-    app.view = View::Providers;
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
-    assert!(text.contains("Providers"), "{text}");
-    assert!(text.contains("Models"), "{text}");
+    app.close_all_popups();
+    app.run_slash("help");
+    let text = frame_text(&mut app, width, height);
+    // The keys page opens on the chat/popup reference; the command list is
+    // further down and reachable with PageDown (covered above).
+    assert!(text.contains("command palette"), "{text}");
+    assert!(text.contains("Popups"), "{text}");
 }
 
 #[test]
@@ -832,14 +844,11 @@ fn providers_fetch_models_spawns_without_a_runtime_context() {
     let store = seed_store(&server.uri(), workspace.path());
     let (mut app, _engine, mut rx, _app_runtime) = app_with(store, workspace.path());
     app.reload_all();
-    app.view = View::Providers;
-
     // No `runtime.enter()`: exactly the state the real event loop is in.
-    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    app.run_slash("provider fetch");
     assert!(app.status.contains("Fetching"), "{}", app.status);
 
     let done = pump(
-        &mut Terminal::new(TestBackend::new(100, 24)).unwrap(),
         &mut app,
         &mut rx,
         |app| app.status.contains("models fetched") || app.status.contains("fetch failed"),
@@ -871,7 +880,6 @@ fn headless_app_render_of_the_smoke_seed_contains_the_agent_loop_events() {
     let store = Arc::new(Store::open_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
-    app.view = View::Chat;
     app.chat.conversation_id = Some("c1".into());
 
     app.apply(UiMsg::Agent(AgentEvent::TurnStarted));
@@ -887,10 +895,7 @@ fn headless_app_render_of_the_smoke_seed_contains_the_agent_loop_events() {
         text: "body text\n".into(),
     }));
 
-    let backend = TestBackend::new(80, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    let text = frame_text(&mut app, 80, 20);
     assert!(text.contains("Live heading"), "{text}");
     assert!(text.contains("body text"), "{text}");
 
@@ -899,10 +904,9 @@ fn headless_app_render_of_the_smoke_seed_contains_the_agent_loop_events() {
     }));
     assert!(!app.chat.is_generating);
 }
-/// Drives the real F1 key path: `p` opens the project form, typing a name and
-/// confirming stores a project whose workspace defaults to the process CWD,
-/// and it shows up in the rendered Projects section. This is the whole TUI
-/// project flow exercised through the same input a user drives.
+/// `/project new` opens the editor; typing a name and confirming stores a
+/// project whose workspace defaults to the process CWD, and `/project` then
+/// lists it for picking.
 #[test]
 fn the_project_form_stores_a_project_with_the_cwd_as_its_workspace() {
     let workspace = tempfile::tempdir().unwrap();
@@ -968,18 +972,20 @@ fn the_project_form_stores_a_project_with_the_cwd_as_its_workspace() {
     store.kv_set("current_agent_id", "a1").unwrap();
     app.reload_all();
 
-    // F1 (the app starts there), then `p` opens the New project form.
-    app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
-    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
-    let form = app.form.clone().expect("`p` opens the new-project form");
-    assert!(matches!(form.purpose, messenger_tui::app::FormPurpose::NewProject));
+    // `/project new` opens the editor; the name field starts empty so typing
+    // replaces nothing, and the workspace defaults to the CWD.
+    app.run_slash("project new");
+    let form = match app.popups.last() {
+        Some(Popup::Form(form)) => form.clone(),
+        other => panic!("/project new opens the editor, got {other:?}"),
+    };
+    assert!(matches!(form.purpose, messenger_tui::popup::FormPurpose::NewProject));
 
-    // Type a name, tab to the workspace field (left empty on purpose), confirm.
     for ch in "Messenger".chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)); // next field
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)); // submit (workspace empty)
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)); // submit
 
     let projects = store.list_projects().unwrap();
     assert_eq!(projects.len(), 1, "the form must persist the project");
@@ -990,23 +996,349 @@ fn the_project_form_stores_a_project_with_the_cwd_as_its_workspace() {
         "an empty workspace defaults to the process CWD"
     );
 
-    // The row is listed under a Projects header in the rendered list.
-    let backend = TestBackend::new(80, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let text = buffer_text(&terminal);
+    // `/project` lists it, and Enter on the row opens a conversation inside it.
+    app.run_slash("project");
+    let text = frame_text(&mut app, 80, 20);
     assert!(text.contains("Projects"), "{text}");
     assert!(text.contains("Messenger"), "{text}");
 
-    // Tab moves the selection into the projects block, and Enter on a project
-    // opens the Agent picker with that project staged (the conversation is
-    // created once an Agent is picked).
-    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert!(app.list_showing_projects);
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let conversation = app
+        .chat
+        .conversation_id
+        .as_deref()
+        .and_then(|id| store.get_conversation(id).ok().flatten())
+        .expect("picking a project opens a conversation in it");
     assert_eq!(
-        app.pending_project.as_deref(),
+        conversation.project_id.as_deref(),
         Some(projects[0].id.as_str()),
-        "Enter on a project row stages it for the picker"
+        "Enter on a project row starts a conversation inside it"
     );
+}
+
+/// A session must land in a working conversation inside the project for the
+/// directory it was launched in — the agentic entry point, not a list.
+#[test]
+fn bootstrap_session_lands_in_a_cwd_project_conversation() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    // A model binding, so the turn resolves and the workspace actually reaches
+    // the tool host.
+    store
+        .upsert_provider(&StoredProvider {
+            id: "p1".into(),
+            name: "test".into(),
+            base_url: "http://localhost:1".into(),
+            api_key: "sk".into(),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .unwrap();
+    store
+        .upsert_model(&StoredModel {
+            id: "p1:m".into(),
+            provider_id: "p1".into(),
+            model_id: "m".into(),
+            display_name: "m".into(),
+            is_enabled: true,
+            context_window: 0,
+            input_rate: None,
+            output_rate: None,
+            input_modalities: "text".into(),
+            output_modalities: "text".into(),
+            supports_tool_calling: true,
+            supports_thinking: false,
+            supports_json_output: false,
+            supports_temperature: true,
+            created_at: 1,
+        })
+        .unwrap();
+    let agent = store.get_default_agent().unwrap().unwrap();
+    store
+        .upsert_agent(&StoredAgent {
+            default_model_id: Some("p1:m".into()),
+            tools_enabled: true,
+            ..agent
+        })
+        .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+
+    // `App::new` does not bootstrap on its own — main.rs does — so drive the
+    // same call the binary makes.
+    app.bootstrap_session();
+
+    assert!(app.popups.is_empty(), "the chat is the landing surface");
+    let conversation_id = app
+        .chat
+        .conversation_id
+        .clone()
+        .expect("bootstrap opens a conversation");
+
+    let cwd = std::env::current_dir().unwrap();
+    let conversation = store
+        .get_conversation(&conversation_id)
+        .unwrap()
+        .unwrap();
+    let project_id = conversation.project_id.expect("the conversation has a project");
+    let project = store.get_project(&project_id).unwrap().unwrap();
+    assert_eq!(
+        std::fs::canonicalize(&project.workspace).unwrap(),
+        std::fs::canonicalize(&cwd).unwrap(),
+        "the project workspace must be the process CWD"
+    );
+
+    // The turn resolver hands the tool host that same directory, which is
+    // what makes the workspace-bound tools usable at all.
+    let resolved =
+        messenger_tui::store_ops::resolve_turn(&store, &conversation_id, &[], None).unwrap();
+    assert_eq!(resolved.workspace, Some(std::path::PathBuf::from(&project.workspace)));
+    assert!(resolved.request.workspace_note.contains(&project.workspace));
+
+    // A second bootstrap must reuse the project, not duplicate it.
+    app.bootstrap_session();
+    assert_eq!(store.list_projects().unwrap().len(), 1);
+
+    // The banner is a session note, not a stored message.
+    assert!(!app.chat.notes.is_empty());
+    assert!(app
+        .engine
+        .store
+        .list_messages_by_conversation(&conversation_id)
+        .unwrap()
+        .is_empty());
+}
+
+/// `/` opens the palette instead of typing into the message box, Tab
+/// completes, and Enter runs the command.
+#[test]
+fn slash_commands_drive_the_session_from_the_input_line() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+    // A leading slash opens the palette and never lands in the message.
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: String::new(),
+            cursor: 0
+        })
+    );
+    for ch in "mo".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.chat.input, "", "the message box stays untouched");
+
+    // `mo` is ambiguous, but "model" and "mode" share the prefix "mode", so
+    // Tab narrows to that instead of guessing.
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "mode".into(),
+            cursor: 0
+        }),
+        "an ambiguous Tab narrows to the shared prefix"
+    );
+    // One more letter selects the other command.
+    app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "moded".into(),
+            cursor: 0
+        })
+    );
+
+    // Backspace returns to the completed command; Enter runs it.
+    app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.popups.is_empty());
+    assert!(
+        app.chat.notes.iter().any(|note| note.text.contains("/mode")),
+        "the command echo must be visible: {:?}",
+        app.chat.notes
+    );
+
+    // An unknown command reports instead of being sent to the model.
+    app.run_slash("definitely-not-a-command");
+    assert!(app
+        .chat
+        .notes
+        .iter()
+        .any(|note| note.text.contains("Unknown command")));
+
+    // /help opens the keys popup, which lists every command name — scrolled,
+    // so walk it the way a user would.
+    app.run_slash("help");
+    assert!(matches!(app.popups.last(), Some(Popup::Help { .. })));
+    let mut seen = String::new();
+    for expected_scroll in 0..8 {
+        assert_eq!(
+            app.popups.last(),
+            Some(&Popup::Help {
+                scroll: expected_scroll * 10
+            }),
+            "PageDown walks the whole reference"
+        );
+        seen.push_str(&frame_text(&mut app, 100, 30));
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    }
+    for command in messenger_tui::commands::SLASH_COMMANDS {
+        assert!(
+            seen.contains(&format!("/{}", command.name)),
+            "help omitted /{}",
+            command.name
+        );
+    }
+
+    // /quit is the one command that ends the session.
+    app.close_all_popups();
+    app.run_slash("quit");
+    assert!(app.should_quit);
+}
+
+/// `/mode` persists on the conversation row, so the declaration gate (not a
+/// UI flag) is what changes.
+#[test]
+fn slash_mode_persists_the_agent_mode() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    app.bootstrap_session();
+    let conversation_id = app.chat.conversation_id.clone().unwrap();
+
+    app.run_slash("mode writable");
+    assert!(app.conversation_writable());
+    assert!(store
+        .get_conversation(&conversation_id)
+        .unwrap()
+        .unwrap()
+        .writable);
+
+    app.run_slash("mode read-only");
+    assert!(!app.conversation_writable());
+
+    // Bare /mode toggles; an unknown word is rejected instead of toggling.
+    app.run_slash("mode");
+    assert!(app.conversation_writable());
+    app.run_slash("mode sideways");
+    assert!(app.conversation_writable(), "a bad mode must not toggle");
+}
+
+/// `/new` continues in the current project so the workspace survives.
+#[test]
+fn slash_new_stays_in_the_current_project() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    app.bootstrap_session();
+    let first = app.chat.conversation_id.clone().unwrap();
+
+    app.run_slash("new");
+    let second = app.chat.conversation_id.clone().unwrap();
+    assert_ne!(second, first, "/new must open a different conversation");
+
+    let project_id = store
+        .get_conversation(&second)
+        .unwrap()
+        .unwrap()
+        .project_id
+        .expect("the new conversation keeps the project");
+    assert_eq!(
+        Some(project_id),
+        store.get_conversation(&first).unwrap().unwrap().project_id
+    );
+}
+
+/// The palette lists what matches and renders into the buffer.
+#[test]
+fn the_palette_lists_the_matching_commands() {
+    let rows = messenger_tui::popup::command_rows("mo");
+    let labels: Vec<&str> = rows.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(labels, vec!["/model", "/mode [read-only|writable]"], "`mo` is ambiguous");
+    // `quit` is a unique prefix, so Tab would complete it outright.
+    assert_eq!(messenger_tui::popup::command_rows("quit").len(), 1);
+    assert!(messenger_tui::popup::command_rows("").len() > 5);
+
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.chat.palette_open = true;
+    app.push(Popup::Commands {
+        buffer: "prov".into(),
+        cursor: 0,
+    });
+
+    let text = frame_text(&mut app, 100, 30);
+    assert!(text.contains("/provider"), "{text}");
+    assert!(text.contains("commands"), "{text}");
+}
+
+/// The slash command output must reach the terminal, not just app state:
+/// notes are what the user sees instead of a modal.
+#[test]
+fn slash_command_notes_render_into_the_transcript() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+    let project_name = app
+        .chat_project()
+        .expect("bootstrap creates the CWD project")
+        .name;
+
+    app.run_slash("mode writable");
+
+    let text = frame_text(&mut app, 110, 40);
+    assert!(
+        text.contains("Agent mode: writable"),
+        "the command outcome must be visible: {text}"
+    );
+    // The header names the project, so the agent's working directory is
+    // never ambiguous.
+    assert!(text.contains(&project_name), "{text}");
+}
+
+/// The editor is the only way to type a message, so it must always be
+/// visible — placeholder when empty, the text once typed. It used to be a
+/// `Constraint::Length(1)` row wrapped in a bordered block, which left the
+/// borders drawn but no content row at all.
+#[test]
+fn the_editor_is_always_rendered() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+
+    // Empty: the placeholder explains the box.
+    let empty = frame_text(&mut app, 100, 24);
+    assert!(empty.contains("ask, or / for commands"), "{empty}");
+
+    // Typed: the prompt shows, and the box grew to fit it.
+    app.chat.input = "refactor the parser".into();
+    let typed = frame_text(&mut app, 100, 24);
+    assert!(typed.contains("refactor the parser"), "{typed}");
+
+    // Multi-line: the box must be taller, and both lines visible.
+    app.chat.input = "first line\nsecond line".into();
+    let multiline = frame_text(&mut app, 100, 24);
+    assert!(multiline.contains("first line"), "{multiline}");
+    assert!(multiline.contains("second line"), "{multiline}");
+
+    // The palette takes over the same box rather than hiding it.
+    app.chat.input.clear();
+    app.chat.palette_open = true;
+    app.push(Popup::Commands {
+        buffer: "new".into(),
+        cursor: 0,
+    });
+    let palette = frame_text(&mut app, 100, 24);
+    assert!(palette.contains("command"), "{palette}");
+    assert!(palette.contains("/new"), "{palette}");
 }

@@ -1,14 +1,13 @@
-//! syntect spans → ratatui `Span`s.
+//! syntect spans → styled [`Span`]s.
 //!
 //! `messenger-highlight` reports byte ranges plus a packed `0xAARRGGBB`
 //! colour for the whole source; a terminal renderer needs per-line spans, so
 //! the source is split into lines and each highlight run is clipped at the
 //! line boundaries.
 
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use crate::text::{Color, Modifier, Span, Style};
 
-/// One packed color (`0xAARRGGBB`) as a ratatui color; the alpha byte is
+/// One packed color (`0xAARRGGBB`) as a terminal color; the alpha byte is
 /// ignored because terminals have no alpha.
 pub fn color_of(packed: u32) -> Color {
     Color::Rgb(
@@ -112,7 +111,6 @@ pub fn chrome_style() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
 
     #[test]
     fn color_maps_argb_to_rgb() {

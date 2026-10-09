@@ -13,8 +13,7 @@ use messenger_llm::domain::ContentPart;
 use messenger_markdown::StreamingSession;
 use messenger_store::model::StoredMessage;
 use messenger_tools::BuiltinTool;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use crate::text::{Color, Line, Modifier, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::highlight;

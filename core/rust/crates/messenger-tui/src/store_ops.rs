@@ -7,11 +7,13 @@
 //! every connected MCP server's tools).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use messenger_core::agent::{TitleConfig, TurnRequest};
 use messenger_mcp::client::McpChatTool;
 use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage, StoredModel};
 use messenger_store::Store;
+use messenger_store::StoredProject;
 use messenger_tools::BuiltinTool;
 
 use crate::config;
@@ -30,6 +32,10 @@ pub const MCP_SERVERS_KEY: &str = "mcp_servers_json";
 pub struct ResolvedTurn {
     pub request: TurnRequest,
     pub conversation_title: String,
+    /// The project's workspace directory the tools must run in. A
+    /// conversation outside any project resolves to `None` and therefore
+    /// declares none of the workspace-bound tools.
+    pub workspace: Option<PathBuf>,
 }
 
 /// Why a turn could not be resolved (shown verbatim in the status line).
@@ -52,9 +58,9 @@ impl TurnError {
         match self {
             TurnError::NoConversation => "Conversation not found.",
             TurnError::NoAgent => "Agent not found.",
-            TurnError::ModelNotConfigured => "Set a model for this Agent first.",
+            TurnError::ModelNotConfigured => "Set a model first (/model, or /provider new).",
             TurnError::NoProvider => "The model's provider no longer exists.",
-            TurnError::NoEnabledModel => "Enable at least one model first.",
+            TurnError::NoEnabledModel => "Set a model first (/model, or /provider new).",
         }
     }
 }
@@ -196,6 +202,74 @@ pub fn create_conversation(
         .upsert_conversation(&conversation)
         .map_err(|e| e.to_string())?;
     Ok(conversation)
+}
+
+/// Absolute form of a directory, falling back to the input when the
+/// platform refuses to canonicalize it (a path that does not exist yet).
+fn absolute_dir(dir: &Path) -> PathBuf {
+    let path = std::fs::canonicalize(dir).unwrap_or_else(|_| {
+        if dir.is_absolute() {
+            dir.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(dir))
+                .unwrap_or_else(|_| dir.to_path_buf())
+        }
+    });
+    strip_verbatim(&path)
+}
+
+/// Windows `canonicalize` returns the extended-length `\\?\C:\…` form, which
+/// is correct for the filesystem but unreadable in a transcript and in the
+/// model's working-directory note. Comparison keys keep it; display does not.
+pub fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => PathBuf::from(format!(r"\\{rest}")),
+        None => PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text)),
+    }
+}
+
+/// Find the project whose workspace is `dir`, matching on the absolute path
+/// so `C:\repo`, `c:\repo` and `C:/repo/` are the same project.
+pub fn project_for_workspace(store: &Store, dir: &Path) -> Result<Option<StoredProject>, String> {
+    let target = absolute_dir(dir);
+    Ok(store
+        .list_projects()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|project| absolute_dir(Path::new(&project.workspace)) == target))
+}
+
+/// The project for the process CWD, creating it on first use.
+///
+/// A terminal client is launched inside the tree the user wants to work on,
+/// so that tree IS the project: a new session opens a conversation in it and
+/// the agent's terminal/workspace tools get a real working directory instead
+/// of the desktop client's shared `~/.messenger` default.
+pub fn ensure_cwd_project(store: &Store) -> Result<StoredProject, String> {
+    let dir = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+    if let Some(project) = project_for_workspace(store, &dir)? {
+        return Ok(project);
+    }
+    let now = messenger_store::now_ms();
+    let workspace = absolute_dir(&dir).to_string_lossy().to_string();
+    let name = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| workspace.clone());
+    let project = StoredProject {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        workspace,
+        created_at: now,
+        updated_at: now,
+    };
+    store
+        .upsert_project(&project)
+        .map_err(|e| e.to_string())?;
+    Ok(project)
 }
 
 /// Apply the default-agent follow flags, then the conversation overrides —
@@ -352,6 +426,7 @@ pub fn resolve_turn(
 
     Ok(ResolvedTurn {
         conversation_title: conversation.title.clone(),
+        workspace: workspace.as_deref().map(|dir| strip_verbatim(Path::new(dir))),
         request: TurnRequest {
             conversation_id: conversation.id.clone(),
             model_id: model.model_id.clone(),

@@ -84,6 +84,28 @@ impl Engine {
         }
     }
 
+    /// An engine for rendering-only tests, which run on plain threads with no
+    /// reactor. It owns a runtime so `Handle::current()` is never reached —
+    /// rendering must not depend on the caller's async context.
+    #[cfg(test)]
+    pub fn headless(store: Store) -> Self {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime needs no reactor");
+        let handle = runtime.handle().clone();
+        // The handle outlives the engine, so the runtime has to as well. It is
+        // never used for work — only held so spawns have somewhere to go.
+        std::mem::forget(runtime);
+        Self::new(
+            Arc::new(store),
+            tx,
+            std::path::PathBuf::from("."),
+            handle,
+        )
+    }
+
     /// A spawner for detached background work, decoupled from `self`.
     ///
     /// Never call `tokio::spawn` directly from UI code: key handling runs
@@ -109,6 +131,10 @@ impl Engine {
     }
 
     /// Spawn one full agent turn.
+    ///
+    /// The tool host runs in the resolved turn's project workspace, falling
+    /// back to the configured default directory for a conversation that
+    /// belongs to no project (MCP tools stay available everywhere).
     pub fn start_turn(self: &Arc<Self>, resolved: ResolvedTurn) {
         let cancel = {
             let mut guard = self.cancel.lock().unwrap();
@@ -119,7 +145,9 @@ impl Engine {
         let tx = self.tx.clone();
         let mcp = Arc::clone(&self.mcp);
         let host = Arc::new(NativeToolHost {
-            workspace: self.workspace.clone(),
+            workspace: resolved
+                .workspace
+                .unwrap_or_else(|| self.workspace.clone()),
             shell: crate::shell::ShellConfig::default(),
             mcp,
             cancel: cancel.clone(),
