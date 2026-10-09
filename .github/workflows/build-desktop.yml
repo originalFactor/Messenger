@@ -35,10 +35,15 @@ jobs:
           $commitCount = git rev-list --count HEAD
           echo "VERSION_CODE=$commitCount" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Set up JDK 17
+      # Must be 21: gradle/gradle-daemon-jvm.properties pins toolchainVersion=21.
+      # windows-latest does not preinstall a matching JDK, so without this Gradle
+      # tries to download one through the Foojay resolver — and that file's
+      # hardcoded per-platform package IDs now answer "Package id not found" (400),
+      # failing the build at configuration time.
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
       - name: Setup Android SDK

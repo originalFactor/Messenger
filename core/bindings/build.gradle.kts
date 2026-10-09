@@ -30,6 +30,11 @@ val rustWorkspaceDir = rootProject.layout.projectDirectory.dir("core/rust")
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffiKotlin")
 val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs")
 
+// Plain values captured at configuration time for the CI diagnostics below: the
+// configuration cache rejects task actions that close over `project` or other
+// Gradle model objects.
+val generatedKotlinPath = generatedKotlinDir.get().asFile.absolutePath
+
 val hostLibName = when {
     OperatingSystem.current().isWindows -> "messenger_ffi.dll"
     OperatingSystem.current().isMacOsX -> "libmessenger_ffi.dylib"
@@ -78,6 +83,22 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
         "--out-dir", generatedKotlinDir.get().asFile.absolutePath,
     )
     outputs.dir(generatedKotlinDir)
+    // NOTE(ci): CI has reported `:core-bindings:compileReleaseKotlin NO-SOURCE`
+    // even though this task succeeds, which leaves :renderer-android unable to
+    // resolve the generated bindings. Record what actually landed on disk so the
+    // next run can distinguish "bindgen wrote nothing" from "the Kotlin source
+    // set never picked the output up".
+    val genOutPath = generatedKotlinPath
+    doLast {
+        val outDir = File(genOutPath)
+        val ktFiles = if (outDir.isDirectory) {
+            outDir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        } else {
+            emptyList()
+        }
+        logger.lifecycle("[uniffi] outDir=$outDir exists=${outDir.isDirectory} ktFiles=${ktFiles.size}")
+        ktFiles.take(20).forEach { logger.lifecycle("[uniffi]   ${it.absolutePath} (${it.length()} bytes)") }
+    }
     rustInputs.execute(this)
 }
 
@@ -132,4 +153,23 @@ dependencies {
 
 tasks.named("preBuild") {
     dependsOn(generateUniFFIBindings, buildRustAndroid)
+}
+
+// NOTE(ci): the second half of the NO-SOURCE diagnosis. Whether a Kotlin source
+// directory that does not exist at snapshot time gets picked up is exactly what
+// CI and a warm local build disagree about, so log the generated dir plus a
+// per-directory file count at execution time. Deliberately avoids the AGP
+// source-set API: on AGP 9 `android.sourceSets.getByName("main").java.srcDirs`
+// throws a ClassCastException (DefaultAndroidLibrarySourceSet_Decorated cannot
+// be cast to AndroidLibrarySourceSet) from this script.
+tasks.configureEach {
+    if (name != "compileReleaseKotlin" && name != "compileDebugKotlin") return@configureEach
+    // Copy into a local so the action captures a plain String rather than a
+    // reference to this build script (which the configuration cache rejects).
+    val genPath = generatedKotlinPath
+    doFirst {
+        val f = File(genPath)
+        val n = if (f.isDirectory) f.walkTopDown().count { it.isFile && it.extension == "kt" } else -1
+        logger.lifecycle("[ksrc] task=$path generated=$f exists=${f.isDirectory} ktFiles=$n")
+    }
 }
