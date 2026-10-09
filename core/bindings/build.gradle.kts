@@ -66,6 +66,11 @@ val ndkHome: String? by lazy {
 val cargoBuildHost by tasks.registering(Exec::class) {
     workingDir(rustWorkspaceDir)
     commandLine("cargo", "build", "--release", "-p", "messenger-ffi")
+    // Declared per platform, matching what cargo actually emits for
+    // crate-type = ["lib", "cdylib"]: `messenger_ffi.dll` on Windows,
+    // `libmessenger_ffi.dylib` on macOS, `libmessenger_ffi.so` elsewhere.
+    // A wrong name here would make the task permanently out-of-date against a
+    // file that never appears.
     outputs.file(rustWorkspaceDir.file("target/release/$hostLibName"))
     rustInputs.execute(this)
 }
@@ -83,21 +88,42 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
         "--out-dir", generatedKotlinDir.get().asFile.absolutePath,
     )
     outputs.dir(generatedKotlinDir)
-    // NOTE(ci): CI has reported `:core-bindings:compileReleaseKotlin NO-SOURCE`
-    // even though this task succeeds, which leaves :renderer-android unable to
-    // resolve the generated bindings. Record what actually landed on disk so the
-    // next run can distinguish "bindgen wrote nothing" from "the Kotlin source
-    // set never picked the output up".
-    val genOutPath = generatedKotlinPath
+    // Fail fast instead of silently generating nothing. This task exiting 0
+    // with an empty output directory made :core-bindings:compileReleaseKotlin
+    // report NO-SOURCE and :renderer-android fail with two "Unresolved
+    // reference" errors that pointed nowhere near the real cause. Two distinct
+    // ways to end up here:
+    //   1. the host cdylib is missing (cargoBuildHost was skipped as UP-TO-DATE
+    //      against a stale output snapshot, or the crate-type produced a
+    //      differently-named library);
+    //   2. bindgen ran but wrote no .kt files.
+    // Distinguish them here, where the actual cargo output is still in context.
+    val libPath = "target/release/$hostLibName"
+    val outPath = generatedKotlinPath
+    val rustRoot = rustWorkspaceDir.asFile.absolutePath
+    doFirst {
+        val lib = File(File(rustRoot, libPath).absolutePath)
+        check(lib.isFile && lib.length() > 0) {
+            "UniFFI host library missing or empty: $lib (exists=${lib.isFile}, " +
+                "size=${if (lib.isFile) lib.length() else -1}). cargoBuildHost should have " +
+                "produced it; run `cargo build --release -p messenger-ffi` in core/rust to see why."
+        }
+        logger.lifecycle("[uniffi] host lib=$lib size=${lib.length()}")
+    }
     doLast {
-        val outDir = File(genOutPath)
+        val outDir = File(outPath)
         val ktFiles = if (outDir.isDirectory) {
             outDir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         } else {
             emptyList()
         }
-        logger.lifecycle("[uniffi] outDir=$outDir exists=${outDir.isDirectory} ktFiles=${ktFiles.size}")
-        ktFiles.take(20).forEach { logger.lifecycle("[uniffi]   ${it.absolutePath} (${it.length()} bytes)") }
+        check(ktFiles.isNotEmpty()) {
+            "UniFFI generated no Kotlin bindings into $outDir " +
+                "(bindgen exited 0 but wrote ${ktFiles.size} .kt files). The host library " +
+                "loaded without UniFFI metadata, so no #[uniffi::export] was discovered."
+        }
+        logger.lifecycle("[uniffi] wrote ${ktFiles.size} .kt file(s) to $outDir")
+        ktFiles.forEach { logger.lifecycle("[uniffi]   ${it.name} (${it.length()} bytes)") }
     }
     rustInputs.execute(this)
 }
