@@ -34,6 +34,7 @@ use messenger_tui::config::TuiConfig;
 use messenger_tui::engine::{Engine, UiMsg};
 use messenger_tui::popup::Popup;
 use messenger_tui::ui;
+use messenger_tui::text::plain_text;
 
 /// Scripted provider: pops one SSE body per request.
 struct Scripted {
@@ -228,7 +229,7 @@ fn frame_text(app: &mut App, width: u16, height: u16) -> String {
     ui::compose(app, width, height)
         .lines
         .iter()
-        .map(|line| line.to_plain_string())
+        .map(|line| plain_text(&line))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1397,7 +1398,7 @@ fn the_editor_wraps_a_prompt_that_exceeds_the_width() {
     app.chat.input = "word ".repeat(30);
 
     let frame = ui::compose(&mut app, 60, 24);
-    let text: Vec<String> = frame.lines.iter().map(|l| l.to_plain_string()).collect();
+    let text: Vec<String> = frame.lines.iter().map(|l| plain_text(&l)).collect();
     let body: String = text
         .iter()
         .filter(|row| row.contains("word"))
@@ -1409,4 +1410,86 @@ fn the_editor_wraps_a_prompt_that_exceeds_the_width() {
     // The caret sits inside the box, not past the right border.
     let (column, _row) = frame.cursor.expect("the editor owns the caret");
     assert!(column < 59, "caret {column} must stay inside a 60-col terminal");
+}
+
+/// The transcript is append-only, so a settled row that has left the viewport
+/// must be handed to the terminal's scrollback EXACTLY once and never
+/// re-emitted. This pins the watermark that decides that.
+#[test]
+fn settled_transcript_rows_are_reported_as_history_exactly_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = messenger_store::Store::open_memory().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let engine = std::sync::Arc::new(Engine::new(
+        std::sync::Arc::new(store),
+        tx,
+        temp.path().to_path_buf(),
+        runtime.handle().clone(),
+    ));
+    let mut app = App::new(
+        engine,
+        TuiConfig::default(),
+        temp.path().join("settings.toml"),
+        temp.path().join("store.db"),
+    );
+    for i in 0..12 {
+        app.note_info(format!("settled note {i}"));
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..6 {
+        let frame = ui::compose(&mut app, 60, 12);
+        seen.extend(frame.history.iter().map(|l| plain_text(l)));
+    }
+    // Every note that left the viewport must appear in history, exactly once.
+    for i in 0..12 {
+        let needle = format!("settled note {i}");
+        let count = seen.iter().filter(|l| l.contains(&needle)).count();
+        assert!(count <= 1, "{needle} emitted {count} times (duplicated history)");
+    }
+    assert!(
+        seen.iter().any(|l| l.contains("settled note 0")),
+        "the oldest note must reach history, got {seen:?}"
+    );
+}
+
+/// A row handed to the terminal's scrollback must never ALSO be drawn in the
+/// viewport: the user would see the same line twice, once above the editor and
+/// once inside it.
+#[test]
+fn no_transcript_row_is_both_history_and_viewport() {
+    let temp = tempfile::tempdir().unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let engine = std::sync::Arc::new(Engine::new(
+        std::sync::Arc::new(messenger_store::Store::open_memory().unwrap()),
+        tx,
+        temp.path().to_path_buf(),
+        runtime.handle().clone(),
+    ));
+    let mut app = App::new(
+        engine,
+        TuiConfig::default(),
+        temp.path().join("settings.toml"),
+        temp.path().join("store.db"),
+    );
+    for i in 0..14 {
+        app.note_info(format!("note-{i}"));
+        let frame = ui::compose(&mut app, 60, ui::viewport_rows(20));
+        let history: Vec<String> = frame.history.iter().map(|l| plain_text(l)).collect();
+        let screen: Vec<String> = frame.lines.iter().map(|l| plain_text(l)).collect();
+        for h in history.iter().filter(|h| !h.trim().is_empty()) {
+            assert!(
+                !screen.iter().any(|s| s == h),
+                "round {i}: {h:?} is emitted as BOTH history and viewport\n\
+                 history={history:?}\nscreen={screen:?}"
+            );
+        }
+    }
 }

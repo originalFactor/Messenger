@@ -232,7 +232,8 @@ fn run() -> Result<(), String> {
     // `TerminalGuard` restores the terminal on every exit path, panic
     // included; `run` calls `stop` explicitly so the restore happens before
     // the process exits rather than at scope teardown.
-    let screen = Screen::start().map_err(|e| format!("terminal: {e}"))?;
+    let screen_rows = crossterm::terminal::size().map(|(_, rows)| rows).unwrap_or(24);
+    let screen = Screen::start(ui::viewport_rows(screen_rows)).map_err(|e| format!("terminal: {e}"))?;
     let mut guard = TerminalGuard(screen);
     let result = event_loop(&mut guard.0, &mut app, &mut rx);
     guard.0.stop();
@@ -254,12 +255,25 @@ fn event_loop(
     app: &mut App,
     rx: &mut mpsc::UnboundedReceiver<messenger_tui::engine::UiMsg>,
 ) -> Result<(), String> {
+    // The viewport is a fixed region at the bottom, so the frame is laid out
+    // against THAT height, not the whole screen: composing for the screen
+    // would give the transcript rows the region reserved for history, which is
+    // then scrolled away unseen.
     loop {
-        let (width, height) = screen.size().map_err(|e| e.to_string())?;
-        let frame = ui::compose(app, width, height);
+        let (width, _) = screen.size().map_err(|e| e.to_string())?;
+        let frame = ui::compose(app, width, screen.height());
+        let history = frame.history.clone();
+        let (lines, cursor) = (frame.lines, frame.cursor);
         screen
-            .render(&frame.lines, frame.cursor, frame.scrolled)
+            .render(cursor, |f| ui::draw(f, &lines))
             .map_err(|e| e.to_string())?;
+        // History goes in AFTER the frame, never before. `insert_before`
+        // scrolls the region above the viewport down to open a gap, which
+        // moves every row the frame just drew one row up — so inserting first
+        // leaves the viewport's own rows duplicated above it (observed: the
+        // project note rendered two or three times). Drawing first and then
+        // inserting means the shift happens above content nobody will redraw.
+        screen.flush_history(&history).map_err(|e| e.to_string())?;
 
         // 30 ms doubles as the streaming batch window (TARGET.md §6).
         if event::poll(Duration::from_millis(30)).map_err(|e| e.to_string())? {

@@ -31,6 +31,17 @@ async-trait = "0.1"
 # `bracketed-paste` keeps a multi-line paste from being read as one giant
 # key press, which the editor would submit as a single message.
 crossterm = { version = "0.28", features = ["bracketed-paste"] }
+# The widget/terminal layer: `Viewport::Inline` + `Terminal::insert_before`
+# (ratatui's own port of the codex scrollback model) keep finalized transcript
+# in the terminal's native scrollback, so the widget layer only ever paints
+# the bottom chrome.
+# `scrolling-regions` is NOT default. Without it ratatui's `insert_before`
+# falls back to scrolling the whole screen and REDRAWING the viewport, which
+# destroys the very history it was asked to insert (measured: scrollback full
+# of blank rows). With it, ratatui restricts the scroll to the region above the
+# viewport — the behaviour codex depends on.
+ratatui = { version = "0.30", features = ["scrolling-regions"] }
+ratatui-textarea = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }

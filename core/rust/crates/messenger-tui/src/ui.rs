@@ -56,6 +56,8 @@
 //!   the editor, and the editor is where the user's attention already is.
 
 use unicode_width::UnicodeWidthStr;
+use ratatui::layout::Rect;
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::app::{command_help_rows, App, NoteKind};
 use crate::popup::{command_rows, Field, Popup};
@@ -76,6 +78,53 @@ const PLACEHOLDER: &str = "> ask, or / for commands";
 /// The prompt drawn at the head of a non-empty message.
 const PROMPT: &str = "> ";
 
+/// The most rows the viewport ever takes: the tallest chrome the client can
+/// produce (a full editor, the `/` palette at its own maximum, the context
+/// line and the footer).
+///
+/// [`crate::screen::Screen`] builds its inline viewport once, and rebuilding
+/// it scrolls the history we just inserted off the top (see that module's
+/// docs). So the viewport is FIXED for the life of the process, and the chrome
+/// pads and clips itself to fit rather than the viewport resizing.
+const MAX_VIEWPORT_ROWS: u16 = 12;
+
+/// The viewport height for a terminal `screen_rows` tall.
+///
+/// It is never smaller than the smallest chrome that still shows a prompt: a
+/// 4-row terminal gets the 5 rows the chrome needs, because the prompt is the
+/// only way to type at all. It is never larger than the screen.
+pub fn viewport_rows(screen_rows: u16) -> u16 {
+    // The smallest chrome that still shows a prompt: the editor's three rows
+    // plus the context line and the footer.
+    let smallest = (MIN_EDITOR_ROWS + 2) as u16;
+    let wanted = MAX_VIEWPORT_ROWS.max(smallest);
+    // The prompt is the only way to type at all, so on a screen too short for
+    // even that we still give it the rows — the cost is one row of scrollback.
+    wanted.max(smallest).min(screen_rows.max(smallest))
+}
+
+/// Paint a composed frame into ratatui's buffer.
+///
+/// The frame's lines are already laid out and wrapped, so they go in as a
+/// `Paragraph` without a wrapping style — ratatui's own layout is used only
+/// to place them.
+pub fn draw(frame: &mut ratatui::Frame<'_>, lines: &[Line<'static>]) {
+    let area = frame.area();
+    let height = usize::from(u16::try_from(lines.len()).unwrap_or(area.height).min(area.height));
+    for (row, line) in lines.iter().take(height).enumerate() {
+        let Ok(y) = u16::try_from(row) else { break };
+        Paragraph::new(line.clone()).render(
+            Rect {
+                x: area.x,
+                y: area.y + y,
+                width: area.width,
+                height: 1,
+            },
+            frame.buffer_mut(),
+        );
+    }
+}
+
 const ACCENT: Color = Color::Indexed(45);
 const CHROME: Color = Color::DarkGray;
 const RULE: Color = Color::Indexed(238);
@@ -86,19 +135,30 @@ pub struct Frame {
     pub lines: Vec<Line<'static>>,
     /// Where the hardware cursor belongs, in frame coordinates.
     pub cursor: Option<(u16, u16)>,
-    /// Transcript rows that scrolled off the top. [`crate::screen`] issues
-    /// the matching scroll so history lands in the terminal's scrollback.
+    /// How many leading transcript rows were left out of the viewport this
+    /// frame, whether or not they are new. Rows before the history watermark
+    /// are already in scrollback and are skipped; the rest are reported in
+    /// [`Frame::history`].
     pub scrolled: u32,
+    /// Transcript rows that have scrolled out of the viewport and are now
+    /// FINAL. [`crate::screen::Screen::flush_history`] writes them into the
+    /// terminal's scrollback, which owns them from then on — they are never
+    /// drawn again, which is why only settled rows may appear here.
+    pub history: Vec<Line<'static>>,
 }
 
-/// Compose the whole frame.
-///
-/// The result is always `height` rows, so the editor, context line, and
-/// footer stay at the bottom of the terminal no matter how short the
-/// transcript is; the gap in between is blank.
-pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
-    let width = width.max(8) as usize;
-    let height = height.max(4) as usize;
+
+/// The bottom chrome: editor (with the `/` palette spliced inside it), the
+/// context line, and the footer. Its height is a function of the CONTENT, not
+/// of the viewport, so it can pad or clip itself to the fixed viewport (see
+/// [`viewport_rows`]) without the transcript silently losing rows.
+fn chrome_lines(
+    app: &mut App,
+    width: usize,
+    max_rows: usize,
+) -> (Vec<Line<'static>>, (u16, u16)) {
+    let width = width.max(8);
+    let height = max_rows.max(MIN_EDITOR_ROWS);
 
     let palette_open = matches!(app.popups.last(), Some(Popup::Commands { .. }));
     let palette_want = if palette_open {
@@ -161,6 +221,21 @@ pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
     }
     chrome.push(footer_line(app, width));
 
+    (chrome, caret)
+}
+
+/// Compose the whole frame for a viewport `height` rows tall.
+///
+/// Transcript rows that no longer fit are reported in [`Frame::history`] rather
+/// than dropped: the terminal keeps them in its scrollback, which is where the
+/// user reads history from. See [`viewport_height`] for how the caller learns
+/// how tall the viewport should be.
+pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
+    let mut history: Vec<Line<'static>> = Vec::new();
+    let width = width.max(8) as usize;
+    let height = (height.max(MIN_EDITOR_ROWS as u16 + 2)) as usize;
+
+    let (chrome, caret) = chrome_lines(app, width, height);
     let transcript_rows = height.saturating_sub(chrome.len());
     let transcript = transcript_lines(app, width);
     let visible = transcript_rows.min(transcript.len());
@@ -171,7 +246,28 @@ pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
         (app.chat.scroll as usize).min(transcript.len().saturating_sub(visible))
     };
     let start = transcript.len() - back - visible;
-    let dropped = start as u32;
+    let dropped = start;
+
+    // Rows before `start` have left the viewport. Those already written to
+    // scrollback are skipped; the ones past the watermark are new and FINAL (a
+    // row that left the viewport cannot still be streaming — the live message
+    // is always in the tail), so they go to the terminal's history.
+    //
+    // The watermark only means anything while the transcript is a stable
+    // prefix, which it is while the user reads the tail (`follow`) and the
+    // width has not changed. Scrolling BACK (`chat.scroll`) re-shows rows that
+    // may already be in scrollback, so the watermark is dropped and the
+    // viewport simply redraws them — the terminal's own scrollback stays
+    // correct either way.
+    if app.chat.follow {
+        let watermark = app.history_rows();
+        if dropped > watermark {
+            history.extend_from_slice(&transcript[watermark..dropped]);
+        }
+        app.set_history_rows(dropped);
+    } else {
+        app.reset_history();
+    }
 
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(height);
     lines.extend(transcript[start..start + visible].iter().cloned());
@@ -199,7 +295,8 @@ pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
     Frame {
         lines,
         cursor,
-        scrolled: dropped,
+        scrolled: dropped as u32,
+        history,
     }
 }
 
@@ -1102,6 +1199,7 @@ fn help_lines(app: &App, scroll: usize) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::plain_text;
 
     /// An app with no runtime attached — the editor and frame paths never
     /// spawn anything, so rendering must not need a reactor.
@@ -1121,8 +1219,8 @@ mod tests {
         let body = vec![Line::raw("a"), Line::raw("b")];
         let boxed = box_lines("t", body, 20, CHROME, 6);
         assert_eq!(boxed.len(), 6, "the budget is the WHOLE box, borders included");
-        assert!(boxed[0].to_plain_string().starts_with('╭'));
-        assert!(boxed[5].to_plain_string().starts_with('╰'));
+        assert!(plain_text(&boxed[0]).starts_with('╭'));
+        assert!(plain_text(&boxed[5]).starts_with('╰'));
     }
 
     #[test]
@@ -1142,13 +1240,13 @@ mod tests {
         let boxed = box_lines("t", vec![Line::raw("a")], 20, CHROME, 5);
         assert_eq!(boxed.len(), 5);
         // A row past the body is a border, padding, border.
-        assert_eq!(boxed[3].to_plain_string(), format!("│{}│", " ".repeat(18)));
+        assert_eq!(plain_text(&boxed[3]), format!("│{}│", " ".repeat(18)));
     }
 
     #[test]
     fn box_lines_clip_an_overlong_body_to_the_inner_width() {
         let boxed = box_lines("t", vec![Line::raw("x".repeat(50))], 20, CHROME, 3);
-        let row = boxed[1].to_plain_string();
+        let row = plain_text(&boxed[1]);
         assert_eq!(row.chars().count(), 20, "{row}");
         assert!(row.starts_with('│') && row.ends_with('│'));
     }
@@ -1157,7 +1255,7 @@ mod tests {
     fn box_rows_are_exactly_the_terminal_width() {
         let boxed = box_lines("message", vec![Line::raw("hi")], 30, CHROME, 3);
         for line in boxed {
-            assert_eq!(line.width(), 30, "{:?}", line.to_plain_string());
+            assert_eq!(line.width(), 30, "{:?}", plain_text(&line));
         }
     }
 
@@ -1167,12 +1265,12 @@ mod tests {
         app.chat.input = "hi".into();
         let (lines, cursor) = editor_box(&app, 20, 3);
         assert_eq!(lines.len(), 3);
-        let body = lines[1].to_plain_string();
+        let body = plain_text(&lines[1]);
         assert!(body.contains("hi"), "{body}");
         let has_block = lines[1]
             .spans
             .iter()
-            .any(|span| span.style.is_reversed());
+            .any(|span| span.style.add_modifier.contains(Modifier::REVERSED));
         assert!(has_block, "the caret must be drawn: {body}");
         // Left border + the `> ` prompt + two cells of text.
         assert_eq!(cursor, (1 + 2 + 2, 1));
@@ -1182,11 +1280,11 @@ mod tests {
     fn an_empty_editor_shows_the_placeholder_without_a_caret_block() {
         let app = app();
         let (lines, _) = editor_box(&app, 40, 3);
-        assert!(lines[1].to_plain_string().contains(PLACEHOLDER));
+        assert!(plain_text(&lines[1]).contains(PLACEHOLDER));
         assert!(!lines[1]
             .spans
             .iter()
-            .any(|span| span.style.is_reversed()));
+            .any(|span| span.style.add_modifier.contains(Modifier::REVERSED)));
     }
 
     #[test]
@@ -1196,8 +1294,8 @@ mod tests {
         assert_eq!(editor_height(&app, 40), 4);
         let (lines, cursor) = editor_box(&app, 40, 4);
         assert_eq!(lines.len(), 4);
-        assert!(lines[1].to_plain_string().contains("one"));
-        assert!(lines[2].to_plain_string().contains("two"));
+        assert!(plain_text(&lines[1]).contains("one"));
+        assert!(plain_text(&lines[2]).contains("two"));
         assert_eq!(cursor.1, 2, "the caret follows the second line");
     }
 
@@ -1218,7 +1316,7 @@ mod tests {
         let height = editor_height(&app, 44);
         assert!(height > 3, "100 chars must need more than one row: {height}");
         let (lines, caret) = editor_box(&app, 44, height);
-        let text: Vec<String> = lines.iter().map(|l| l.to_plain_string()).collect();
+        let text: Vec<String> = lines.iter().map(|l| plain_text(&l)).collect();
         let joined = text.join("\n");
         assert!(joined.contains("www"), "the input is visible:\n{text:?}");
         // The tail row must be present — the caret's row is the LAST row.
@@ -1309,17 +1407,17 @@ mod tests {
         let rows: Vec<Line<'static>> = (0..40).map(|i| Line::raw(i.to_string())).collect();
         let window = windowed(rows, 20);
         assert_eq!(window.len(), MAX_VISIBLE_ROWS);
-        assert_eq!(window[0].to_plain_string(), "13");
+        assert_eq!(plain_text(&window[0]), "13");
     }
 
     #[test]
     fn composite_replaces_the_rows_it_covers() {
         let mut frame = vec![Line::raw("top"), Line::raw("mid"), Line::raw("bot")];
         composite(&mut frame, vec![Line::raw("XX")], 10);
-        assert_eq!(frame[0].to_plain_string(), "top");
-        assert!(frame[1].to_plain_string().contains("XX"), "{}", frame[1].to_plain_string());
-        assert!(!frame[1].to_plain_string().contains("mid"));
-        assert_eq!(frame[2].to_plain_string(), "bot");
+        assert_eq!(plain_text(&frame[0]), "top");
+        assert!(plain_text(&frame[1]).contains("XX"), "{}", plain_text(&frame[1]));
+        assert!(!plain_text(&frame[1]).contains("mid"));
+        assert_eq!(plain_text(&frame[2]), "bot");
         assert_eq!(frame[1].width(), 10);
     }
 
@@ -1327,6 +1425,10 @@ mod tests {
     /// frame pushes the prompt off a small terminal, a shorter one lets stale
     /// rows linger. A 20-row terminal with the palette open is the case that
     /// actually broke: the chrome budgeted 1 row for a box that needs 2.
+    /// `compose` fills the viewport it is given, but never below the minimum
+    /// that still shows a prompt: a 4-row request is answered with the 5 rows
+    /// the chrome needs, and the caller must not draw a viewport smaller than
+    /// that (see [`viewport_height`], which is the only thing that sizes one).
     #[test]
     fn the_frame_is_exactly_the_viewport_height_at_every_size() {
         for height in 4u16..30 {
@@ -1340,17 +1442,21 @@ mod tests {
                             cursor: 0,
                         });
                     }
-                    let frame = compose(&mut app, width, height);
+                    // The viewport the client would actually build for a
+                    // terminal this tall — the frame must fill exactly that,
+                    // because the viewport is fixed and the chrome pads.
+                    let wanted = viewport_rows(height);
+                    let frame = compose(&mut app, width, wanted);
                     assert_eq!(
                         frame.lines.len(),
-                        height as usize,
-                        "frame must fill {width}x{height} (palette: {palette})"
+                        usize::from(wanted),
+                        "frame must fill {width}x{wanted} (palette: {palette})"
                     );
                     for line in &frame.lines {
                         assert!(
                             line.width() <= width as usize,
                             "row too wide at {width}: {:?}",
-                            line.to_plain_string()
+                            plain_text(&line)
                         );
                     }
                 }
@@ -1368,7 +1474,7 @@ mod tests {
         let text: Vec<String> = frame
             .lines
             .iter()
-            .map(|line| line.to_plain_string())
+            .map(|line| plain_text(&line))
             .collect();
         let editor = text.iter().position(|row| row.contains("message")).unwrap();
         // Three editor rows (top border, content, bottom border), then the
@@ -1388,7 +1494,7 @@ mod tests {
         let blank = frame
             .lines
             .iter()
-            .filter(|line| line.to_plain_string().trim().is_empty())
+            .filter(|line| plain_text(&line).trim().is_empty())
             .count();
         assert!(blank >= 15, "an empty transcript pads the gap: {blank} blank rows");
     }
@@ -1401,7 +1507,7 @@ mod tests {
         app.chat.input = "abc".into();
         let frame = compose(&mut app, 60, 20);
         let (column, row) = frame.cursor.expect("the chat owns the caret");
-        let editor_row = frame.lines[row as usize].to_plain_string();
+        let editor_row = plain_text(&frame.lines[row as usize]);
         assert!(editor_row.contains("abc"), "caret row: {editor_row:?}");
         assert!(editor_row.starts_with('│'), "caret row: {editor_row:?}");
         let _ = column;
@@ -1433,7 +1539,7 @@ mod tests {
                     line.width() <= width as usize,
                     "row {index} is {} cells at width {width}: {:?}",
                     line.width(),
-                    line.to_plain_string()
+                    plain_text(&line)
                 );
             }
         }
@@ -1452,7 +1558,7 @@ mod tests {
         });
         for width in [20u16, 45, 100] {
             for line in compose(&mut app, width, 30).lines {
-                let text = line.to_plain_string();
+                let text = plain_text(&line);
                 if text.starts_with('╭') || text.starts_with('╰') || text.contains('│') {
                     assert_eq!(
                         line.width(),
@@ -1484,7 +1590,7 @@ mod tests {
             frame
                 .lines
                 .iter()
-                .any(|line| line.to_plain_string().contains("note 199")),
+                .any(|line| plain_text(&line).contains("note 199")),
             "the newest note stays visible"
         );
     }
@@ -1504,7 +1610,7 @@ mod tests {
         let text: Vec<String> = frame
             .lines
             .iter()
-            .map(|line| line.to_plain_string())
+            .map(|line| plain_text(&line))
             .collect();
         let box_top = text.iter().position(|row| row.contains('╭')).unwrap();
         let box_bottom = text.iter().position(|row| row.contains('╰')).unwrap();

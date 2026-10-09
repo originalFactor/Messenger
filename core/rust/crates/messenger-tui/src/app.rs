@@ -134,6 +134,16 @@ pub struct ChatState {
     /// recovered here when the message is sent (pi's paste registry).
     pub pastes: std::collections::HashMap<usize, String>,
     paste_counter: usize,
+    /// How many transcript rows have already been handed to the terminal's
+    /// scrollback (see [`crate::screen::Screen::flush_history`]).
+    ///
+    /// The transcript is append-only, so this is a row watermark rather than a
+    /// message index: [`crate::ui::compose`] renders the whole transcript every
+    /// frame, and rows below the watermark are already gone from the screen.
+    /// Each row is inserted exactly once. Re-wrapping at a new width changes
+    /// the row count, so a width change resets this — see
+    /// [`ChatState::reset_history`].
+    history_rows: usize,
 
     live: Option<LiveStream>,
     cache: RenderedCache,
@@ -859,6 +869,25 @@ impl App {
                 render::message_lines(message, width, &opts)
             })
             .clone()
+    }
+
+    /// Transcript rows already written to the terminal's scrollback.
+    pub fn history_rows(&self) -> usize {
+        self.chat.history_rows
+    }
+
+    /// Record that `rows` transcript rows have been handed to scrollback.
+    pub fn set_history_rows(&mut self, rows: usize) {
+        self.chat.history_rows = rows;
+    }
+
+    /// Forget how much transcript is in scrollback.
+    ///
+    /// Called when the transcript is re-rendered at a different width: the
+    /// rows change (they re-wrap), so the old watermark no longer refers to
+    /// the same text and the new render is inserted from the top instead.
+    pub fn reset_history(&mut self) {
+        self.chat.history_rows = 0;
     }
 
     // ------------------------------------------------------------------
