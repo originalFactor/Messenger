@@ -23,3 +23,16 @@ edition = "2021"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Used only for the host cdylib that uniffi-bindgen reads (see
+# core/bindings/build.gradle.kts). That library must keep its symbol table:
+# uniffi finds the UNIFFI_META_* metadata symbols by walking the ELF `.symtab`,
+# which `strip = true` above removes — on Linux bindgen then exits 0 having
+# discovered nothing, yielding an empty bindings directory. PE and Mach-O are
+# unaffected (they read the export table and nlist respectively), which is why
+# only the Linux CI job failed. Nothing ships this artifact: the Android
+# jniLibs come from cargo-ndk targeting the Android triples and keep the
+# stripped release profile, and the host library's only consumer is bindgen.
+[profile.bindgen]
+inherits = "release"
+strip = "none"

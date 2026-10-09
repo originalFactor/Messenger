@@ -41,9 +41,21 @@ val hostLibName = when {
     else -> "libmessenger_ffi.so"
 }
 
+// The host build uses the `bindgen` profile, which is `release` with
+// `strip = "none"`. uniffi-bindgen locates the UNIFFI_META_* symbols by walking
+// the ELF `.symtab`, and the release profile's `strip = true` deletes it — on
+// Linux bindgen then exits 0 having found no components and writes an empty
+// bindings directory, which surfaced as `NO-SOURCE` on :core-bindings and two
+// "Unresolved reference" errors in :renderer-android. PE and Mach-O are immune
+// (they read the export table and nlist), so only the Linux CI job broke.
+// Cargo emits custom-profile output under target/<profile>/, which also keeps
+// the host library out of target/release/ where cargo-ndk's shared state lives.
+val hostProfile = "bindgen"
+val hostProfileDir = "target/$hostProfile"
+
 // Cargo emits `<name>.exe` for bins on Windows only; Unix targets get no suffix.
 val exeSuffix = if (OperatingSystem.current().isWindows) ".exe" else ""
-val bindgenBinName = "target/release/uniffi-bindgen$exeSuffix"
+val bindgenBinName = "$hostProfileDir/uniffi-bindgen$exeSuffix"
 
 val rustInputs = Action<Exec> {
     // Track the WHOLE workspace: messenger-ffi depends on the sibling crates
@@ -69,11 +81,13 @@ val ndkHome: String? by lazy {
 
 val cargoBuildHost by tasks.registering(Exec::class) {
     workingDir(rustWorkspaceDir)
-    // --bin uniffi-bindgen as well as the cdylib: generateUniFFIBindings invokes
-    // this binary directly instead of `cargo run`, so a single cargo invocation
-    // is the only thing that writes core/rust/target. See the comment there.
+    // --profile bindgen: build the cdylib with its symbol table intact, which is
+    // what uniffi-bindgen needs to find the metadata symbols (release's
+    // `strip = true` removes them). Also builds the bindgen binary itself, so
+    // generateUniFFIBindings can invoke it directly rather than re-entering
+    // cargo via `cargo run`.
     commandLine(
-        "cargo", "build", "--release", "-p", "messenger-ffi",
+        "cargo", "build", "--profile", hostProfile, "-p", "messenger-ffi",
         "--bin", "uniffi-bindgen", "--lib",
     )
     // Declared per platform, matching what cargo actually emits for
@@ -81,7 +95,7 @@ val cargoBuildHost by tasks.registering(Exec::class) {
     // `libmessenger_ffi.dylib` on macOS, `libmessenger_ffi.so` elsewhere.
     // A wrong name here would make the task permanently out-of-date against a
     // file that never appears.
-    outputs.file(rustWorkspaceDir.file("target/release/$hostLibName"))
+    outputs.file(rustWorkspaceDir.file("$hostProfileDir/$hostLibName"))
     // Both declared: generateUniFFIBindings depends on this binary existing,
     // so leaving it undeclared would let the task report UP-TO-DATE while the
     // executable was stale or absent.
@@ -93,13 +107,7 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
     dependsOn(cargoBuildHost)
     workingDir(rustWorkspaceDir)
     // Invoke the bindgen binary that cargoBuildHost already built instead of
-    // `cargo run`. `cargo run` re-enters cargo and writes to the very same
-    // core/rust/target/release directory that cargoBuildHost is writing; with
-    // org.gradle.parallel=true those two raced, and the library bindgen then
-    // loaded had its UniFFI metadata clobbered mid-write — the file existed and
-    // was megabytes in size, but no #[uniffi::export] could be read out of it,
-    // so bindgen exited 0 having written zero bindings. cargoBuildHost is now
-    // the single writer of that directory.
+    // `cargo run`, so exactly one cargo invocation owns this task's inputs.
     // ktlint is not on every machine; formatting is cosmetic for generated code.
     commandLine(
         // Absolute path: Exec does not resolve a relative program against the
@@ -107,7 +115,7 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
         // into bindgenBinName.
         File(rustWorkspaceDir.asFile, bindgenBinName).absolutePath,
         "generate",
-        "--library", "target/release/$hostLibName",
+        "--library", "$hostProfileDir/$hostLibName",
         "--language", "kotlin",
         "--no-format",
         "--out-dir", generatedKotlinDir.get().asFile.absolutePath,
@@ -123,7 +131,7 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
     //      differently-named library);
     //   2. bindgen ran but wrote no .kt files.
     // Distinguish them here, where the actual cargo output is still in context.
-    val libPath = "target/release/$hostLibName"
+    val libPath = "$hostProfileDir/$hostLibName"
     val outPath = generatedKotlinPath
     val rustRoot = rustWorkspaceDir.asFile.absolutePath
     val bindgenBinPath = bindgenBinName
@@ -133,12 +141,12 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
         check(bin.isFile && bin.length() > 0) {
             "UniFFI bindgen binary missing or empty: $bin (exists=${bin.isFile}). " +
                 "cargoBuildHost builds it via `--bin uniffi-bindgen`; run " +
-                "`cargo build --release -p messenger-ffi --bin uniffi-bindgen --lib` in core/rust."
+                "`cargo build --profile bindgen -p messenger-ffi --bin uniffi-bindgen --lib` in core/rust."
         }
         check(lib.isFile && lib.length() > 0) {
             "UniFFI host library missing or empty: $lib (exists=${lib.isFile}, " +
                 "size=${if (lib.isFile) lib.length() else -1}). cargoBuildHost should have " +
-                "produced it; run `cargo build --release -p messenger-ffi` in core/rust to see why."
+                "produced it; run `cargo build --profile bindgen -p messenger-ffi` in core/rust to see why."
         }
         logger.lifecycle("[uniffi] host lib=$lib size=${lib.length()} bindgen=$bin")
     }
@@ -151,8 +159,9 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
         }
         check(ktFiles.isNotEmpty()) {
             "UniFFI generated no Kotlin bindings into $outDir " +
-                "(bindgen exited 0 but wrote ${ktFiles.size} .kt files). The host library " +
-                "loaded without UniFFI metadata, so no #[uniffi::export] was discovered."
+                "(bindgen exited 0 but wrote ${ktFiles.size} .kt files). The library carried no " +
+                "UNIFFI_META_* metadata symbols — most likely it was built with `strip = true` " +
+                "instead of the `bindgen` profile, whose symbol table uniffi reads."
         }
         logger.lifecycle("[uniffi] wrote ${ktFiles.size} .kt file(s) to $outDir")
         ktFiles.forEach { logger.lifecycle("[uniffi]   ${it.name} (${it.length()} bytes)") }
