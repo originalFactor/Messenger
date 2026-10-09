@@ -40,8 +40,13 @@ crossterm = { version = "0.28", features = ["bracketed-paste"] }
 # destroys the very history it was asked to insert (measured: scrollback full
 # of blank rows). With it, ratatui restricts the scroll to the region above the
 # viewport — the behaviour codex depends on.
+# `ratatui-textarea` is deliberately NOT used. It would be the natural editor
+# widget, but it exposes no public wrapped-height API (`visual_line_count` and
+# friends are internal), so it cannot report how tall the editor needs to be —
+# which is exactly what a fixed-height inline viewport needs to know. Writing
+# the editor into this crate's own `compose` keeps that height ours, and the
+# caret/wrap rules stay pinned by tests.
 ratatui = { version = "0.30", features = ["scrolling-regions"] }
-ratatui-textarea = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
