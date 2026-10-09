@@ -41,6 +41,10 @@ val hostLibName = when {
     else -> "libmessenger_ffi.so"
 }
 
+// Cargo emits `<name>.exe` for bins on Windows only; Unix targets get no suffix.
+val exeSuffix = if (OperatingSystem.current().isWindows) ".exe" else ""
+val bindgenBinName = "target/release/uniffi-bindgen$exeSuffix"
+
 val rustInputs = Action<Exec> {
     // Track the WHOLE workspace: messenger-ffi depends on the sibling crates
     // (store/core/llm/…), so a change outside the ffi crate must still
@@ -65,22 +69,43 @@ val ndkHome: String? by lazy {
 
 val cargoBuildHost by tasks.registering(Exec::class) {
     workingDir(rustWorkspaceDir)
-    commandLine("cargo", "build", "--release", "-p", "messenger-ffi")
+    // --bin uniffi-bindgen as well as the cdylib: generateUniFFIBindings invokes
+    // this binary directly instead of `cargo run`, so a single cargo invocation
+    // is the only thing that writes core/rust/target. See the comment there.
+    commandLine(
+        "cargo", "build", "--release", "-p", "messenger-ffi",
+        "--bin", "uniffi-bindgen", "--lib",
+    )
     // Declared per platform, matching what cargo actually emits for
     // crate-type = ["lib", "cdylib"]: `messenger_ffi.dll` on Windows,
     // `libmessenger_ffi.dylib` on macOS, `libmessenger_ffi.so` elsewhere.
     // A wrong name here would make the task permanently out-of-date against a
     // file that never appears.
     outputs.file(rustWorkspaceDir.file("target/release/$hostLibName"))
+    // Both declared: generateUniFFIBindings depends on this binary existing,
+    // so leaving it undeclared would let the task report UP-TO-DATE while the
+    // executable was stale or absent.
+    outputs.file(rustWorkspaceDir.file(bindgenBinName))
     rustInputs.execute(this)
 }
 
 val generateUniFFIBindings by tasks.registering(Exec::class) {
     dependsOn(cargoBuildHost)
     workingDir(rustWorkspaceDir)
+    // Invoke the bindgen binary that cargoBuildHost already built instead of
+    // `cargo run`. `cargo run` re-enters cargo and writes to the very same
+    // core/rust/target/release directory that cargoBuildHost is writing; with
+    // org.gradle.parallel=true those two raced, and the library bindgen then
+    // loaded had its UniFFI metadata clobbered mid-write — the file existed and
+    // was megabytes in size, but no #[uniffi::export] could be read out of it,
+    // so bindgen exited 0 having written zero bindings. cargoBuildHost is now
+    // the single writer of that directory.
     // ktlint is not on every machine; formatting is cosmetic for generated code.
     commandLine(
-        "cargo", "run", "--release", "-p", "messenger-ffi", "--bin", "uniffi-bindgen",
+        // Absolute path: Exec does not resolve a relative program against the
+        // working directory on Windows, and the `.exe` suffix is already baked
+        // into bindgenBinName.
+        File(rustWorkspaceDir.asFile, bindgenBinName).absolutePath,
         "generate",
         "--library", "target/release/$hostLibName",
         "--language", "kotlin",
@@ -101,14 +126,21 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
     val libPath = "target/release/$hostLibName"
     val outPath = generatedKotlinPath
     val rustRoot = rustWorkspaceDir.asFile.absolutePath
+    val bindgenBinPath = bindgenBinName
     doFirst {
         val lib = File(File(rustRoot, libPath).absolutePath)
+        val bin = File(File(rustRoot, bindgenBinPath).absolutePath)
+        check(bin.isFile && bin.length() > 0) {
+            "UniFFI bindgen binary missing or empty: $bin (exists=${bin.isFile}). " +
+                "cargoBuildHost builds it via `--bin uniffi-bindgen`; run " +
+                "`cargo build --release -p messenger-ffi --bin uniffi-bindgen --lib` in core/rust."
+        }
         check(lib.isFile && lib.length() > 0) {
             "UniFFI host library missing or empty: $lib (exists=${lib.isFile}, " +
                 "size=${if (lib.isFile) lib.length() else -1}). cargoBuildHost should have " +
                 "produced it; run `cargo build --release -p messenger-ffi` in core/rust to see why."
         }
-        logger.lifecycle("[uniffi] host lib=$lib size=${lib.length()}")
+        logger.lifecycle("[uniffi] host lib=$lib size=${lib.length()} bindgen=$bin")
     }
     doLast {
         val outDir = File(outPath)
