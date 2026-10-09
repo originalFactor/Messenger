@@ -150,6 +150,24 @@ impl Style {
     pub(crate) fn attributes(&self) -> Vec<crossterm::style::Attribute> {
         self.add_modifier.attributes()
     }
+
+    /// A compact, comparable encoding of this style for the screen's
+    /// differential repaint. Two runs with the same key paint identically, so
+    /// a row whose key is unchanged needs no repaint — and two that differ
+    /// (a caret block that moved, say) always do.
+    pub(crate) fn render_key(&self) -> String {
+        let mut key = String::new();
+        if let Some(color) = self.fg {
+            key.push_str(&format!("f{color:?};"));
+        }
+        if let Some(color) = self.bg {
+            key.push_str(&format!("b{color:?};"));
+        }
+        if !self.add_modifier.is_empty() {
+            key.push_str(&format!("m{:?};", self.add_modifier));
+        }
+        key
+    }
 }
 
 /// A set of text attributes. An empty set means no attributes, never

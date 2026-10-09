@@ -29,7 +29,7 @@
 //! ╭─ commands ────────────────────────────────╮   the `/` palette, when open
 //! │▸ /model    switch the bound model           │   (it belongs to the editor)
 //! ╰─ message ─────────────────────────────────╯   editor, grows with input
-//! │ › ask, or / for commands                    │
+//! │ > ask, or / for commands                    │
 //!  conv · project · agent · read-only            context line
 //!  ready  model · status              1.2k · me  footer
 //! ```
@@ -72,9 +72,9 @@ const MAX_VISIBLE_ROWS: usize = 14;
 const BORDER: usize = 2;
 /// Shown while the editor is empty — it tells the user what the box is for
 /// instead of leaving an empty rectangle.
-const PLACEHOLDER: &str = "› ask, or / for commands";
+const PLACEHOLDER: &str = "> ask, or / for commands";
 /// The prompt drawn at the head of a non-empty message.
-const PROMPT: &str = "› ";
+const PROMPT: &str = "> ";
 
 const ACCENT: Color = Color::Indexed(45);
 const CHROME: Color = Color::DarkGray;
@@ -288,6 +288,14 @@ fn prefix_role(role: &str, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
 // editor
 // ---------------------------------------------------------------------------
 
+/// Cells available for editor text on any row: the inner width minus the
+/// prompt (which rides on the first row) minus one column reserved for the
+/// caret — pi's `layoutWidth = contentWidth - 1`, so a caret at the end of a
+/// full row still has a cell to sit in instead of landing on the border.
+fn editor_text_width(width: usize) -> usize {
+    width.saturating_sub(BORDER + PROMPT.width() + 1).max(1)
+}
+
 /// Rows the editor box needs: two border rows plus its wrapped text, capped.
 /// The height estimate must wrap at a REAL row width: pass the width the box
 /// will actually draw at (pi wraps its layout at the same width it renders).
@@ -297,8 +305,7 @@ fn editor_height(app: &App, width: usize) -> usize {
     let rows = if empty {
         1
     } else {
-        let text_width = width.saturating_sub(BORDER + PROMPT.width()).max(1);
-        wrap_editor_text(&text, text_width)
+        wrap_editor_text(&text, editor_text_width(width))
             .0
             .len()
             .clamp(1, MAX_EDITOR_ROWS)
@@ -341,11 +348,16 @@ fn wrap_editor_text(text: &str, width: usize) -> (Vec<String>, Vec<usize>) {
             if used + token_width > width && used > 0 {
                 rows.push(std::mem::take(&mut current));
                 sources.push(logical);
-                used = 0;
-                // Never start a row with the space that ended the last one.
-                if token.chars().all(char::is_whitespace) {
-                    continue;
-                }
+
+                // The space that overflowed moves to the next row with the
+                // text it separates — dropping it (the old behaviour) deleted
+                // a character the user typed, so the caret then had nothing
+                // to advance across and froze on the row's left edge while
+                // more spaces were added. It stays invisible (it is padding
+                // against the border) but it still counts toward the column.
+                current.push_str(&token);
+                used = token_width;
+                continue;
             }
             if token_width > width {
                 // Hard-break a word that cannot fit a whole row.
@@ -426,20 +438,27 @@ fn editor_box(app: &App, width: usize, height: usize) -> (Vec<Line<'static>>, (u
     };
 
     let body_rows = height.saturating_sub(2);
-    let inner = width.saturating_sub(BORDER);
-    let text_width = inner.saturating_sub(PROMPT.width());
     // Wrap to the row budget; the caret's visual row is kept in view the way
     // pi keeps its cursor visible: scroll as little as possible, never past
     // the end. The head of a tall prompt scrolls away, the tail — where the
     // user is typing — never does.
-    let (all_rows, sources) = wrap_editor_text(&shown, text_width.max(1));
-    let (caret_line, caret_column) = caret_position(&shown);
-    // The caret sits on the LAST visual row of its logical line (the caret is
-    // at the end of the input, which wrapped to that row).
+    let text_width = editor_text_width(width);
+    let (all_rows, sources) = wrap_editor_text(&shown, text_width);
+    let (caret_line, _absolute_column) = caret_position(&shown);
+    // The caret always sits at the END of the input: its visual row is the
+    // last row of its logical line, and its column is that row's VISIBLE
+    // width. A space that wrapped away is never drawn, so the caret must not
+    // count it either — counting it is what parked the cursor at the box's
+    // right border whenever spaces were added or deleted around a wrap.
     let caret_visual = sources
         .iter()
         .rposition(|source| *source == caret_line)
         .unwrap_or(0);
+    let caret_in_row = all_rows
+        .get(caret_visual)
+        .map(|row| row.width())
+        .unwrap_or(0)
+        .min(text_width);
     let start = if all_rows.len() <= body_rows {
         0
     } else {
@@ -449,30 +468,33 @@ fn editor_box(app: &App, width: usize, height: usize) -> (Vec<Line<'static>>, (u
     };
     let visible = &all_rows[start..(start + body_rows).min(all_rows.len())];
 
-    let draw_fake_caret = !empty && visible.len() == 1;
+    // The inverse block is drawn on the caret's row whenever it is on screen,
+    // not only when the editor is one row tall: a terminal that hides or
+    // misplaces the hardware cursor left the user with no caret at all as
+    // soon as the prompt wrapped. pi draws the same reverse-video cell.
+    let draw_fake_caret = !empty;
     let mut body = Vec::with_capacity(body_rows);
     for (index, line) in visible.iter().enumerate() {
         let mut spans = Vec::new();
         if start + index == 0 && !empty {
             spans.push(Span::styled(PROMPT, Style::default().fg(ACCENT)));
         }
-        let caret = (draw_fake_caret && caret_visual == start + index).then_some(caret_column);
+        let caret = (draw_fake_caret && caret_visual == start + index).then_some(caret_in_row);
         spans.extend(body_spans(line, style, caret));
         body.push(Line::from(spans));
     }
 
     let lines = box_lines(title, body, width, border, height);
-    // With a placeholder on screen the caret belongs at the head of the line,
-    // not at the end of the placeholder text.
+    // With a placeholder on screen the caret belongs where typing starts, not
+    // at the end of the placeholder text.
     let visual_in_window = caret_visual.saturating_sub(start).min(body_rows.saturating_sub(1));
     let row = 1 + if empty { 0 } else { visual_in_window };
-    let column = BORDER
-        + if start + visual_in_window == 0 && !empty {
-            PROMPT.width()
-        } else {
-            0
-        }
-        + if empty { 0 } else { caret_column.min(text_width) };
+    // Column 0 is the box's left border, so the content starts at column 1.
+    // The prompt rides only on the first text row — and on the placeholder,
+    // which carries its own.
+    let column = 1
+        + if empty || caret_visual == 0 { PROMPT.width() } else { 0 }
+        + if empty { 0 } else { caret_in_row };
     (lines, (column as u16, row as u16))
 }
 
@@ -1152,8 +1174,8 @@ mod tests {
             .iter()
             .any(|span| span.style.is_reversed());
         assert!(has_block, "the caret must be drawn: {body}");
-        // Two borders + the `› ` prompt + two cells of text.
-        assert_eq!(cursor, (2 + 2 + 2, 1));
+        // Left border + the `> ` prompt + two cells of text.
+        assert_eq!(cursor, (1 + 2 + 2, 1));
     }
 
     #[test]
@@ -1203,6 +1225,70 @@ mod tests {
         let last_body = &text[text.len() - 2];
         assert!(last_body.contains('w'), "tail row shows input: {last_body:?}");
         assert_eq!(caret.1 as usize, height - 2, "the caret is on the last body row");
+    }
+
+    /// The reported bug: adding or deleting a SPACE around a wrap boundary
+    /// left the cursor behind. Three causes, all pinned here: the caret
+    /// column was the absolute column in the text rather than the column
+    /// within its visual row (so it parked on the box's right border); the
+    /// overflowing space was deleted from the model instead of carried to
+    /// the next row (so the caret had nothing to advance across); and the
+    /// screen diffed rows by characters alone, so a caret moving across
+    /// trailing spaces repainted nothing. At a 20-col box rows wrap at 15
+    /// cells (inner 18 − prompt 2 − caret 1).
+    #[test]
+    fn the_caret_tracks_the_text_across_wrap_boundaries() {
+        let mut app = app();
+        let (width, rows) = (20usize, 5usize);
+        app.chat.input = "w".repeat(15);
+        let (_, caret) = editor_box(&app, width, rows);
+        assert_eq!(caret, (18, 1), "a full row puts the caret in the reserved cell");
+
+        // The space no longer fits on the first row, so it wraps WITH the
+        // text: the caret follows onto the next row, one cell past the
+        // space, instead of sitting on the border.
+        app.chat.input.push(' ');
+        let (_, caret) = editor_box(&app, width, rows);
+        assert_eq!(caret, (2, 2), "1 (left border) + 1 cell of space");
+
+        // Further spaces keep advancing the caret one cell each — the
+        // wrapped space is present, so it is not inert.
+        app.chat.input.push(' ');
+        let (_, caret) = editor_box(&app, width, rows);
+        assert_eq!(caret, (3, 2));
+
+        // The next character lands on that row, right after them.
+        app.chat.input.push('x');
+        let (_, caret) = editor_box(&app, width, rows);
+        assert_eq!(caret, (4, 2), "1 + 2 spaces + 1 cell of text");
+
+        // Deleting back down walks the caret back and returns it to the end
+        // of the full first row.
+        app.chat.input.pop();
+        app.chat.input.pop();
+        app.chat.input.pop();
+        let (_, caret) = editor_box(&app, width, rows);
+        assert_eq!(caret, (18, 1));
+    }
+
+    /// A caret on a wrapped row is measured from THAT row's left edge, not
+    /// from the start of the logical line.
+    #[test]
+    fn the_caret_column_is_relative_to_its_visual_row() {
+        let mut app = app();
+        app.chat.input = format!("{}tail", "w".repeat(15));
+        let (_, caret) = editor_box(&app, 20, 5);
+        assert_eq!(caret, (5, 2), "row 2 holds 'tail' (4 cells) after the border");
+    }
+
+    /// Single-line input: the caret sits right after the last character
+    /// (left border + prompt + text), never past it.
+    #[test]
+    fn the_caret_sits_immediately_after_the_text() {
+        let mut app = app();
+        app.chat.input = "abc".into();
+        let (_, caret) = editor_box(&app, 20, 5);
+        assert_eq!(caret, (6, 1), "1 + 2 (prompt) + 3 chars");
     }
 
     #[test]

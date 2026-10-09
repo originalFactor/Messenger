@@ -55,8 +55,11 @@ use crate::text::Line;
 /// A diffable terminal surface.
 pub struct Screen {
     stdout: Stdout,
-    /// Plain text of the rows currently on screen, or `None` to force the next
-    /// frame to repaint everything (first frame, or after a resize).
+    /// Styled text of the rows currently on screen, or `None` to force the next
+    /// frame to repaint everything (first frame, or after a resize). The
+    /// STYLE is part of the key, not just the characters: the editor's caret
+    /// is a reversed run, so a caret that moves across trailing spaces
+    /// repaints nothing in the text yet changes every pixel of the row.
     previous: Option<Vec<String>>,
     /// How many leading frame lines have been pushed out of the viewport.
     scrolled: usize,
@@ -151,7 +154,7 @@ impl Screen {
 
         let repaint_all = self.previous.is_none();
         let previous = self.previous.take().unwrap_or_default();
-        let current: Vec<String> = lines.iter().map(Line::to_plain_string).collect();
+        let current: Vec<String> = lines.iter().map(styled_key).collect();
 
         for (row, line) in lines.iter().enumerate().take(rows as usize) {
             let text = &current[row];
@@ -236,6 +239,24 @@ impl Drop for Screen {
     }
 }
 
+
+/// A row's identity for the differential repaint: its characters AND each
+/// run's style. Comparing characters alone cannot see a moved caret — the
+/// editor's cursor is a reversed run, so "hello world" and "hello world "
+/// are the same text while looking completely different (the caret sits in a
+/// different cell), and the row would be skipped, stranding the cursor's
+/// block one keystroke behind. This is the same rule pi's renderer follows:
+/// it diffs the emitted SGR string, not the plain text.
+fn styled_key(line: &Line<'_>) -> String {
+    let mut key = String::new();
+    for span in &line.spans {
+        key.push_str(&span.style.render_key());
+        key.push_str(&span.content);
+        key.push('\u{1}');
+    }
+    key
+}
+
 /// Truncate `text` to at most `cells` display columns, never splitting a wide
 /// character in half.
 fn clip_to_cells(text: &str, cells: usize) -> String {
@@ -278,6 +299,43 @@ mod tests {
         assert_eq!(clipped.width(), 2);
     }
 
+
+    /// The reported bug: the editor's caret is a REVERSED run, so adding or
+    /// deleting a space leaves the row's characters unchanged while moving
+    /// the highlighted cell. Diffing on characters alone decided the row was
+    /// identical and skipped it, stranding the caret's block one keystroke
+    /// behind the hardware cursor.
+    #[test]
+    fn a_row_key_covers_styles_not_only_characters() {
+        use crate::text::{Line, Modifier, Span, Style};
+
+        let plain = Line::from(Span::raw("hello world "));
+        let caret_at_end = Line::from(vec![
+            Span::raw("hello world"),
+            Span::styled(
+                " ",
+                Style::default().add_modifier(Modifier::REVERSED),
+            ),
+        ]);
+        let caret_one_earlier = Line::from(vec![
+            Span::raw("hello worl"),
+            Span::styled(
+                " ",
+                Style::default().add_modifier(Modifier::REVERSED),
+            ),
+        ]);
+
+        // The characters are identical, so a text-only key would call these
+        // one row; the styled key sees the caret move.
+        assert_eq!(
+            plain.to_plain_string(),
+            caret_at_end.to_plain_string(),
+            "the characters really are identical"
+        );
+        assert_ne!(styled_key(&plain), styled_key(&caret_at_end));
+        assert_ne!(styled_key(&caret_at_end), styled_key(&caret_one_earlier));
+        assert_eq!(styled_key(&plain), styled_key(&plain.clone()));
+    }
     #[test]
     fn clip_of_an_empty_budget_is_empty() {
         assert_eq!(clip_to_cells("abc", 0), "");
