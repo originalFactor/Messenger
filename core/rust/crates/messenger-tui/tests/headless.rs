@@ -1274,8 +1274,11 @@ fn the_palette_lists_the_matching_commands() {
     });
 
     let text = frame_text(&mut app, 100, 30);
-    assert!(text.contains("/provider"), "{text}");
-    assert!(text.contains("commands"), "{text}");
+    // pi-style: the input row (`/prov`) and the matching command live in ONE
+    // editor box titled ` command `.
+    assert!(text.contains("/prov"), "{text}");
+    assert!(text.contains("╭─  command "), "{text}");
+    assert!(text.contains("▸ /provider"), "{text}");
 }
 
 /// The slash command output must reach the terminal, not just app state:
@@ -1341,4 +1344,69 @@ fn the_editor_is_always_rendered() {
     let palette = frame_text(&mut app, 100, 24);
     assert!(palette.contains("command"), "{palette}");
     assert!(palette.contains("/new"), "{palette}");
+}
+
+/// A pasted chunk behaves like pi's handlePaste: CRLF normalizes to \n, the
+/// editor wraps instead of clipping, and a paste NEVER fires Enter-sends per
+/// line (the report: "paste a few lines and the app hangs / sends cascade").
+#[test]
+fn paste_lands_in_the_editor_without_sending() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+
+    // CRLF paste: normalized newlines, one multi-line editor, zero sends.
+    app.handle_paste("alpha\r\nbeta\r\ngamma");
+    assert_eq!(app.chat.input, "alpha\nbeta\ngamma");
+    assert!(app.chat.messages.is_empty(), "a paste must not send");
+
+    // A large paste collapses to a marker (pi's paste registry).
+    let big = (0..30).map(|i| format!("row {i}")).collect::<Vec<_>>().join("\n");
+    app.handle_paste(&big);
+    let marker = app
+        .chat
+        .input
+        .split("[paste #")
+        .nth(1)
+        .and_then(|tail| tail.split(']').next())
+        .and_then(|num| num.split_whitespace().next())
+        .and_then(|num| num.parse::<usize>().ok())
+        .expect("a 30-line paste inserts a paste marker");
+    assert!(
+        app.chat.pastes.contains_key(&marker),
+        "the full text is stored under the marker id"
+    );
+
+    // Sending expands the marker back to the full text.
+    let expanded = messenger_tui::app::expand_paste_markers(&app.chat.input, &app.chat.pastes);
+    assert!(expanded.contains("row 29"), "{expanded}");
+    assert!(expanded.contains("alpha"), "earlier text survives: {expanded}");
+}
+
+/// A long single-line prompt wraps inside the editor box instead of being
+/// clipped at the border with the caret stranded past the edge.
+#[test]
+fn the_editor_wraps_a_prompt_that_exceeds_the_width() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+    app.chat.input = "word ".repeat(30);
+
+    let frame = ui::compose(&mut app, 60, 24);
+    let text: Vec<String> = frame.lines.iter().map(|l| l.to_plain_string()).collect();
+    let body: String = text
+        .iter()
+        .filter(|row| row.contains("word"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    // All 30 words visible across wrapped rows.
+    assert_eq!(body.matches("word").count(), 30, "{body}");
+    // The caret sits inside the box, not past the right border.
+    let (column, _row) = frame.cursor.expect("the editor owns the caret");
+    assert!(column < 59, "caret {column} must stay inside a 60-col terminal");
 }

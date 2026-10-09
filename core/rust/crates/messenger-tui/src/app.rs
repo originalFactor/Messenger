@@ -130,6 +130,10 @@ pub struct ChatState {
     pub notes: Vec<ChatNote>,
     /// True while the `/` palette owns the input line.
     pub palette_open: bool,
+    /// Large pastes collapse into `[paste #N …]` markers; the full text is
+    /// recovered here when the message is sent (pi's paste registry).
+    pub pastes: std::collections::HashMap<usize, String>,
+    paste_counter: usize,
 
     live: Option<LiveStream>,
     cache: RenderedCache,
@@ -919,13 +923,19 @@ impl App {
             .and_then(|user| user.ai_api_key)
     }
 
+    /// Expand `[paste #N …]` markers back to their stored text (pi's paste
+    /// registry), so the model sees what the user actually pasted.
+    pub fn expand_paste_markers_in(&self, input: &str) -> String {
+        expand_paste_markers(input, &self.chat.pastes)
+    }
+
     /// Send the chat input as a new turn.
     pub fn send_message(&mut self) {
         if self.chat.is_generating {
             self.status = "A turn is already running (Esc to cancel).".into();
             return;
         }
-        let text = self.chat.input.trim_end().to_string();
+        let text = expand_paste_markers(self.chat.input.trim_end(), &self.chat.pastes);
         if text.trim().is_empty() {
             return;
         }
@@ -2238,6 +2248,49 @@ impl App {
     // keys
     // ------------------------------------------------------------------
 
+    /// Insert a bracketed-paste chunk into the editor the way pi does
+    /// (`handlePaste`): normalize line endings, drop control characters, and
+    /// collapse a LARGE paste into a `[paste #N …]` marker so a huge dump
+    /// does not drown the box (the full text still rides on send).
+    pub fn handle_paste(&mut self, text: &str) {
+        // The `/` palette owns the input line while it is open; a paste there
+        // just appends to the command buffer.
+        if self.chat.palette_open {
+            if let Some(Popup::Commands { buffer, cursor }) = self.popups.last_mut() {
+                for ch in text.chars() {
+                    if !ch.is_control() {
+                        buffer.push(ch);
+                        *cursor = 0;
+                    }
+                }
+            }
+            return;
+        }
+        // Normalize line endings (Windows terminals paste \r\n) and keep
+        // newlines only.
+        let cleaned: String = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .chars()
+            .filter(|ch| *ch == '\n' || !ch.is_control())
+            .collect();
+        let lines = cleaned.split('\n').count();
+        let total_chars = cleaned.chars().count();
+        if lines > 10 || total_chars > 1000 {
+            self.chat.paste_counter += 1;
+            let paste_id = self.chat.paste_counter;
+            let marker = if lines > 10 {
+                format!("[paste #{paste_id} +{lines} lines]")
+            } else {
+                format!("[paste #{paste_id} {total_chars} chars]")
+            };
+            self.chat.pastes.insert(paste_id, cleaned);
+            self.chat.input.push_str(&marker);
+        } else {
+            self.chat.input.push_str(&cleaned);
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         // Ctrl+C always quits and always restores the terminal.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -2907,6 +2960,30 @@ fn shared_prefix(names: &[String]) -> String {
         }
     }
     prefix
+}
+
+/// Expand `[paste #N …]` markers back to their stored text (pi's paste
+/// registry), so the model sees what the user actually pasted.
+pub fn expand_paste_markers(input: &str, pastes: &std::collections::HashMap<usize, String>) -> String {
+    let mut text = input.to_string();
+    while let Some(start) = text.find("[paste #") {
+        let Some(end_rel) = text[start..].find(']') else { break };
+        let end = start + end_rel;
+        let token = &text[start + 8..end];
+        let Some(id) = token
+            .split_whitespace()
+            .next()
+            .and_then(|num| num.parse::<usize>().ok())
+        else {
+            break;
+        };
+        let Some(pasted) = pastes.get(&id) else {
+            break;
+        };
+        let pasted = pasted.clone();
+        text.replace_range(start..=end, &pasted);
+    }
+    text
 }
 
 /// Every command as `(label, summary)`, for the help popup.

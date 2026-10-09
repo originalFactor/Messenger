@@ -263,14 +263,18 @@ fn event_loop(
 
         // 30 ms doubles as the streaming batch window (TARGET.md §6).
         if event::poll(Duration::from_millis(30)).map_err(|e| e.to_string())? {
-            if let Event::Key(key) = event::read().map_err(|e| e.to_string())? {
+            match event::read().map_err(|e| e.to_string())? {
                 // Terminals with the enhanced keyboard protocol (and Windows
                 // console input) report Release/Repeat alongside Press; acting
                 // on those double-applies every key (a `toggle` flips twice and
                 // `n` opens a form that immediately submits again).
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key(key);
-                }
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key),
+                // Bracketed paste arrives as ONE event carrying the whole
+                // chunk, newlines included. Treating it as keystrokes fired
+                // one `send` per line and left the turn machinery tangled —
+                // the reported "paste a few lines and the app hangs".
+                Event::Paste(text) => app.handle_paste(&text),
+                _ => {}
             }
         }
         while let Ok(msg) = rx.try_recv() {

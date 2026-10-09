@@ -111,21 +111,47 @@ pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
     // a row of text, a border), then the footer and context line, then the
     // palette, and the transcript gives way. The prompt must never be pushed
     // off the screen — it is the only way to type at all.
+    // pi draws the `/` palette INSIDE the editor box (below the input, above
+    // the bottom border — see its Editor.render autocomplete block), so the
+    // two are one component: the palette rows are part of the editor's budget.
     let editor_min = MIN_EDITOR_ROWS.min(height);
-    let palette_rows = palette_want.min(height.saturating_sub(editor_min + 2));
-    let editor_rows = editor_height(app)
+    let palette_rows = if palette_open {
+        palette_want.min(height.saturating_sub(editor_min + 2))
+    } else {
+        0
+    };
+    let editor_rows = editor_height(app, width)
         .clamp(editor_min, height.saturating_sub(palette_rows + 2).max(editor_min))
-        .min(height.saturating_sub(palette_rows));
+        .min(height.saturating_sub(palette_rows))
+        + if palette_open { palette_rows } else { 0 };
+    let editor_rows = editor_rows.min(height.saturating_sub(2).max(MIN_EDITOR_ROWS));
 
-    // The chrome is built FIRST so the transcript gets whatever rows are
-    // genuinely left. Budgeting arithmetically and then drawing to that
-    // budget is how a box ends up a row taller than the space it was given.
     let mut chrome: Vec<Line<'static>> = Vec::new();
-    if palette_open {
-        chrome.extend(palette_box(app, width, palette_rows));
-    }
-    let palette_actual = chrome.len();
-    let (editor, caret) = editor_box(app, width, editor_rows);
+    let (editor, caret) = if palette_open {
+        let mut body = editor_box(app, width, editor_rows - palette_rows.max(2));
+        // Append the palette rows INSIDE the box, above the bottom border.
+        let inner_rows = palette_rows.saturating_sub(2).max(0);
+        let mut palette_lines = box_lines(
+            " command ",
+            palette_body(app)
+                .into_iter()
+                .take(inner_rows)
+                .collect(),
+            width,
+            ACCENT,
+            palette_rows.max(2),
+        );
+        // Splice: keep the editor's top rows + body, then the palette box
+        // without its top border, replacing the editor's bottom border.
+        let editor_total = body.0.len();
+        let keep = editor_total.saturating_sub(1);
+        let mut combined: Vec<Line<'static>> = body.0.drain(..keep).collect();
+        combined.extend(palette_lines.drain(1..));
+        body.0 = combined;
+        (body.0, body.1)
+    } else {
+        editor_box(app, width, editor_rows)
+    };
     chrome.extend(editor);
     // The editor and the footer outrank the context line: on a terminal with
     // no room for all three, the context line is dropped rather than
@@ -158,8 +184,9 @@ pub fn compose(app: &mut App, width: u16, height: u16) -> Frame {
     if let Some(modal) = overlay(app, width, height) {
         composite(&mut lines, modal, width);
     }
-    // The caret is box-relative; the terminal wants a frame row.
-    let editor_start = transcript_rows + palette_actual;
+    // The caret is box-relative; the terminal wants a frame row. The editor
+    // starts right after the transcript rows (the palette lives inside it).
+    let editor_start = transcript_rows;
     let cursor = if app.popups.is_empty() {
         Some((
             caret.0.min(width.saturating_sub(1) as u16),
@@ -261,9 +288,22 @@ fn prefix_role(role: &str, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
 // editor
 // ---------------------------------------------------------------------------
 
-/// Rows the editor box needs: two border rows plus its text, capped.
-fn editor_height(app: &App) -> usize {
-    editor_text(app).lines().count().clamp(1, MAX_EDITOR_ROWS) + 2
+/// Rows the editor box needs: two border rows plus its wrapped text, capped.
+/// The height estimate must wrap at a REAL row width: pass the width the box
+/// will actually draw at (pi wraps its layout at the same width it renders).
+fn editor_height(app: &App, width: usize) -> usize {
+    let text = editor_text(app);
+    let empty = text.is_empty();
+    let rows = if empty {
+        1
+    } else {
+        let text_width = width.saturating_sub(BORDER + PROMPT.width()).max(1);
+        wrap_editor_text(&text, text_width)
+            .0
+            .len()
+            .clamp(1, MAX_EDITOR_ROWS)
+    };
+    rows + 2
 }
 
 /// The text the editor shows. While the `/` palette is open it owns the line,
@@ -277,6 +317,83 @@ fn editor_text(app: &App) -> String {
     } else {
         app.chat.input.clone()
     }
+}
+
+/// Word-wrap the editor text into visual rows: splits per logical line with a
+/// greedy word wrap (CJK cells count double, a word longer than the row
+/// hard-breaks). Returns the rows plus, for each, the logical line it came
+/// from — the caret maps through that to a visual row.
+/// At `usize::MAX` width every logical line stays a single row (the height
+/// estimate); pi does the same with its `layoutWidth`.
+fn wrap_editor_text(text: &str, width: usize) -> (Vec<String>, Vec<usize>) {
+    let mut rows: Vec<String> = Vec::new();
+    let mut sources: Vec<usize> = Vec::new();
+    for (logical, line) in text.split('\n').enumerate() {
+        if width == usize::MAX || line.is_empty() {
+            rows.push(line.to_string());
+            sources.push(logical);
+            continue;
+        }
+        let mut current = String::new();
+        let mut used = 0usize;
+        for token in tokenize_words(line) {
+            let token_width = token.width();
+            if used + token_width > width && used > 0 {
+                rows.push(std::mem::take(&mut current));
+                sources.push(logical);
+                used = 0;
+                // Never start a row with the space that ended the last one.
+                if token.chars().all(char::is_whitespace) {
+                    continue;
+                }
+            }
+            if token_width > width {
+                // Hard-break a word that cannot fit a whole row.
+                for ch in token.chars() {
+                    let ch_width = ch.to_string().width();
+                    if used + ch_width > width && used > 0 {
+                        rows.push(std::mem::take(&mut current));
+                        sources.push(logical);
+                        used = 0;
+                    }
+                    current.push(ch);
+                    used += ch_width;
+                }
+                continue;
+            }
+            current.push_str(&token);
+            used += token_width;
+        }
+        rows.push(current);
+        sources.push(logical);
+    }
+    (rows, sources)
+}
+
+/// Split into runs of whitespace and non-whitespace so the wrap keeps whole
+/// words together and spaces survive mid-row.
+fn tokenize_words(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut current_space: Option<bool> = None;
+    for ch in text.chars() {
+        let is_space = ch.is_whitespace();
+        match current_space {
+            Some(kind) if kind != is_space => {
+                tokens.push(std::mem::take(&mut current));
+                current.push(ch);
+                current_space = Some(is_space);
+            }
+            _ => {
+                current.push(ch);
+                current_space = Some(is_space);
+            }
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 /// The editor's box plus the caret's cell inside it.
@@ -308,22 +425,38 @@ fn editor_box(app: &App, width: usize, height: usize) -> (Vec<Line<'static>>, (u
         RULE
     };
 
-    // With a single-line prompt the caret is ALSO drawn as an inverse block:
-    // terminals hide the hardware caret while the app is busy streaming, and
-    // the user needs a focus marker then. A multi-line prompt is left to the
-    // hardware caret alone.
-    let (caret_line, caret_column) = caret_position(&shown);
     let body_rows = height.saturating_sub(2);
-    let draw_fake_caret = !empty && !shown.contains('\n');
+    let inner = width.saturating_sub(BORDER);
+    let text_width = inner.saturating_sub(PROMPT.width());
+    // Wrap to the row budget; the caret's visual row is kept in view the way
+    // pi keeps its cursor visible: scroll as little as possible, never past
+    // the end. The head of a tall prompt scrolls away, the tail — where the
+    // user is typing — never does.
+    let (all_rows, sources) = wrap_editor_text(&shown, text_width.max(1));
+    let (caret_line, caret_column) = caret_position(&shown);
+    // The caret sits on the LAST visual row of its logical line (the caret is
+    // at the end of the input, which wrapped to that row).
+    let caret_visual = sources
+        .iter()
+        .rposition(|source| *source == caret_line)
+        .unwrap_or(0);
+    let start = if all_rows.len() <= body_rows {
+        0
+    } else {
+        caret_visual
+            .saturating_sub(body_rows.saturating_sub(1))
+            .min(all_rows.len() - body_rows)
+    };
+    let visible = &all_rows[start..(start + body_rows).min(all_rows.len())];
+
+    let draw_fake_caret = !empty && visible.len() == 1;
     let mut body = Vec::with_capacity(body_rows);
-    for (index, line) in shown.lines().enumerate() {
+    for (index, line) in visible.iter().enumerate() {
         let mut spans = Vec::new();
-        if index == 0 && !empty {
+        if start + index == 0 && !empty {
             spans.push(Span::styled(PROMPT, Style::default().fg(ACCENT)));
         }
-        let caret = draw_fake_caret
-            .then(|| (index == caret_line).then_some(caret_column))
-            .flatten();
+        let caret = (draw_fake_caret && caret_visual == start + index).then_some(caret_column);
         spans.extend(body_spans(line, style, caret));
         body.push(Line::from(spans));
     }
@@ -331,18 +464,16 @@ fn editor_box(app: &App, width: usize, height: usize) -> (Vec<Line<'static>>, (u
     let lines = box_lines(title, body, width, border, height);
     // With a placeholder on screen the caret belongs at the head of the line,
     // not at the end of the placeholder text.
-    let row = 1 + if empty { 0 } else { caret_line.min(body_rows.saturating_sub(1)) };
-    let column = BORDER + prefix_width(&shown, caret_line) + if empty { 0 } else { caret_column };
+    let visual_in_window = caret_visual.saturating_sub(start).min(body_rows.saturating_sub(1));
+    let row = 1 + if empty { 0 } else { visual_in_window };
+    let column = BORDER
+        + if start + visual_in_window == 0 && !empty {
+            PROMPT.width()
+        } else {
+            0
+        }
+        + if empty { 0 } else { caret_column.min(text_width) };
     (lines, (column as u16, row as u16))
-}
-
-/// The prefix width (`› `) that precedes the caret's logical line.
-fn prefix_width(text: &str, line: usize) -> usize {
-    if line == 0 && !text.is_empty() {
-        PROMPT.width()
-    } else {
-        0
-    }
 }
 
 /// Split one editor row into styled runs, reversing the character under the
@@ -558,23 +689,19 @@ fn clip_spans(spans: Vec<Span<'static>>, cells: usize) -> Line<'static> {
 // popups
 // ---------------------------------------------------------------------------
 
-/// The `/` palette, boxed and sitting directly above the editor.
-fn palette_box(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
-    let body = palette_body(app);
-    let hint = Line::from(Span::styled(
-        "  ↑/↓ move · Enter run · Tab complete · Esc cancel",
-        Style::default().fg(CHROME),
-    ));
-    let mut body = body;
-    body.push(hint);
-    box_lines("commands", body, width, ACCENT, height)
-}
-
+/// The `/` palette body: filtered commands plus the key hint. pi renders
+/// these INSIDE the editor box, under the input row; [`compose`] splices
+/// them in there.
 fn palette_body(app: &App) -> Vec<Line<'static>> {
-    match app.popups.last() {
+    let mut lines = match app.popups.last() {
         Some(Popup::Commands { buffer, cursor }) => command_lines(buffer, *cursor),
         _ => Vec::new(),
-    }
+    };
+    lines.push(Line::from(Span::styled(
+        "  ↑/↓ move · Enter run · Tab complete · Esc cancel",
+        Style::default().fg(CHROME),
+    )));
+    lines
 }
 
 /// Every other popup is a centred modal over the frame, drawn at 70% of the
@@ -588,7 +715,8 @@ fn overlay(app: &mut App, width: usize, height: usize) -> Option<Vec<Line<'stati
         Popup::Help { scroll } => (help_lines(app, *scroll), ACCENT),
     };
     let title = app.popups.last()?.title().to_string();
-    let modal_width = (width * 70 / 100).max(20).min(width);
+    // pi's overlay default width is `min(80, available)` — not a percentage.
+    let modal_width = width.min(80).max(20).min(width);
     // The modal is bounded by the frame it covers, borders included.
     let height = (lines.len() + 2).min(height);
     Some(box_lines(&title, lines, modal_width, border, height))
@@ -602,7 +730,8 @@ fn composite(frame: &mut [Line<'static>], overlay: Vec<Line<'static>>, width: us
         return;
     }
     let top = (frame.len() - height) / 2;
-    let left = (width.saturating_sub(width * 70 / 100)) / 2;
+    let overlay_width = overlay.first().map(|line| line.width()).unwrap_or(0);
+    let left = width.saturating_sub(overlay_width) / 2;
     for (offset, row) in overlay.into_iter().enumerate() {
         let target = top + offset;
         let used = row.width();
@@ -716,14 +845,10 @@ fn windowed(rows: Vec<Line<'static>>, cursor: usize) -> Vec<Line<'static>> {
 }
 
 fn command_lines(buffer: &str, cursor: usize) -> Vec<Line<'static>> {
+    // The input row (`/buffer`) already shows in the editor body above the
+    // palette, so the list here carries ONLY the filtered commands.
     let rows = command_rows(buffer);
-    let mut lines = vec![Line::from(vec![
-        Span::styled("/ ", Style::default().fg(ACCENT)),
-        Span::styled(
-            buffer.to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ])];
+    let mut lines: Vec<Line<'static>> = Vec::new();
     if rows.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("  no command matches /{buffer}"),
@@ -1046,7 +1171,7 @@ mod tests {
     fn a_multiline_editor_grows_and_moves_the_caret_down() {
         let mut app = app();
         app.chat.input = "one\ntwo".into();
-        assert_eq!(editor_height(&app), 4);
+        assert_eq!(editor_height(&app, 40), 4);
         let (lines, cursor) = editor_box(&app, 40, 4);
         assert_eq!(lines.len(), 4);
         assert!(lines[1].to_plain_string().contains("one"));
@@ -1058,7 +1183,26 @@ mod tests {
     fn the_editor_caps_its_growth() {
         let mut app = app();
         app.chat.input = (0..40).map(|i| format!("{i}\n")).collect::<String>();
-        assert_eq!(editor_height(&app), MAX_EDITOR_ROWS + 2);
+        assert_eq!(editor_height(&app, 80), MAX_EDITOR_ROWS + 2);
+    }
+
+    /// A prompt longer than one row WRAPS — the box grows to fit (pi's
+    /// layoutText) instead of clipping the tail at the border.
+    #[test]
+    fn a_long_single_line_prompt_wraps_instead_of_clipping() {
+        let mut app = app();
+        app.chat.input = "w".repeat(100);
+        // 100 cells at a 44-col box wraps to ~3 rows.
+        let height = editor_height(&app, 44);
+        assert!(height > 3, "100 chars must need more than one row: {height}");
+        let (lines, caret) = editor_box(&app, 44, height);
+        let text: Vec<String> = lines.iter().map(|l| l.to_plain_string()).collect();
+        let joined = text.join("\n");
+        assert!(joined.contains("www"), "the input is visible:\n{text:?}");
+        // The tail row must be present — the caret's row is the LAST row.
+        let last_body = &text[text.len() - 2];
+        assert!(last_body.contains('w'), "tail row shows input: {last_body:?}");
+        assert_eq!(caret.1 as usize, height - 2, "the caret is on the last body row");
     }
 
     #[test]
@@ -1259,10 +1403,11 @@ mod tests {
         );
     }
 
-    /// The palette belongs to the editor: it renders directly above it
-    /// instead of floating over the transcript the way a modal does.
+    /// The palette belongs to the editor: pi renders the autocomplete INSIDE
+    /// the editor box — the input row first, then the filtered commands, all
+    /// between one pair of borders (titled ` command `).
     #[test]
-    fn the_palette_sits_directly_above_the_editor() {
+    fn the_palette_renders_inside_the_editor_box() {
         let mut app = app();
         app.chat.palette_open = true;
         app.push(crate::popup::Popup::Commands {
@@ -1275,12 +1420,18 @@ mod tests {
             .iter()
             .map(|line| line.to_plain_string())
             .collect();
-        let palette = text.iter().position(|row| row.contains("commands")).unwrap();
-        let editor = text.iter().position(|row| row.contains("command ")).unwrap();
-        assert!(palette < editor, "the palette is above the editor");
+        let box_top = text.iter().position(|row| row.contains('╭')).unwrap();
+        let box_bottom = text.iter().position(|row| row.contains('╰')).unwrap();
+        let input = text.iter().position(|row| row.contains("/model")).unwrap();
         assert!(
-            text.iter().any(|row| row.contains("/model")),
-            "the buffer's command is listed:\n{text:?}"
+            box_top < input && input < box_bottom,
+            "input + its command list share ONE box:\n{text:?}"
         );
+        // The input row comes before the palette rows inside that box.
+        let list_row = text
+            .iter()
+            .position(|row| row.contains("▸ /model"))
+            .expect("the highlighted command is listed");
+        assert!(input < list_row, "input first, list below");
     }
 }

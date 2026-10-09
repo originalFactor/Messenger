@@ -106,11 +106,13 @@ impl Screen {
     /// Current terminal size in `(columns, rows)`.
     ///
     /// A size change invalidates the recorded frame, so the next
-    /// [`Screen::render`] repaints in full.
+    /// [`Screen::render`] repaints in full; the scroll counter restarts so
+    /// the delta model sees a fresh baseline.
     pub fn size(&mut self) -> io::Result<(u16, u16)> {
         let (columns, rows) = terminal::size()?;
         if self.size != (columns, rows) {
             self.previous = None;
+            self.scrolled = 0;
             self.size = (columns, rows);
         }
         Ok((columns, rows))
@@ -118,10 +120,10 @@ impl Screen {
 
     /// Draw a frame and leave the hardware cursor at `cursor`.
     ///
-    /// `scrolled` is how many rows `compose` dropped from the top of the
-    /// frame; those rows are pushed into the terminal's scrollback, which is
-    /// where the user reaches them with the mouse wheel. Only rows whose text
-    /// changed are rewritten.
+    /// `scrolled` is how many rows `compose` dropped from the top of THIS
+    /// frame; the DELTA against the previous frame's count is issued as a
+    /// real terminal scroll, which is what pushes history into the
+    /// terminal's scrollback. Only rows whose text changed are rewritten.
     ///
     /// Returns the position the cursor actually took.
     pub fn render(
@@ -132,9 +134,13 @@ impl Screen {
     ) -> io::Result<(u16, u16)> {
         let (columns, rows) = self.size()?;
 
-        let wanted = self.scrolled.wrapping_add(scrolled as usize);
-        if wanted != self.scrolled {
-            for _ in 0..wanted.saturating_sub(self.scrolled).min(rows as usize) {
+        // The terminal scrolled by `scrolled - previous_scrolled` since the
+        // last frame. Scrolling is monotonic within a session (the frame
+        // only ever drops MORE rows), and a resize resets both counts.
+        let wanted = scrolled as usize;
+        let delta = wanted.saturating_sub(self.scrolled);
+        if delta > 0 {
+            for _ in 0..delta.min(rows as usize) {
                 self.scroll_up(rows)?;
             }
             self.scrolled = wanted;
