@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -140,6 +140,13 @@ fun SettingsScreen(
     var showClearDataDialog by remember { mutableStateOf(false) }
     val terminalNotInstalledMessage = stringResource(Res.string.terminal_not_installed)
 
+    // The expanded height of a LargeFlexibleTopAppBar reserves a 64 dp top row for
+    // the collapsed title, which is invisible while collapsedFraction is 0. Without a
+    // scrollBehavior that fraction never changes, so scrolling left that blank row
+    // stranded under the status bar. Wiring the nested scroll lets the list push the
+    // title back into that row and collapse the large one, closing the gap.
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+
     LaunchedEffect(cloudSyncError) {
         cloudSyncError?.let { showPlatformToast(it) }
     }
@@ -160,11 +167,11 @@ fun SettingsScreen(
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(text = stringResource(Res.string.settings_title)) },
-                modifier = Modifier.statusBarsPadding(),
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                     scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
+                ),
+                scrollBehavior = scrollBehavior
             )
         },
         modifier = Modifier.fillMaxSize()
@@ -181,7 +188,8 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 720.dp)
-                    .navigationBarsPadding(),
+                    .navigationBarsPadding()
+                    .nestedScroll(scrollBehavior.nestedScrollConnection),
                 // Keep the last setting clear of the floating bottom navigation
                 // pill (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
                 // rail layout (desktop / large windows), which has no pill.
