@@ -7,6 +7,7 @@ All shared Android/Desktop/Web logic. Clean Architecture: `domain/` (pure Kotlin
 - `commonMain` — target-agnostic. MUST NOT reference Room or `java.*` (the Room artifact does not exist for wasmJs; one such reference breaks the whole web target).
 - `jvmSharedMain` — Android + Desktop only: Room, `OkioStorage`, `okio.FileSystem.SYSTEM`, Room-backed repositories, `CloudSyncRepository`. Tests for it live in `jvmSharedTest` (uses `org.junit`/`runBlocking`, not available on wasm).
 - `androidMain` / `desktopMain` / `wasmJsMain` — platform `actual` implementations.
+- The hierarchy is manual (`dependsOn` edges `commonMain` ← `jvmSharedMain` ← `androidMain`/`desktopMain`, `commonTest` ← `jvmSharedTest` ← `desktopTest`): the default Kotlin hierarchy template cannot express the Android+Desktop-but-not-wasm grouping, so root `gradle.properties` sets `kotlin.mpp.applyDefaultHierarchyTemplate=false`. Keep both the `dependsOn` calls and that property.
 - Room compiler is registered per-target via KSP: `add("kspAndroid", …)` + `add("kspDesktop", …)`.
 - The `compose.resources` block stays in `shared` (strings under `composeResources/values[-zh-rCN]/`).
 

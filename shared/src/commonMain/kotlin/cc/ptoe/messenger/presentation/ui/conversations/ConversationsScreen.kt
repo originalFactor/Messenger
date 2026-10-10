@@ -192,7 +192,12 @@ fun ConversationsScreen(
                     // Keep the FAB above the floating bottom navigation pill
                     // (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
                     // rail layout (desktop / large windows), which has no pill.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .padding(bottom = LocalBottomNavClearance.current)
+                    ) {
                         FloatingActionButton(
                             onClick = { showAgentPicker = true }
                         ) {
