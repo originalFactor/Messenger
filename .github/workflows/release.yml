@@ -31,6 +31,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Only the VERSION file is needed here (the tag check below), but the job
+      # has to check the tree out for it: nothing else in this job reads the
+      # repository, so without this step `tr < VERSION` fails with
+      # "No such file or directory" and the whole release is aborted. Checking
+      # out the triggering ref means VERSION is read from the TAGGED commit —
+      # which is exactly what the check is about.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download androidApp release artifact
         uses: actions/download-artifact@v4
         with:
@@ -78,6 +87,10 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF#refs/tags/}"
+          if [ ! -f VERSION ]; then
+            echo "::error::No VERSION file at the tagged commit ($tag). It is the single source of truth for the version name."
+            exit 1
+          fi
           file="$(tr -d '[:space:]' < VERSION)"
           if [ "$tag" != "v$file" ]; then
             echo "::error::Tag '$tag' does not match VERSION '$file' (expected tag 'v$file')."
