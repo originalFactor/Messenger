@@ -36,12 +36,13 @@ Messenger/
 │       │                       #   --platform 30) wired into preBuild; NDK resolved from
 │       │                       #   ANDROID_NDK_HOME else $sdk.dir/ndk/<highest>
 │       └── proguard-rules.pro  # consumer rules: keep cc.ptoe.messenger.core.** + JNA (R8 on :wear)
-├── .github/workflows/          # GitHub Actions CI/CD (split into 7 files)
+├── .github/workflows/          # GitHub Actions CI/CD (split into 8 files)
 │   ├── build-android.yml       # Reusable workflow: androidApp ABI release APKs
 │   ├── build-wear.yml          # Reusable workflow: wear release APK
 │   ├── build-desktop.yml       # Reusable workflow: Desktop MSI distribution
 │   ├── build-web.yml           # Reusable workflow: Web (Wasm) distribution
-│   ├── build-all.yml           # Reusable aggregator: 4 explicit parallel jobs calling build-*.yml
+│   ├── build-tui.yml           # Reusable workflow: TUI binaries (Linux + Windows)
+│   ├── build-all.yml           # Reusable aggregator: 5 explicit parallel jobs calling build-*.yml
 │   ├── ci.yml                  # Push/PR CI: calls build-all.yml + rolling web-client release
 │   └── release.yml             # Tag-triggered (v*): calls build-all.yml + GitHub Release
 ├── gradle/
@@ -712,7 +713,7 @@ The Web client is a third Compose Multiplatform target of the same KMP app — n
 - **Cloud**: sign-in, sign-out, sync, card preview/redemption, password change, account deletion and the server URL all go through `SyncEngine` from `messenger-sync`. `messenger-sync`'s `login`/`register` now persist the `messenger_session` cookie into `KV_SESSION`/`KV_SESSION_HOST` (`CloudApiClient::login_capturing_cookie` reads `Set-Cookie`), which is what makes cloud auth work for any client without a cookie jar.
 - **Legacy import**: `--import-desktop [<dir>]` runs the marker-guarded, idempotent `messenger_store::import_legacy`. That function now accepts BOTH Room file names (`messenger_database` from Android, `messenger_database.db` from the JVM/Desktop `Room.databaseBuilder`), so the Desktop database is importable. The TUI owns its own store; the import is opt-in and one-shot.
 - **Deliberate terminal degradations** (documented, not unfinished): math renders as its LaTeX **source** in a bordered box (a terminal cannot stack fractions); models.dev metadata does not exist here, so `context_window` stays 0 (unlimited) unless the provider's `GET /models` reports it — the per-model form exposes an editable Context Window instead.
-- **No CI change**: CI runs Gradle builds only (there is no `cargo test` step), so the TUI's verification is the local `cargo test --workspace` in `core/rust`. Do not add a Gradle task for the binary.
+- **CI builds the binary, tests stay local**: `build-tui.yml` runs `cargo build --release --locked -p messenger-tui` in `core/rust` on `ubuntu-latest` + `windows-latest` and uploads the binaries as release assets (Gradle stays out of this path — no Gradle task for the binary). There is still no `cargo test` step in CI; `cargo test --workspace` in `core/rust` remains the verification.
 
 ## TARGET.md architecture migration (in progress)
 
@@ -961,16 +962,17 @@ verification, or a release/R8 configuration change requires validation:
 
 ## CI/CD
 
-GitHub Actions CI/CD is split into 6 workflow files under `.github/workflows/`, organized as a nested call chain:
+GitHub Actions CI/CD is split into 8 workflow files under `.github/workflows/`, organized as a nested call chain:
 
-- **Reusable build workflows** (`build-android.yml`, `build-wear.yml`, `build-desktop.yml`, `build-web.yml`): Each is triggered via `workflow_call`. Every build resolves the shared version — `VERSION_CODE` from `git rev-list --count HEAD` (full checkout via `fetch-depth: 0`), the semantic name from the `VERSION` file — logs it, and initializes git submodules recursively (`server/`).
+- **Reusable build workflows** (`build-android.yml`, `build-wear.yml`, `build-desktop.yml`, `build-web.yml`, `build-tui.yml`): Each is triggered via `workflow_call`. Every build resolves the shared version — `VERSION_CODE` from `git rev-list --count HEAD` (full checkout via `fetch-depth: 0`), the semantic name from the `VERSION` file — logs it, and initializes git submodules recursively (`server/`).
   - `build-android.yml` runs on `ubuntu-latest` (bash + `./gradlew`), installs the pinned NDK `29.0.14206865` + CMake `3.22.1` (`android-actions/setup-android` packages) for `:runtime`'s vendored PTY JNI, builds `:androidApp:assembleRelease` + `:runtime:assembleRelease`, and uploads `androidApp-release` + `runtime-release`.
   - `build-wear.yml` runs on `ubuntu-latest` (bash + `./gradlew`), builds `:wear:assembleRelease`, and uploads `wear-release`.
   - `build-desktop.yml` runs on `windows-latest` (pwsh + `.\gradlew.bat`, required for MSI packaging), builds `:desktopApp:packageReleaseMsi`, and uploads `desktop-msi` (unsigned).
-- **`build-all.yml` (aggregator)**: Reusable workflow triggered via `workflow_call`. Declares three explicit jobs (`build-android`, `build-wear`, `build-desktop`) with no `needs` between them, so they run in parallel — each calls its corresponding `build-<target>.yml` via `uses:` with `secrets: inherit`. (GitHub Actions does not support `strategy.matrix` on jobs that call reusable workflows via `uses:`, so the three calls are written out explicitly instead of generated from a matrix.)
-- **`ci.yml` (Push/PR CI)**: Triggered on push to `main` and PRs to `main`, but only when project code or build dependencies change. The `paths` filter (applied identically to both `push` and `pull_request`) includes: `shared/**`, `androidApp/**`, `desktopApp/**`, `wear/**`, `runtime/**`, root `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties`, `gradle/libs.versions.toml`, `gradle/wrapper/**`, `gradlew` / `gradlew.bat`, and `.github/workflows/**`. Documentation (`README.md`, `AGENTS.md`), `server/**`, `specs/**`, `LICENSE`, `logo.*`, `.idea/**`, `.gitmodules`, `licenserc.toml`, etc. do NOT trigger CI. A single `build-all` job calls `./.github/workflows/build-all.yml` with `secrets: inherit`.
-- **`release.yml` (Tag-triggered Release CI)**: Triggered only on `v*` tags. A `build-all` job calls `./.github/workflows/build-all.yml` (four parallel builds), then a `release` job (`needs: build-all`, runs on `ubuntu-latest`) downloads the Android ABI APKs, runtime companion APKs, Wear APK, desktop MSI and Web bundle, and VERIFIES the tag against the `VERSION` file before creating a GitHub Release via `softprops/action-gh-release@v2` with `generate_release_notes: true` (a mismatch fails the run — see "Versioning").
-- **Caching**: `gradle/actions/setup-gradle@v4` with `cache-read-only: ${{ github.ref != 'refs/heads/main' }}` (PR builds only read cache, main pushes write it) and `gradle-home-cache-cleanup: true`; plus a dedicated `~/.konan` Kotlin/Native compiler cache keyed on `*.gradle.kts` / `libs.versions.toml` hashes.
+  - `build-tui.yml` is the one cargo build: a matrix over `ubuntu-latest` (`x86_64-unknown-linux-gnu`) and `windows-latest` (`x86_64-pc-windows-msvc`) — both the runner's host triple, so no cross toolchain — running `cargo build --release --locked -p messenger-tui` in `core/rust` and uploading `tui-<target>` (the raw binary; `release.yml` zips and names the assets). It builds only; the Rust tests stay local.
+- **`build-all.yml` (aggregator)**: Reusable workflow triggered via `workflow_call`. Declares five explicit jobs (`build-android`, `build-wear`, `build-desktop`, `build-web`, `build-tui`) with no `needs` between them, so they run in parallel — each calls its corresponding `build-<target>.yml` via `uses:` with `secrets: inherit`. (GitHub Actions does not support `strategy.matrix` on jobs that call reusable workflows via `uses:`, so the five calls are written out explicitly instead of generated from a matrix.)
+- **`ci.yml` (Push/PR CI)**: Triggered on push to `main` and PRs to `main`, but only when project code or build dependencies change. The `paths` filter (applied identically to both `push` and `pull_request`) includes: `shared/**`, `androidApp/**`, `desktopApp/**`, `webApp/**`, `wear/**`, `runtime/**`, `core/**` (which covers `core/rust/**`, so a TUI change runs the `build-tui` builds), `VERSION`, root `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties`, `gradle/libs.versions.toml`, `gradle/wrapper/**`, `gradlew` / `gradlew.bat`, and `.github/workflows/**`. Documentation (`README.md`, `AGENTS.md`), `server/**`, `specs/**`, `LICENSE`, `logo.*`, `.idea/**`, `.gitmodules`, `licenserc.toml`, etc. do NOT trigger CI. A single `build-all` job calls `./.github/workflows/build-all.yml` with `secrets: inherit`.
+- **`release.yml` (Tag-triggered Release CI)**: Triggered only on `v*` tags. A `build-all` job calls `./.github/workflows/build-all.yml` (five parallel builds), then a `release` job (`needs: build-all`, runs on `ubuntu-latest`) downloads the Android ABI APKs, runtime companion APKs, Wear APK, desktop MSI, Web bundle and TUI binaries (zipping the Web bundle as `messenger-web-<tag>.zip` and each TUI binary as `messenger-tui-<tag>-<target>.zip`), and VERIFIES the tag against the `VERSION` file before creating a GitHub Release via `softprops/action-gh-release@v2` with `generate_release_notes: true` (a mismatch fails the run — see "Versioning").
+- **Caching**: `gradle/actions/setup-gradle@v4` with `cache-read-only: ${{ github.ref != 'refs/heads/main' }}` (PR builds only read cache, main pushes write it) and `gradle-home-cache-cleanup: true`; a dedicated `~/.konan` Kotlin/Native compiler cache keyed on `*.gradle.kts` / `libs.versions.toml` hashes; and `Swatinem/rust-cache@v2` on `core/rust` for the Rust builds (Web/Wasm and TUI).
 - **Signing**: Keystore is materialized from the `KEYSTORE_BASE64` secret into `keyring/messenger-release.jks` (only on push builds, not PRs) inside the androidApp and wear build workflows; `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` secrets feed the signing config. Desktop MSI is unsigned.
 
 ## Git Workflow
@@ -1026,10 +1028,12 @@ Write clear, concise commit messages describing what was changed and why. Push o
 - [MultiSelectTopBar.kt](file:///c:/Users/deskt/Desktop/projects/Messenger/shared/src/commonMain/kotlin/cc/ptoe/messenger/presentation/ui/components/MultiSelectTopBar.kt) - Shared selection-mode TopAppBar for long-press multi-select
 - [ci.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/ci.yml) - Push/PR CI: calls build-all.yml
 - [release.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/release.yml) - Tag-triggered (v*) Release CI: calls build-all.yml + GitHub Release
-- [build-all.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-all.yml) - Reusable aggregator: matrix-parallel call of the 3 build workflows
+- [build-all.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-all.yml) - Reusable aggregator: parallel call of the 5 build workflows
 - [build-android.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-android.yml) - Reusable workflow: androidApp ABI release APKs
 - [build-wear.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-wear.yml) - Reusable workflow: wear release APK
 - [build-desktop.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-desktop.yml) - Reusable workflow: Desktop MSI distribution
+- [build-web.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-web.yml) - Reusable workflow: Web (Wasm) distribution
+- [build-tui.yml](file:///c:/Users/deskt/Desktop/projects/Messenger/.github/workflows/build-tui.yml) - Reusable workflow: TUI binaries (Linux + Windows, cargo build only)
 - [messenger-tui/src/app.rs](file:///c:/Users/deskt/Desktop/projects/Messenger/core/rust/crates/messenger-tui/src/app.rs) - Terminal client state machine: CWD-project bootstrap, popup-stack key routing, slash-command dispatch, transcript notes, cloud actions
 - [messenger-tui/src/popup.rs](file:///c:/Users/deskt/Desktop/projects/Messenger/core/rust/crates/messenger-tui/src/popup.rs) - The popup stack: command palette, generic select list, form editor, confirmation, keys reference
 - [messenger-tui/src/commands.rs](file:///c:/Users/deskt/Desktop/projects/Messenger/core/rust/crates/messenger-tui/src/commands.rs) - The `/` command table (data only: name, args, summary, the picker it opens)

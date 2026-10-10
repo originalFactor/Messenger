@@ -37,3 +37,8 @@ jobs:
     name: Build Web
     uses: ./.github/workflows/build-web.yml
     secrets: inherit
+
+  build-tui:
+    name: Build TUI
+    uses: ./.github/workflows/build-tui.yml
+    secrets: inherit

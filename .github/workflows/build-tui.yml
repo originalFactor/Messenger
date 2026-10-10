@@ -1,0 +1,77 @@
+# Copyright 2026 ECSDevs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build TUI
+
+on:
+  workflow_call:
+
+jobs:
+  build-tui:
+    name: Build TUI binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # The two platforms are independent release assets: one failing must not
+      # cancel the other, so both results are visible in a single run.
+      fail-fast: false
+      matrix:
+        include:
+          # Both targets are the runners' host triples, so this is a plain host
+          # `cargo build` — no cross toolchain and no `--target`.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            exe: messenger-tui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: messenger-tui.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # messenger-core's build.rs bakes the git commit count into the
+          # binary's version, so the full history is part of the build input.
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve version (semantic name from VERSION, code from commit count)
+        shell: bash
+        run: |
+          commitCount=$(git rev-list --count HEAD)
+          echo "VERSION_CODE=$commitCount" >> "$GITHUB_ENV"
+          echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($commitCount)"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/rust
+
+      # Deliberately cargo, not Gradle: the TUI links the Rust crates directly
+      # (no UniFFI, no Kotlin), and Gradle stays out of this path. This job only
+      # has to prove the binary BUILDS — Rust tests remain the local
+      # `cargo test --workspace` in core/rust.
+      - name: Build messenger-tui
+        working-directory: core/rust
+        run: cargo build --release --locked -p messenger-tui
+
+      - name: Upload TUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-${{ matrix.target }}
+          path: core/rust/target/release/${{ matrix.exe }}
+          if-no-files-found: error
