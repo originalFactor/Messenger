@@ -15,6 +15,17 @@ pub struct Usage {
     pub completion_tokens: i64,
     #[serde(rename = "total_tokens")]
     pub total_tokens: i64,
+    /// Cache breakdown; omitted by providers that do not cache prompts.
+    #[serde(rename = "prompt_tokens_details")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+/// Cache hit/miss breakdown of the prompt (OpenAI `prompt_tokens_details`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PromptTokensDetails {
+    #[serde(rename = "cached_tokens")]
+    pub cached_tokens: i64,
 }
 
 /// A streaming chat completions chunk. All fields tolerated-missing: providers

@@ -43,7 +43,10 @@ pub enum AgentEvent {
     FinalMessagePersisted { message_id: String, content: String },
     ToolCallStarted { call_id: String, name: String },
     ToolCallFinished { call_id: String, name: String, output: String, is_error: bool },
-    UsageRecorded { prompt_tokens: i64, completion_tokens: i64 },
+    /// Token totals for the WHOLE turn, summed over its rounds. `cached_tokens`
+    /// is how much of `prompt_tokens` the provider served from its prompt
+    /// cache (0 when it does not report a breakdown).
+    UsageRecorded { prompt_tokens: i64, completion_tokens: i64, cached_tokens: i64 },
     TitleGenerated { title: String },
     TitleFailed { code: String },
     Finished { message_id: String },
@@ -165,6 +168,10 @@ pub async fn run_chat_turn(
     let client = OpenAiClient::new(&request.base_url, &request.api_key);
     let mut current_content = String::new();
     let mut round: u32 = 0;
+    // Every round's provider-reported usage, summed for the turn. Tool rounds
+    // bill the prompt again (the context grows with each tool result), so the
+    // turn total is the sum over rounds — not just the final round's number.
+    let mut turn_usage = UsageTotals::default();
 
     // Unbounded: the turn ends on the model's final text round, an API error,
     // or user cancellation — tool rounds are never cut off by a round count.
@@ -271,6 +278,7 @@ pub async fn run_chat_turn(
             });
             return Ok(());
         };
+        turn_usage.add(usage);
 
         if tool_calls.is_empty() {
             // Final text round: land in the placeholder row.
@@ -286,15 +294,20 @@ pub async fn run_chat_turn(
                 content: content.clone(),
             });
 
-            // Usage bookkeeping: exact when reported, estimate otherwise.
+            // Context bookkeeping: the FINAL round's usage is the size of the
+            // context as it now stands, which is what the 80% gate needs.
             let tokens = usage
                 .map(|u| u.prompt_tokens + u.completion_tokens)
                 .filter(|t| *t > 0)
                 .unwrap_or(sent_context_estimate + estimate_tokens_text(&content));
             record_usage(store, &request.conversation_id, tokens)?;
+            // The event reports what the TURN consumed: every round re-sends a
+            // growing context, so billing sums the rounds.
+            let turn = turn_usage.finish(sent_context_estimate, &content);
             sink.on_event(&AgentEvent::UsageRecorded {
-                prompt_tokens: 0,
-                completion_tokens: tokens,
+                prompt_tokens: turn.prompt_tokens,
+                completion_tokens: turn.completion_tokens,
+                cached_tokens: turn.cached_tokens,
             });
 
             // Title generation (still-untitled conversations only).
@@ -567,6 +580,53 @@ fn record_usage(store: &Store, conversation_id: &str, tokens: i64) -> Result<(),
     updated.context_tokens = tokens;
     updated.context_tokens_at = now_ms();
     store.upsert_conversation(&updated).map_err(|e| e.to_string())
+}
+
+/// The turn's token totals, summed over its rounds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct UsageTotals {
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
+    /// True once any round reported provider usage, i.e. the sums are exact.
+    reported: bool,
+}
+
+impl UsageTotals {
+    /// Fold one round's usage in. A round that reported nothing (some
+    /// providers omit usage entirely) leaves the sums untouched; [`finish`]
+    /// then falls back to estimates for the whole turn.
+    ///
+    /// [`finish`]: UsageTotals::finish
+    fn add(&mut self, usage: Option<messenger_llm::dto::Usage>) {
+        match usage {
+            Some(usage) if usage.prompt_tokens + usage.completion_tokens > 0 => {
+                self.prompt_tokens += usage.prompt_tokens;
+                self.completion_tokens += usage.completion_tokens;
+                self.cached_tokens += usage
+                    .prompt_tokens_details
+                    .map(|details| details.cached_tokens)
+                    .unwrap_or(0);
+                self.reported = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// The turn's final totals. When no round reported usage the final round's
+    /// context estimate stands in for the prompt and its text for the
+    /// completion — the same fallback the context bookkeeping uses.
+    fn finish(&self, final_context_estimate: i64, final_content: &str) -> UsageTotals {
+        if self.reported {
+            return *self;
+        }
+        UsageTotals {
+            prompt_tokens: final_context_estimate,
+            completion_tokens: estimate_tokens_text(final_content),
+            cached_tokens: 0,
+            reported: false,
+        }
+    }
 }
 
 /// Preserve the turn's placeholder row and a latest persisted timestamp.

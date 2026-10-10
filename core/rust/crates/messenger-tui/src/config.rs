@@ -25,6 +25,8 @@ pub struct TuiConfig {
     pub show_tool_details: bool,
     /// Snap the chat to the newest message while streaming?
     pub auto_scroll: bool,
+    /// Print the startup wordmark above the frame?
+    pub show_banner: bool,
 }
 
 impl Default for TuiConfig {
@@ -35,6 +37,7 @@ impl Default for TuiConfig {
             show_think: false,
             show_tool_details: false,
             auto_scroll: true,
+            show_banner: true,
         }
     }
 }

@@ -13,6 +13,7 @@
 //! }
 //! ```
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,7 +110,6 @@ fn run() -> Result<(), String> {
         print!("{HELP}");
         return Ok(());
     }
-
     let config_path = args
         .config
         .clone()
@@ -229,6 +229,12 @@ fn run() -> Result<(), String> {
     app.bootstrap_session();
 
     // ---- terminal --------------------------------------------------------
+    // The banner goes out as ordinary output BEFORE the viewport is built: it
+    // lands in the terminal's scrollback, and since an inline viewport
+    // positions itself relative to the cursor, building it afterwards anchors
+    // the frame under the banner instead of over it.
+    print_banner(app.config.show_banner);
+
     // `TerminalGuard` restores the terminal on every exit path, panic
     // included; `run` calls `stop` explicitly so the restore happens before
     // the process exits rather than at scope teardown.
@@ -238,6 +244,22 @@ fn run() -> Result<(), String> {
     let result = event_loop(&mut guard.0, &mut app, &mut rx);
     guard.0.stop();
     result
+}
+
+/// Print the wordmark above the frame, or nothing when it is switched off.
+///
+/// Written through `ratatui::text` printers so the banner and the frame share
+/// the same styling model.
+fn print_banner(enabled: bool) {
+    if !enabled {
+        return;
+    }
+    let width = crossterm::terminal::size().map(|(cols, _)| cols).unwrap_or(80);
+    let mut stdout = std::io::stdout();
+    for line in messenger_tui::banner::banner_lines(width) {
+        let _ = writeln!(stdout, "{line}");
+    }
+    let _ = stdout.flush();
 }
 
 /// Owns the [`Screen`] so a panic anywhere in the loop still puts the

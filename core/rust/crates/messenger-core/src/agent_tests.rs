@@ -88,6 +88,27 @@ data: [DONE]
 ", serde_json::to_string(&chunk).unwrap())
 }
 
+/// A text stream whose usage-only chunk arrives BEFORE `[DONE]`, which is
+/// where every real provider puts it (the parser stashes it and attaches it
+/// to `Done`).
+fn text_stream_with_usage(text: &str, prompt: i64, completion: i64, cached: i64) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "delta": {"content": text},
+            "finish_reason": "stop"
+        }]
+    });
+    format!(
+        "data: {}
+
+{}data: [DONE]
+
+",
+        serde_json::to_string(&chunk).unwrap(),
+        usage_chunk(prompt, completion, cached)
+    )
+}
+
 fn seeded_store() -> Store {
     let store = Store::open_memory().unwrap();
     store
@@ -439,4 +460,69 @@ async fn the_workspace_note_is_appended_to_the_system_prompt() {
 fn client_constructs_smoke() {
     let client = OpenAiClient::new("http://localhost", "sk");
     let _ = client;
+}
+
+/// A turn that reports usage on EVERY round must sum them: each tool round
+/// re-sends a grown context, so the billed prompt is the sum, not the last
+/// round's. The cache breakdown rides along.
+#[tokio::test]
+async fn usage_recorded_sums_every_round_and_carries_the_cache_split() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ScriptedResponder {
+            bodies: Mutex::new(VecDeque::from(vec![
+                // Round 1: a tool call, billed 100/10 with 64 cached.
+                format!("{}{}", usage_chunk(100, 10, 64), tool_call_stream("terminal", "call_1")),
+                // Round 2: the final text, billed 200/20 with 128 cached.
+                text_stream_with_usage("All done.", 200, 20, 128),
+            ])),
+        })
+        .mount(&server)
+        .await;
+
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    run_chat_turn(
+        &store,
+        &StaticToolHost,
+        &sink,
+        &turn_request(&server.uri()),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let events = sink.0.lock();
+    let usage = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::UsageRecorded { prompt_tokens, completion_tokens, cached_tokens } => {
+                Some((*prompt_tokens, *completion_tokens, *cached_tokens))
+            }
+            _ => None,
+        })
+        .expect("the turn must report its usage");
+    assert_eq!(
+        usage,
+        (300, 30, 192),
+        "both rounds' usage must be summed, not just the final round's"
+    );
+    // The context bookkeeping still tracks the FINAL round only: that is the
+    // size of the context as it now stands, which is what the 80% gate needs.
+    let conversation = store.get_conversation("c1").unwrap().unwrap();
+    assert_eq!(conversation.context_tokens, 220, "200 + 20 from the final round");
+}
+
+/// An OpenAI-style usage-only chunk (arrives before `[DONE]`, empty choices).
+fn usage_chunk(prompt: i64, completion: i64, cached: i64) -> String {
+    let chunk = serde_json::json!({
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": cached}
+        }
+    });
+    format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap())
 }

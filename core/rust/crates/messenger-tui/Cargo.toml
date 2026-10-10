@@ -58,6 +58,15 @@ globset = "0.4"
 walkdir = "2"
 dirs = "6"
 unicode-width = "0.2"
+# Ctrl-V: a terminal never delivers an image through bracketed paste, so the
+# clipboard is read directly (X11/Wayland/macOS/Windows in one crate).
+# `image-data` is not part of the default set once `default-features` is off,
+# and it is what makes `Clipboard::get_image()` exist.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
+# Re-encoding a pasted image: the clipboard hands over raw RGBA, and providers
+# want a `data:` URI. Only the formats worth resizing are compiled in.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
 
 [dev-dependencies]
 wiremock = "0.6"

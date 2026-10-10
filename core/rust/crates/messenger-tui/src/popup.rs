@@ -6,7 +6,7 @@
 //! to the topmost popup, else to the chat editor) and one place a modal is
 //! drawn.
 
-use crate::commands::SLASH_COMMANDS;
+use crate::commands::{SlashCommand, SLASH_COMMANDS};
 
 // ---------------------------------------------------------------------------
 // form fields
@@ -322,6 +322,14 @@ pub struct Select {
 pub enum Popup {
     /// The `/` command menu: a filter buffer plus the matching commands.
     Commands { buffer: String, cursor: usize },
+    /// The `@` file picker: the query typed so far, the matching rows, and
+    /// the cursor's row. Structurally the command palette's twin — both own
+    /// the input line while open — but it filters a different list.
+    Mention {
+        query: String,
+        cursor: usize,
+        items: Vec<crate::mention::MentionItem>,
+    },
     Select(Select),
     Form(Form),
     Confirm(Confirm),
@@ -334,6 +342,7 @@ impl Popup {
     pub fn title(&self) -> &str {
         match self {
             Popup::Commands { .. } => "commands",
+            Popup::Mention { .. } => "files",
             Popup::Select(select) => &select.title,
             Popup::Form(form) => &form.title,
             Popup::Confirm(confirm) => &confirm.title,
@@ -342,12 +351,17 @@ impl Popup {
     }
 }
 
-/// The commands matching a `/` buffer, as palette rows.
-pub fn command_rows(buffer: &str) -> Vec<(String, String)> {
+/// The commands matching a `/` buffer, in palette order.
+fn matching(buffer: &str) -> impl Iterator<Item = &'static SlashCommand> {
     let needle = buffer.trim_start_matches('/').to_lowercase();
     SLASH_COMMANDS
         .iter()
-        .filter(|command| command.name.starts_with(&needle))
+        .filter(move |command| command.name.starts_with(&needle))
+}
+
+/// The commands matching a `/` buffer, as palette rows.
+pub fn command_rows(buffer: &str) -> Vec<(String, String)> {
+    matching(buffer)
         .map(|command| {
             let label = if command.args.is_empty() {
                 format!("/{}", command.name)
@@ -356,6 +370,18 @@ pub fn command_rows(buffer: &str) -> Vec<(String, String)> {
             };
             (label, command.summary.to_string())
         })
+        .collect()
+}
+
+/// The NAMES of the commands matching a `/` buffer, in palette order — what
+/// Tab completes to and what Enter runs for the highlighted row.
+///
+/// Bare names, never the palette's display labels: a label carries the
+/// argument hint (`/mode [read-only|writable]`), which is documentation
+/// about the command, not a value to execute or to filter on.
+pub fn command_names(buffer: &str) -> Vec<String> {
+    matching(buffer)
+        .map(|command| command.name.to_string())
         .collect()
 }
 
@@ -402,5 +428,18 @@ mod tests {
         // A unique prefix narrows to exactly one row.
         assert_eq!(command_rows("proj").len(), 1);
         assert!(command_rows("").len() > 5);
+    }
+
+    /// Completion and execution address BARE names: a label's `[args]` hint
+    /// is documentation, and feeding it back into the buffer would leave
+    /// `/mode [read-only|writable]` as the filter — a string no command name
+    /// starts with, so the list would empty itself.
+    #[test]
+    fn command_names_are_bare_and_never_carry_the_argument_hint() {
+        assert_eq!(command_names("mo"), vec!["model", "mode"]);
+        assert_eq!(command_names("proj"), vec!["project"]);
+        // Same matching as the rows, so a name and its row never disagree.
+        assert_eq!(command_names("").len(), command_rows("").len());
+        assert!(command_names("").contains(&"mode".to_string()));
     }
 }

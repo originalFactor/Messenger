@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::dto::{ChatCompletionChunk, ChatDelta, Usage};
+#[cfg(test)]
+use crate::dto::PromptTokensDetails;
 use crate::events::{ChatStreamEvent, ToolCallData};
 
 /// Accumulator for one streaming tool call: id/name arrive with the first
@@ -420,7 +422,35 @@ mod tests {
             Some(Usage {
                 prompt_tokens: 12,
                 completion_tokens: 34,
-                total_tokens: 46
+                total_tokens: 46,
+                prompt_tokens_details: None,
+            })
+        );
+    }
+
+    /// A provider that reports a prompt-cache breakdown carries it through to
+    /// `Done` — the cached count is what the clients display as "(N cached)".
+    #[test]
+    fn a_prompt_cache_breakdown_rides_along_on_the_usage() {
+        let mut parser = ChatStreamParser::new();
+        let events = feed_all(
+            &mut parser,
+            &[
+                r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"total_tokens":107,"prompt_tokens_details":{"cached_tokens":64}}}"#,
+                "[DONE]",
+            ],
+        );
+        let usage = events.iter().find_map(|e| match e {
+            ChatStreamEvent::Done { usage, .. } => *usage,
+            _ => None,
+        });
+        assert_eq!(
+            usage,
+            Some(Usage {
+                prompt_tokens: 100,
+                completion_tokens: 7,
+                total_tokens: 107,
+                prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: 64 }),
             })
         );
     }

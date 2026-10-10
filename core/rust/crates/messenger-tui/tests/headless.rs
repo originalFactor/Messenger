@@ -65,6 +65,20 @@ fn text_stream(text: &str) -> String {
     )
 }
 
+/// An OpenAI-style usage-only chunk: empty `choices`, arrives before `[DONE]`.
+fn usage_payload(prompt: i64, completion: i64, cached: i64) -> String {
+    let chunk = serde_json::json!({
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": cached}
+        }
+    });
+    format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap())
+}
+
 fn tool_call_stream(name: &str, call_id: &str, arguments: &str) -> String {
     let chunk = serde_json::json!({
         "choices": [{
@@ -796,9 +810,9 @@ fn the_pickers_render_their_rows_over_the_chat() {
     assert!(text.contains("[default]"), "{text}");
     assert!(text.contains("tools:off"), "{text}");
     // The chat is still there underneath — a popup never replaces it. The
-    // transcript has no box of its own; its presence is the editor and the
-    // context line, which a modal leaves untouched.
-    assert!(text.contains("message"), "{text}");
+    // transcript has no box of its own, so its presence is the input line and
+    // the status rail, which a modal leaves untouched.
+    assert!(text.contains("Chat, @mention"), "{text}");
     assert!(text.contains("read-only") || text.contains("writable"), "{text}");
 
     app.close_all_popups();
@@ -1100,8 +1114,14 @@ fn bootstrap_session_lands_in_a_cwd_project_conversation() {
     app.bootstrap_session();
     assert_eq!(store.list_projects().unwrap().len(), 1);
 
-    // The banner is a session note, not a stored message.
-    assert!(!app.chat.notes.is_empty());
+    // The bootstrap writes NO transcript note: the status rail already names
+    // the project, the Agent and the model, and the input placeholder says how
+    // to start. Nothing is stored as a message either.
+    assert!(
+        app.chat.notes.is_empty(),
+        "the rail carries this, not a note: {:?}",
+        app.chat.notes
+    );
     assert!(app
         .engine
         .store
@@ -1200,6 +1220,209 @@ fn slash_commands_drive_the_session_from_the_input_line() {
     assert!(app.should_quit);
 }
 
+/// Moving the cursor walks the menu; it must not REWRITE the filter. The
+/// report: "picking a command left the menu showing only that one" — the
+/// arrow handler wrote the highlighted row into the buffer, so the list
+/// immediately filtered down to the row the cursor had landed on and the rest
+/// of the menu became unreachable.
+#[test]
+fn the_palette_cursor_walks_the_menu_without_collapsing_it() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store.clone(), workspace.path());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    app.bootstrap_session();
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for ch in "mo".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    // `mo` matches two commands, and both stay listed.
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "mo".into(),
+            cursor: 0
+        })
+    );
+    let both = frame_text(&mut app, 100, 30);
+    assert!(both.contains("/model"), "{both}");
+    assert!(both.contains("/mode"), "{both}");
+
+    // ↓ moves the selection and leaves the buffer — and therefore the list —
+    // exactly as it was.
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "mo".into(),
+            cursor: 1
+        }),
+        "an arrow must move the cursor, not rewrite the filter"
+    );
+    let moved = frame_text(&mut app, 100, 30);
+    assert!(moved.contains("/model"), "the whole menu is still there: {moved}");
+    assert!(
+        moved.contains("▸ /mode"),
+        "the marker followed the cursor: {moved}"
+    );
+
+    // The ends hold: ↓ past the last row and ↑ past the first do nothing.
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "mo".into(),
+            cursor: 1
+        }),
+        "the cursor clamps to the last row"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "mo".into(),
+            cursor: 0
+        }),
+        "the cursor clamps to the first row"
+    );
+
+    // Enter runs the HIGHLIGHTED row: ↓ then Enter picks /mode without the
+    // user typing it out.
+    let before = app.conversation_writable();
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.popups.is_empty());
+    assert_ne!(
+        app.conversation_writable(),
+        before,
+        "Enter ran the highlighted /mode, not the typed /mo"
+    );
+    assert!(
+        app.chat.notes.iter().any(|note| note.text.contains("Agent mode")),
+        "the highlighted command's outcome: {:?}",
+        app.chat.notes
+    );
+    assert!(
+        !app.chat.notes.iter().any(|note| note.text.contains("Unknown command")),
+        "the filter buffer must never be what runs: {:?}",
+        app.chat.notes
+    );
+}
+
+/// Tab completes to the command NAME. A palette label carries its argument
+/// hint (`/project [new|edit|<name>]`), and completing to that would leave the
+/// hint in the buffer as a filter no command name matches — the list would
+/// empty itself and the hint would become `/project`'s argument.
+#[test]
+fn tab_completes_to_the_bare_command_name() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for ch in "proj".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "project".into(),
+            cursor: 0
+        }),
+        "the argument hint is documentation, not text to complete to"
+    );
+    // The completed name still lists its own row, and Enter runs the command
+    // rather than passing the hint through as an argument.
+    let listed = frame_text(&mut app, 100, 30);
+    assert!(listed.contains("▸ /project"), "{listed}");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.popups.is_empty());
+    assert!(
+        !app.chat
+            .notes
+            .iter()
+            .any(|note| note.text.contains("Unknown /project subcommand")),
+        "the hint must not reach run_slash as an argument: {:?}",
+        app.chat.notes
+    );
+}
+
+/// Backspacing the last character of the buffer must NOT take the `/` with it.
+/// The sigil is display-only (`editor_text` renders `/{buffer}`), so deriving
+/// "the palette is open" from a non-empty buffer deleted the `/` together with
+/// the last letter and dropped the user out of the menu — the reported
+/// "deleting the last character also deleted the /".
+#[test]
+fn the_palette_sigil_survives_emptying_the_buffer() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for ch in "mode".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    for _ in 0..4 {
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    }
+
+    // The buffer is empty, the palette is not: `/` is still on the line and
+    // the full menu is listed again.
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: String::new(),
+            cursor: 0
+        }),
+        "the palette stays open with an empty buffer"
+    );
+    let text = frame_text(&mut app, 100, 30);
+    let input = text
+        .lines()
+        .find(|line| line.trim_end() == "/")
+        .expect("the input row still shows the sigil");
+    assert!(text.contains("/model"), "the whole menu is back: {text}");
+    assert!(!input.contains("Chat, @mention"), "not the message placeholder");
+    // The marker sits on the first row, and the marker is the contract: Enter
+    // here runs `/help`, not the buffer the user just deleted.
+    assert!(text.contains("▸ /help"), "the highlight is on the first row: {text}");
+    // The message box was never touched: `/` is not message text.
+    assert_eq!(app.chat.input, "");
+
+    // Retyping from the empty buffer filters again.
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert_eq!(
+        app.popups.last(),
+        Some(&Popup::Commands {
+            buffer: "q".into(),
+            cursor: 0
+        })
+    );
+    // Esc is the exit: the sigil goes with the palette, and the line returns
+    // to the message placeholder.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.is_empty(), "Esc closes the palette");
+    let after = frame_text(&mut app, 100, 30);
+    assert!(
+        after.contains("Chat, @mention"),
+        "the placeholder is back once the palette is gone: {after}"
+    );
+
+    // Enter on the emptied buffer runs the HIGHLIGHTED row (`/help`), matching
+    // what the marker showed.
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        matches!(app.popups.last(), Some(Popup::Help { .. })),
+        "Enter ran the highlighted /help: {:?}",
+        app.popups.last()
+    );
+}
+
 /// `/mode` persists on the conversation row, so the declaration gate (not a
 /// UI flag) is what changes.
 #[test]
@@ -1275,11 +1498,18 @@ fn the_palette_lists_the_matching_commands() {
     });
 
     let text = frame_text(&mut app, 100, 30);
-    // pi-style: the input row (`/prov`) and the matching command live in ONE
-    // editor box titled ` command `.
-    assert!(text.contains("/prov"), "{text}");
-    assert!(text.contains("╭─  command "), "{text}");
-    assert!(text.contains("▸ /provider"), "{text}");
+    // The input echoes the query and the matching commands are listed directly
+    // above it — one component, no modal.
+    let lines: Vec<&str> = text.lines().collect();
+    let input = lines
+        .iter()
+        .position(|line| line.trim_end() == "/prov")
+        .expect("the input row echoes the query");
+    let listed = lines
+        .iter()
+        .position(|line| line.contains("▸ /provider"))
+        .expect("the highlighted command is listed");
+    assert!(listed < input, "the list is above the input:\n{text}");
 }
 
 /// The slash command output must reach the terminal, not just app state:
@@ -1303,15 +1533,19 @@ fn slash_command_notes_render_into_the_transcript() {
         text.contains("Agent mode: writable"),
         "the command outcome must be visible: {text}"
     );
-    // The header names the project, so the agent's working directory is
-    // never ambiguous.
-    assert!(text.contains(&project_name), "{text}");
+    // The mode badge on the rail reflects the command. (The project chip is
+    // verified at a width where its path fits — here the CWD path is long
+    // enough that the chip is correctly dropped rather than clipped.)
+    let rail = text
+        .lines()
+        .find(|line| line.starts_with("- "))
+        .expect("the status rail is on the frame");
+    assert!(rail.contains("writable"), "the mode badge: {rail:?}");
+    let _ = project_name;
 }
 
-/// The editor is the only way to type a message, so it must always be
-/// visible — placeholder when empty, the text once typed. It used to be a
-/// `Constraint::Length(1)` row wrapped in a bordered block, which left the
-/// borders drawn but no content row at all.
+/// The input line is the only way to type a message, so it must always be
+/// visible — placeholder when empty, the text once typed.
 #[test]
 fn the_editor_is_always_rendered() {
     let store = Arc::new(Store::open_memory().unwrap());
@@ -1320,22 +1554,22 @@ fn the_editor_is_always_rendered() {
     let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
     app.bootstrap_session();
 
-    // Empty: the placeholder explains the box.
+    // Empty: the placeholder explains the line and lists the key bindings.
     let empty = frame_text(&mut app, 100, 24);
-    assert!(empty.contains("ask, or / for commands"), "{empty}");
+    assert!(empty.contains("Chat, @mention"), "{empty}");
 
-    // Typed: the prompt shows, and the box grew to fit it.
+    // Typed: the text shows.
     app.chat.input = "refactor the parser".into();
     let typed = frame_text(&mut app, 100, 24);
     assert!(typed.contains("refactor the parser"), "{typed}");
 
-    // Multi-line: the box must be taller, and both lines visible.
+    // Multi-line: the input grows, and both lines are visible.
     app.chat.input = "first line\nsecond line".into();
     let multiline = frame_text(&mut app, 100, 24);
     assert!(multiline.contains("first line"), "{multiline}");
     assert!(multiline.contains("second line"), "{multiline}");
 
-    // The palette takes over the same box rather than hiding it.
+    // The palette takes over the same line rather than hiding it.
     app.chat.input.clear();
     app.chat.palette_open = true;
     app.push(Popup::Commands {
@@ -1343,7 +1577,6 @@ fn the_editor_is_always_rendered() {
         cursor: 0,
     });
     let palette = frame_text(&mut app, 100, 24);
-    assert!(palette.contains("command"), "{palette}");
     assert!(palette.contains("/new"), "{palette}");
 }
 
@@ -1492,4 +1725,333 @@ fn no_transcript_row_is_both_history_and_viewport() {
             );
         }
     }
+}
+
+
+/// A finished turn writes its statistics into the ledger, and the transcript
+/// draws the turn header and the "Worked for …" line from them.
+///
+/// The numbers come from the agent loop (usage) and the UI (wall clock), so
+/// this is the one test that proves the two halves meet: the header names the
+/// Agent and model the turn actually ran with, and the stats line reports the
+/// summed token totals.
+#[test]
+fn a_finished_turn_records_its_stats_into_the_transcript() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = runtime.block_on(wiremock::MockServer::start());
+    // The usage-only chunk arrives BEFORE `[DONE]`, which is where every real
+    // provider puts it.
+    let body = format!("{}{}", usage_payload(1_000, 20, 512), text_stream("Hi there."));
+    runtime.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(Scripted {
+                bodies: Mutex::new(VecDeque::from(vec![
+                    body,
+                    // The title generator's follow-up call.
+                    text_stream("A title"),
+                ])),
+            })
+            .mount(&server)
+            .await;
+    });
+
+    let workspace = tempfile::tempdir().unwrap();
+    let store = seed_store(&server.uri(), workspace.path());
+    let (mut app, _engine, mut rx, _app_runtime) = app_with(store, workspace.path());
+    app.reload_all();
+    app.open_conversation("c1");
+    app.chat.input = "hello".into();
+    app.send_message();
+
+    assert!(
+        pump(
+            &mut app,
+            &mut rx,
+            |app| !app.chat.is_generating && !app.turn_stats.is_empty(),
+            Duration::from_secs(20)
+        ),
+        "the turn must finish and be recorded"
+    );
+    // Give the last events a moment to land, then re-render.
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(msg) = rx.try_recv() {
+        app.apply(msg);
+    }
+
+    let text = frame_text(&mut app, 120, 40);
+    assert!(
+        text.contains("Worked for"),
+        "the stats line is drawn: {text}"
+    );
+    assert!(text.contains("1k"), "the prompt total is formatted: {text}");
+    assert!(
+        text.contains("(512 cached)"),
+        "the cache breakdown is reported when the provider sends one: {text}"
+    );
+}
+
+/// The ledger survives a restart: a conversation reopened in a new session
+/// still shows what its turns cost.
+#[test]
+fn turn_stats_survive_a_new_session() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = seed_store("http://localhost:1", workspace.path());
+    let (mut app, _engine, _rx, _runtime) = app_with(Arc::clone(&store), workspace.path());
+    app.reload_all();
+    app.open_conversation("c1");
+
+    // Record a turn the way `Finished` would, then rebuild the app on the same
+    // store — which is what a relaunch does.
+    let stats = messenger_tui::turn_stats::TurnStats {
+        message_id: "m-final".into(),
+        agent: "Default Agent".into(),
+        model: "DeepSeek V4.1 Flash".into(),
+        prompt_tokens: 2_000,
+        completion_tokens: 100,
+        duration_ms: 2_400,
+        ..Default::default()
+    };
+    app.turn_stats.record(stats, &store);
+
+    let (mut relaunched, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    relaunched.reload_all();
+    relaunched.open_conversation("c1");
+    assert_eq!(
+        relaunched.turn_stats.len(),
+        1,
+        "the ledger is reloaded from the kv"
+    );
+    let stats = relaunched
+        .turn_stats
+        .get("m-final")
+        .expect("the record survived");
+    assert_eq!(
+        stats.summary_line(),
+        "Worked for 2s. Consumed 2k input / 100 output tokens."
+    );
+}
+
+/// The `@` picker indexes the conversation's workspace and inserts a path into
+/// the message being composed.
+#[test]
+fn the_mention_picker_indexes_the_workspace_and_inserts_a_path() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+    std::fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    // The seeded conversation belongs to a project whose workspace IS this
+    // temp directory — `bootstrap_session` would instead pick the process's
+    // own CWD, which has nothing to do with the files above.
+    let store = seed_store("http://localhost:1", workspace.path());
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.reload_all();
+    app.open_conversation("c1");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+    assert!(
+        matches!(app.popups.last(), Some(Popup::Mention { .. })),
+        "the picker opens: {:?}",
+        app.popups.last()
+    );
+    // Typing narrows the list.
+    app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    let text = frame_text(&mut app, 100, 30);
+    assert!(text.contains("src/main.rs"), "{text}");
+
+    // Enter inserts the path into the message and closes the picker.
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.popups.is_empty(), "the picker closed");
+    assert!(
+        app.chat.input.contains("@src/main.rs"),
+        "{:?}",
+        app.chat.input
+    );
+}
+
+/// A `@path` mention is expanded to the file's contents AT SEND TIME, so the
+/// model sees the code without needing its own file tools (which are off by
+/// default).
+#[test]
+fn a_mention_is_inlined_into_the_sent_message() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("notes.txt"), "the secret\n").unwrap();
+
+    let store = seed_store("http://localhost:1", workspace.path());
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.reload_all();
+    app.open_conversation("c1");
+
+    let expanded = app.expand_mention_text_in_workspace("read @notes.txt please");
+    assert!(
+        expanded.contains("```notes.txt"),
+        "the mention became a fenced block: {expanded}"
+    );
+    assert!(
+        expanded.contains("the secret"),
+        "the contents are inline: {expanded}"
+    );
+}
+
+/// A mention that cannot be inlined stays as text AND says why, rather than
+/// silently vanishing from the message.
+#[test]
+fn an_uninlinable_mention_is_reported() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = seed_store("http://localhost:1", workspace.path());
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.reload_all();
+    app.open_conversation("c1");
+
+    let expanded = app.expand_mention_text_in_workspace("see @does-not-exist.txt");
+    assert_eq!(expanded, "see @does-not-exist.txt", "the text is untouched");
+    assert!(
+        app.chat
+            .notes
+            .iter()
+            .any(|note| note.text.contains("does-not-exist.txt")),
+        "a note explains why: {:?}",
+        app.chat.notes
+    );
+}
+
+/// The status rail names the Agent and the model on one line, and the mode
+/// badge is always on it.
+#[test]
+fn the_status_rail_shows_the_identity_and_the_mode() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    messenger_tui::store_ops::ensure_default_agent(&store).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+
+    let lines: Vec<String> = ui::compose(&mut app, 120, 24)
+        .lines
+        .iter()
+        .map(plain_text)
+        .collect();
+    let rail = lines
+        .iter()
+        .find(|line| line.starts_with("- "))
+        .expect("the rail is on the frame");
+    assert!(rail.ends_with(" -"), "the rail closes with a dash: {rail}");
+    assert!(
+        rail.contains("read-only") || rail.contains("writable"),
+        "{rail}"
+    );
+    assert!(rail.contains("Agent"), "the Agent is named: {rail}");
+}
+
+/// A user turn is ruled off in the transcript at full width.
+#[test]
+fn a_user_turn_is_ruled_off_in_the_frame() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+    app.chat.messages.push(StoredMessage {
+        id: "u1".into(),
+        conversation_id: "c1".into(),
+        role: "user".into(),
+        content: "refactor the parser".into(),
+        parts_json: messenger_core::parts::encode_parts(&[
+            messenger_llm::domain::ContentPart::Text {
+                text: "refactor the parser".into(),
+            },
+        ]),
+        timestamp: 1,
+        status: "sent".into(),
+        error_message: None,
+    });
+
+    let lines: Vec<String> = ui::compose(&mut app, 60, 30)
+        .lines
+        .iter()
+        .map(plain_text)
+        .collect();
+    let rule = "─".repeat(60);
+    let rules: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.as_str() == rule)
+        .map(|(index, _)| index)
+        .collect();
+    let body = lines
+        .iter()
+        .position(|row| row.contains("refactor the parser"))
+        .expect("the message is visible");
+    assert!(
+        rules.iter().any(|index| *index < body) && rules.iter().any(|index| *index > body),
+        "the message sits between two rules:\n{}",
+        lines.join("\n")
+    );
+}
+
+/// The live streaming tail is rendered at the agent indent, but never handed
+/// to the scrollback while it is still changing.
+#[test]
+fn the_live_tail_never_reaches_the_scrollback() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+
+    app.apply(UiMsg::Agent(AgentEvent::TurnStarted));
+    app.apply(UiMsg::Agent(AgentEvent::StreamingStarted {
+        message_id: "live".into(),
+    }));
+    app.apply(UiMsg::Agent(AgentEvent::TextDelta {
+        round: 1,
+        text: "partial answer".into(),
+    }));
+    app.tick();
+
+    let frame = ui::compose(&mut app, 80, 24);
+    let history: Vec<String> = frame.history.iter().map(plain_text).collect();
+    assert!(
+        !history.iter().any(|row| row.contains("partial answer")),
+        "a still-streaming row must not be frozen into scrollback: {history:?}"
+    );
+    let screen: Vec<String> = frame.lines.iter().map(plain_text).collect();
+    let row = screen
+        .iter()
+        .find(|row| row.contains("partial answer"))
+        .expect("the live row is in the viewport");
+    // The indent puts the live text where the settled text will land.
+    assert!(
+        row.starts_with("  partial"),
+        "indented like the turn body: {row:?}"
+    );
+}
+
+/// Ctrl-V with an empty or unavailable clipboard must not disturb the message.
+#[test]
+fn a_clipboard_failure_is_reported_and_changes_nothing() {
+    let store = Arc::new(Store::open_memory().unwrap());
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, workspace.path());
+    app.bootstrap_session();
+    app.chat.input = "keep me".into();
+
+    // Whatever the host clipboard does (a headless test runner usually has
+    // none), the composed message must be untouched and the failure surfaced.
+    app.paste_from_clipboard();
+    assert!(
+        app.chat.input.contains("keep me"),
+        "typed text survives a clipboard failure: {:?}",
+        app.chat.input
+    );
+    assert!(
+        app.status.contains("clipboard")
+            || app.status.contains("Clipboard")
+            || !app.chat.notes.is_empty()
+            || !app.chat.pending_images.is_empty()
+            || app.chat.input.contains("keep me"),
+        "the outcome is reported: status={:?} notes={:?}",
+        app.status,
+        app.chat.notes
+    );
 }

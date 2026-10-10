@@ -36,6 +36,16 @@ pub struct ResolvedTurn {
     /// conversation outside any project resolves to `None` and therefore
     /// declares none of the workspace-bound tools.
     pub workspace: Option<PathBuf>,
+    /// Display labels for the turn's transcript header and stats line. The
+    /// engine drops this struct once the turn is spawned, so anything the UI
+    /// needs to remember has to be picked up here at send time.
+    pub agent_name: String,
+    pub model_display_name: String,
+    /// The bound model's rates, for the cost chip. `None` on a provider that
+    /// declares no rate metadata (a BYOK provider), which means "not billable
+    /// at a known price" rather than "free".
+    pub model_input_rate: Option<f64>,
+    pub model_output_rate: Option<f64>,
 }
 
 /// Why a turn could not be resolved (shown verbatim in the status line).
@@ -427,6 +437,10 @@ pub fn resolve_turn(
     Ok(ResolvedTurn {
         conversation_title: conversation.title.clone(),
         workspace: workspace.as_deref().map(|dir| strip_verbatim(Path::new(dir))),
+        agent_name: effective.name.clone(),
+        model_display_name: model.display_name.clone(),
+        model_input_rate: model.input_rate,
+        model_output_rate: model.output_rate,
         request: TurnRequest {
             conversation_id: conversation.id.clone(),
             model_id: model.model_id.clone(),

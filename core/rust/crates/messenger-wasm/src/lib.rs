@@ -184,8 +184,9 @@ fn agent_event_to_json(event: &AgentEvent) -> String {
             "type": "ToolCallFinished", "callId": call_id, "name": name,
             "output": output, "isError": is_error
         }),
-        AgentEvent::UsageRecorded { prompt_tokens, completion_tokens } => serde_json::json!({
-            "type": "UsageRecorded", "promptTokens": prompt_tokens, "completionTokens": completion_tokens
+        AgentEvent::UsageRecorded { prompt_tokens, completion_tokens, cached_tokens } => serde_json::json!({
+            "type": "UsageRecorded", "promptTokens": prompt_tokens, "completionTokens": completion_tokens,
+            "cachedTokens": cached_tokens
         }),
         AgentEvent::TitleGenerated { title } => {
             serde_json::json!({"type": "TitleGenerated", "title": title})

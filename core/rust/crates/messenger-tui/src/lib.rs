@@ -23,16 +23,20 @@
 //! library so the headless integration tests can drive the real app state
 //! machine and assert on the frames `ui::compose` produces.
 //!
-//! Rendering is split three ways, with no widget framework in between:
-//! [`text`] holds the terminal's own line/span/style types, [`ui`] composes
-//! a frame out of them, and [`screen`] diffs that frame against what the
-//! terminal already shows.
+//! Rendering is split four ways, with no widget framework in between:
+//! [`text`] holds the terminal's own line/span/style types, [`transcript`]
+//! turns stored messages into the turn-grouped conversation view, [`ui`]
+//! composes those rows plus the bottom chrome into a frame, and [`screen`]
+//! diffs that frame against what the terminal already shows.
 
 pub mod app;
+pub mod banner;
+pub mod clipboard;
 pub mod commands;
 pub mod config;
 pub mod engine;
 pub mod highlight;
+pub mod mention;
 pub mod popup;
 pub mod render;
 pub mod screen;
@@ -40,5 +44,8 @@ pub mod shell;
 pub mod store_ops;
 pub mod text;
 pub mod tools;
+pub mod transcript;
+pub mod turn_stats;
 pub mod ui;
 pub mod workspace;
+pub mod workspace_meta;

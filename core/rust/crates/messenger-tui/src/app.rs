@@ -26,12 +26,14 @@ use crate::commands::{self, SLASH_COMMANDS};
 use crate::config::{self, TuiConfig};
 use crate::engine::{load_mcp_servers, CardSnapshot, Engine, UiMsg};
 use crate::popup::{
-    command_rows, Confirm, ConfirmPurpose, Field, Form, FormPurpose, Popup, Select, SelectItem,
+    command_names, Confirm, ConfirmPurpose, Field, Form, FormPurpose, Popup, Select, SelectItem,
     SelectPurpose,
 };
 use crate::render::{self, RenderOpts};
 use crate::store_ops::{self, TurnError};
 use crate::text::Line;
+use crate::transcript::NoteKind as TranscriptNoteKind;
+use crate::turn_stats::{TurnStats, TurnStatsLedger};
 
 // ---------------------------------------------------------------------------
 // chat state
@@ -81,41 +83,6 @@ impl ChatNote {
 }
 
 #[derive(Default)]
-struct RenderedCache {
-    entries: HashMap<String, (String, u16, (bool, bool), Vec<Line<'static>>)>,
-}
-
-impl RenderedCache {
-    fn get_or_build(
-        &mut self,
-        key: &str,
-        fingerprint: String,
-        width: u16,
-        opts: &RenderOpts,
-        build: impl FnOnce() -> Vec<Line<'static>>,
-    ) -> &Vec<Line<'static>> {
-        let opts_key = (opts.show_think, opts.show_tool_details);
-        let stale = match self.entries.get(key) {
-            Some((cached_fingerprint, cached_width, cached_opts, _)) => {
-                cached_fingerprint != &fingerprint
-                    || *cached_width != width
-                    || *cached_opts != opts_key
-            }
-            None => true,
-        };
-        if stale {
-            self.entries
-                .insert(key.to_string(), (fingerprint, width, opts_key, build()));
-        }
-        &self.entries.get(key).expect("just inserted").3
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
-#[derive(Default)]
 pub struct ChatState {
     pub conversation_id: Option<String>,
     pub messages: Vec<StoredMessage>,
@@ -130,9 +97,22 @@ pub struct ChatState {
     pub notes: Vec<ChatNote>,
     /// True while the `/` palette owns the input line.
     pub palette_open: bool,
+    /// The `@` file picker's state, when it owns the input line.
+    pub mention: Option<crate::mention::MentionIndex>,
+    /// Running this turn produced; consumed by `Finished` to write the ledger.
+    pub current_turn: Option<CurrentTurn>,
+    /// The turn's totals as reported by the provider, held until `Finished`
+    /// says which message row they belong to.
+    pub pending_usage: Option<TurnUsage>,
+    /// The most recent turn's totals, kept after `pending_usage` is consumed:
+    /// the cost chip keeps showing what the last turn cost.
+    pub last_usage: Option<TurnUsage>,
     /// Large pastes collapse into `[paste #N …]` markers; the full text is
     /// recovered here when the message is sent (pi's paste registry).
     pub pastes: std::collections::HashMap<usize, String>,
+    /// Images pasted from the clipboard, waiting to be attached to the next
+    /// message. Each is a `(dataUri, localPath)` pair.
+    pub pending_images: Vec<PendingImage>,
     paste_counter: usize,
     /// How many transcript rows have already been handed to the terminal's
     /// scrollback (see [`crate::screen::Screen::flush_history`]).
@@ -146,7 +126,41 @@ pub struct ChatState {
     history_rows: usize,
 
     live: Option<LiveStream>,
-    cache: RenderedCache,
+    /// Rendered turn bodies, keyed by message id. The transcript is
+    /// re-rendered every frame (its row count decides what is in view), so
+    /// the markdown and syntect passes are cached here.
+    pub body_cache: crate::transcript::BodyCache,
+}
+
+/// An image pasted from the clipboard and staged for the next message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingImage {
+    pub data_uri: String,
+    pub local_path: String,
+    /// Display size for the transcript's `[image #1 1920x1080]` marker.
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The token totals a turn reported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnUsage {
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cached_tokens: i64,
+}
+
+/// What a turn was run with, captured at send time: the ledger needs labels
+/// that the request itself does not carry, and the engine drops the resolved
+/// turn once it is spawned.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CurrentTurn {
+    pub agent: String,
+    pub model: String,
+    pub effort: Option<String>,
+    pub input_rate: Option<f64>,
+    pub output_rate: Option<f64>,
+    pub started: Option<std::time::Instant>,
 }
 
 /// The subset of `CloudUser` the TUI shows.
@@ -189,9 +203,77 @@ pub struct App {
     pub cloud_user: Option<CloudUserInfo>,
     /// Last status-line diagnostic (token totals etc.).
     pub last_list_message: Option<String>,
+    /// Finished turns' statistics, keyed by the message that carries them.
+    pub turn_stats: TurnStatsLedger,
+    /// The active model's context window and rates, for the status rail's
+    /// context/cost chips. Refreshed when the conversation or model changes
+    /// rather than per frame — resolving it walks the store.
+    pub model_meta: Option<ModelMeta>,
+    /// Cached context usage (tokens) for the open conversation. Recomputed on
+    /// conversation/message changes; the rail must not run the token estimate
+    /// on every frame.
+    pub context_tokens: Option<i64>,
     /// The directory the process was launched in: the session's default
     /// project workspace.
     pub cwd: PathBuf,
+}
+
+/// The bits of the bound model the status rail needs.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelMeta {
+    pub model_id: String,
+    pub context_window: i64,
+    pub input_rate: Option<f64>,
+    pub output_rate: Option<f64>,
+}
+
+impl ChatState {
+    /// The workspace file index for `@` mentions, if one has been built.
+    pub fn mention_index(&self) -> Option<&crate::mention::MentionIndex> {
+        self.mention.as_ref()
+    }
+
+    /// Build the index for `root`, or reuse the one already loaded.
+    ///
+    /// Returns false when the workspace has no indexable files, so the caller
+    /// can tell the user why `@` produced nothing.
+    pub fn ensure_mentions(&mut self, root: &std::path::Path) -> bool {
+        match &self.mention {
+            Some(index) if index.root() == root => !index.is_empty(),
+            _ => {
+                let index = crate::mention::MentionIndex::build(root);
+                let usable = !index.is_empty();
+                self.mention = Some(index);
+                usable
+            }
+        }
+    }
+
+    /// Drop the index: the workspace changed, so its file list is stale.
+    pub fn forget_mentions(&mut self) {
+        self.mention = None;
+    }
+
+    /// The session notes in the shape the transcript renders.
+    pub fn transcript_notes(&self) -> Vec<(String, TranscriptNoteKind)> {
+        self.notes
+            .iter()
+            .map(|note| {
+                let kind = match note.kind {
+                    NoteKind::Info => TranscriptNoteKind::Info,
+                    NoteKind::Warn => TranscriptNoteKind::Warn,
+                    NoteKind::Error => TranscriptNoteKind::Error,
+                };
+                (note.text.clone(), kind)
+            })
+            .collect()
+    }
+
+    /// The last turn's reported usage, for the cost chip.
+    pub fn last_usage(&self) -> Option<(i64, i64)> {
+        self.last_usage
+            .map(|usage| (usage.prompt_tokens, usage.completion_tokens))
+    }
 }
 
 impl App {
@@ -201,6 +283,7 @@ impl App {
         config_path: PathBuf,
         store_path: PathBuf,
     ) -> Self {
+        let engine_store = Arc::clone(&engine.store);
         let mut app = Self {
             engine,
             config,
@@ -224,9 +307,13 @@ impl App {
             },
             cloud_user: None,
             last_list_message: None,
+            turn_stats: TurnStatsLedger::load(&engine_store),
+            model_meta: None,
+            context_tokens: None,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         };
         app.reload_all();
+        app.refresh_model_meta();
         app
     }
 
@@ -614,7 +701,13 @@ impl App {
                 self.chat.scroll = 0;
                 self.chat.follow = true;
                 self.chat.error = None;
-                self.chat.cache.clear();
+                self.chat.body_cache.clear();
+                // The model, the context usage and the workspace all belong to
+                // the conversation that just became current, so the rail's
+                // chips and the mention index are refreshed here rather than
+                // lazily from the render path.
+                self.chat.forget_mentions();
+                self.refresh_model_meta();
             }
             Err(error) => self.status = error,
         }
@@ -652,10 +745,6 @@ impl App {
     /// client's shared `~/.messenger` default.
     pub fn bootstrap_session(&mut self) {
         self.reload_all();
-        let agent_name = store_ops::current_agent(&self.engine.store)
-            .ok()
-            .flatten()
-            .map(|agent| agent.name);
         let Some(agent) = store_ops::current_agent(&self.engine.store).ok().flatten() else {
             self.note(ChatNote::error(
                 "No Agent available — configure a provider and model first.",
@@ -681,11 +770,10 @@ impl App {
             Ok(conversation) => {
                 self.reload_all();
                 self.open_conversation(&conversation.id);
-                let agent_label = agent_name.unwrap_or_else(|| agent.name.clone());
-                self.note(ChatNote::info(format!(
-                    "Project “{}” · agent {} · type a request, or / for commands.",
-                    project.name, agent_label
-                )));
+                // No banner note: the status rail already names the project,
+                // the Agent and the model, and the input placeholder already
+                // says how to start. A note repeating all three would push the
+                // conversation down for a session with nothing in it yet.
             }
             Err(error) => self.note(ChatNote::error(error)),
         }
@@ -699,6 +787,10 @@ impl App {
             Ok(messages) => self.chat.messages = messages,
             Err(error) => self.status = error,
         }
+        // The context chips are a function of these messages, and this is
+        // called exactly when they change (a round persisted, a turn ended).
+        // Doing it here rather than per frame is what keeps the rail free.
+        self.refresh_context_tokens();
     }
 
     pub fn save_config(&mut self) {
@@ -763,7 +855,7 @@ impl App {
                 }
                 self.reload_chat_messages();
                 // A round changed the transcript: drop stale cache entries.
-                self.chat.cache.clear();
+                self.chat.body_cache.clear();
             }
             AgentEvent::TitleGenerated { title } => {
                 self.status = format!("Title: {title}");
@@ -777,9 +869,25 @@ impl App {
             AgentEvent::UsageRecorded {
                 prompt_tokens,
                 completion_tokens,
+                cached_tokens,
             } => {
-                let total = prompt_tokens + completion_tokens;
-                self.last_list_message = Some(format!("{total} tokens"));
+                // The turn's totals, held until `Finished` names the row they
+                // belong to (the ledger is keyed by the final message).
+                self.chat.pending_usage = Some(TurnUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                });
+                self.chat.last_usage = Some(TurnUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                });
+                self.last_list_message = Some(format!(
+                    "{} in / {} out",
+                    crate::turn_stats::format_tokens(prompt_tokens),
+                    crate::turn_stats::format_tokens(completion_tokens)
+                ));
             }
             AgentEvent::ReasoningFormatDetected { format } => {
                 self.status = format!("Reasoning format: {format}");
@@ -796,12 +904,13 @@ impl App {
             AgentEvent::Cancelled => {
                 self.chat.is_generating = false;
                 self.chat.live = None;
-                self.chat.cache.clear();
+                self.chat.body_cache.clear();
                 self.status = "Turn cancelled.".into();
                 self.reload_chat_messages();
             }
-            AgentEvent::Finished { .. } => {
+            AgentEvent::Finished { message_id } => {
                 self.chat.is_generating = false;
+                self.record_turn_stats(&message_id);
                 self.reload_chat_messages();
                 self.reload_conversations();
             }
@@ -821,6 +930,120 @@ impl App {
                 self.reload_chat_messages();
             }
         }
+    }
+
+    /// Write the finished turn into the ledger: the transcript draws the turn
+    /// header and the "Worked for …" line from it.
+    ///
+    /// Called on `Finished` only. A cancelled or failed turn has no final
+    /// message to hang the numbers on, and its rows already carry the outcome.
+    fn record_turn_stats(&mut self, message_id: &str) {
+        let Some(current) = self.chat.current_turn.take() else {
+            return;
+        };
+        let usage = self.chat.pending_usage.take().unwrap_or_default();
+        let duration_ms = current
+            .started
+            .map(|started| crate::turn_stats::duration_ms(started.elapsed()))
+            .unwrap_or(0);
+        let cost_units = crate::turn_stats::cost_units(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            current.input_rate,
+            current.output_rate,
+        );
+        self.turn_stats.record(
+            TurnStats {
+                message_id: message_id.to_string(),
+                agent: current.agent,
+                model: current.model,
+                effort: current.effort,
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                cached_tokens: usage.cached_tokens,
+                duration_ms,
+                cost_units,
+            },
+            &self.engine.store,
+        );
+        self.refresh_context_tokens();
+    }
+
+    /// Refresh the bound model's context window and rates for the status rail.
+    pub fn refresh_model_meta(&mut self) {
+        self.model_meta = self.bound_model_row().map(|model| ModelMeta {
+            model_id: model.model_id.clone(),
+            context_window: model.context_window,
+            input_rate: model.input_rate,
+            output_rate: model.output_rate,
+        });
+        self.refresh_context_tokens();
+    }
+
+    /// Recompute the conversation's context usage for the rail.
+    ///
+    /// Walks the whole message list through the token estimator, so it is
+    /// called on the events that change the answer (a reload, a usage report,
+    /// a model switch) rather than from the render path.
+    pub fn refresh_context_tokens(&mut self) {
+        let Some(conversation_id) = self.chat.conversation_id.clone() else {
+            self.context_tokens = None;
+            return;
+        };
+        let Ok(Some(conversation)) = self.engine.store.get_conversation(&conversation_id) else {
+            self.context_tokens = None;
+            return;
+        };
+        let Ok(rows) = self
+            .engine
+            .store
+            .list_messages_by_conversation(&conversation_id)
+        else {
+            self.context_tokens = None;
+            return;
+        };
+        let state = messenger_core::context::ContextState {
+            context_summary: conversation.context_summary.clone(),
+            context_summary_until: conversation.context_summary_until,
+            context_tokens: conversation.context_tokens,
+            context_tokens_at: conversation.context_tokens_at,
+        };
+        // Only `sent` rows are part of the next request: a `sending`
+        // placeholder has not been answered yet, and an `error` row is not
+        // replayed.
+        let sent: Vec<messenger_llm::domain::Message> = rows
+            .into_iter()
+            .filter(|row| row.status == "sent")
+            .map(messenger_core::agent::message_from_row)
+            .collect();
+        let system_prompt = self.current_system_prompt();
+        self.context_tokens = Some(messenger_core::context::estimate_context_tokens(
+            &state,
+            &sent,
+            system_prompt.as_deref(),
+        ));
+    }
+
+    /// The system prompt the next request would carry, or `None` when the
+    /// conversation cannot be resolved.
+    fn current_system_prompt(&self) -> Option<String> {
+        let conversation_id = self.chat.conversation_id.as_deref()?;
+        let conversation = self
+            .engine
+            .store
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()?;
+        let agent = self
+            .engine
+            .store
+            .get_agent(&conversation.agent_id)
+            .ok()
+            .flatten()?;
+        let default_agent = self.engine.store.get_default_agent().ok().flatten();
+        let effective =
+            store_ops::resolve_effective_agent(agent, Some(&conversation), default_agent.as_ref());
+        Some(effective.system_prompt)
     }
 
     /// Drain the live streaming session's diffs (the document is the source
@@ -847,28 +1070,6 @@ impl App {
             return None;
         }
         Some(render::blocks_to_lines(&blocks, width, &self.opts()))
-    }
-
-    /// Render one stored message with caching keyed on its content fingerprint.
-    pub fn rendered_message(&mut self, index: usize, width: u16) -> Vec<Line<'static>> {
-        let opts = self.opts();
-        let Some(message) = self.chat.messages.get(index) else {
-            return Vec::new();
-        };
-        let fingerprint = format!(
-            "{}|{}|{}|{}|{}",
-            message.content,
-            message.parts_json.as_deref().unwrap_or(""),
-            message.status,
-            message.error_message.as_deref().unwrap_or(""),
-            message.role
-        );
-        self.chat
-            .cache
-            .get_or_build(&message.id, fingerprint, width, &opts, || {
-                render::message_lines(message, width, &opts)
-            })
-            .clone()
     }
 
     /// Transcript rows already written to the terminal's scrollback.
@@ -965,9 +1166,13 @@ impl App {
             return;
         }
         let text = expand_paste_markers(self.chat.input.trim_end(), &self.chat.pastes);
-        if text.trim().is_empty() {
+        let images = std::mem::take(&mut self.chat.pending_images);
+        // An image-only message is legitimate: the model gets the picture and
+        // no text. Text-only needs a non-blank body as before.
+        if text.trim().is_empty() && images.is_empty() {
             return;
         }
+        let text = self.expand_mentions_in(&text);
         let conversation_id = match self.chat.conversation_id.clone() {
             Some(id) => id,
             None => match self.create_conversation() {
@@ -1003,12 +1208,24 @@ impl App {
             .flatten()
             .unwrap_or(0)
             + 1;
+        let mut parts: Vec<ContentPart> = Vec::new();
+        if !text.is_empty() {
+            parts.push(ContentPart::Text { text: text.clone() });
+        }
+        for image in &images {
+            parts.push(ContentPart::Image {
+                image: messenger_llm::domain::MessageImage {
+                    data_uri: image.data_uri.clone(),
+                    local_path: image.local_path.clone(),
+                },
+            });
+        }
         let message = StoredMessage {
             id: uuid::Uuid::new_v4().to_string(),
             conversation_id: conversation_id.clone(),
             role: "user".into(),
             content: text.clone(),
-            parts_json: messenger_core::parts::encode_parts(&[ContentPart::Text { text: text.clone() }]),
+            parts_json: messenger_core::parts::encode_parts(&parts),
             timestamp,
             status: "sent".into(),
             error_message: None,
@@ -1018,23 +1235,70 @@ impl App {
             return;
         }
         if let Ok(Some(mut conversation)) = self.engine.store.get_conversation(&conversation_id) {
-            conversation.last_message = Some(text.chars().take(80).collect::<String>());
+            conversation.last_message = Some(summarize_last_message(&text, images.len()));
             conversation.updated_at = messenger_store::now_ms();
             let _ = self.engine.store.upsert_conversation(&conversation);
         }
+
+        // The turn's labels ride along for the ledger: the engine drops the
+        // resolved turn once it is spawned, and the header needs the names.
+        self.chat.current_turn = Some(CurrentTurn {
+            agent: resolved.agent_name.clone(),
+            model: resolved.model_display_name.clone(),
+            effort: resolved.request.reasoning_effort.clone(),
+            input_rate: resolved.model_input_rate,
+            output_rate: resolved.model_output_rate,
+            started: Some(std::time::Instant::now()),
+        });
+        self.chat.pending_usage = None;
 
         self.chat.input.clear();
         self.chat.scroll = 0;
         self.chat.follow = true;
         self.chat.error = None;
-        self.chat.cache.clear();
+        self.chat.body_cache.clear();
         self.reload_chat_messages();
+        self.refresh_context_tokens();
         self.engine.start_turn(resolved);
+    }
+
+    /// Expand `@path` mentions into fenced file contents.
+    ///
+    /// Mentions that could not be inlined stay as typed and produce a note, so
+    /// a file the user expected to see does not silently vanish from the
+    /// message.
+    ///
+    /// The index is built if it is not warm yet: a user who types `@path` by
+    /// hand (or pastes it) never opened the picker, and their mention must
+    /// still resolve.
+    pub fn expand_mentions_in(&mut self, text: &str) -> String {
+        if !crate::mention::parse_mentions(text).is_empty() && self.chat.mention_index().is_none() {
+            if let Some(project) = self.chat_project() {
+                let root = std::path::PathBuf::from(&project.workspace);
+                self.chat.ensure_mentions(&root);
+            }
+        }
+        let Some(index) = self.chat.mention.clone() else {
+            return text.to_string();
+        };
+        let expansion = crate::mention::expand_mentions(text, &index);
+        for skipped in expansion.skipped {
+            self.note(ChatNote::warn(format!("Kept as text: {skipped}")));
+        }
+        expansion.text
+    }
+
+    /// The same expansion, against the workspace of the open conversation.
+    ///
+    /// Builds the index on demand, so it works without the picker having been
+    /// opened first.
+    pub fn expand_mention_text_in_workspace(&mut self, text: &str) -> String {
+        self.expand_mentions_in(text)
     }
 
     pub fn toggle_think(&mut self) {
         self.config.show_think = !self.config.show_think;
-        self.chat.cache.clear();
+        self.chat.body_cache.clear();
         let label = if self.config.show_think { "expanded" } else { "collapsed" };
         self.note_info(format!("Think blocks {label}"));
         self.save_config();
@@ -1042,7 +1306,7 @@ impl App {
 
     pub fn toggle_tool_details(&mut self) {
         self.config.show_tool_details = !self.config.show_tool_details;
-        self.chat.cache.clear();
+        self.chat.body_cache.clear();
         let label = if self.config.show_tool_details {
             "expanded"
         } else {
@@ -1098,7 +1362,7 @@ impl App {
             self.chat.conversation_id = None;
             self.chat.messages.clear();
             self.chat.live = None;
-            self.chat.cache.clear();
+            self.chat.body_cache.clear();
         }
         self.note_info("Conversation deleted.");
         self.reload_conversations();
@@ -1607,7 +1871,7 @@ impl App {
             self.note(ChatNote::warn("No models — /provider new, then fetch."));
             return;
         }
-        let bound = self.bound_model_id();
+        let bound = self.bound_model_row().map(|model| model.id.clone());
         let items: Vec<SelectItem> = models
             .iter()
             .map(|model| {
@@ -1708,26 +1972,49 @@ impl App {
     }
 
     /// The model the open conversation actually resolves to (its override,
-    /// else the Agent's).
-    fn bound_model_id(&self) -> Option<String> {
+    /// else its Agent's).
+    ///
+    /// The Agent is taken from the CONVERSATION, not from the global "current
+    /// agent" key: a conversation keeps whichever Agent it was created with,
+    /// and the two diverge as soon as the user switches Agents elsewhere.
+    fn bound_model_row(&self) -> Option<&StoredModel> {
         let conversation = self
             .chat
             .conversation_id
             .as_deref()
             .and_then(|id| self.engine.store.get_conversation(id).ok().flatten())?;
-        conversation
-            .override_model_id
-            .clone()
-            .or_else(|| store_ops::current_agent(&self.engine.store).ok().flatten()?.default_model_id)
+        let agent_model = self
+            .engine
+            .store
+            .get_agent(&conversation.agent_id)
+            .ok()
+            .flatten()
+            .and_then(|agent| agent.default_model_id);
+        let id = conversation.override_model_id.clone().or(agent_model)?;
+        self.models.iter().find(|model| model.id == id)
     }
 
-    /// The model this session would actually call, for the footer.
+    /// The model this session would actually call, for the status rail.
     pub fn bound_model_label(&self) -> Option<String> {
-        let id = self.bound_model_id()?;
-        self.models
-            .iter()
-            .find(|model| model.id == id)
+        self.bound_model_row()
             .map(|model| model.display_name.clone())
+    }
+
+    /// The reasoning effort the conversation's next turn would carry.
+    ///
+    /// Merged the same way `resolve_turn` merges it (the Agent's follow
+    /// flags, then the conversation's override), so the rail and the request
+    /// never disagree about what is in force.
+    pub fn effective_effort(&self, conversation: &StoredConversation) -> Option<String> {
+        let agent = self
+            .engine
+            .store
+            .get_agent(&conversation.agent_id)
+            .ok()
+            .flatten()?;
+        let default_agent = self.engine.store.get_default_agent().ok().flatten();
+        store_ops::resolve_effective_agent(agent, Some(conversation), default_agent.as_ref())
+            .reasoning_effort
     }
 
     /// React to a pick from a `Popup::Select`.
@@ -2358,6 +2645,9 @@ impl App {
                 _ => {}
             },
             Popup::Commands { buffer, cursor } => self.handle_commands_key(buffer, cursor, key),
+            Popup::Mention { query, cursor, items } => {
+                self.handle_mention_key(query, cursor, items, key)
+            }
             Popup::Select(mut select) => {
                 match key.code {
                     KeyCode::Down | KeyCode::Char('j') if !control => {
@@ -2580,6 +2870,12 @@ impl App {
 
     /// The `/` palette: a filter buffer with Tab completion. Everything is a
     /// prefix of `SLASH_COMMANDS`, so completion can never fail to suggest.
+    ///
+    /// The buffer is ONLY a filter; the cursor is the selection. Arrows move
+    /// the selection and leave the buffer alone — writing the highlighted row
+    /// back into the buffer would filter the list down to that single row and
+    /// make it impossible to walk the menu (the reported "the menu collapses
+    /// to the row I moved onto").
     fn handle_commands_key(&mut self, mut buffer: String, mut cursor: usize, key: KeyEvent) {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -2589,42 +2885,45 @@ impl App {
                 return;
             }
             KeyCode::Enter => {
-                let line = buffer.clone();
+                // The highlighted row is what runs, so ↓ then Enter picks a
+                // command without typing it out. Nothing matching means the
+                // typed buffer is what fails (with the usual unknown-command
+                // warning) rather than a command the user never chose.
+                let line = command_names(&buffer)
+                    .get(cursor)
+                    .cloned()
+                    .unwrap_or_else(|| buffer.clone());
                 self.chat.palette_open = false;
                 self.run_slash(&line);
                 return;
             }
             KeyCode::Tab => {
-                let rows = command_rows(&buffer);
-                match rows.as_slice() {
+                // Complete to the command NAME: a palette label carries the
+                // argument hint (`/mode [read-only|writable]`), which is
+                // documentation, not something to run or to filter on.
+                let names = command_names(&buffer);
+                match names.as_slice() {
                     [] => self.note(ChatNote::warn(format!("Unknown command /{buffer}"))),
-                    [(label, _)] => buffer = label.trim_start_matches('/').to_string(),
+                    [name] => buffer = name.clone(),
                     many => {
-                        let names: Vec<String> = many
-                            .iter()
-                            .map(|(label, _)| label.trim_start_matches('/').to_string())
-                            .collect();
-                        self.note(ChatNote::info(format!("Commands: /{}", names.join("  /"))));
-                        buffer = shared_prefix(&names);
+                        self.note(ChatNote::info(format!("Commands: /{}", many.join("  /"))));
+                        buffer = shared_prefix(many);
                     }
                 }
                 cursor = 0;
             }
-            KeyCode::Down | KeyCode::Up => {
-                let count = command_rows(&buffer).len();
-                if count > 0 {
-                    cursor = if key.code == KeyCode::Down {
-                        (cursor + 1).min(count - 1)
-                    } else {
-                        cursor.saturating_sub(1)
-                    };
-                    // The highlighted row is the command that runs.
-                    if let Some((label, _)) = command_rows(&buffer).get(cursor) {
-                        buffer = label.trim_start_matches('/').to_string();
-                    }
-                }
+            KeyCode::Down => {
+                cursor = cursor.saturating_add(1).min(command_names(&buffer).len().saturating_sub(1));
+            }
+            KeyCode::Up => {
+                cursor = cursor.saturating_sub(1);
             }
             KeyCode::Backspace => {
+                // Backspacing off the last character leaves a bare `/` and the
+                // full menu rather than closing: the sigil is display-only
+                // (the input row renders `/{buffer}`), so closing on an empty
+                // buffer would delete the `/` along with the last letter and
+                // drop the user out of the menu mid-filter. Esc is the exit.
                 buffer.pop();
                 cursor = 0;
             }
@@ -2634,10 +2933,181 @@ impl App {
             }
             _ => {}
         }
-        // An emptied palette returns to plain message typing.
-        self.chat.palette_open = !buffer.is_empty();
-        if !buffer.is_empty() {
-            self.push(Popup::Commands { buffer, cursor });
+        // The palette stays open until Esc peels it: the buffer empties, but
+        // the `/` (and with it the menu) does not.
+        self.chat.palette_open = true;
+        self.push(Popup::Commands { buffer, cursor });
+    }
+
+    /// Keys while the `@` file picker owns the line. Structurally the command
+    /// palette's twin: the query is echoed on the input row, the list below it
+    /// filters as you type, and Enter inserts the choice.
+    ///
+    /// The one difference is what Enter does — the palette RUNS a command,
+    /// while the picker inserts a path into the message being composed, so the
+    /// user keeps typing after the pick.
+    fn handle_mention_key(
+        &mut self,
+        mut query: String,
+        mut cursor: usize,
+        items: Vec<crate::mention::MentionItem>,
+        key: KeyEvent,
+    ) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Enter => {
+                if let Some(item) = items.get(cursor) {
+                    self.insert_mention(&item.path);
+                }
+                return;
+            }
+            KeyCode::Tab => {
+                // Complete into the query rather than inserting: the user may
+                // still want to narrow further.
+                if let Some(item) = items.get(cursor) {
+                    query = item.path.clone();
+                    cursor = 0;
+                }
+            }
+            KeyCode::Down => {
+                if !items.is_empty() {
+                    cursor = (cursor + 1).min(items.len() - 1);
+                }
+            }
+            KeyCode::Up => {
+                cursor = cursor.saturating_sub(1);
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                cursor = 0;
+                if query.is_empty() {
+                    // An empty query means the user is done with the picker;
+                    // a second Backspace should edit the message, not the
+                    // query, so close here and let the input take over.
+                    return;
+                }
+            }
+            KeyCode::Char(ch) if !control && !ch.is_whitespace() => {
+                query.push(ch);
+                cursor = 0;
+            }
+            // A space ends the mention: the path is complete.
+            KeyCode::Char(' ') => {
+                if let Some(item) = items.get(cursor) {
+                    self.insert_mention(&item.path);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let filtered = self
+            .chat
+            .mention_index()
+            .map(|index| index.search(&query))
+            .unwrap_or_default();
+        if !query.is_empty() {
+            self.push(Popup::Mention {
+                query,
+                cursor,
+                items: filtered,
+            });
+        }
+    }
+
+    /// Insert `@path` at the end of the message being composed and close the
+    /// picker. The path is what the send path later expands into the file's
+    /// contents.
+    fn insert_mention(&mut self, path: &str) {
+        if !self.chat.input.is_empty() && !self.chat.input.ends_with(char::is_whitespace) {
+            self.chat.input.push(' ');
+        }
+        self.chat.input.push('@');
+        self.chat.input.push_str(path);
+        self.chat.input.push(' ');
+    }
+
+    /// Open the `@` file picker against the conversation's workspace.
+    ///
+    /// The workspace is the PROJECT's directory — the same tree the agent's
+    /// file tools would read — so a mention always names a file the agent
+    /// could actually have been handed. A conversation in no project has no
+    /// workspace to mention from, and says so instead of opening an empty
+    /// picker.
+    pub fn open_mention_picker(&mut self) {
+        let Some(project) = self.chat_project() else {
+            self.note(ChatNote::warn(
+                "No project here — @ brings in files from a project's workspace.",
+            ));
+            return;
+        };
+        let root = std::path::PathBuf::from(&project.workspace);
+        if !self.chat.ensure_mentions(&root) {
+            self.note(ChatNote::warn(format!(
+                "No files to mention in {}.",
+                project.workspace
+            )));
+            return;
+        }
+        let items = self
+            .chat
+            .mention_index()
+            .map(|index| index.search(""))
+            .unwrap_or_default();
+        self.push(Popup::Mention {
+            query: String::new(),
+            cursor: 0,
+            items,
+        });
+    }
+
+    /// Ctrl-V: paste the system clipboard into the message.
+    ///
+    /// Text rides the bracketed-paste path (so a long paste collapses into a
+    /// marker rather than filling the input), and an image becomes a staged
+    /// attachment. The two are not exclusive: a clipboard can carry both, and
+    /// whichever it has is what gets pasted.
+    pub fn paste_from_clipboard(&mut self) {
+        match crate::clipboard::read_clipboard() {
+            Ok(crate::clipboard::ClipboardContent::Text(text)) => self.handle_paste(&text),
+            Ok(crate::clipboard::ClipboardContent::Image(image)) => {
+                self.stage_image(image);
+            }
+            Ok(crate::clipboard::ClipboardContent::Empty) => {
+                self.status = "The clipboard is empty.".into();
+            }
+            Err(error) => {
+                self.note(ChatNote::warn(format!("Clipboard unavailable: {error}")));
+            }
+        }
+    }
+
+    /// Stage a pasted image for the next message, writing its local copy.
+    ///
+    /// The local file is not optional: `decode_parts` needs BOTH the data URI
+    /// and a local path to reconstruct an image part, and the renderer reads
+    /// the file. A failure to write it drops the attachment rather than
+    /// staging one that cannot be sent.
+    fn stage_image(&mut self, image: crate::clipboard::ClipboardImage) {
+        let directory = self
+            .store_path
+            .parent()
+            .map(|parent| parent.join("chat_images"))
+            .unwrap_or_else(|| PathBuf::from("chat_images"));
+        match crate::clipboard::write_image(&directory, &image) {
+            Ok(local_path) => {
+                self.chat.pending_images.push(PendingImage {
+                    data_uri: image.data_uri,
+                    local_path,
+                    width: image.width,
+                    height: image.height,
+                });
+                let count = self.chat.pending_images.len();
+                self.status = format!("Image attached ({count} ready to send).");
+            }
+            Err(error) => {
+                self.note(ChatNote::warn(format!("Could not store the image: {error}")));
+            }
         }
     }
 
@@ -2660,6 +3130,12 @@ impl App {
                     cursor: 0,
                 });
             }
+            // Ctrl+V pastes from the system clipboard: text goes in like a
+            // bracketed paste, an image is staged as an attachment.
+            KeyCode::Char('v') if control => self.paste_from_clipboard(),
+            // `@` opens the file picker at the current caret position (the
+            // input only ever appends, so that is the end).
+            KeyCode::Char('@') if !alt && !control => self.open_mention_picker(),
             KeyCode::Enter if !alt && !control => self.send_message(),
             KeyCode::Enter => {
                 // Alt+Enter (and the terminal's Ctrl+J, which arrives as a
@@ -2993,8 +3469,7 @@ fn shared_prefix(names: &[String]) -> String {
 
 /// Expand `[paste #N …]` markers back to their stored text (pi's paste
 /// registry), so the model sees what the user actually pasted.
-pub fn expand_paste_markers(input: &str, pastes: &std::collections::HashMap<usize, String>) -> String {
-    let mut text = input.to_string();
+pub fn expand_paste_markers(input: &str, pastes: &std::collections::HashMap<usize, String>) -> String {    let mut text = input.to_string();
     while let Some(start) = text.find("[paste #") {
         let Some(end_rel) = text[start..].find(']') else { break };
         let end = start + end_rel;
@@ -3028,6 +3503,22 @@ pub fn command_help_rows() -> Vec<(String, String)> {
             (label, command.summary.to_string())
         })
         .collect()
+}
+
+/// The conversation-list preview for a message that may carry images.
+///
+/// A message with no text at all still needs a row in the list, so an
+/// image-only send previews as its attachment count.
+fn summarize_last_message(text: &str, images: usize) -> String {
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        return trimmed.chars().take(80).collect();
+    }
+    match images {
+        0 => String::new(),
+        1 => "[image]".into(),
+        count => format!("[{count} images]"),
+    }
 }
 
 #[cfg(test)]

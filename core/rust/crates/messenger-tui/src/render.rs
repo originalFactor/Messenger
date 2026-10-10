@@ -573,6 +573,15 @@ fn inline_spans(inline: &Inline, base: Style) -> Vec<Span<'static>> {
 }
 
 /// Wrap a plain string to `width` display cells.
+///
+/// Public because the transcript's own block styles (the indented user turn,
+/// the dim stats line) need the same wrap the renderer uses — a second
+/// implementation would wrap differently from the code beside it.
+pub fn wrap_text(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    wrap_plain(text, width, style)
+}
+
+/// Wrap a plain string to `width` display cells.
 fn wrap_plain(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     wrap_spans(vec![Span::styled(text.to_string(), style)], width)
 }
