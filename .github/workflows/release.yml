@@ -70,6 +70,22 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      # The tag is the published identity of a release, so it must agree with
+      # the VERSION file the artifacts were built from: a `v1.0.1` tag on a
+      # tree whose VERSION still says 1.0.0 would ship five clients that all
+      # report 1.0.0 under a 1.0.1 release. Fail here instead.
+      - name: Verify the tag matches the VERSION file
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          file="$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "v$file" ]; then
+            echo "::error::Tag '$tag' does not match VERSION '$file' (expected tag 'v$file')."
+            echo "Bump the VERSION file and tag the commit that carries it."
+            exit 1
+          fi
+          echo "Tag '$tag' matches VERSION '$file'."
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

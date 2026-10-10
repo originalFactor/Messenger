@@ -127,7 +127,8 @@ To get a local copy up and running, follow these simple steps.
    ./gradlew :desktopApp:run               # Desktop (JVM)
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
-   Android release builds produce the same three ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Version code and name can be overridden with the `VERSION_CODE` and `VERSION_NAME` environment variables. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+   Android release builds produce the same three ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+   Android/Wear/Runtime, Desktop, Web and the terminal client all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
 5. Build the browser client and the terminal client (optional)
    ```sh
    ./gradlew :webApp:wasmJsBrowserDevelopmentRun   # browser dev server (COOP/COEP on)
@@ -137,7 +138,14 @@ To get a local copy up and running, follow these simple steps.
    cd core/rust && cargo build -p messenger-tui     # terminal client
    ```
    The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI republishes it to a rolling `web-client` GitHub release, and the account server (`server/`) downloads and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
-6. (Optional) Change the git remote URL to avoid accidental pushes to the base project
+6. Cutting a release
+   ```sh
+   ./release.ps1 -Bump patch     # 1.0.0 -> 1.0.1: bumps VERSION, commits it, tags v1.0.1, pushes
+   ./release.ps1                 # tag and push the version already committed in VERSION
+   ./release.ps1 -NoPush         # create the tag locally, inspect it, push later
+   ```
+   The push is what triggers the release build. The script refuses to tag when `VERSION` is uncommitted or differs from `HEAD` (a tag names a commit, so the mismatch would publish the wrong version), when the tree is dirty, or when the tag already exists locally or on origin; `-WhatIf` previews, and `-AllowDirty` tolerates unrelated local edits. `.github/workflows/release.yml` re-checks the tag against `VERSION` at the tagged commit and fails rather than publishing a mismatch.
+7. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
    git remote set-url origin ECSDevs/Messenger
    git remote -v # confirm the changes

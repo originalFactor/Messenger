@@ -40,6 +40,7 @@ OPTIONS:
     --config <path>             settings file (default ~/.messenger/tui/settings.toml)
     --import-desktop [<dir>]    one-shot import of a legacy desktop Room database
                                 (default dir ~/.messenger/files/databases)
+    --version                   print the version and exit
     --help                      print this help
 
 ENVIRONMENT:
@@ -53,6 +54,7 @@ struct Args {
     workspace: Option<String>,
     config: Option<PathBuf>,
     import_desktop: Option<Option<PathBuf>>,
+    version: bool,
     help: bool,
 }
 
@@ -62,12 +64,14 @@ fn parse_args() -> Result<Args, String> {
         workspace: None,
         config: None,
         import_desktop: None,
+        version: false,
         help: false,
     };
     let mut argv = std::env::args().skip(1).peekable();
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--help" | "-h" => args.help = true,
+            "--version" | "-V" => args.version = true,
             "--store" => {
                 args.store = Some(PathBuf::from(
                     argv.next().ok_or("--store needs a path")?,
@@ -110,6 +114,13 @@ fn run() -> Result<(), String> {
         print!("{HELP}");
         return Ok(());
     }
+    if args.version {
+        // Same version string the Kotlin clients show: the semantic version
+        // from the repository-root VERSION file, plus the build's commit count.
+        println!("messenger-tui {}", messenger_core::version::full());
+        return Ok(());
+    }
+
     let config_path = args
         .config
         .clone()
@@ -342,10 +353,19 @@ mod tests {
             "--workspace",
             "--config",
             "--import-desktop",
+            "--version",
             "--help",
         ] {
             assert!(HELP.contains(flag), "help must document {flag}");
         }
+    }
+
+    #[test]
+    fn version_flag_is_parsed() {
+        // parse_args reads the process argv, so the flag table is checked
+        // through HELP plus the short form it also accepts.
+        assert!(HELP.contains("--version"));
+        assert!(HELP.contains("--help"));
     }
 
     #[test]

@@ -29,10 +29,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Compute version code from commit count
+      - name: Resolve version (semantic name from VERSION, code from commit count)
         run: |
           commitCount=$(git rev-list --count HEAD)
           echo "VERSION_CODE=$commitCount" >> "$GITHUB_ENV"
+          echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($commitCount)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

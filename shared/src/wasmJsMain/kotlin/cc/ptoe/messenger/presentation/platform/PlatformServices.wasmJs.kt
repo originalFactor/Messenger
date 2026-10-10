@@ -30,8 +30,12 @@ actual fun copyTextToClipboard(text: String) {
     runCatching { writeClipboard(text) }
 }
 
-/** Firefox/Safari install the app with an extension, so a version to show is rare. */
-actual fun appVersionName(): String? = null
+// The browser has no installed package to read a version from, so it comes
+// from the generated constant (see ':shared:generateAppVersion') — the same
+// VERSION file and commit count the other clients carry.
+actual fun appVersionName(): String? = APP_VERSION_NAME
+
+actual fun appVersionCode(): Int? = APP_VERSION_CODE
 
 actual val sendOnEnterShortcut: Boolean = true
 

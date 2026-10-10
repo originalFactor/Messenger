@@ -16,10 +16,13 @@ pub fn core_ping() -> String {
     "pong".to_string()
 }
 
-/// Version of the Rust core, reported to the app shell for diagnostics.
+/// Version of the project this core was built for, reported to the app shell
+/// for diagnostics. The semantic version from the repository-root `VERSION`
+/// file plus the git commit count — the same scheme the Kotlin and TUI clients
+/// report, NOT this Cargo workspace's internal crate version.
 #[uniffi::export]
 pub fn core_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    messenger_core::version::full()
 }
 
 /// Events the Agent Runtime emits.

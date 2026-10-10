@@ -26,6 +26,9 @@ on:
       - wear/**
       - runtime/**
       - core/**
+      # A malformed VERSION fails every build, so a VERSION-only change must
+      # still run CI.
+      - VERSION
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties
@@ -45,6 +48,7 @@ on:
       - wear/**
       - runtime/**
       - core/**
+      - VERSION
       - build.gradle.kts
       - settings.gradle.kts
       - gradle.properties

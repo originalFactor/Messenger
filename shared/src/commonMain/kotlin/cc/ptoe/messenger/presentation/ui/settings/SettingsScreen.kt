@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.platform.appVersionCode
 import cc.ptoe.messenger.presentation.platform.appVersionName
 import cc.ptoe.messenger.presentation.platform.copyAvatarToInternal
 import cc.ptoe.messenger.presentation.platform.deleteAvatarFile
@@ -325,9 +326,15 @@ fun SettingsScreen(
                 SectionHeader(title = stringResource(Res.string.settings_about))
             }
             item {
+                // 版本名是语义化版本（VERSION 文件），括号里是 git commit 计数版本号，
+                // 与 Android 包管理器里的 versionCode 一致。
+                val versionName = appVersionName()
+                val versionCode = appVersionCode()
                 ListItem(
                     title = stringResource(Res.string.settings_version),
-                    subtitle = appVersionName() ?: stringResource(Res.string.settings_version_unknown),
+                    subtitle = versionName?.let { name ->
+                        if (versionCode != null) "$name ($versionCode)" else name
+                    } ?: stringResource(Res.string.settings_version_unknown),
                     icon = Icons.Default.Info,
                     showArrow = false,
                     onClick = null

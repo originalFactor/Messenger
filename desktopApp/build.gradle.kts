@@ -48,11 +48,13 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Messenger"
-            // Mirrors androidApp/wear: versionCode = git commit count (rootProject.ext),
-            // which is monotonically increasing and keeps MSI/Deb upgrade ordering correct.
-            // packageVersion must be numeric triplets (jpackage constraint); the human-readable
-            // versionName "vYYYYMMDD" is tracked separately in rootProject.ext["versionName"].
-            packageVersion = "1.0.${rootProject.ext["versionCode"]}"
+            // Same scheme as androidApp/wear/runtime: the semantic version name
+            // from the repository-root VERSION file, with the git commit count as
+            // the monotonic build component. jpackage requires dotted digits and
+            // an increasing product version for upgrade ordering, so the MSI/Deb
+            // product version is MAJOR.MINOR.<commitCount>, derived in the root
+            // build script (rootProject.ext["packageVersion"]).
+            packageVersion = rootProject.ext["packageVersion"] as String
             // Required runtime modules for the packaged JRE. Suggested by suggestModules, plus
             // java.sql/sqlite-jdbc, TLS EC certificates, DNS naming and desktop/AWT internals.
             modules(

@@ -31,7 +31,12 @@ actual fun copyTextToClipboard(text: String) {
     }
 }
 
-actual fun appVersionName(): String? = "desktop"
+// Desktop has no package registry to query, so the version comes from the
+// generated constant (see ':shared:generateAppVersion') — the same VERSION file
+// and commit count the Android package carries.
+actual fun appVersionName(): String? = APP_VERSION_NAME
+
+actual fun appVersionCode(): Int? = APP_VERSION_CODE
 
 actual val sendOnEnterShortcut: Boolean = true
 

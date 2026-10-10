@@ -23,8 +23,17 @@ expect fun showPlatformToast(message: String)
 /** Copies text to the system clipboard. */
 expect fun copyTextToClipboard(text: String)
 
-/** App version name for the settings screen (`null` when unavailable). */
+/**
+ * App version for the settings screen, `null` when unavailable.
+ *
+ * The name is the semantic version from the repository-root `VERSION` file
+ * (`MAJOR.MINOR.PATCH`); the code is the git commit count. Android reads both
+ * from the installed package, Desktop/Web from the generated constants.
+ */
 expect fun appVersionName(): String?
+
+/** Version code: the git commit count the build was made from (`null` when unavailable). */
+expect fun appVersionCode(): Int?
 
 /**
  * Whether the chat input field should treat a bare hardware Enter key as

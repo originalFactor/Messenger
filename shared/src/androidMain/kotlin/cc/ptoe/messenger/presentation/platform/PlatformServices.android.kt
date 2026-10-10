@@ -46,6 +46,13 @@ actual fun appVersionName(): String? = runCatching {
     info.versionName
 }.getOrNull()
 
+actual fun appVersionCode(): Int? = runCatching {
+    val context = AndroidContextHolder.appContext
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    // longVersionCode (API 28+) rather than the deprecated int `versionCode`.
+    info.longVersionCode.toInt()
+}.getOrNull()
+
 // 虚拟 IME (软键盘) 不通过 KeyEvent 发送 Enter，因此关闭快捷发送逻辑，
 // 避免外接蓝牙键盘等场景意外触发行为差异。Android 端按标准输入法
 // 回车换行，发送按钮仍为右侧圆形 FilledIconButton。

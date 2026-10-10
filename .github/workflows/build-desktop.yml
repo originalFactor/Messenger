@@ -29,11 +29,12 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Compute version code from commit count
+      - name: Resolve version (semantic name from VERSION, code from commit count)
         shell: pwsh
         run: |
           $commitCount = git rev-list --count HEAD
           echo "VERSION_CODE=$commitCount" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Building Messenger $((Get-Content VERSION -Raw).Trim()) ($commitCount)"
 
       # Must be 21: gradle/gradle-daemon-jvm.properties pins toolchainVersion=21.
       # windows-latest does not preinstall a matching JDK, so without this Gradle

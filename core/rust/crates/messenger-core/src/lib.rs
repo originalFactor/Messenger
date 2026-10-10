@@ -9,3 +9,4 @@ mod agent_tests;
 pub mod context;
 pub mod parts;
 pub mod title;
+pub mod version;

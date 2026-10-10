@@ -45,21 +45,36 @@ pub fn art_width() -> usize {
     ART.iter().map(|row| row.len()).max().unwrap_or(0)
 }
 
+/// The version caption printed under the wordmark: the shared project version
+/// (semantic name + commit count), not this crate's internal Cargo version.
+fn version_caption() -> String {
+    format!("v{}", messenger_core::version::full())
+}
+
 /// The banner rows for a terminal `width` cells wide, or `None` when it does
 /// not fit — the caller then prints the compact form instead.
+///
+/// A terminal wide enough for the art also gets the version caption as a final
+/// row: the TUI has no Settings screen, so the wordmark is the only place a
+/// user can read which build they are running.
 pub fn banner_lines(width: u16) -> Vec<Line<'static>> {
     let width = usize::from(width);
     if width < art_width() {
         return vec![compact_line(width)];
     }
-    ART.iter()
+    let mut lines: Vec<Line<'static>> = ART
+        .iter()
         .map(|row| {
             // Padded to the block width: a ragged right edge would make the
             // shorter rows look like a mistake rather than part of the art.
             let padded = format!("{row:<width$}", width = art_width());
             Line::from(Span::styled(padded, Style::default().fg(Color::Cyan)))
         })
-        .collect()
+        .collect();
+    lines.push(
+        Span::styled(version_caption(), Style::default().fg(Color::DarkGray)).into(),
+    );
+    lines
 }
 
 /// The fallback for a terminal too narrow for the art: one line, truncated to
@@ -71,7 +86,7 @@ fn compact_line(width: usize) -> Line<'static> {
             Style::default().fg(Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD),
         ),
         Span::styled(
-            format!("  v{}", env!("CARGO_PKG_VERSION")),
+            format!("  {}", version_caption()),
             Style::default().fg(Color::DarkGray),
         ),
     ];
@@ -116,12 +131,15 @@ mod tests {
     #[test]
     fn a_wide_terminal_gets_the_wordmark() {
         let lines = banner_lines(art_width() as u16);
-        assert_eq!(lines.len(), ART.len());
+        // The art, plus the version caption underneath it.
+        assert_eq!(lines.len(), ART.len() + 1);
         assert!(plain_text(&lines[0]).contains("__  __"));
         assert!(plain_text(&lines[2]).contains('/'), "the art is drawn");
-        for line in &lines {
+        for line in &lines[..ART.len()] {
             assert_eq!(line.width(), art_width(), "the block is squared off");
         }
+        let caption = plain_text(&lines[ART.len()]);
+        assert_eq!(caption, format!("v{}", messenger_core::version::full()));
     }
 
     #[test]
@@ -134,10 +152,16 @@ mod tests {
     }
 
     #[test]
-    fn no_banner_row_ever_exceeds_the_terminal_width() {
+    fn every_banner_row_fits_the_terminal() {
         for width in 1u16..120 {
             let lines = banner_lines(width);
-            let floor = if width < art_width() as u16 { 1 } else { ART.len() };
+            // Below the art width there is only the compact line; at or above
+            // it, the wordmark plus the version caption.
+            let floor = if width < art_width() as u16 {
+                1
+            } else {
+                ART.len() + 1
+            };
             assert_eq!(lines.len(), floor, "width {width}");
             for line in lines {
                 assert!(
