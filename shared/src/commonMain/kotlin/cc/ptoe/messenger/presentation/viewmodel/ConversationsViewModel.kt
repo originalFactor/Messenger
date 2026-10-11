@@ -32,6 +32,7 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import cc.ptoe.messenger.domain.usecase.EmptyConversationCleaner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,7 +61,8 @@ class ConversationsViewModel(
     private val currentAgentRepository: CurrentAgentRepository,
     private val agentRepository: AgentRepository,
     private val modelRepository: ModelRepository,
-    private val projectRepository: ProjectRepository
+    private val projectRepository: ProjectRepository,
+    private val emptyConversationCleaner: EmptyConversationCleaner
 ) : ViewModel() {
 
     val currentAgent: StateFlow<Agent?> = currentAgentRepository.currentAgent
@@ -178,6 +180,18 @@ class ConversationsViewModel(
         }
     }
 
+    /**
+     * 清理空会话（建好后从未发过消息的会话），由聊天列表页进入时调用。
+     * [keepConversationId] 用于保护双栏布局中右栏正在展示的会话。
+     */
+    fun cleanUpEmptyConversations(keepConversationId: String? = null) {
+        viewModelScope.launch {
+            emptyConversationCleaner.cleanUp(
+                excluding = keepConversationId?.let { setOf(it) } ?: emptySet()
+            )
+        }
+    }
+
     fun cloneConversation(
         conversationId: String,
         onCloned: (String) -> Unit = {}
@@ -285,7 +299,8 @@ class ConversationsViewModel(
             currentAgentRepository: CurrentAgentRepository,
             agentRepository: AgentRepository,
             modelRepository: ModelRepository,
-            projectRepository: ProjectRepository
+            projectRepository: ProjectRepository,
+            emptyConversationCleaner: EmptyConversationCleaner
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -295,7 +310,8 @@ class ConversationsViewModel(
                     currentAgentRepository,
                     agentRepository,
                     modelRepository,
-                    projectRepository
+                    projectRepository,
+                    emptyConversationCleaner
                 ) as T
             }
         }

@@ -31,6 +31,7 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import cc.ptoe.messenger.domain.usecase.EmptyConversationCleaner
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flatMapLatest
@@ -58,7 +59,8 @@ class AgentConversationsViewModel(
     private val messageRepository: MessageRepository,
     private val modelRepository: ModelRepository,
     private val currentAgentRepository: CurrentAgentRepository,
-    private val projectRepository: ProjectRepository
+    private val projectRepository: ProjectRepository,
+    private val emptyConversationCleaner: EmptyConversationCleaner
 ) : ViewModel() {
 
     val agent: StateFlow<Agent?> = agentRepository.getById(agentId)
@@ -113,7 +115,8 @@ class AgentConversationsViewModel(
             initialValue = emptyList()
         )
 
-    fun createNewConversation(onCreated: (String) -> Unit = {}) {        viewModelScope.launch {
+    fun createNewConversation(onCreated: (String) -> Unit = {}) {
+        viewModelScope.launch {
             val agent = agentRepository.getById(agentId).first() ?: return@launch
             currentAgentRepository.setCurrentAgentId(agent.id)
             val now = currentTimeMillis()
@@ -156,6 +159,18 @@ class AgentConversationsViewModel(
     fun deleteConversation(conversationId: String) {
         viewModelScope.launch {
             conversationRepository.delete(conversationId)
+        }
+    }
+
+    /**
+     * 清理空会话（建好后从未发过消息的会话），由聊天列表页进入时调用。
+     * [keepConversationId] 用于保护双栏布局中右栏正在展示的会话。
+     */
+    fun cleanUpEmptyConversations(keepConversationId: String? = null) {
+        viewModelScope.launch {
+            emptyConversationCleaner.cleanUp(
+                excluding = keepConversationId?.let { setOf(it) } ?: emptySet()
+            )
         }
     }
 
@@ -219,7 +234,8 @@ class AgentConversationsViewModel(
             messageRepository: MessageRepository,
             modelRepository: ModelRepository,
             currentAgentRepository: CurrentAgentRepository,
-            projectRepository: ProjectRepository
+            projectRepository: ProjectRepository,
+            emptyConversationCleaner: EmptyConversationCleaner
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -230,7 +246,8 @@ class AgentConversationsViewModel(
                     messageRepository,
                     modelRepository,
                     currentAgentRepository,
-                    projectRepository
+                    projectRepository,
+                    emptyConversationCleaner
                 ) as T
             }
         }

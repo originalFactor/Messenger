@@ -42,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -112,7 +113,8 @@ fun ConversationsScreen(
             currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
             agentRepository = AppContainerHolder.instance.agentRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            projectRepository = AppContainerHolder.instance.projectRepository
+            projectRepository = AppContainerHolder.instance.projectRepository,
+            emptyConversationCleaner = AppContainerHolder.instance.emptyConversationCleaner
         )
     )
 ) {
@@ -126,6 +128,12 @@ fun ConversationsScreen(
     val agentsById = remember(allAgents) { allAgents.associateBy(Agent::id) }
     // 可选为聊天对象的 Agent：内置标题生成等功能型角色不出现在选择器中。
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
+
+    // 进入列表页时清掉从未发过消息的空会话（宽限期见 EmptyConversationCleaner）；
+    // 双栏布局下右栏正在展示的会话要豁免，否则会被从脚下删掉。
+    LaunchedEffect(Unit) {
+        viewModel.cleanUpEmptyConversations(selectedConversationId)
+    }
 
     var renameConversationId by remember { mutableStateOf<String?>(null) }
     var deleteConversationId by remember { mutableStateOf<String?>(null) }

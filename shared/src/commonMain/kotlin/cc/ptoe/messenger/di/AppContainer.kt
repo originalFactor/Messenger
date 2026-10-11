@@ -46,6 +46,7 @@ import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
+import cc.ptoe.messenger.domain.usecase.EmptyConversationCleaner
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import cc.ptoe.messenger.domain.mcp.McpManager
@@ -204,6 +205,15 @@ class AppContainer(
         providerRepository = providerRepository,
         apiRepository = apiRepository,
         externalScope = applicationScope
+    )
+
+    /**
+     * 空会话自动清理：聊天列表页进入时删除「从未发过消息」的会话
+     * （宽限期与命名豁免见 [EmptyConversationCleaner]）。
+     */
+    val emptyConversationCleaner: EmptyConversationCleaner = EmptyConversationCleaner(
+        conversationRepository = conversationRepository,
+        messageRepository = messageRepository
     )
 
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */

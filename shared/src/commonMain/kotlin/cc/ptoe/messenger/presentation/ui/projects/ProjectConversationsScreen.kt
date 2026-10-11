@@ -34,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,7 +89,8 @@ fun ProjectConversationsScreen(
             agentRepository = AppContainerHolder.instance.agentRepository,
             messageRepository = AppContainerHolder.instance.messageRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository
+            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
+            emptyConversationCleaner = AppContainerHolder.instance.emptyConversationCleaner
         )
     )
 ) {
@@ -96,6 +98,11 @@ fun ProjectConversationsScreen(
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy { it.id } }
+
+    // 进入列表页时清掉从未发过消息的空会话（宽限期见 EmptyConversationCleaner）。
+    LaunchedEffect(Unit) {
+        viewModel.cleanUpEmptyConversations()
+    }
 
     var renameConversationId by remember { mutableStateOf<String?>(null) }
     var renameInitialTitle by remember { mutableStateOf("") }
