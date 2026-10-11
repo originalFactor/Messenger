@@ -30,4 +30,19 @@ interface ConversationRepository {
     suspend fun update(conversation: Conversation)
     suspend fun updateLastMessage(id: String, lastMessage: String, updatedAt: Long)
     suspend fun delete(id: String)
+
+    /**
+     * Deletes conversations that were created but never used — tapping "new
+     * chat" inserts a row before any message exists, so backing out leaves an
+     * empty one behind.
+     *
+     * Only the trigger lives here: the rule (grace period, placeholder-title
+     * check, message emptiness) is implemented in the Rust core
+     * (`messenger_core::conversation`) and reached through
+     * [cc.ptoe.messenger.core.CoreBridge]. [excludeIds] protects
+     * conversations that are currently on screen.
+     *
+     * Returns the ids that were deleted.
+     */
+    suspend fun sweepEmptyConversations(excludeIds: List<String> = emptyList()): List<String>
 }

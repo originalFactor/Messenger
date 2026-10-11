@@ -73,6 +73,15 @@ class ConversationRepositoryImpl(
         onChanged(id, true)
     }
 
+    /**
+     * Not implemented on the Room stack: the empty-conversation rule lives in
+     * the Rust core (`messenger_core::conversation`) and is reached through
+     * [cc.ptoe.messenger.core.CoreBridge]. Desktop still runs Room while the
+     * core migration is in flight, so it simply has no sweep — reimplementing
+     * the policy here is exactly the duplication that move removed.
+     */
+    override suspend fun sweepEmptyConversations(excludeIds: List<String>): List<String> = emptyList()
+
     private fun ConversationEntity.toDomain(): Conversation {
         return Conversation(
             id = id,

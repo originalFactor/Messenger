@@ -60,6 +60,20 @@ interface CoreBridge {
     fun updateConversationLastMessage(id: String, lastMessage: String?, updatedAt: Long)
     fun deleteConversation(id: String)
 
+    /**
+     * Deletes conversations that were created but never used, returning the
+     * deleted ids as a JSON array.
+     *
+     * The platform decides only *when* to sweep (a chat list becoming
+     * visible): the policy — grace period, placeholder-title check, message
+     * emptiness — and the clock all live in the Rust core
+     * (`messenger_core::conversation`), so every client shares one rule.
+     * [excludeIdsJson] is a JSON array of ids to protect (conversations
+     * currently on screen). Deletes record their cloud tombstone in the same
+     * call.
+     */
+    fun sweepEmptyConversations(excludeIdsJson: String): String
+
     fun listMessagesByConversationJson(conversationId: String): String
     fun getMessageJson(id: String): String?
     fun upsertMessageJson(json: String)

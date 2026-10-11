@@ -89,6 +89,9 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
 
     override fun deleteConversation(id: String) = core.delete_conversation(id)
 
+    override fun sweepEmptyConversations(excludeIdsJson: String): String =
+        core.sweep_empty_conversations(excludeIdsJson)
+
     override fun listMessagesByConversationJson(conversationId: String): String =
         core.list_messages_by_conversation_json(conversationId)
 

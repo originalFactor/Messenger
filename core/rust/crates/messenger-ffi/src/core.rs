@@ -494,6 +494,44 @@ impl CoreHandle {
         self.sync_engine().request_local_change(&kind, &id, deleted).map_err(|e| CoreError::Generic { detail: e })
     }
 
+    /// Deletes conversations that were created but never used (see
+    /// `messenger_core::conversation`), returning the deleted ids as JSON.
+    ///
+    /// The platform calls this when a chat list becomes visible and decides
+    /// nothing else: the policy (grace period, placeholder title, message
+    /// emptiness) and the clock both live in the core, so every client shares
+    /// one rule. `exclude_ids_json` is a JSON array of ids to protect — the
+    /// dual-pane detail pane passes the conversation it is showing.
+    ///
+    /// Each delete also records the cloud tombstone when a session exists;
+    /// without it the row would come straight back on the next sync pull.
+    pub fn sweep_empty_conversations(&self, exclude_ids_json: String) -> Result<String, CoreError> {
+        let exclude: Vec<String> = serde_json::from_str(&exclude_ids_json)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        let store = &self.store;
+        let signed_in = self.sync_engine().current_user().is_some();
+        let deleted = messenger_core::conversation::sweep_empty_conversations(
+            store,
+            messenger_store::now_ms(),
+            messenger_core::conversation::DEFAULT_GRACE_PERIOD_MS,
+            &exclude,
+            |id| {
+                store
+                    .delete_messages_by_conversation(id)
+                    .map_err(|e| e.to_string())?;
+                store.delete_conversation(id).map_err(|e| e.to_string())?;
+                if signed_in {
+                    if let Err(detail) = self.sync_engine().request_local_change("conversation", id, true) {
+                        eprintln!("messenger-core: empty-conversation tombstone failed for {id}: {detail}");
+                    }
+                }
+                Ok(())
+            },
+        )
+        .map_err(|e| CoreError::Generic { detail: e })?;
+        serde_json::to_string(&deleted).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
     #[uniffi::method(async_runtime = "tokio")]
     pub async fn cloud_sync(&self, replace_local: bool) -> Result<String, CoreError> {
         let engine = self.sync_engine();

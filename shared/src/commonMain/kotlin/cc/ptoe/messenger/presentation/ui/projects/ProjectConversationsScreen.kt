@@ -89,8 +89,7 @@ fun ProjectConversationsScreen(
             agentRepository = AppContainerHolder.instance.agentRepository,
             messageRepository = AppContainerHolder.instance.messageRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
-            emptyConversationCleaner = AppContainerHolder.instance.emptyConversationCleaner
+            currentAgentRepository = AppContainerHolder.instance.currentAgentRepository
         )
     )
 ) {
@@ -99,9 +98,9 @@ fun ProjectConversationsScreen(
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy { it.id } }
 
-    // 进入列表页时清掉从未发过消息的空会话（宽限期见 EmptyConversationCleaner）。
+    // 进入列表页时触发一次空会话清理（规则在 Rust core）。
     LaunchedEffect(Unit) {
-        viewModel.cleanUpEmptyConversations()
+        viewModel.sweepEmptyConversations()
     }
 
     var renameConversationId by remember { mutableStateOf<String?>(null) }

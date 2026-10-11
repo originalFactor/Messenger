@@ -513,6 +513,39 @@ impl WasmCore {
             .map_err(js_error)
     }
 
+    /// Deletes conversations that were created but never used (see
+    /// `messenger_core::conversation`), returning the deleted ids as JSON.
+    ///
+    /// Mirrors `messenger-ffi`'s `sweep_empty_conversations`: policy and clock
+    /// live in the core, `exclude_ids_json` is a JSON array of ids to protect,
+    /// and each delete also records the cloud tombstone when a session exists
+    /// so the row cannot come back on the next sync pull.
+    pub fn sweep_empty_conversations(&self, exclude_ids_json: String) -> Result<String, JsValue> {
+        let exclude: Vec<String> = parse(&exclude_ids_json)?;
+        let store = &self.store;
+        let signed_in = engine_for(store).current_user().is_some();
+        let deleted = messenger_core::conversation::sweep_empty_conversations(
+            store,
+            messenger_store::now_ms(),
+            messenger_core::conversation::DEFAULT_GRACE_PERIOD_MS,
+            &exclude,
+            |id| {
+                store
+                    .delete_messages_by_conversation(id)
+                    .map_err(|e| e.to_string())?;
+                store.delete_conversation(id).map_err(|e| e.to_string())?;
+                if signed_in {
+                    if let Err(detail) = engine_for(store).request_local_change("conversation", id, true) {
+                        eprintln!("messenger-core: empty-conversation tombstone failed for {id}: {detail}");
+                    }
+                }
+                Ok(())
+            },
+        )
+        .map_err(js_str)?;
+        json(&deleted)
+    }
+
     pub fn cloud_sync(&self, replace_local: bool) -> Promise {
         let store = Rc::clone(&self.store);
         future_to_promise(async move {

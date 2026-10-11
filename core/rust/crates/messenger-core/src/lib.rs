@@ -7,6 +7,7 @@ pub mod agent;
 #[cfg(test)]
 mod agent_tests;
 pub mod context;
+pub mod conversation;
 pub mod parts;
 pub mod title;
 pub mod version;

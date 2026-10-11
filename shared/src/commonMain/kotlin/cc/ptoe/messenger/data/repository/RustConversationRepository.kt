@@ -97,6 +97,22 @@ class RustConversationRepository(
         onChanged(id, true)
     }
 
+    /**
+     * The empty-conversation rule and the clock live in the Rust core; this
+     * only forwards the ids to protect and decodes the ids that went away.
+     *
+     * No [onChanged] hook is fired here: each delete records its own cloud
+     * tombstone inside the core, and the store events it emits already bump
+     * [version] through the subscription in `init`.
+     */
+    override suspend fun sweepEmptyConversations(excludeIds: List<String>): List<String> {
+        val excludeJson = NetworkClient.json.encodeToString(excludeIds)
+        val deletedJson = coreBridge.sweepEmptyConversations(excludeJson)
+        return runCatching {
+            NetworkClient.json.decodeFromString<List<String>>(deletedJson)
+        }.getOrDefault(emptyList())
+    }
+
     private fun StoredConversationDto.toDomain() = Conversation(
         id = id,
         title = title,

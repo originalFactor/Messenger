@@ -148,6 +148,29 @@ class RustRepositoriesTest {
             notify("Conversation", id)
         }
 
+        /**
+         * Stands in for the Rust `messenger_core::conversation` sweep: the real
+         * policy lives in the core, so this mirrors it closely enough to pin
+         * the Kotlin side's job — forwarding the exclude list and decoding the
+         * returned ids.
+         */
+        override fun sweepEmptyConversations(excludeIdsJson: String): String {
+            val excluded = NetworkClient.json.decodeFromString<List<String>>(excludeIdsJson).toSet()
+            val now = System.currentTimeMillis()
+            val deleted = conversations.values.filter { dto ->
+                dto.id !in excluded &&
+                    (dto.lastMessage == null || dto.lastMessage.isBlank()) &&
+                    messages.values.none { it.conversationId == dto.id } &&
+                    dto.updatedAt <= now - SWEEP_GRACE_PERIOD_MS &&
+                    (dto.title.isBlank() || dto.title == "新对话" || dto.title == "New Chat")
+            }.map { dto ->
+                conversations.remove(dto.id)
+                notify("Conversation", dto.id)
+                dto.id
+            }
+            return NetworkClient.json.encodeToString(deleted)
+        }
+
         // Message
         override fun listMessagesByConversationJson(conversationId: String): String =
             NetworkClient.json.encodeToString(messages.values.filter { it.conversationId == conversationId })
@@ -435,5 +458,41 @@ class RustRepositoriesTest {
         assertEquals("messenger-ui", Project("p", "  Messenger   UI ", "", 1, 1).workspaceFolderName)
         assertEquals("a-b", Project("p", "a//b", "", 1, 1).workspaceFolderName)
         assertEquals("project", Project("p", "///", "", 1, 1).workspaceFolderName)
+    }
+
+    /**
+     * The sweep policy lives in the Rust core; the Kotlin repository's only job
+     * is to forward the protected ids and decode the deleted ones back.
+     */
+    @Test
+    fun testSweepEmptyConversationsForwardsExclusionsAndReturnsDeletedIds() = runBlocking {
+        val bridge = FakeCoreBridge()
+        val repo = RustConversationRepository(bridge)
+        val stale = System.currentTimeMillis() - SWEEP_GRACE_PERIOD_MS - 1
+
+        for (id in listOf("open", "stale")) {
+            repo.insert(
+                Conversation(
+                    id = id,
+                    title = "新对话",
+                    providerId = "p1",
+                    agentId = "a1",
+                    createdAt = stale,
+                    updatedAt = stale,
+                    lastMessage = null
+                )
+            )
+        }
+
+        val deleted = repo.sweepEmptyConversations(excludeIds = listOf("open"))
+
+        assertEquals(listOf("stale"), deleted)
+        assertNotNull(repo.getById("open").first(), "the excluded conversation stays")
+        assertNull(repo.getById("stale").first())
+    }
+
+    private companion object {
+        /** Mirrors `messenger_core::conversation::DEFAULT_GRACE_PERIOD_MS`. */
+        const val SWEEP_GRACE_PERIOD_MS = 5 * 60 * 1000L
     }
 }

@@ -61,6 +61,9 @@ class AndroidCoreBridge(
         core.updateConversationLastMessage(id, lastMessage, updatedAt)
     override fun deleteConversation(id: String) = core.deleteConversation(id)
 
+    override fun sweepEmptyConversations(excludeIdsJson: String): String =
+        core.sweepEmptyConversations(excludeIdsJson)
+
     override fun listMessagesByConversationJson(conversationId: String): String =
         core.listMessagesByConversationJson(conversationId)
     override fun getMessageJson(id: String): String? = core.getMessageJson(id)

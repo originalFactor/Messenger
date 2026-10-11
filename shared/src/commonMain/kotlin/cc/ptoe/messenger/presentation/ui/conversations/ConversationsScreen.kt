@@ -113,8 +113,7 @@ fun ConversationsScreen(
             currentAgentRepository = AppContainerHolder.instance.currentAgentRepository,
             agentRepository = AppContainerHolder.instance.agentRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            projectRepository = AppContainerHolder.instance.projectRepository,
-            emptyConversationCleaner = AppContainerHolder.instance.emptyConversationCleaner
+            projectRepository = AppContainerHolder.instance.projectRepository
         )
     )
 ) {
@@ -129,10 +128,10 @@ fun ConversationsScreen(
     // 可选为聊天对象的 Agent：内置标题生成等功能型角色不出现在选择器中。
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
 
-    // 进入列表页时清掉从未发过消息的空会话（宽限期见 EmptyConversationCleaner）；
-    // 双栏布局下右栏正在展示的会话要豁免，否则会被从脚下删掉。
+    // 进入列表页时触发一次空会话清理（规则在 Rust core）；双栏布局下右栏
+    // 正在展示的会话要豁免，否则会被从脚下删掉。
     LaunchedEffect(Unit) {
-        viewModel.cleanUpEmptyConversations(selectedConversationId)
+        viewModel.sweepEmptyConversations(selectedConversationId)
     }
 
     var renameConversationId by remember { mutableStateOf<String?>(null) }

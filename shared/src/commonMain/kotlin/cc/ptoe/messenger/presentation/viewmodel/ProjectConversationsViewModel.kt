@@ -35,7 +35,6 @@ import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
-import cc.ptoe.messenger.domain.usecase.EmptyConversationCleaner
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -56,8 +55,7 @@ class ProjectConversationsViewModel(
     private val agentRepository: AgentRepository,
     private val messageRepository: MessageRepository,
     private val modelRepository: ModelRepository,
-    private val currentAgentRepository: CurrentAgentRepository,
-    private val emptyConversationCleaner: EmptyConversationCleaner
+    private val currentAgentRepository: CurrentAgentRepository
 ) : ViewModel() {
 
     val project: StateFlow<Project?> = projectRepository.getById(projectId)
@@ -119,13 +117,14 @@ class ProjectConversationsViewModel(
     }
 
     /**
-     * 清理空会话（建好后从未发过消息的会话），由项目会话列表页进入时调用。
-     * [keepConversationId] 用于保护双栏布局中右栏正在展示的会话。
+     * 清理建好后从未发过消息的空会话。规则在 Rust core
+     * （`messenger_core::conversation`），这里只负责触发；项目会话列表页
+     * 进入时调用。[keepConversationId] 保护双栏布局中右栏正在展示的会话。
      */
-    fun cleanUpEmptyConversations(keepConversationId: String? = null) {
+    fun sweepEmptyConversations(keepConversationId: String? = null) {
         viewModelScope.launch {
-            emptyConversationCleaner.cleanUp(
-                excluding = keepConversationId?.let { setOf(it) } ?: emptySet()
+            conversationRepository.sweepEmptyConversations(
+                excludeIds = keepConversationId?.let { listOf(it) } ?: emptyList()
             )
         }
     }
@@ -155,8 +154,7 @@ class ProjectConversationsViewModel(
             agentRepository: AgentRepository,
             messageRepository: MessageRepository,
             modelRepository: ModelRepository,
-            currentAgentRepository: CurrentAgentRepository,
-            emptyConversationCleaner: EmptyConversationCleaner
+            currentAgentRepository: CurrentAgentRepository
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -168,8 +166,7 @@ class ProjectConversationsViewModel(
                     agentRepository,
                     messageRepository,
                     modelRepository,
-                    currentAgentRepository,
-                    emptyConversationCleaner
+                    currentAgentRepository
                 ) as T
             }
         }

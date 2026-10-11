@@ -456,6 +456,19 @@ impl Store {
         Ok(())
     }
 
+    /// How many messages a conversation has. The empty-conversation sweep
+    /// only needs emptiness, and `EXISTS` short-circuits on the first row
+    /// instead of materializing the history.
+    pub fn conversation_has_messages(&self, conversation_id: &str) -> Result<bool, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE conversationId = ?1)",
+            )?;
+            stmt.query_row([conversation_id], |row| row.get::<_, i64>(0))
+                .map(|v| v != 0)
+        })
+    }
+
     /// Max timestamp among a conversation's messages (for the
     /// strictly-increasing timestamp cursor).
     pub fn max_message_timestamp(&self, conversation_id: &str) -> Result<Option<i64>, rusqlite::Error> {
