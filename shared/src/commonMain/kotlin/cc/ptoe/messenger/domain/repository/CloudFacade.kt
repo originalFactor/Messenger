@@ -33,13 +33,9 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The cloud SaaS surface the UI consumes — login, sync, market, avatars.
  *
- * Two implementations exist, selected per platform in `createLocalStores`:
- * - Android/Desktop: `CloudSyncRepository` (Room-backed, in `jvmSharedMain`).
- * - Web: `RustCloudFacade`, which delegates to the Rust sync engine through
- *   [cc.ptoe.messenger.core.CoreBridge] (Room has no wasmJs artifact).
- *
- * The UI must depend on this interface only, so the same screens compile for
- * every target.
+ * The single implementation is `RustCloudFacade`, which delegates to the Rust
+ * sync engine through [cc.ptoe.messenger.core.CoreBridge] on every platform.
+ * The interface stays as the seam the screens depend on.
  */
 interface CloudFacade {
     val user: Flow<CloudUser?>

@@ -22,7 +22,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * (De)serialization helpers for the `parts` column on [MessageEntity].
+ * (De)serialization helpers for a message's `partsJson` column.
  * Centralized here so the wire format and the [ContentPart] model stay
  * in lockstep — every read/write path uses the same JSON shape and the
  * same Json instance.

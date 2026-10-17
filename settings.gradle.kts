@@ -68,4 +68,9 @@ include(":core-bindings")
 // The bindings module lives under core/bindings to keep the Rust core and its
 // Kotlin bridge side by side; Gradle's default path would be ./core-bindings.
 project(":core-bindings").projectDir = file("core/bindings")
+// Desktop counterpart: the same UniFFI bindings and cdylib, packaged for the
+// JVM instead of Android. Both are needed because every client now runs the
+// Rust core (there is no Room fallback left).
+include(":core-bindings-desktop")
+project(":core-bindings-desktop").projectDir = file("core/bindings-desktop")
 include(":renderer-android")

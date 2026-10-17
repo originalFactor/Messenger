@@ -57,7 +57,7 @@ impl<'a> SyncEngine<'a> {
             let _ = self.store.delete_model(&m.id);
         }
 
-        for dto in models_resp.data {
+        for dto in models_resp.entries() {
             let prev = existing_map.get(&dto.id);
             let row = StoredModel {
                 id: prev

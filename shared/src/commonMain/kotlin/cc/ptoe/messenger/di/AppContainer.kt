@@ -20,9 +20,6 @@ import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.data.local.ChatImageStore
-import cc.ptoe.messenger.data.repository.ApiRepositoryImpl
-import cc.ptoe.messenger.data.repository.CurrentAgentRepositoryImpl
-import cc.ptoe.messenger.data.repository.createModelsDevRepository
 import cc.ptoe.messenger.data.repository.RustAgentRepository
 import cc.ptoe.messenger.data.repository.RustConversationRepository
 import cc.ptoe.messenger.data.repository.RustProjectRepository
@@ -36,16 +33,13 @@ import cc.ptoe.messenger.data.util.ioDispatcher
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.repository.AgentRepository
-import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
-import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
-import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import cc.ptoe.messenger.domain.mcp.McpManager
@@ -71,9 +65,11 @@ class AppDirs(
 /**
  * Manual service locator shared by every platform entry point
  * (Android `MessengerApplication`, Desktop `main`, the web bundle).
- * Room and the on-disk DataStore are reached through the per-target
- * [createLocalStores]/[createRoomRepositories] factories, so this class
- * itself compiles for every target including wasmJs.
+ *
+ * Every platform runs the Rust core: the entry point installs a
+ * [CoreBridge] before constructing this container, and all durable state,
+ * the agent turn loop, title generation, model discovery and cloud sync live
+ * behind it. Only the preferences DataStore stays platform-local.
  */
 class AppContainer(
     val appDirs: AppDirs,
@@ -82,7 +78,7 @@ class AppContainer(
 
     val localDataMutex = Mutex()
 
-    /** Per-platform stores: Room+DataStore on Android/Desktop, Rust+OPFS on web. */
+    /** Per-platform stores: the cloud facade plus the preferences DataStore. */
     val stores: LocalStores = createLocalStores(appDirs)
 
     val appPreferences = stores.appPreferences
@@ -118,7 +114,14 @@ class AppContainer(
     fun allTools(): List<ChatTool> =
         createBuiltinChatTools(defaultWorkspaceRoot()) + mcpManager.activeTools.value
 
-    val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
+    /**
+     * The Rust core every repository delegates to. Non-null by construction:
+     * the platform entry point installs it before building the container, and
+     * a container without a core could not persist anything.
+     */
+    val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge) {
+        "Install CoreBridgeRegistry.bridge before constructing AppContainer"
+    }
 
     private fun providerChanged(id: String, deleted: Boolean) {
         // 内置云 AI 服务商不参与云同步（各设备本地自建）。
@@ -140,71 +143,38 @@ class AppContainer(
         }
     }
 
-    private val hooks = LocalChangeHooks(
-        onProviderChanged = ::providerChanged,
-        onModelChanged = ::modelChanged,
-        onAgentChanged = ::agentChanged,
-        onConversationChanged = { id, deleted -> cloud.requestLocalChange("conversation", id, deleted) },
-        onProjectChanged = { id, deleted -> cloud.requestLocalChange("project", id, deleted) },
-        onMessagesChanged = { conversationId -> cloud.requestLocalChange("conversation", conversationId) },
+    val providerRepository: ProviderRepository = RustProviderRepository(coreBridge) { id, deleted ->
+        providerChanged(id, deleted)
+    }
+
+    val modelRepository: ModelRepository = RustModelRepository(coreBridge) { providerId, _ ->
+        modelChanged(providerId)
+    }
+
+    val agentRepository: AgentRepository = RustAgentRepository(
+        coreBridge = coreBridge,
+        onChanged = { previous, current -> agentChanged(previous, current) },
+        avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
     )
 
-    /** Non-null only on Android/Desktop (web always runs on the Rust core). */
-    private val roomRepositories: RoomRepositories? =
-        if (coreBridge == null) createRoomRepositories(stores, chatImageStore, hooks) else null
-
-    val providerRepository: ProviderRepository = coreBridge?.let {
-        RustProviderRepository(it) { id, deleted -> providerChanged(id, deleted) }
-    } ?: roomRepositories!!.providers
-
-    val modelRepository: ModelRepository = coreBridge?.let {
-        RustModelRepository(it) { providerId, _ -> modelChanged(providerId) }
-    } ?: roomRepositories!!.models
-
-    val agentRepository: AgentRepository = coreBridge?.let {
-        RustAgentRepository(
-            coreBridge = it,
-            onChanged = { previous, current -> agentChanged(previous, current) },
-            avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
-        )
-    } ?: roomRepositories!!.agents
-
-    val conversationRepository: ConversationRepository = coreBridge?.let {
-        RustConversationRepository(it) { id, deleted ->
+    val conversationRepository: ConversationRepository =
+        RustConversationRepository(coreBridge) { id, deleted ->
             cloud.requestLocalChange("conversation", id, deleted)
         }
-    } ?: roomRepositories!!.conversations
 
-    val projectRepository: ProjectRepository = coreBridge?.let {
-        RustProjectRepository(it) { id, deleted -> cloud.requestLocalChange("project", id, deleted) }
-    } ?: roomRepositories!!.projects
+    val projectRepository: ProjectRepository = RustProjectRepository(coreBridge) { id, deleted ->
+        cloud.requestLocalChange("project", id, deleted)
+    }
 
-    val messageRepository: MessageRepository = coreBridge?.let {
-        RustMessageRepository(it, chatImageStore) { conversationId ->
+    val messageRepository: MessageRepository =
+        RustMessageRepository(coreBridge, chatImageStore) { conversationId ->
             cloud.requestLocalChange("conversation", conversationId)
         }
-    } ?: roomRepositories!!.messages
 
-    val modelsDevRepository: ModelsDevRepository = createModelsDevRepository(appDirs.filesDir)
-
-    val apiRepository: ApiRepository = ApiRepositoryImpl(modelsDevRepository)
-
-    val currentAgentRepository: CurrentAgentRepository = coreBridge?.let {
-        RustCurrentAgentRepository(it, agentRepository)
-    } ?: CurrentAgentRepositoryImpl(appPreferences, agentRepository)
+    val currentAgentRepository: CurrentAgentRepository =
+        RustCurrentAgentRepository(coreBridge, agentRepository)
 
     private val applicationScope = CoroutineScope(SupervisorJob() + ioDispatcher)
-
-    /** 首轮回复完成后的 LLM 会话标题生成（手机聊天流与 Wear 代处理流共用）。 */
-    val conversationTitleGenerator: ConversationTitleGenerator = ConversationTitleGenerator(
-        agentRepository = agentRepository,
-        conversationRepository = conversationRepository,
-        messageRepository = messageRepository,
-        modelRepository = modelRepository,
-        providerRepository = providerRepository,
-        apiRepository = apiRepository,
-        externalScope = applicationScope
-    )
 
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */
     fun initializeLocalAndCloudData() {

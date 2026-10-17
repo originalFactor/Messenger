@@ -16,19 +16,11 @@
 
 package cc.ptoe.messenger.di
 
-import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.data.cloud.RustCloudFacade
 import cc.ptoe.messenger.data.local.AppPreferences
-import cc.ptoe.messenger.data.local.ChatImageStore
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.createMessengerDataStore
-import cc.ptoe.messenger.domain.model.Agent
-import cc.ptoe.messenger.domain.repository.AgentRepository
-import cc.ptoe.messenger.domain.repository.ConversationRepository
-import cc.ptoe.messenger.domain.repository.MessageRepository
-import cc.ptoe.messenger.domain.repository.ModelRepository
-import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -50,16 +42,6 @@ actual fun createLocalStores(appDirs: AppDirs): LocalStores {
     )
     return LocalStores(cloud = cloud, appPreferences = appPreferences, themePreferences = themePreferences)
 }
-
-/**
- * Unreachable: [AppContainer] only calls this when no CoreBridge is installed,
- * and the web entry point always installs one.
- */
-actual fun createRoomRepositories(
-    stores: LocalStores,
-    chatImageStore: ChatImageStore,
-    hooks: LocalChangeHooks,
-): RoomRepositories = error("Room is not available on wasmJs")
 
 /**
  * Wipes the Rust store's rows and the session/user key-value state, then lets

@@ -60,6 +60,10 @@ suspend fun awaitJsJson(promise: JsAny?): String =
     (awaitJs(promise) as? JsString)?.toString()
         ?: throw IllegalStateException("expected a JSON string from the wasm core")
 
+/** Awaits a JSON-string result, mapping JS `undefined`/`null` to `null`. */
+suspend fun awaitJsJsonOrNull(promise: JsAny?): String? =
+    (awaitJs(promise) as? JsString)?.toString()
+
 /** Awaits a numeric result. */
 suspend fun awaitJsLong(promise: JsAny?): Long =
     jsNumberValue(awaitJs(promise)).toLong()

@@ -29,6 +29,9 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import javax.imageio.ImageIO
+import cc.ptoe.messenger.core.CoreBridgeRegistry
+import cc.ptoe.messenger.core.DesktopCoreBridge
+import cc.ptoe.messenger.core.CoreHandle
 import cc.ptoe.messenger.data.local.DesktopChatImageStore
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -47,6 +50,18 @@ fun main() {
         filesDir = home.resolve(".messenger").resolve("files"),
         cacheDir = home.resolve(".messenger").resolve("cache")
     )
+    // The Rust core owns all durable state and the agent loop on every
+    // platform. Desktop stores it beside the preferences (the legacy Room file
+    // lives under filesDir/databases and is imported once, in place).
+    val coreDir = appDirs.filesDir.resolve("messenger_core").toFile().apply { mkdirs() }
+    val legacyDir = appDirs.filesDir.resolve("databases").toFile()
+    val core = CoreHandle.open(
+        storePath = coreDir.resolve("store.db").absolutePath,
+        legacyDbDir = legacyDir.takeIf { it.isDirectory }?.absolutePath,
+        nowMs = System.currentTimeMillis()
+    )
+    CoreBridgeRegistry.bridge = DesktopCoreBridge(core)
+
     val container = AppContainer(
         appDirs = appDirs,
         chatImageStore = DesktopChatImageStore(appDirs.filesDir)

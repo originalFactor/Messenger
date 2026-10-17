@@ -24,6 +24,8 @@ plugins {
 
 dependencies {
     implementation(project(":shared"))
+    // Rust core (UniFFI bindings + host cdylib); Main.kt opens the store.
+    implementation(project(":core-bindings-desktop"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(libs.kotlinx.coroutines.swing)
@@ -33,7 +35,6 @@ dependencies {
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
     implementation(libs.ktor.client.core)
-    implementation(libs.androidx.room.runtime)
 }
 
 compose.desktop {

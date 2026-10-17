@@ -81,8 +81,7 @@ Key highlights:
 * [![Compose Multiplatform][CMP-badge]][CMP-url]
 * [![Material 3][Material3-badge]][Material3-url]
 * [![Wear Compose][Wear-badge]][Wear-url]
-* [![Room][Room-badge]][Room-url]
-* [![Retrofit][Retrofit-badge]][Retrofit-url]
+* [![SQLite][SQLite-badge]][SQLite-url]
 * [![OkHttp][OkHttp-badge]][OkHttp-url]
 * [![Rust][Rust-badge]][Rust-url]
 * [![Ratatui][Ratatui-badge]][Ratatui-url]
@@ -256,14 +255,12 @@ ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.co
 [Material3-url]: https://m3.material.io/
 [Wear-badge]: https://img.shields.io/badge/Wear%20OS-4285F4?style=for-the-badge&logo=wearos&logoColor=white
 [Wear-url]: https://developer.android.com/training/wearables
-[Room-badge]: https://img.shields.io/badge/Room-6DB33F?style=for-the-badge&logo=sqlite&logoColor=white
-[Room-url]: https://developer.android.com/jetpack/androidx/releases/room
-[Retrofit-badge]: https://img.shields.io/badge/Retrofit-48B883?style=for-the-badge&logo=square&logoColor=white
-[Retrofit-url]: https://square.github.io/retrofit/
-[OkHttp-badge]: https://img.shields.io/badge/OkHttp-48B883?style=for-the-badge&logo=square&logoColor=white
-[OkHttp-url]: https://square.github.io/okhttp/
+[SQLite-badge]: https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white
+[SQLite-url]: https://www.sqlite.org/
 [Rust-badge]: https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white
 [Rust-url]: https://www.rust-lang.org/
+[OkHttp-badge]: https://img.shields.io/badge/OkHttp-48B883?style=for-the-badge&logo=square&logoColor=white
+[OkHttp-url]: https://square.github.io/okhttp/
 [Ratatui-badge]: https://img.shields.io/badge/Ratatui-000000?style=for-the-badge&logo=rust&logoColor=white
 [Ratatui-url]: https://ratatui.rs/
 [Crossterm-badge]: https://img.shields.io/badge/Crossterm-000000?style=for-the-badge&logo=rust&logoColor=white

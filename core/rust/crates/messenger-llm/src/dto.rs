@@ -132,16 +132,47 @@ pub struct ResponseToolCall {
 
 /// `GET /models` response. `context_window` / `input_rate` / `output_rate`
 /// are Messenger cloud-proxy extensions; other providers usually omit them.
+///
+/// OpenAI/Anthropic answer with `{ data: [...] }`, Gemini with
+/// `{ models: [{ name: "models/…" }] }` — both are accepted and [entries]
+/// flattens them into one list.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ModelsResponse {
     pub data: Vec<ModelEntry>,
+    /// Gemini's list shape (names carry a `models/` prefix).
+    pub models: Vec<ModelEntry>,
+}
+
+impl ModelsResponse {
+    /// Every model in the response, with Gemini's `models/` prefix stripped
+    /// so callers always see the id they must send back.
+    pub fn entries(&self) -> Vec<ModelEntry> {
+        let mut entries: Vec<ModelEntry> = self
+            .data
+            .iter()
+            .chain(self.models.iter())
+            .cloned()
+            .collect();
+        for entry in &mut entries {
+            if entry.id.is_empty() {
+                entry.id = entry.name.clone();
+            }
+            if let Some(stripped) = entry.id.strip_prefix("models/") {
+                entry.id = stripped.to_string();
+            }
+        }
+        entries.retain(|entry| !entry.id.is_empty());
+        entries
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ModelEntry {
     pub id: String,
+    /// Gemini's identifier (`models/gemini-…`); empty for OpenAI-shaped lists.
+    pub name: String,
     #[serde(rename = "object")]
     pub object: String,
     pub created: Option<i64>,

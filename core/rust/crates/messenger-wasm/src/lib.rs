@@ -666,6 +666,40 @@ impl WasmCore {
         })
     }
 
+    /// `GET /models` for one provider plus models.dev enrichment (JSON array
+    /// of `DiscoveredModel`). Nothing is persisted.
+    pub fn discover_provider_models_json(
+        &self,
+        base_url: String,
+        api_key: String,
+        api_format: Option<String>,
+    ) -> Promise {
+        let store = Rc::clone(&self.store);
+        future_to_promise(async move {
+            let discovered = messenger_sync::discover_provider_models(
+                &base_url,
+                &api_key,
+                api_format.as_deref(),
+            )
+            .await
+            .map_err(js_str)?;
+            let enriched = messenger_sync::enrich_with_models_dev(&store, discovered).await;
+            to_js_string(&enriched)
+        })
+    }
+
+    /// models.dev metadata for one model id; `undefined` when unknown.
+    pub fn models_dev_metadata_json(&self, model_id: String) -> Promise {
+        let store = Rc::clone(&self.store);
+        future_to_promise(async move {
+            let metadata = messenger_sync::models_dev_metadata(&store, &model_id).await;
+            match metadata {
+                Some(model) => to_js_string(&model),
+                None => Ok(JsValue::UNDEFINED),
+            }
+        })
+    }
+
     pub fn cloud_sync_builtin_models(&self, force: bool) -> Promise {
         let store = Rc::clone(&self.store);
         future_to_promise(async move {

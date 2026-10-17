@@ -24,7 +24,6 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.data.local.ChatImageStore
-import cc.ptoe.messenger.data.remote.dto.UsageDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.domain.model.Agent
@@ -39,7 +38,6 @@ import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.repository.ProjectRepository
-import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
@@ -47,11 +45,9 @@ import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
-import cc.ptoe.messenger.domain.usecase.ConversationTitleGenerator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -63,7 +59,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.chat_picture
 import cc.ptoe.messenger.generated.resources.chat_workspace_note
@@ -83,7 +78,6 @@ import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.data.util.runBlockingCall
 import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
 import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
-import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
@@ -98,11 +92,9 @@ class ChatViewModel(
     private val messageRepository: MessageRepository,
     private val conversationRepository: ConversationRepository,
     private val agentRepository: AgentRepository,
-    private val apiRepository: ApiRepository,
     private val modelRepository: ModelRepository,
     private val providerRepository: ProviderRepository,
     private val chatImageStore: ChatImageStore,
-    private val conversationTitleGenerator: ConversationTitleGenerator,
     /**
      * 平台内置工具工厂；参数是所属项目的 workspace 绝对路径（无项目时
      * 传 null，此时不声明工作区工具）。为空工厂（如 Android 未安装伴随
@@ -110,7 +102,7 @@ class ChatViewModel(
      */
     private val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
     private val projectRepository: ProjectRepository? = null,
-    private val coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
+    private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
 ) : ViewModel() {
 
     private val _conversationId = MutableStateFlow<String?>(null)
@@ -333,217 +325,6 @@ class ChatViewModel(
         _conversationId.value = conversationId
     }
 
-    // ------------------------------------------------------------------
-    // Context window / auto summarization
-    //
-    // 模型声明了 context window（内置云 AI 服务商自动同步元数据）时，
-    // 发送前估算上下文占用；达到 80% 就把较早的历史折叠成一份摘要
-    // （保留最近 SUMMARY_KEEP_COUNT 条原文），摘要以 system 消息随请求
-    // 发送，聊天记录本身不动。内置云代理每回合回报精确 usage，覆盖估算。
-    // ------------------------------------------------------------------
-
-    /**
-     * 粗略 token 估算：CJK 字符约 1 token/字，其余约 4 字符/token，
-     * 另加每条约 4 token 的消息开销。只用于阈值判断；内置云代理会回报
-     * 精确 usage 并在每回合后覆盖该估算。
-     */
-    private fun estimateTokens(text: String): Long {
-        if (text.isEmpty()) return 0L
-        var cjk = 0L
-        var other = 0L
-        for (c in text) {
-            if (c.code > 0x2E7F) cjk++ else other++
-        }
-        return cjk + (other + 3) / 4
-    }
-
-    private fun estimateTokens(message: Message): Long {
-        val text = message.parts.filterIsInstance<ContentPart.Text>()
-            .joinToString("\n") { it.text }
-            .ifBlank { message.content }
-        // 一张中等分辨率图按 ~800 tokens 估算
-        val images = message.parts.count { it is ContentPart.Image }
-        return estimateTokens(text) + images * 800L + 4L
-    }
-
-    /**
-     * 估算「下次请求将携带的完整上下文」的 token 数。优先以最近一次精确
-     * 用量记账（[Conversation.contextTokens]）为基数，叠加其后新增消息的
-     * 估算值；没有记账时从系统提示词 + 折叠摘要 + 全量历史估算。
-     */
-    private suspend fun estimateContextTokens(
-        conversation: Conversation,
-        systemPrompt: String?
-    ): Long {
-        val messages = messageRepository.getByConversationId(conversation.id)
-            .first()
-            .filter { it.status == MessageStatus.SENT }
-        return if (conversation.contextTokens > 0L) {
-            conversation.contextTokens +
-                messages.filter { it.timestamp > conversation.contextTokensAt }
-                    .sumOf { estimateTokens(it) }
-        } else {
-            estimateTokens(systemPrompt.orEmpty()) +
-                estimateTokens(conversation.contextSummary.orEmpty()) +
-                messages.filter { it.timestamp >= conversation.contextSummaryUntil }
-                    .sumOf { estimateTokens(it) }
-        }
-    }
-
-    /**
-     * 发送前的 80% 上下文自动摘要。把 timestamp 早于保留窗口的历史
-     * （连同上一份摘要）交给模型压缩成新摘要并写回会话；返回值是写回后
-     * 的最新会话（调用方据此组装请求上下文）。失败时提示但不阻塞发送。
-     */
-    private suspend fun maybeSummarizeContext(
-        conversation: Conversation,
-        agent: Agent,
-        model: ChatModel,
-        provider: Provider
-    ): Conversation {
-        if (model.contextWindow <= 0L) return conversation
-        val threshold = model.contextWindow * 80L / 100L
-        if (estimateContextTokens(conversation, agent.systemPrompt) < threshold) return conversation
-
-        val all = messageRepository.getByConversationId(conversation.id)
-            .first()
-            .filter { it.status == MessageStatus.SENT }
-        if (all.isEmpty()) return conversation
-        val keepCount = minOf(SUMMARY_KEEP_COUNT, all.size)
-        val firstKept = all[all.size - keepCount]
-        val toSummarize = all.filter { it.timestamp < firstKept.timestamp }
-        if (toSummarize.isEmpty()) return conversation
-
-        val transcript = buildString {
-            val previousSummary = conversation.contextSummary
-            if (!previousSummary.isNullOrBlank() && conversation.contextSummaryUntil > 0L) {
-                appendLine("[Earlier summary]")
-                appendLine(previousSummary)
-                appendLine()
-                appendLine("[Conversation since then]")
-            }
-            toSummarize.forEach { message ->
-                appendLine("${roleLabel(message)}: ${messageBrief(message)}")
-            }
-        }
-
-        return try {
-            val result = apiRepository.createChatCompletion(
-                provider = provider,
-                modelId = model.modelId,
-                messages = listOf(
-                    Message(
-                        id = randomUuid(),
-                        conversationId = "",
-                        role = MessageRole.USER,
-                        content = transcript,
-                        timestamp = currentTimeMillis(),
-                        status = MessageStatus.SENT
-                    )
-                ),
-                systemPrompt = getString(Res.string.context_summarize_prompt),
-                temperature = 0.3f,
-                topP = 1.0f,
-                maxTokens = null,
-                reasoningEffort = null,
-                reasoningFormat = null
-            )
-            val summary = stripThinkBlock(result.content).trim()
-            if (summary.isEmpty()) return conversation
-            val updated = conversation.copy(
-                contextSummary = summary,
-                contextSummaryUntil = firstKept.timestamp,
-                contextTokens = estimateTokens(agent.systemPrompt.orEmpty()) +
-                    estimateTokens(summary) +
-                    all.filter { it.timestamp >= firstKept.timestamp }
-                        .sumOf { estimateTokens(it) },
-                contextTokensAt = currentTimeMillis()
-            )
-            conversationRepository.update(updated)
-            updated
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(
-                getString(
-                    Res.string.error_context_summarize_failed,
-                    e.message ?: getString(Res.string.error_unknown)
-                )
-            )
-            conversation
-        }
-    }
-
-    /**
-     * 组装发送给 API 的上下文消息：折叠摘要（若有，置于最前作为 system
-     * 消息）+ 截止时间戳之后的原文消息，末尾保留 HISTORY_MAX_MESSAGES 条
-     * 兜底截断（模型未声明 context window 时它仍然生效）。
-     */
-    private fun buildApiContextMessages(
-        conversation: Conversation,
-        sentMessages: List<Message>
-    ): List<Message> {
-        val recent = sentMessages.filter { it.timestamp >= conversation.contextSummaryUntil }
-        val summary = conversation.contextSummary
-            ?.takeIf { it.isNotBlank() && conversation.contextSummaryUntil > 0L }
-            ?: return recent.takeLast(HISTORY_MAX_MESSAGES).trimOrphanToolMessages()
-        val summaryMessage = Message(
-            id = SUMMARY_MESSAGE_ID,
-            conversationId = conversation.id,
-            role = MessageRole.SYSTEM,
-            content = "[Summary of earlier conversation]\n$summary",
-            timestamp = 0L,
-            status = MessageStatus.SENT
-        )
-        return (listOf(summaryMessage) + recent)
-            .takeLast(HISTORY_MAX_MESSAGES)
-            .trimOrphanToolMessages()
-    }
-
-    /**
-     * 兜底截断可能把工具配对从中间切开：开头的 role=TOOL 消息若已失去其
-     * assistant tool_calls 配对（被截掉），必须丢弃 — OpenAI 会拒绝缺少
-     * 前置 tool_calls 的 tool 消息。
-     */
-    private fun List<Message>.trimOrphanToolMessages(): List<Message> =
-        dropWhile { it.role == MessageRole.TOOL }
-
-    /** 回合结束后写回上下文用量：优先精确 usage，否则退回估算。 */
-    private suspend fun updateContextTokens(
-        conversationId: String,
-        sentContextEstimate: Long,
-        responseText: String,
-        usage: UsageDto?
-    ) {
-        val conv = conversationRepository.getById(conversationId).first() ?: return
-        val tokens = usage
-            ?.let { it.promptTokens.toLong() + it.completionTokens.toLong() }
-            ?.takeIf { it > 0L }
-            ?: (sentContextEstimate + estimateTokens(responseText))
-        conversationRepository.update(
-            conv.copy(contextTokens = tokens, contextTokensAt = currentTimeMillis())
-        )
-    }
-
-    private fun roleLabel(message: Message): String = when (message.role) {
-        MessageRole.USER -> "User"
-        MessageRole.ASSISTANT -> "Assistant"
-        else -> "System"
-    }
-
-    /** 折叠进摘要的单条消息文本：多模态消息以 [image ×N] 占位。 */
-    private fun messageBrief(message: Message): String {
-        val text = message.parts.filterIsInstance<ContentPart.Text>()
-            .joinToString("\n") { it.text }
-            .ifBlank { message.content }
-        val imageCount = message.parts.count { it is ContentPart.Image }
-        return if (imageCount > 0) {
-            (if (text.isBlank()) "" else "$text\n") + "[image ×$imageCount]"
-        } else {
-            text
-        }
-    }
-
     /**
      * Imports a picked image into a [MessageImage] and queues it as a
      * pending attachment. Errors are surfaced through the existing
@@ -663,455 +444,93 @@ class ChatViewModel(
 
         val (provider, model) = result
         val bridge = coreBridge
-        if (bridge != null) {
-            val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-            val workspace = resolveWorkspaceFor(conv)
-            val availableTools = builtinTools(workspace)
-            val enabledTools = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
-                availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
-            } else {
-                emptyList()
-            }
-            // 可执行工具表：执行不做参数预筛（沙盒按实际操作约束），与 Rust 侧
-            // 请求声明共用 per-tool 开关。写入类工具（edit/create）的声明由
-            // Rust 按 writable 过滤，此处保留全量映射，模型误调未声明工具时
-            // 由核心回路返回错误自纠。
-            val toolsByName = enabledTools.associateBy { it.name }
-            val config = TurnConfigBridge(
-                conversationId = conversationId,
-                modelId = model.modelId,
-                baseUrl = provider.baseUrl,
-                apiKey = provider.apiKey,
-                apiFormat = provider.apiFormat.requestFormat.wireName,
-                systemPrompt = agent.systemPrompt,
-                temperature = agent.temperature.toDouble(),
-                topP = agent.topP.toDouble(),
-                maxTokens = agent.maxTokens?.toLong(),
-                reasoningEffort = agent.reasoningEffort,
-                toolNames = enabledTools.map { it.name },
-                writable = conv.writable,
-                contextWindow = model.contextWindow,
-                summarizePrompt = getString(Res.string.context_summarize_prompt),
-                titleAgentId = titleHolder?.id,
-                titleAgentSystemPrompt = titleHolder?.systemPrompt,
-                titleAgentModelId = titleHolder?.defaultModelId,
-                hasWorkspace = workspace != null,
-                workspaceNote = workspace?.let {
-                    getString(Res.string.chat_workspace_note, it)
-                }.orEmpty(),
-            )
-
-            _isGenerating.value = true
-            _streamingContent.value = ""
-            currentDocSession = bridge.createDocumentSession()
-            _streamingDiff.value = null
-
-            currentGenerationJob = viewModelScope.launch {
-                try {
-                    bridge.runTurn(
-                        config = config,
-                        toolExecutor = { name, argumentsJson ->
-                            val tool = toolsByName[name]
-                            if (tool != null) {
-                                // NEVER let an exception escape into the JNI
-                                // upcall: a foreign callback exception turns
-                                // into a Rust panic (spawn_blocking JoinError
-                                // → "tool host cancelled"). Report it to the
-                                // model as an error result for self-correction.
-                                try {
-                                    val r = runBlockingCall { tool.execute(argumentsJson) }
-                                    r.output to r.isError
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    ("tool execution failed: ${e.message ?: e::class.simpleName}") to true
-                                }
-                            } else {
-                                "Unknown tool: $name" to true
-                            }
-                        },
-                        onEventJson = { eventJson ->
-                            handleTurnEvent(eventJson)
-                        }
-                    )
-                } catch (e: CancellationException) {
-                    bridge.cancelTurn()
-                    throw e
-                } catch (e: Exception) {
-                    setError(e.message ?: getString(Res.string.error_unknown))
-                } finally {
-                    currentDocSession = null
-                    _streamingContent.value = null
-                    _streamingMessageId.value = null
-                    _streamingDiff.value = null
-                    _isGenerating.value = false
-                }
-            }
-            return
+        val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
+        val workspace = resolveWorkspaceFor(conv)
+        val availableTools = builtinTools(workspace)
+        val enabledTools = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
+            availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
+        } else {
+            emptyList()
         }
-
-        // 80% 上下文自动摘要：可能写回会话的摘要状态，返回最新会话快照。
-        val effectiveConv = maybeSummarizeContext(conv, agent, model, provider)
-
-        val aiMessageId = randomUuid()
-        val aiMessage = Message(
-            id = aiMessageId,
+        // 可执行工具表：执行不做参数预筛（沙盒按实际操作约束），与 Rust 侧
+        // 请求声明共用 per-tool 开关。写入类工具（edit/create）的声明由
+        // Rust 按 writable 过滤，此处保留全量映射，模型误调未声明工具时
+        // 由核心回路返回错误自纠。
+        val toolsByName = enabledTools.associateBy { it.name }
+        val config = TurnConfigBridge(
             conversationId = conversationId,
-            role = MessageRole.ASSISTANT,
-            content = "",
-            timestamp = currentTimeMillis(),
-            status = MessageStatus.SENDING
+            modelId = model.modelId,
+            baseUrl = provider.baseUrl,
+            apiKey = provider.apiKey,
+            apiFormat = provider.apiFormat.requestFormat.wireName,
+            systemPrompt = agent.systemPrompt,
+            temperature = agent.temperature.toDouble(),
+            topP = agent.topP.toDouble(),
+            maxTokens = agent.maxTokens?.toLong(),
+            reasoningEffort = agent.reasoningEffort,
+            toolNames = enabledTools.map { it.name },
+            writable = conv.writable,
+            contextWindow = model.contextWindow,
+            summarizePrompt = getString(Res.string.context_summarize_prompt),
+            titleAgentId = titleHolder?.id,
+            titleAgentSystemPrompt = titleHolder?.systemPrompt,
+            titleAgentModelId = titleHolder?.defaultModelId,
+            hasWorkspace = workspace != null,
+            workspaceNote = workspace?.let {
+                getString(Res.string.chat_workspace_note, it)
+            }.orEmpty(),
         )
-        messageRepository.insert(aiMessage)
 
-        // Bind the live streamed content to this message before tokens arrive.
-        _streamingMessageId.value = aiMessageId
         _isGenerating.value = true
+        _streamingContent.value = ""
+        currentDocSession = bridge.createDocumentSession()
+        _streamingDiff.value = null
 
-        launchChatTurn(
-            conversationId = conversationId,
-            agent = agent,
-            conversation = effectiveConv,
-            provider = provider,
-            model = model,
-            targetMessage = aiMessage,
-            initialDetectedFormat = effectiveConv.reasoningFormat
-        )
-    }
-
-    /**
-     * 单次发送的代理循环（generateResponse / retrySend 共用核心）：
-     * 流式一轮 → 模型请求工具调用（[ChatStreamEvent.Done.toolCalls] 非空）时
-     * 逐个确认并执行工具、把结果以 role=TOOL 行写回历史 → 重建上下文进入下一轮，
-     * 直到模型给出最终文本（写入 [targetMessage] 行）或出错/取消；工具轮数不设上限。
-     *
-     * 工具轮的 assistant 消息（轮内文本 + ToolCall parts）以独立行落库，
-     * [targetMessage] 始终承载最终文本；因此工具配对在历史中保持完整，
-     * retrySend 的目标行排除只作用于第一轮。
-     */
-    private fun launchChatTurn(
-        conversationId: String,
-        agent: Agent,
-        conversation: Conversation,
-        provider: Provider,
-        model: ChatModel,
-        targetMessage: Message,
-        initialDetectedFormat: String?,
-        excludeTargetFromHistory: Boolean = false
-    ) {
         currentGenerationJob = viewModelScope.launch {
-            var detectedFormat = initialDetectedFormat
-            var hasFinished = false
-            var currentContent = ""
-            // 插入行的时间戳游标：保证工具轮 assistant 行 / TOOL 结果行 / 最终文本
-            // 严格递增，避免同毫秒插入时消息列表顺序漂移。声明在 try 外，收尾分支
-            // （含异常路径）也能把占位行时间戳推进到工具行之后。
-            var timestampCursor = targetMessage.timestamp
-            suspend fun nextTimestamp(): Long {
-                timestampCursor = maxOf(timestampCursor + 1L, currentTimeMillis())
-                return timestampCursor
-            }
-            // 占位行（最终文本落点）的时间戳停留在最初插入时刻，早于工具轮行；
-            // 有工具轮落行时必须顺次推进，否则按时间排序会把最终答案排到卡片之前。
-            suspend fun bumpedFinalTimestamp(): Long? =
-                if (timestampCursor > targetMessage.timestamp) nextTimestamp() else null
             try {
-                // 请求是否携带 tools：生效工具总开关打开且平台注册了工具即发送，
-                // 并按 Agent 的每工具开关过滤（配置缺失的键视为开启）。
-                //（不按 supportsToolCalling 门控 — 元数据缺失时该值为 false，
-                //  会让功能看似失效；不支持的服务商会给出可见错误。）
-                // Agent 模式：只读时不声明写入类工具（edit/create），终端声明
-                // 换检查用途描述；可写时全量声明。执行不做参数预筛——沙盒
-                // （Android 为伴随 runtime 的独立 UID）按实际操作约束。
-                // 普通会话没有 workspace，终端与工作区工具不存在（MCP 不受约束）。
-                val workspace = resolveWorkspaceFor(conversation)
-                val availableTools = builtinTools(workspace)
-                val toolsForRequest = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
-                    val enabledTools = availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
-                    // 发送时的会话快照（launchChatTurn 的 conversation 参数来自
-                    // 发送时的新鲜 DB 读取）。agentWritable StateFlow 由 UI 订阅
-                    // 驱动（WhileSubscribed 5 秒无订阅即重置），App 切后台后其
-                    // .value 会退回 false，不能作为回合内的模式决策依据。
-                    if (conversation.writable) {
-                        enabledTools.map { tool ->
-                            if (tool is TerminalTool) {
-                                TerminalTool(readOnly = false, workspaceRoot = workspace)
-                            } else {
-                                tool
+                bridge.runTurn(
+                    config = config,
+                    toolExecutor = { name, argumentsJson ->
+                        val tool = toolsByName[name]
+                        if (tool != null) {
+                            // NEVER let an exception escape into the JNI
+                            // upcall: a foreign callback exception turns
+                            // into a Rust panic (spawn_blocking JoinError
+                            // → "tool host cancelled"). Report it to the
+                            // model as an error result for self-correction.
+                            try {
+                                val r = runBlockingCall { tool.execute(argumentsJson) }
+                                r.output to r.isError
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                ("tool execution failed: ${e.message ?: e::class.simpleName}") to true
                             }
+                        } else {
+                            "Unknown tool: $name" to true
                         }
-                    } else {
-                        enabledTools.filter { !it.writeAccess }
+                    },
+                    onEventJson = { eventJson ->
+                        handleTurnEvent(eventJson)
                     }
-                } else {
-                    null
-                }
-                // 仅允许执行已声明（未停用）的工具，模型误调时回错误结果自纠
-                val toolsByName = toolsForRequest?.associateBy { it.name } ?: emptyMap()
-                var excludeId: String? = if (excludeTargetFromHistory) targetMessage.id else null
-
-                var turnComplete = false
-                while (!turnComplete) {
-                    hasFinished = false
-                    // 本轮是否为工具调用轮（Done 事件写回；一轮流会因 finish_reason
-                    // 块与 [DONE] 各发一次 Done，须防重复处理）
-                    var toolRoundCalls: List<ToolCallData>? = null
-                    val sentMessages = messageRepository.getByConversationId(conversationId)
-                        .first()
-                        .filter { it.status == MessageStatus.SENT && it.id != excludeId }
-                    val historyMessages = buildApiContextMessages(conversation, sentMessages)
-                    // 本次请求上下文的估算基数（usage 缺失时用于用量记账）
-                    val sentContextEstimate = if (conversation.contextTokens > 0L) {
-                        conversation.contextTokens +
-                            sentMessages.filter { it.timestamp > conversation.contextTokensAt }
-                                .sumOf { estimateTokens(it) }
-                    } else {
-                        estimateTokens(agent.systemPrompt.orEmpty()) +
-                            historyMessages.sumOf { estimateTokens(it) }
-                    }
-                    currentContent = ""
-                    _streamingMessageId.value = targetMessage.id
-                    apiRepository.streamChatCompletion(
-                        provider = provider,
-                        modelId = model.modelId,
-                        messages = historyMessages,
-                        systemPrompt = agent.systemPrompt,
-                        temperature = agent.temperature,
-                        topP = agent.topP,
-                        maxTokens = agent.maxTokens,
-                        reasoningEffort = agent.reasoningEffort,
-                        reasoningFormat = detectedFormat,
-                        tools = toolsForRequest
-                    ).collect { event ->
-                        when (event) {
-                            is ChatStreamEvent.ReasoningDetected -> {
-                                if (detectedFormat == null) {
-                                    // reasoning_content=完整思维链 / reasoning_summary=GPT 等加密思维链仅回传摘要
-                                    detectedFormat = event.format
-                                    // 重新读取，避免覆盖并发写回的其他会话字段
-                                    conversationRepository.getById(conversationId).first()?.let {
-                                        conversationRepository.update(it.copy(reasoningFormat = event.format))
-                                    }
-                                }
-                            }
-                            is ChatStreamEvent.Content -> {
-                                currentContent += event.text
-                                _streamingContent.value = currentContent
-                            }
-                            is ChatStreamEvent.Done -> {
-                                if (hasFinished) return@collect
-                                hasFinished = true
-                                if (detectedFormat == null && currentContent.contains("<think")) {
-                                    detectedFormat = "think_tag"
-                                    conversationRepository.getById(conversationId).first()?.let {
-                                        conversationRepository.update(it.copy(reasoningFormat = "think_tag"))
-                                    }
-                                }
-                                updateContextTokens(conversationId, sentContextEstimate, currentContent, event.usage)
-                                if (event.toolCalls.isNotEmpty() && toolRoundCalls == null) {
-                                    // 工具轮：轮内文本 + 工具调用以独立 assistant 行落库
-                                    val turnMessage = Message(
-                                        id = randomUuid(),
-                                        conversationId = conversationId,
-                                        role = MessageRole.ASSISTANT,
-                                        content = currentContent,
-                                        parts = event.toolCalls.map {
-                                            ContentPart.ToolCall(
-                                                callId = it.callId,
-                                                name = it.name,
-                                                arguments = it.arguments
-                                            )
-                                        },
-                                        timestamp = nextTimestamp(),
-                                        status = MessageStatus.SENT
-                                    )
-                                    messageRepository.insert(turnMessage)
-                                    if (currentContent.isNotBlank()) {
-                                        updateConversationLastMessage(conversationId, currentContent, turnMessage.timestamp)
-                                    }
-                                    toolRoundCalls = event.toolCalls
-                                    // 该轮文本已由独立行承载；占位行回到空态等待下一轮
-                                    currentContent = ""
-                                    _streamingContent.value = null
-                                    // 工具调用已进入历史，后续轮次不再排除目标行
-                                    excludeId = null
-                                } else if (event.toolCalls.isEmpty() && toolRoundCalls == null) {
-                                    saveStreamResult(
-                                        targetMessage,
-                                        currentContent,
-                                        conversationId,
-                                        null,
-                                        bumpedFinalTimestamp()
-                                    )
-                                    if (currentContent.isNotBlank()) {
-                                        awaitMessagePersisted(targetMessage.id, currentContent)
-                                        // 最终文本轮完成 → 标题生成（工具轮不触发）
-                                        conversationTitleGenerator.launchGenerateIfNeeded(
-                                            conversationId, provider, model
-                                        ) { message -> setError(message) }
-                                    }
-                                    _streamingContent.value = null
-                                    _streamingMessageId.value = null
-                                    _isGenerating.value = false
-                                    turnComplete = true
-                                }
-                            }
-                            is ChatStreamEvent.Error -> {
-                                hasFinished = true
-                                saveStreamResult(targetMessage, currentContent, conversationId, event.message)
-                                setError(event.message)
-                                if (currentContent.isNotBlank()) {
-                                    awaitMessagePersisted(targetMessage.id, currentContent)
-                                }
-                                _streamingContent.value = null
-                                _streamingMessageId.value = null
-                                _isGenerating.value = false
-                            }
-                        }
-                    }
-                    if (!hasFinished) {
-                        val errorMsg = getString(Res.string.error_api_no_valid_response)
-                        saveStreamResult(
-                            targetMessage,
-                            currentContent,
-                            conversationId,
-                            errorMsg,
-                            bumpedFinalTimestamp()
-                        )
-                        setError(errorMsg)
-                        if (currentContent.isNotBlank()) {
-                            awaitMessagePersisted(targetMessage.id, currentContent)
-                        }
-                        _streamingContent.value = null
-                        _streamingMessageId.value = null
-                        _isGenerating.value = false
-                        return@launch
-                    }
-                    val calls = toolRoundCalls ?: return@launch
-                    executeToolCalls(
-                        conversationId = conversationId,
-                        calls = calls,
-                        toolsByName = toolsByName,
-                        startAfterTimestamp = timestampCursor
-                    )
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                val errorMsg = e.message ?: getString(Res.string.error_unknown)
-                saveStreamResult(
-                    targetMessage,
-                    currentContent,
-                    conversationId,
-                    errorMsg,
-                    bumpedFinalTimestamp()
                 )
-                setError(errorMsg)
-                if (currentContent.isNotBlank()) {
-                    awaitMessagePersisted(targetMessage.id, currentContent)
-                }
+            } catch (e: CancellationException) {
+                bridge.cancelTurn()
+                throw e
+            } catch (e: Exception) {
+                setError(e.message ?: getString(Res.string.error_unknown))
+            } finally {
+                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
+                _streamingDiff.value = null
                 _isGenerating.value = false
             }
         }
     }
 
-    /**
-     * 依次执行一轮工具调用：工具在沙箱内自动执行（不弹确认框，确认机制
-     * 已整体移除）。未知工具/参数错误同样以结果文本回传，让模型自纠。
-     */
-    private suspend fun executeToolCalls(
-        conversationId: String,
-        calls: List<ToolCallData>,
-        toolsByName: Map<String, ChatTool>,
-        startAfterTimestamp: Long
-    ) {
-        var cursor = startAfterTimestamp
-        suspend fun nextTimestamp(): Long {
-            cursor = maxOf(cursor + 1L, currentTimeMillis())
-            return cursor
-        }
-        for (call in calls) {
-            val tool = toolsByName[call.name]
-            val row = Message(
-                id = randomUuid(),
-                conversationId = conversationId,
-                role = MessageRole.TOOL,
-                content = "",
-                parts = listOf(ContentPart.ToolResult(callId = call.callId, name = call.name, output = "")),
-                timestamp = nextTimestamp(),
-                status = MessageStatus.SENDING
-            )
-            // 先落库「运行中」行：finishToolMessage 只做 update（Room 对
-            // 不存在的行是 no-op），不先 insert 结果行就永远不会写进历史。
-            messageRepository.insert(row)
-            when {
-                tool == null -> finishToolMessage(
-                    row,
-                    getString(Res.string.tool_unknown_tool, call.name),
-                    isError = true
-                )
-                else -> {
-                    val result = try {
-                        tool.execute(call.arguments)
-                    } catch (e: CancellationException) {
-                        // 进程已被执行器的 finally 终止；先落中断结果再传播取消，
-                        // 保证 TOOL 行不会停留在「运行中」。
-                        withContext(NonCancellable) {
-                            finishToolMessage(row, getString(Res.string.tool_interrupted_result), isError = true)
-                        }
-                        throw e
-                    }
-                    finishToolMessage(row, result.output, isError = result.isError)
-                }
-            }
-        }
-    }
-
-    /** 把「运行中」TOOL 行更新为最终结果（结果同时写入 content 与 ToolResult part）。 */
-    private suspend fun finishToolMessage(row: Message, output: String, isError: Boolean) {
-        val part = row.parts.firstOrNull() as? ContentPart.ToolResult
-        messageRepository.update(
-            row.copy(
-                content = output,
-                parts = listOf(
-                    ContentPart.ToolResult(
-                        callId = part?.callId ?: "",
-                        name = part?.name ?: "",
-                        output = output,
-                        isError = isError
-                    )
-                ),
-                status = MessageStatus.SENT
-            )
-        )
-    }
-
-    /**
-     * Waits for [messages] to reflect the final persisted [content] for [messageId]
-     * before the host unbinds [streamingMessageId]. Without this, the bubble switches
-     * from the live [streamingContent] (which holds the streamed content in memory)
-     * to the static path while [Message.content] is still the stale empty value from
-     * the initial insert — the static path's `remember(message.id, message.content)`
-     * then seeds an empty state, causing a one-frame empty render (visible flicker)
-     * before the Room Flow re-emits with the persisted content. Bounded by a timeout
-     * so a missing emission (e.g. [saveStreamResult] no-op on blank content) does
-     * not block the stream completion forever.
-     */
-    private suspend fun awaitMessagePersisted(
-        messageId: String,
-        content: String,
-        timeoutMs: Long = 1000L
-    ) {
-        withTimeoutOrNull(timeoutMs) {
-            messages.first { list ->
-                list.any { it.id == messageId && it.content == content }
-            }
-        }
-    }
-
     fun stopGeneration() {
-        coreBridge?.cancelTurn()
+        coreBridge.cancelTurn()
         currentGenerationJob?.cancel()
         currentGenerationJob = null
         _isGenerating.value = false
@@ -1180,13 +599,6 @@ class ChatViewModel(
                 return@launch
             }
 
-            messageRepository.update(
-                message.copy(
-                    status = MessageStatus.SENDING,
-                    errorMessage = null,
-                    content = ""
-                )
-            )
             val result = getActiveModelAndProvider(conv, currentAgent)
             if (result == null) {
                 setError(getString(Res.string.error_configure_model_first))
@@ -1199,24 +611,10 @@ class ChatViewModel(
                 return@launch
             }
 
-            val (provider, model) = result
-
-            // Bind the live streamed content to this message before tokens arrive.
-            _streamingMessageId.value = messageId
-            _isGenerating.value = true
-
-            // 重试路径复用原 ERROR 行承载最终文本；该行第一轮仍排除在历史外，
-            // 一旦产生工具调用（写入独立行）即恢复纳入。
-            launchChatTurn(
-                conversationId = message.conversationId,
-                agent = currentAgent,
-                conversation = conv,
-                provider = provider,
-                model = model,
-                targetMessage = message.copy(status = MessageStatus.SENDING, errorMessage = null, content = ""),
-                initialDetectedFormat = conv.reasoningFormat,
-                excludeTargetFromHistory = true
-            )
+            // 重试走与普通发送相同的核心回路：Rust 自己创建承载最终文本的
+            // 占位行，因此失败行必须删掉（它的 errorMessage 不属于历史）。
+            messageRepository.delete(messageId)
+            generateResponse(message.conversationId, currentAgent)
         }
     }
 
@@ -1346,35 +744,6 @@ class ChatViewModel(
         conversationRepository.updateLastMessage(conversationId, lastMessage, timestamp)
     }
 
-    private suspend fun saveStreamResult(
-        aiMessage: Message,
-        content: String,
-        conversationId: String,
-        errorMessage: String?,
-        timestamp: Long? = null
-    ) {
-        if (content.isNotBlank()) {
-            messageRepository.update(
-                aiMessage.copy(
-                    content = content,
-                    status = MessageStatus.SENT,
-                    errorMessage = null,
-                    timestamp = timestamp ?: aiMessage.timestamp
-                )
-            )
-            updateConversationLastMessage(conversationId, content, currentTimeMillis())
-        } else if (errorMessage != null) {
-            messageRepository.update(
-                aiMessage.copy(
-                    content = content,
-                    status = MessageStatus.ERROR,
-                    errorMessage = errorMessage,
-                    timestamp = timestamp ?: aiMessage.timestamp
-                )
-            )
-        }
-    }
-
     private fun handleTurnEvent(eventJson: String) {
         val root = try {
             NetworkClient.json.parseToJsonElement(eventJson).jsonObject
@@ -1403,7 +772,7 @@ class ChatViewModel(
                 if (!finishBatch.isNullOrBlank() && finishBatch != "{\"diffs\":[]}") {
                     _streamingDiff.value = finishBatch
                 }
-                currentDocSession = coreBridge?.createDocumentSession()
+                currentDocSession = coreBridge.createDocumentSession()
             }
             "Finished", "Cancelled" -> {
                 val finishBatch = currentDocSession?.finish()
@@ -1444,25 +813,16 @@ class ChatViewModel(
     }
 
     companion object {
-        /** 兜底历史截断（模型未声明 context window 时仍然生效）。 */
-        private const val HISTORY_MAX_MESSAGES = 20
-        /** 自动摘要时保留原文的近期消息条数。 */
-        private const val SUMMARY_KEEP_COUNT = 10
-        /** 注入请求的折叠摘要 system 消息的占位 id。 */
-        private const val SUMMARY_MESSAGE_ID = "context-summary"
-
         fun provideFactory(
             messageRepository: MessageRepository,
             conversationRepository: ConversationRepository,
             agentRepository: AgentRepository,
-            apiRepository: ApiRepository,
             modelRepository: ModelRepository,
             providerRepository: ProviderRepository,
             chatImageStore: ChatImageStore,
-            conversationTitleGenerator: ConversationTitleGenerator,
             builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
             projectRepository: ProjectRepository? = null,
-            coreBridge: CoreBridge? = CoreBridgeRegistry.bridge
+            coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -1470,11 +830,9 @@ class ChatViewModel(
                     messageRepository,
                     conversationRepository,
                     agentRepository,
-                    apiRepository,
                     modelRepository,
                     providerRepository,
                     chatImageStore,
-                    conversationTitleGenerator,
                     builtinTools,
                     projectRepository,
                     coreBridge

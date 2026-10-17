@@ -16,20 +16,11 @@
 
 package cc.ptoe.messenger.di
 
-import androidx.room.RoomDatabase
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
-import cc.ptoe.messenger.data.cloud.CloudSyncRepository
+import cc.ptoe.messenger.core.CoreBridgeRegistry
+import cc.ptoe.messenger.data.cloud.RustCloudFacade
 import cc.ptoe.messenger.data.local.AppPreferences
-import cc.ptoe.messenger.data.local.ChatImageStore
-import cc.ptoe.messenger.data.local.MessengerDatabase
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.createMessengerDataStore
-import cc.ptoe.messenger.data.repository.AgentRepositoryImpl
-import cc.ptoe.messenger.data.repository.ConversationRepositoryImpl
-import cc.ptoe.messenger.data.repository.MessageRepositoryImpl
-import cc.ptoe.messenger.data.repository.ModelRepositoryImpl
-import cc.ptoe.messenger.data.repository.ProviderRepositoryImpl
-import cc.ptoe.messenger.data.repository.ProjectRepositoryImpl
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.ioDispatcher
 import kotlinx.coroutines.flow.first
@@ -37,97 +28,43 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 /**
- * Android/Desktop stores: one Room database plus the on-disk preferences
- * DataStore, held behind the Room-backed [CloudSyncRepository].
+ * Android/Desktop stores: the Rust core owns every entity row, so the cloud
+ * facade is [RustCloudFacade]; preferences live in an on-disk DataStore.
+ * There is no Room database on any platform.
  */
-internal class RoomLocalStores(
-    cloud: CloudSyncRepository,
-    appPreferences: AppPreferences,
-    themePreferences: ThemePreferences,
-) : LocalStores(cloud, appPreferences, themePreferences) {
-    val database: MessengerDatabase = cloud.database
-}
-
 actual fun createLocalStores(appDirs: AppDirs): LocalStores {
-    val database = platformDatabaseBuilder(appDirs)
-        .setDriver(BundledSQLiteDriver())
-        .setQueryCoroutineContext(ioDispatcher)
-        .addMigrations(
-            MessengerDatabase.MIGRATION_13_14,
-            MessengerDatabase.MIGRATION_14_15,
-            MessengerDatabase.MIGRATION_15_16,
-            MessengerDatabase.MIGRATION_16_17,
-            MessengerDatabase.MIGRATION_17_18,
-            MessengerDatabase.MIGRATION_18_19,
-            MessengerDatabase.MIGRATION_19_20,
-            MessengerDatabase.MIGRATION_20_21,
-            MessengerDatabase.MIGRATION_21_22
-        )
-        .fallbackToDestructiveMigration(dropAllTables = true)
-        .build()
-
+    val core = requireNotNull(CoreBridgeRegistry.bridge) {
+        "CoreBridgeRegistry.bridge must be installed before AppContainer is built"
+    }
     val dataStore = createMessengerDataStore(appDirs.filesDir)
     val appPreferences = AppPreferences(dataStore)
     val themePreferences = ThemePreferences(dataStore)
-    val cloud = CloudSyncRepository(
+    val cloud = RustCloudFacade(
+        core = core,
         appPreferences = appPreferences,
-        database = database,
-        filesDir = appDirs.filesDir,
         localDataMutex = Mutex(),
     )
-    return RoomLocalStores(cloud, appPreferences, themePreferences)
+    return LocalStores(cloud = cloud, appPreferences = appPreferences, themePreferences = themePreferences)
 }
 
 /**
- * Room-backed repositories (Android/Desktop). The builtin provider and the
- * builtin title agent are excluded from cloud sync in the change callbacks —
- * they are per-device rows that each device seeds for itself.
+ * Wipes the Rust store's rows and the session/user key-value state, then lets
+ * [AppContainer] re-seed the default agent. This is deliberately NOT
+ * `cloudSync(replaceLocal = true)`, which would pull the remote state straight
+ * back into the freshly cleared local one.
  */
-actual fun createRoomRepositories(
-    stores: LocalStores,
-    chatImageStore: ChatImageStore,
-    hooks: LocalChangeHooks,
-): RoomRepositories {
-    val database = (stores as RoomLocalStores).database
-    return RoomRepositories(
-        providers = ProviderRepositoryImpl(database.providerDao()) { id, deleted ->
-            hooks.onProviderChanged(id, deleted)
-        },
-        models = ModelRepositoryImpl(database.modelDao()) { providerId, _ ->
-            hooks.onModelChanged(providerId)
-        },
-        agents = AgentRepositoryImpl(
-            agentDao = database.agentDao(),
-            onChanged = { previous, current -> hooks.onAgentChanged(previous, current) },
-        ),
-        conversations = ConversationRepositoryImpl(database.conversationDao()) { id, deleted ->
-            hooks.onConversationChanged(id, deleted)
-        },
-        projects = ProjectRepositoryImpl(database.projectDao()) { id, deleted ->
-            hooks.onProjectChanged(id, deleted)
-        },
-        messages = MessageRepositoryImpl(database.messageDao()) { conversationId ->
-            hooks.onMessagesChanged(conversationId)
-        },
-    )
-}
-
 actual suspend fun clearLocalData(appDirs: AppDirs, stores: LocalStores) =
     withContext(ioDispatcher) {
-        val room = stores as RoomLocalStores
-        val cloud = room.cloud as CloudSyncRepository
-        cloud.cancelPendingLocalSync()
-        room.appPreferences.userAvatar.first()?.let { avatarPath ->
+        val core = requireNotNull(stores.cloud as? RustCloudFacade) {
+            "clearLocalData requires the Rust cloud facade"
+        }.core
+        stores.cloud.cancelPendingLocalSync()
+        stores.appPreferences.userAvatar.first()?.let { avatarPath ->
             FileKit.delete(avatarPath)
         }
-        room.database.providerDao().deleteAll()
-        room.database.modelDao().deleteAll()
-        room.database.agentDao().deleteAll()
-        room.database.conversationDao().deleteAll()
-        room.database.projectDao().deleteAll()
-        room.database.messageDao().deleteAll()
-        room.appPreferences.clearAll()
+        core.clearLocalDataForReinit()
+        stores.appPreferences.clearAll()
         FileKit.deleteRecursively(appDirs.filesDir)
         FileKit.deleteRecursively(appDirs.cacheDir)
-        cloud.ensureBuiltinTitleAgent()
+        stores.cloud.ensureBuiltinTitleAgent()
     }

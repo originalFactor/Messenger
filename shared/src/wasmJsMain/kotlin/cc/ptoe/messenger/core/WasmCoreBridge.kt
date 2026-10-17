@@ -167,6 +167,16 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
     override suspend fun cloudRedeemCard(code: String): String =
         core.cloud_redeem_card(code).let { awaitJsJson(it) }
 
+    override suspend fun discoverProviderModelsJson(
+        baseUrl: String,
+        apiKey: String,
+        apiFormat: String?
+    ): String = core.discover_provider_models_json(baseUrl, apiKey, apiFormat)
+        .let { awaitJsJson(it) }
+
+    override suspend fun modelsDevMetadataJson(modelId: String): String? =
+        core.models_dev_metadata_json(modelId).let { awaitJsJsonOrNull(it) }
+
     override suspend fun cloudSyncBuiltinModels(force: Boolean): Long =
         core.cloud_sync_builtin_models(force).let { awaitJsLong(it) }
 

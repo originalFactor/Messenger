@@ -27,7 +27,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.ksp)
 }
 
 // The app version is one scheme for every client: the semantic version in the
@@ -204,6 +203,7 @@ kotlin {
         getByName("desktopMain") {
             dependsOn(jvmSharedMain)
             dependencies {
+                implementation(project(":core-bindings-desktop"))
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
@@ -213,7 +213,6 @@ kotlin {
         // Room + bundled SQLite: JVM/native only (no wasmJs artifact exists).
         getByName("jvmSharedMain") {
             dependencies {
-                implementation(libs.androidx.room.runtime)
                 implementation(libs.androidx.sqlite.bundled)
             }
         }
@@ -277,7 +276,5 @@ compose.resources {
 }
 
 dependencies {
-    // Room compiler: per-target KSP registration (AGP 9 KMP library plugin pattern).
-    add("kspAndroid", libs.androidx.room.compiler)
-    add("kspDesktop", libs.androidx.room.compiler)
+    // No KSP processors remain: entities live in the Rust core.
 }

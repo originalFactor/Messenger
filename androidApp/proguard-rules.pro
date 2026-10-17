@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Messenger (mobile) R8/ProGuard rules
 # Full R8 minification is enabled for release builds. These rules keep every
-# class that is loaded reflectively (Room, Retrofit/Gson, Java-WebSocket,
+# class that is loaded reflectively (Retrofit/Gson, Java-WebSocket,
 # CommonMark, ucrop) and the manifest-declared application/service classes.
 # ---------------------------------------------------------------------------
 
@@ -10,8 +10,8 @@
 -renamesourcefileattribute SourceFile
 
 # --- Annotations / signatures / inner-class metadata -----------------------
-# Gson needs Signature to resolve generic types; Retrofit & Room need
-# RuntimeVisibleAnnotations to read @POST/@Query/@Entity etc.; inner classes
+# Gson needs Signature to resolve generic types; Retrofit needs
+# RuntimeVisibleAnnotations to read @POST/@Query etc.; inner classes
 # are needed for the anonymous WebSocketServer / WebSocketListener subclasses.
 -keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations
 -keepattributes RuntimeVisibleParameterAnnotations,RuntimeInvisibleParameterAnnotations
@@ -30,27 +30,6 @@
 
 # Wear sync handler invoked by MobileHttpServer
 -keep class cc.ptoe.messenger.data.wear.MobileWearChatHandler { *; }
-
-# ===========================================================================
-# Room
-# ===========================================================================
-# @Database subclass is instantiated by reflection inside RoomDatabase
--keep class cc.ptoe.messenger.data.local.MessengerDatabase { *; }
--keep class cc.ptoe.messenger.data.local.MessengerDatabase_* { *; }
--keep class * extends androidx.room.RoomDatabase { *; }
-
-# @Dao interfaces: Room generates the impl at compile time (KSP), but the
-# interface must survive so the generated class can implement it.
--keep interface cc.ptoe.messenger.data.local.dao.* { *; }
-
-# @Entity classes: Room reflects on field names for column mapping.
--keep @androidx.room.Entity class * { *; }
-
-# Room internals we touch directly
--keep class androidx.room.RoomSQLiteQuery { *; }
--keep class * extends androidx.room.util.ShortcutUtil { *; }
--dontwarn androidx.room.**
--dontwarn androidx.room.paging.**
 
 # ===========================================================================
 # Retrofit + Gson

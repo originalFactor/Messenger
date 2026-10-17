@@ -91,6 +91,15 @@ class AndroidCoreBridge(
     override suspend fun cloudPreviewCard(code: String): String = core.cloudPreviewCard(code)
     override suspend fun cloudRedeemCard(code: String): String = core.cloudRedeemCard(code)
     override suspend fun cloudSyncBuiltinModels(force: Boolean): Long = core.cloudSyncBuiltinModels(force).toLong()
+
+    override suspend fun discoverProviderModelsJson(
+        baseUrl: String,
+        apiKey: String,
+        apiFormat: String?
+    ): String = core.discoverProviderModelsJson(baseUrl, apiKey, apiFormat)
+
+    override suspend fun modelsDevMetadataJson(modelId: String): String? =
+        core.modelsDevMetadataJson(modelId)
     override suspend fun cloudListMarketAgents(query: String, cursor: String?): String =
         core.cloudListMarketAgents(query, cursor)
     override suspend fun cloudGetMarketAgent(id: String): String = core.cloudGetMarketAgent(id)

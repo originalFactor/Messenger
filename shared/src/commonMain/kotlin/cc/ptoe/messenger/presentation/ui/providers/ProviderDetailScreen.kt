@@ -143,8 +143,7 @@ fun ProviderDetailScreen(
         factory = ProviderDetailViewModel.provideFactory(
             providerRepository = AppContainerHolder.instance.providerRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
-            apiRepository = AppContainerHolder.instance.apiRepository,
-            modelsDevRepository = AppContainerHolder.instance.modelsDevRepository,
+            coreBridge = AppContainerHolder.instance.coreBridge,
             providerId = providerId
         )
     )

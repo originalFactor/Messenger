@@ -21,12 +21,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
+import cc.ptoe.messenger.core.CoreBridge
+import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.domain.model.ChatModel
+import cc.ptoe.messenger.domain.model.DiscoveredModelDto
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.model.applyModelsDev
-import cc.ptoe.messenger.domain.repository.ApiRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
-import cc.ptoe.messenger.domain.repository.ModelsDevRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -67,8 +68,7 @@ data class ProviderDetailUiState(
 class ProviderDetailViewModel(
     private val providerRepository: ProviderRepository,
     private val modelRepository: ModelRepository,
-    private val apiRepository: ApiRepository,
-    private val modelsDevRepository: ModelsDevRepository,
+    private val coreBridge: CoreBridge,
     providerId: String
 ) : ViewModel() {
 
@@ -146,7 +146,14 @@ class ProviderDetailViewModel(
                 syncedModels = emptyList()
             )
             try {
-                val fetchedModels = apiRepository.fetchModels(provider)
+                val discovered = coreBridge.discoverProviderModelsJson(
+                    baseUrl = provider.baseUrl,
+                    apiKey = provider.apiKey,
+                    apiFormat = provider.apiFormat.requestFormat.wireName
+                )
+                val fetchedModels = NetworkClient.json
+                    .decodeFromString<List<DiscoveredModelDto>>(discovered)
+                    .map { it.toChatModel(provider) }
                 _uiState.value = _uiState.value.copy(
                     syncStatus = SyncStatus.SUCCESS,
                     syncedModels = fetchedModels
@@ -210,7 +217,13 @@ class ProviderDetailViewModel(
                     displayName = displayName.ifBlank { modelId },
                     isEnabled = true,
                     createdAt = currentTimeMillis()
-                ).applyModelsDev(runCatching { modelsDevRepository.getMetadata(modelId) }.getOrNull())
+                ).applyModelsDev(
+                    runCatching {
+                        coreBridge.modelsDevMetadataJson(modelId)?.let { json ->
+                            NetworkClient.json.decodeFromString<DiscoveredModelDto>(json).toModelsDevModel()
+                        }
+                    }.getOrNull()
+                )
                 modelRepository.insert(newModel)
             }
         }
@@ -285,8 +298,7 @@ class ProviderDetailViewModel(
         fun provideFactory(
             providerRepository: ProviderRepository,
             modelRepository: ModelRepository,
-            apiRepository: ApiRepository,
-            modelsDevRepository: ModelsDevRepository,
+            coreBridge: CoreBridge,
             providerId: String
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -294,8 +306,7 @@ class ProviderDetailViewModel(
                 return ProviderDetailViewModel(
                     providerRepository,
                     modelRepository,
-                    apiRepository,
-                    modelsDevRepository,
+                    coreBridge,
                     providerId
                 ) as T
             }

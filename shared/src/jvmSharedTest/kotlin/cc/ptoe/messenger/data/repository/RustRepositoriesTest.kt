@@ -250,6 +250,9 @@ class RustRepositoriesTest {
         override suspend fun cloudClearMarketLinksAndBuiltinProvider() {}
         override fun clearLocalDataForReinit() {}
 
+        override suspend fun discoverProviderModelsJson(baseUrl: String, apiKey: String, apiFormat: String?): String = "[]"
+        override suspend fun modelsDevMetadataJson(modelId: String): String? = null
+
         override fun cancelTurn() {}
         override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: (String, String) -> Pair<String, Boolean>, onEventJson: (String) -> Unit) {}
     }

@@ -18,7 +18,6 @@ package cc.ptoe.messenger.data.wear
 
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
-import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
@@ -121,246 +120,71 @@ class MobileWearChatHandler(private val app: AppContainer) {
             app.messageRepository.insert(assistantMessage)
 
             val bridge = app.coreBridge
-            if (bridge != null) {
-                val titleHolder = app.agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-                val config = TurnConfigBridge(
-                    conversationId = conversationId,
-                    modelId = activeModel.second.modelId,
-                    baseUrl = activeModel.first.baseUrl,
-                    apiKey = activeModel.first.apiKey,
-                    apiFormat = activeModel.first.apiFormat.requestFormat.wireName,
-                    systemPrompt = resolvedAgent.systemPrompt.orEmpty(),
-                    temperature = resolvedAgent.temperature.toDouble(),
-                    topP = resolvedAgent.topP.toDouble(),
-                    maxTokens = resolvedAgent.maxTokens?.toLong(),
-                    reasoningEffort = resolvedAgent.reasoningEffort,
-                    toolNames = emptyList(),
-                    writable = conversation.writable,
-                    contextWindow = activeModel.second.contextWindow,
-                    summarizePrompt = "Please summarize the conversation so far.",
-                    titleAgentId = titleHolder?.id,
-                    titleAgentSystemPrompt = titleHolder?.systemPrompt,
-                    titleAgentModelId = titleHolder?.defaultModelId,
-                    // The watch declares no tools at all (see toolNames), so it
-                    // has no workspace either.
-                    hasWorkspace = false,
-                    workspaceNote = ""
-                )
-
-                var currentContent = ""
-                try {
-                    bridge.runTurn(
-                        config = config,
-                        toolExecutor = { name, _ -> "Tool execution disabled on watch" to true },
-                        onEventJson = { eventJson ->
-                            val root = try {
-                                NetworkClient.json.parseToJsonElement(eventJson).jsonObject
-                            } catch (_: Exception) {
-                                return@runTurn
-                            }
-                            val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
-                            when (type) {
-                                "TextDelta" -> {
-                                    val delta = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                    currentContent += delta
-                                    frame("chat_delta") { put("delta", delta) }
-                                }
-                                "Finished" -> {
-                                    frame("chat_done") {
-                                        put("content", currentContent)
-                                        put("userMessageId", userMessage.id)
-                                        put("assistantMessageId", assistantMessage.id)
-                                    }
-                                }
-                                "Error" -> {
-                                    val msg = root["message"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
-                                    if (currentContent.isNotBlank()) {
-                                        frame("chat_done") {
-                                            put("content", currentContent)
-                                            put("userMessageId", userMessage.id)
-                                            put("assistantMessageId", assistantMessage.id)
-                                        }
-                                        frame("chat_error") { put("error", msg) }
-                                    } else {
-                                        frame("chat_error") { put("error", msg) }
-                                    }
-                                }
-                            }
-                        }
-                    )
-                } catch (e: Exception) {
-                    val msg = e.message ?: "Failed to generate response."
-                    frame("chat_error") { put("error", msg) }
-                }
-                return
-            }
-
-            val history = app.messageRepository.getByConversationId(conversationId).first()
-                .filter {
-                    it.role != MessageRole.SYSTEM &&
-                        it.status != MessageStatus.ERROR &&
-                        it.status != MessageStatus.SENDING
-                }
+            val titleHolder = app.agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
+            val config = TurnConfigBridge(
+                conversationId = conversationId,
+                modelId = activeModel.second.modelId,
+                baseUrl = activeModel.first.baseUrl,
+                apiKey = activeModel.first.apiKey,
+                apiFormat = activeModel.first.apiFormat.requestFormat.wireName,
+                systemPrompt = resolvedAgent.systemPrompt.orEmpty(),
+                temperature = resolvedAgent.temperature.toDouble(),
+                topP = resolvedAgent.topP.toDouble(),
+                maxTokens = resolvedAgent.maxTokens?.toLong(),
+                reasoningEffort = resolvedAgent.reasoningEffort,
+                toolNames = emptyList(),
+                writable = conversation.writable,
+                contextWindow = activeModel.second.contextWindow,
+                summarizePrompt = "Please summarize the conversation so far.",
+                titleAgentId = titleHolder?.id,
+                titleAgentSystemPrompt = titleHolder?.systemPrompt,
+                titleAgentModelId = titleHolder?.defaultModelId,
+                // The watch declares no tools at all (see toolNames), so it
+                // has no workspace either.
+                hasWorkspace = false,
+                workspaceNote = ""
+            )
 
             var currentContent = ""
-            var hasFinished = false
-            var detectedFormat: String? = conversation.reasoningFormat
-            try {
-                app.apiRepository.streamChatCompletion(
-                    provider = activeModel.first,
-                    modelId = activeModel.second.modelId,
-                    messages = history,
-                    systemPrompt = resolvedAgent.systemPrompt,
-                    temperature = resolvedAgent.temperature,
-                    topP = resolvedAgent.topP,
-                    maxTokens = resolvedAgent.maxTokens,
-                    reasoningEffort = resolvedAgent.reasoningEffort,
-                    reasoningFormat = detectedFormat
-                ).collect { event ->
-                    when (event) {
-                        is ChatStreamEvent.ReasoningDetected -> {
-                            if (detectedFormat == null) {
-                                detectedFormat = event.format
-                            }
+            bridge.runTurn(
+                config = config,
+                toolExecutor = { _, _ -> "Tool execution disabled on watch" to true },
+                onEventJson = { eventJson ->
+                    val root = try {
+                        NetworkClient.json.parseToJsonElement(eventJson).jsonObject
+                    } catch (_: Exception) {
+                        return@runTurn
+                    }
+                    val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
+                    when (type) {
+                        "TextDelta" -> {
+                            val delta = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                            currentContent += delta
+                            frame("chat_delta") { put("delta", delta) }
                         }
-                        is ChatStreamEvent.Content -> {
-                            currentContent += event.text
-                            app.messageRepository.update(
-                                assistantMessage.copy(content = currentContent)
-                            )
-                            frame("chat_delta") { put("delta", event.text) }
-                        }
-                        is ChatStreamEvent.Done -> {
-                            hasFinished = true
-                            if (detectedFormat == null && currentContent.contains("<think")) {
-                                detectedFormat = "think_tag"
-                            }
-                            app.messageRepository.update(
-                                assistantMessage.copy(
-                                    content = currentContent,
-                                    status = MessageStatus.SENT
-                                )
-                            )
-                            app.conversationRepository.update(
-                                conversation.copy(
-                                    lastMessage = currentContent,
-                                    updatedAt = System.currentTimeMillis(),
-                                    reasoningFormat = detectedFormat ?: conversation.reasoningFormat
-                                )
-                            )
-                            if (currentContent.isNotBlank()) {
-                                // 首轮回复完成 → 与手机端一致地为未命名对话生成标题
-                                app.conversationTitleGenerator.launchGenerateIfNeeded(
-                                    conversationId,
-                                    activeModel.first,
-                                    activeModel.second
-                                )
-                            }
+                        "Finished" -> {
                             frame("chat_done") {
                                 put("content", currentContent)
                                 put("userMessageId", userMessage.id)
                                 put("assistantMessageId", assistantMessage.id)
                             }
                         }
-                        is ChatStreamEvent.Error -> {
-                            hasFinished = true
+                        "Error" -> {
+                            val msg = root["message"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
                             if (currentContent.isNotBlank()) {
-                                app.messageRepository.update(
-                                    assistantMessage.copy(
-                                        content = currentContent,
-                                        status = MessageStatus.SENT
-                                    )
-                                )
-                                app.conversationRepository.update(
-                                    conversation.copy(
-                                        lastMessage = currentContent,
-                                        updatedAt = System.currentTimeMillis(),
-                                        reasoningFormat = detectedFormat ?: conversation.reasoningFormat
-                                    )
-                                )
                                 frame("chat_done") {
                                     put("content", currentContent)
                                     put("userMessageId", userMessage.id)
                                     put("assistantMessageId", assistantMessage.id)
                                 }
-                                frame("chat_error") { put("error", event.message) }
-                            } else {
-                                app.messageRepository.update(
-                                    assistantMessage.copy(
-                                        content = currentContent,
-                                        status = MessageStatus.ERROR,
-                                        errorMessage = event.message
-                                    )
-                                )
-                                app.conversationRepository.update(
-                                    conversation.copy(
-                                        lastMessage = text,
-                                        updatedAt = System.currentTimeMillis(),
-                                        reasoningFormat = detectedFormat ?: conversation.reasoningFormat
-                                    )
-                                )
-                                frame("chat_error") { put("error", event.message) }
                             }
+                            frame("chat_error") { put("error", msg) }
                         }
                     }
                 }
-                if (!hasFinished) {
-                    val msg = "API 未返回有效数据，请检查 API 配置和参数"
-                    if (currentContent.isNotBlank()) {
-                        app.messageRepository.update(
-                            assistantMessage.copy(
-                                content = currentContent,
-                                status = MessageStatus.SENT
-                            )
-                        )
-                        app.conversationRepository.update(
-                            conversation.copy(
-                                lastMessage = currentContent,
-                                updatedAt = System.currentTimeMillis(),
-                                reasoningFormat = detectedFormat ?: conversation.reasoningFormat
-                            )
-                        )
-                        frame("chat_done") {
-                            put("content", currentContent)
-                            put("userMessageId", userMessage.id)
-                            put("assistantMessageId", assistantMessage.id)
-                        }
-                        frame("chat_error") { put("error", msg) }
-                    } else {
-                        app.messageRepository.update(
-                            assistantMessage.copy(
-                                content = currentContent,
-                                status = MessageStatus.ERROR,
-                                errorMessage = msg
-                            )
-                        )
-                        frame("chat_error") { put("error", msg) }
-                    }
-                }
-            } catch (e: Exception) {
-                if (currentContent.isNotBlank()) {
-                    app.messageRepository.update(
-                        assistantMessage.copy(
-                            content = currentContent,
-                            status = MessageStatus.SENT
-                        )
-                    )
-                    app.conversationRepository.update(
-                        conversation.copy(
-                            lastMessage = currentContent,
-                            updatedAt = System.currentTimeMillis(),
-                            reasoningFormat = detectedFormat ?: conversation.reasoningFormat
-                        )
-                    )
-                    frame("chat_done") {
-                        put("content", currentContent)
-                        put("userMessageId", userMessage.id)
-                        put("assistantMessageId", assistantMessage.id)
-                    }
-                }
-                frame("chat_error") { put("error", e.message ?: "Unknown error") }
-            }
+            )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             frame("chat_error") { put("error", e.message ?: "Unknown error") }
         }
     }

@@ -569,6 +569,40 @@ impl CoreHandle {
         Ok(count as u32)
     }
 
+    /// `GET /models` for one provider plus models.dev enrichment. Returns a
+    /// JSON array of `DiscoveredModel`; nothing is written to the store —
+    /// the caller picks which rows to insert.
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn discover_provider_models_json(
+        &self,
+        base_url: String,
+        api_key: String,
+        api_format: Option<String>,
+    ) -> Result<String, CoreError> {
+        let discovered = messenger_sync::discover_provider_models(
+            &base_url,
+            &api_key,
+            api_format.as_deref(),
+        )
+        .await
+        .map_err(|detail| CoreError::Generic { detail })?;
+        let enriched = messenger_sync::enrich_with_models_dev(&self.store, discovered).await;
+        serde_json::to_string(&enriched).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    /// models.dev metadata for one model id (fills a manually added row).
+    /// Returns `null` when models.dev has no record.
+    #[uniffi::method(async_runtime = "tokio")]
+    pub async fn models_dev_metadata_json(&self, model_id: String) -> Result<Option<String>, CoreError> {
+        let metadata = messenger_sync::models_dev_metadata(&self.store, &model_id).await;
+        match metadata {
+            Some(model) => serde_json::to_string(&model)
+                .map(Some)
+                .map_err(|e| CoreError::Generic { detail: e.to_string() }),
+            None => Ok(None),
+        }
+    }
+
     #[uniffi::method(async_runtime = "tokio")]
     pub async fn cloud_list_market_agents(&self, query: String, cursor: Option<String>) -> Result<String, CoreError> {
         let engine = self.sync_engine();

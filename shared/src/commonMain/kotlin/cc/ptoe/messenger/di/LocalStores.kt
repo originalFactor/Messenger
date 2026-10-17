@@ -21,10 +21,11 @@ import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.domain.repository.CloudFacade
 
 /**
- * The platform's durable local stores: the cloud facade plus the two
- * preferences stores. Android/Desktop back this with Room + an on-disk
- * DataStore; web backs it with the Rust core's SQLite-on-OPFS store and an
- * OPFS preferences DataStore.
+ * The platform's local stores: the cloud facade (always the Rust-backed
+ * [cc.ptoe.messenger.data.cloud.RustCloudFacade]) plus the two preferences
+ * stores. Durable entity data lives in the Rust core on every platform; only
+ * the preferences DataStore is platform-specific (a file on Android/Desktop,
+ * OPFS in the browser).
  */
 open class LocalStores(
     val cloud: CloudFacade,

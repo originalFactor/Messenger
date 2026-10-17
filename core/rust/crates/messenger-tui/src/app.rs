@@ -2101,7 +2101,7 @@ impl App {
                         .list_models_by_provider(&provider.id)
                         .unwrap_or_default();
                     let mut added = 0usize;
-                    for entry in response.data {
+                    for entry in response.entries() {
                         let id = format!("{}:{}", provider.id, entry.id);
                         let previous = existing.iter().find(|model| model.id == id);
                         let model = StoredModel {

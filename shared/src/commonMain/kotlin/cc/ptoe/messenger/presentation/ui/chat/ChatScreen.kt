@@ -120,11 +120,9 @@ fun ChatScreen(
             messageRepository = AppContainerHolder.instance.messageRepository,
             conversationRepository = AppContainerHolder.instance.conversationRepository,
             agentRepository = AppContainerHolder.instance.agentRepository,
-            apiRepository = AppContainerHolder.instance.apiRepository,
             modelRepository = AppContainerHolder.instance.modelRepository,
             providerRepository = AppContainerHolder.instance.providerRepository,
             chatImageStore = AppContainerHolder.instance.chatImageStore,
-            conversationTitleGenerator = AppContainerHolder.instance.conversationTitleGenerator,
             builtinTools = { workspace -> AppContainerHolder.instance.availableTools(workspace) },
             projectRepository = AppContainerHolder.instance.projectRepository
         )

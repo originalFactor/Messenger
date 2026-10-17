@@ -48,7 +48,7 @@ interface ChatImageStore {
     /**
      * Drops cached bitmaps for message ids that no longer appear in
      * the conversation. Called by
-     * [cc.ptoe.messenger.data.repository.MessageRepositoryImpl] after
+     * [cc.ptoe.messenger.data.repository.RustMessageRepository] after
      * a delete; the chat screen doesn't need to invoke it directly.
      */
     fun deleteIfExists(path: String?)

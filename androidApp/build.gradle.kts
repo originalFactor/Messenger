@@ -109,6 +109,5 @@ dependencies {
     implementation(libs.coil3.compose)
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
-    implementation(libs.androidx.room.runtime)
     implementation(libs.ktor.client.core)
 }

@@ -223,7 +223,7 @@ class RustCloudFacade(
 
     /**
      * The debounce lives here on purpose: the Rust core has no scheduler.
-     * Mirrors `CloudSyncRepository.requestLocalSync` (750 ms, then push).
+     * Debounced local-change sync (750 ms, then push).
      */
     override fun requestLocalSync() {
         scheduledSync?.cancel()

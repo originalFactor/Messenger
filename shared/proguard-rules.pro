@@ -6,27 +6,14 @@
 # ---------------------------------------------------------------------------
 
 # --- Annotations / signatures / inner-class metadata -----------------------
-# Gson needs Signature to resolve generic types; Retrofit & Room need
-# RuntimeVisibleAnnotations to read @POST/@Query/@Entity etc.
+# Gson needs Signature to resolve generic types; Retrofit needs
+# RuntimeVisibleAnnotations to read @POST/@Query etc.
 -keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations
 -keepattributes RuntimeVisibleParameterAnnotations,RuntimeInvisibleParameterAnnotations
 -keepattributes Signature,InnerClasses,EnclosingMethod
 -keepattributes AnnotationDefault,Exceptions,Deprecated
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
-
-# ===========================================================================
-# Room
-# ===========================================================================
--keep class cc.ptoe.messenger.data.local.MessengerDatabase { *; }
--keep class cc.ptoe.messenger.data.local.MessengerDatabase_* { *; }
--keep class * extends androidx.room.RoomDatabase { *; }
--keep interface cc.ptoe.messenger.data.local.dao.* { *; }
--keep @androidx.room.Entity class * { *; }
--keep class androidx.room.RoomSQLiteQuery { *; }
--keep class * extends androidx.room.util.ShortcutUtil { *; }
--dontwarn androidx.room.**
--dontwarn androidx.room.paging.**
 
 # ===========================================================================
 # Cloud authentication and sync models (serialized reflectively via Gson)

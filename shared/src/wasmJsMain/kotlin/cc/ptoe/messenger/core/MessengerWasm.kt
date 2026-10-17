@@ -131,6 +131,16 @@ external class WasmCoreJs {
     fun cloud_redeem_card(code: String): JsAny
     fun cloud_sync_builtin_models(force: Boolean): JsAny
 
+    /** Provider model discovery + models.dev enrichment (JSON array). */
+    fun discover_provider_models_json(
+        baseUrl: String,
+        apiKey: String,
+        apiFormat: String?
+    ): JsAny
+
+    /** models.dev metadata for one model id; resolves `undefined` when unknown. */
+    fun models_dev_metadata_json(modelId: String): JsAny
+
     fun cloud_list_market_agents(query: String, cursor: String?): JsAny
     fun cloud_get_market_agent(id: String): JsAny
     fun cloud_publish_market_agent(agentId: String): JsAny

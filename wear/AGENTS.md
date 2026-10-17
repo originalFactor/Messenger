@@ -31,7 +31,7 @@ When investigating:
 
 1. Reproduce from a clean run: `./gradlew --no-daemon :wear:assembleRelease --rerun-tasks`.
 2. Inspect `wear/build/outputs/mapping/release/`: `mapping.txt` (survivors + obfuscated names), `usage.txt` (removed classes/members — a member under a surviving class is optimized, not removed), `seeds.txt` (keep-rule matches, not proof of APK presence), `configuration.txt` (effective rules incl. consumer rules).
-3. Compare with the final APK (APK Analyzer / `apkanalyzer`). Watch Manifest components, Room's `MessengerDatabase_Impl` + DAOs, Retrofit interfaces, Gson DTOs, and `WearNetworkBridge` WebSocket/NSD callbacks.
+3. Compare with the final APK (APK Analyzer / `apkanalyzer`). Watch Manifest components, the UniFFI-generated `cc.ptoe.messenger.core` classes + JNA, Gson DTOs, and `WearNetworkBridge` WebSocket/NSD callbacks.
 4. Identify the reflective/serialized entry point before adding a rule. Preserve only the smallest scope; keep annotations/signature metadata when a library reads them (`RuntimeVisibleAnnotations`, `Signature`, …).
 5. Rebuild and confirm the rule in `configuration.txt`, the class in `usage.txt`/`mapping.txt`, and its presence in the APK. Never `-keep class ** { *; }`.
 6. If unclear, temporarily add `-whyareyoukeeping class <FQN>`, read the reason chain, remove the diagnostic rule afterwards.

@@ -99,6 +99,21 @@ interface CoreBridge {
     suspend fun cloudPreviewCard(code: String): String
     suspend fun cloudRedeemCard(code: String): String
     suspend fun cloudSyncBuiltinModels(force: Boolean): Long
+
+    /**
+     * `GET /models` for one provider, enriched with models.dev metadata.
+     * Returns a JSON array of `DiscoveredModel`; nothing is persisted — the
+     * caller chooses which rows to insert. Rust owns both steps so every
+     * platform discovers models identically.
+     */
+    suspend fun discoverProviderModelsJson(
+        baseUrl: String,
+        apiKey: String,
+        apiFormat: String?
+    ): String
+
+    /** models.dev metadata for one model id (JSON), or null when unknown. */
+    suspend fun modelsDevMetadataJson(modelId: String): String?
     suspend fun cloudListMarketAgents(query: String, cursor: String?): String
     suspend fun cloudGetMarketAgent(id: String): String
     suspend fun cloudPublishMarketAgent(agentId: String): String
