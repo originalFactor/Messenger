@@ -134,6 +134,8 @@ fn read_providers(legacy: &Connection) -> Result<Vec<StoredProvider>, rusqlite::
             name: row.get(1)?,
             base_url: row.get(2)?,
             api_key: row.get(3)?,
+            // Legacy Room rows predate the protocol column: Chat Completions.
+            api_format: "chat".to_string(),
             created_at: row.get(4)?,
             updated_at: row.get(5)?,
         })

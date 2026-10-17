@@ -117,6 +117,7 @@ fn seeded_store() -> Store {
             name: "test".into(),
             base_url: "unused".into(),
             api_key: "sk".into(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })
@@ -197,6 +198,7 @@ fn turn_request(base_url: &str) -> TurnRequest {
         model_id: "test-model".into(),
         base_url: base_url.to_string(),
         api_key: "sk".into(),
+        api_format: messenger_llm::ApiFormat::Chat,
         system_prompt: "be helpful".into(),
         temperature: Some(0.7),
         top_p: Some(0.9),
@@ -525,4 +527,54 @@ fn usage_chunk(prompt: i64, completion: i64, cached: i64) -> String {
         }
     });
     format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap())
+}
+
+/// The Messages protocol path: the same turn loop, but the upstream speaks
+/// Anthropic's SSE event names and the request goes to `/v1/messages`.
+#[tokio::test]
+async fn turn_runs_against_a_messages_protocol_upstream() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/messages"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_string(
+                [
+                    r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0}}}"#,
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pondering"}}"#,
+                    r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Done."}}"#,
+                    r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+                    r#"{"type":"message_stop"}"#,
+                ]
+                .iter()
+                .map(|payload| format!("data: {payload}\n\n"))
+                .collect::<String>(),
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    let mut request = turn_request(&server.uri());
+    request.api_format = messenger_llm::ApiFormat::Messages;
+    run_chat_turn(
+        &store,
+        &StaticToolHost,
+        &sink,
+        &request,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let messages = store.list_messages_by_conversation("c1").unwrap();
+    let final_row = messages.last().unwrap();
+    assert_eq!(final_row.role, "assistant");
+    assert_eq!(final_row.content, "<think>pondering</think>\nDone.");
+    assert!(
+        sink.0
+            .lock()
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ReasoningFormatDetected { format } if format == "reasoning_summary"))
+    );
 }

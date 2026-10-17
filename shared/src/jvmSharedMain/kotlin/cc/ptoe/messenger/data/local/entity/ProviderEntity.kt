@@ -25,6 +25,8 @@ data class ProviderEntity(
     val name: String,
     val baseUrl: String,
     val apiKey: String,
+    /** Conversation protocol (`chat` / `responses` / `messages` / `interactions`). */
+    val apiFormat: String = "chat",
     val createdAt: Long,
     val updatedAt: Long
 )

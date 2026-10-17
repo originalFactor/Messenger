@@ -170,6 +170,8 @@ internal data class CloudProviderRequest(
     val name: String,
     val baseUrl: String,
     val apiKey: String,
+    /** Conversation protocol; always sent (never defaulted away). */
+    val apiFormat: String,
     val models: List<CloudModelRequest>,
     val createdAt: Long,
     val updatedAt: Long

@@ -60,7 +60,8 @@ actual fun createLocalStores(appDirs: AppDirs): LocalStores {
             MessengerDatabase.MIGRATION_17_18,
             MessengerDatabase.MIGRATION_18_19,
             MessengerDatabase.MIGRATION_19_20,
-            MessengerDatabase.MIGRATION_20_21
+            MessengerDatabase.MIGRATION_20_21,
+            MessengerDatabase.MIGRATION_21_22
         )
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()

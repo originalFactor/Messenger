@@ -446,6 +446,7 @@ pub fn resolve_turn(
             model_id: model.model_id.clone(),
             base_url: provider.base_url.clone(),
             api_key,
+            api_format: messenger_llm::ApiFormat::from_store(Some(provider.api_format.as_str())),
             system_prompt: effective.system_prompt.clone(),
             temperature: effective.temperature,
             top_p: effective.top_p,

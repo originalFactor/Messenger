@@ -85,6 +85,8 @@ pub struct TurnRequest {
     pub model_id: String,
     pub base_url: String,
     pub api_key: String,
+    /// Wire protocol the provider speaks (`Provider.apiFormat`).
+    pub api_format: messenger_llm::ApiFormat,
     pub system_prompt: String,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -165,7 +167,7 @@ pub async fn run_chat_turn(
         message_id: placeholder_id.clone(),
     });
 
-    let client = OpenAiClient::new(&request.base_url, &request.api_key);
+    let client = OpenAiClient::with_format(&request.base_url, &request.api_key, request.api_format);
     let mut current_content = String::new();
     let mut round: u32 = 0;
     // Every round's provider-reported usage, summed for the turn. Tool rounds
@@ -477,7 +479,7 @@ async fn maybe_summarize_context(
         &to_summarize,
     );
 
-    let client = OpenAiClient::new(&request.base_url, &request.api_key);
+    let client = OpenAiClient::with_format(&request.base_url, &request.api_key, request.api_format);
     let params = ChatTurnParams {
         temperature: Some(0.3),
         top_p: Some(1.0),

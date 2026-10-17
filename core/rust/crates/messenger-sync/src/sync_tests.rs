@@ -58,6 +58,7 @@ fn delta_body() -> serde_json::Value {
         ],
         "providers": [
             {"_id": "p1", "name": "Cloud Provider", "baseUrl": "https://api", "apiKey": "k",
+             "apiFormat": "messages",
              "models": [{"id": "p1:m", "modelId": "m", "displayName": "m", "isEnabled": true}],
              "createdAt": 1, "updatedAt": 2, "version": 14},
             // Builtin provider never syncs — a remote copy is ignored.
@@ -210,7 +211,10 @@ async fn pull_applies_delta_with_guards() {
     assert_eq!(store.list_conversations_by_project("proj1").unwrap().len(), 1);
 
     // Provider models reinserted; builtin provider NOT created from the delta.
-    assert!(store.get_provider("p1").unwrap().is_some());
+    assert_eq!(
+        store.get_provider("p1").unwrap().unwrap().api_format,
+        "messages"
+    );
     assert_eq!(store.list_models_by_provider("p1").unwrap().len(), 1);
 
     // Builtin seeding: provider from the signed-in user's AI key, title agent

@@ -18,6 +18,7 @@ package cc.ptoe.messenger.data.repository
 
 import cc.ptoe.messenger.data.local.dao.ProviderDao
 import cc.ptoe.messenger.data.local.entity.ProviderEntity
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.flow.Flow
@@ -63,6 +64,7 @@ class ProviderRepositoryImpl(
             name = name,
             baseUrl = baseUrl,
             apiKey = apiKey,
+            apiFormat = ApiFormat.fromWireName(apiFormat),
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -74,6 +76,7 @@ class ProviderRepositoryImpl(
             name = name,
             baseUrl = baseUrl,
             apiKey = apiKey,
+            apiFormat = apiFormat.wireName,
             createdAt = createdAt,
             updatedAt = updatedAt
         )

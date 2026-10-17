@@ -106,6 +106,8 @@ pub struct TurnConfig {
     pub model_id: String,
     pub base_url: String,
     pub api_key: String,
+    /// Wire protocol: `chat` (default) / `responses` / `messages` / `interactions`.
+    pub api_format: String,
     pub system_prompt: String,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -900,6 +902,7 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
         model_id: config.model_id.clone(),
         base_url: config.base_url.clone(),
         api_key: config.api_key.clone(),
+        api_format: messenger_core::ApiFormat::from_store(Some(config.api_format.as_str())),
         system_prompt: config.system_prompt.clone(),
         temperature: config.temperature,
         top_p: config.top_p,

@@ -20,6 +20,10 @@ use messenger_markdown::StreamingSession;
 use messenger_store::model::{
     StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProvider,
 };
+
+/// Provider wire protocols selectable in the provider form; the value stored
+/// in `providers.apiFormat` is the lowercase name.
+const PROVIDER_PROTOCOLS: [&str; 5] = ["chat", "responses", "messages", "interactions", "auto"];
 use messenger_store::StoredProject;
 
 use crate::commands::{self, SLASH_COMMANDS};
@@ -399,6 +403,7 @@ impl App {
                     name: form.value("Name"),
                     base_url: form.value("Base URL"),
                     api_key: form.value("API key"),
+                    api_format: form.value("Protocol"),
                     created_at: existing.as_ref().map(|p| p.created_at).unwrap_or(now),
                     updated_at: now,
                 };
@@ -554,6 +559,9 @@ impl App {
                 let base_url = form.value("Base URL");
                 if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
                     return Some("Base URL must start with http:// or https://".into());
+                }
+                if !PROVIDER_PROTOCOLS.contains(&form.value("Protocol").as_str()) {
+                    return Some("Protocol must be chat, responses, messages, interactions or auto.".into());
                 }
                 None
             }
@@ -2322,6 +2330,18 @@ impl App {
                 Field::secret(
                     "API key",
                     existing.as_ref().map(|p| p.api_key.clone()).unwrap_or_default(),
+                ),
+                Field::choice(
+                    "Protocol",
+                    PROVIDER_PROTOCOLS.iter().map(|name| name.to_string()).collect(),
+                    existing
+                        .as_ref()
+                        .and_then(|p| {
+                            PROVIDER_PROTOCOLS
+                                .iter()
+                                .position(|name| *name == p.api_format)
+                        })
+                        .unwrap_or(0),
                 ),
             ],
         ));

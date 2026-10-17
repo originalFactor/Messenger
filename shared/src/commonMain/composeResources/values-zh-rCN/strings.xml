@@ -234,6 +234,7 @@
     <string name="providers_api_url_label">API 地址</string>
     <string name="providers_api_url_placeholder">https://api.openai.com/v1</string>
     <string name="providers_api_key_label">API Key</string>
+    <string name="providers_api_format_label">接口协议</string>
     <string name="providers_model_management">模型管理</string>
     <string name="providers_load_failed">加载失败</string>
     <string name="providers_no_models">暂无模型\n点击上方「同步模型」从 API 拉取\n或点击「手动添加」输入模型 ID</string>

@@ -25,7 +25,6 @@ import cc.ptoe.messenger.data.remote.dto.ToolCallFunctionDto
 import cc.ptoe.messenger.data.remote.dto.ToolSpecDto
 import cc.ptoe.messenger.data.remote.dto.ToolSpecFunctionDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
-import cc.ptoe.messenger.data.remote.sse.ChatStreamParser
 import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.ChatModel
@@ -59,7 +58,8 @@ class ApiRepositoryImpl(
     private val modelsDevRepository: ModelsDevRepository? = null
 ) : ApiRepository {
 
-    private fun openAiClient(provider: Provider) = OpenAiClient(provider.baseUrl, provider.apiKey)
+    private fun openAiClient(provider: Provider) =
+        OpenAiClient(provider.baseUrl, provider.apiKey, provider.apiFormat.requestFormat)
 
     override suspend fun fetchModels(provider: Provider): List<ChatModel> {
         return try {
@@ -118,8 +118,7 @@ class ApiRepositoryImpl(
                 tools = tools?.map { it.toToolSpecDto() },
                 stream = true
             )
-            val sseFlow = openAiClient(provider).createChatCompletionStream(request)
-            val eventFlow = ChatStreamParser.parseToEvents(sseFlow)
+            val eventFlow = openAiClient(provider).createChatCompletionStream(request)
             var hasFinished = false
             eventFlow.collect { event ->
                 if (event is ChatStreamEvent.Done || event is ChatStreamEvent.Error) {

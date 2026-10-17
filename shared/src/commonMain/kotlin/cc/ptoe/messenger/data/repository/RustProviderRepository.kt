@@ -19,6 +19,7 @@ package cc.ptoe.messenger.data.repository
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.StoredProviderDto
 import cc.ptoe.messenger.data.remote.NetworkClient
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.flow.Flow
@@ -82,6 +83,7 @@ class RustProviderRepository(
         name = name,
         baseUrl = baseUrl,
         apiKey = apiKey,
+        apiFormat = ApiFormat.fromWireName(apiFormat),
         createdAt = createdAt,
         updatedAt = updatedAt
     )
@@ -91,6 +93,7 @@ class RustProviderRepository(
         name = name,
         baseUrl = baseUrl,
         apiKey = apiKey,
+        apiFormat = apiFormat.wireName,
         createdAt = createdAt,
         updatedAt = updatedAt
     )

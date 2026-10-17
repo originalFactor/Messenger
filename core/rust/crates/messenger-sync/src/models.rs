@@ -242,6 +242,9 @@ pub struct CloudProviderDocument {
     pub base_url: String,
     #[serde(rename = "apiKey")]
     pub api_key: String,
+    /// Conversation protocol; absent on documents written by older clients.
+    #[serde(rename = "apiFormat")]
+    pub api_format: Option<String>,
     pub models: Vec<CloudModelDocument>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
@@ -560,6 +563,8 @@ pub struct CloudProviderRequest {
     pub base_url: String,
     #[serde(rename = "apiKey")]
     pub api_key: String,
+    #[serde(rename = "apiFormat")]
+    pub api_format: String,
     pub models: Vec<CloudModelDocument>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,

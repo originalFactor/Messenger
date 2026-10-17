@@ -20,12 +20,17 @@ import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionResponseDto
 import cc.ptoe.messenger.data.remote.dto.ModelsResponseDto
+import cc.ptoe.messenger.data.remote.format.ApiFormatRequests
+import cc.ptoe.messenger.data.remote.format.ApiFormatStreamParser
+import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.SSEParser
+import cc.ptoe.messenger.domain.model.ApiFormat
 import io.ktor.client.call.body
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
-import io.ktor.client.request.preparePost
+import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
@@ -34,37 +39,75 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.json.JsonObject
 
 import cc.ptoe.messenger.data.util.ioDispatcher
 
 /**
- * OpenAI-compatible API client backed by Ktor (replaces the Retrofit
- * interface). Non-2xx responses surface as
- * [io.ktor.client.plugins.ResponseException] (see `expectSuccess` in
- * [NetworkClient]); callers can read the error body from it.
+ * Provider client backed by Ktor. [format] selects the request path, extra
+ * auth headers, and the response/SSE decoding; callers only see the
+ * format-agnostic [ChatStreamEvent] flow.
+ *
+ * Non-2xx responses surface as [io.ktor.client.plugins.ResponseException]
+ * (see `expectSuccess` in [NetworkClient]); callers can read the error body
+ * from it.
  */
-class OpenAiClient(baseUrl: String, apiKey: String) {
+class OpenAiClient(
+    baseUrl: String,
+    apiKey: String,
+    val format: ApiFormat = ApiFormat.CHAT,
+) {
 
     private val client = NetworkClient.clientFor(baseUrl, apiKey)
     private val root = baseUrl.trimEnd('/')
+    private val apiKey = apiKey
 
     suspend fun getModels(): ModelsResponseDto =
-        client.get("$root/models").body()
-
-    suspend fun createChatCompletion(request: ChatCompletionRequestDto): ChatCompletionResponseDto =
-        client.post("$root/chat/completions") {
-            contentType(ContentType.Application.Json)
-            setBody(request)
+        client.get("$root/models") {
+            ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) ->
+                header(name, value)
+            }
         }.body()
 
-    /**
-     * Streams `chat/completions` and emits each raw SSE `data:` payload
-     * (including the terminal `[DONE]` sentinel) via [SSEParser].
-     */
-    fun createChatCompletionStream(request: ChatCompletionRequestDto): Flow<String> = flow {
-        client.preparePost("$root/chat/completions") {
+    suspend fun createChatCompletion(request: ChatCompletionRequestDto): ChatCompletionResponseDto {
+        val payload = client.post("$root${ApiFormatRequests.path(format)}") {
             contentType(ContentType.Application.Json)
-            setBody(request)
+            ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) ->
+                header(name, value)
+            }
+            setBody(ApiFormatRequests.encode(format, request))
+        }.body<JsonObject>()
+        return if (format == ApiFormat.CHAT) {
+            NetworkClient.json.decodeFromJsonElement(ChatCompletionResponseDto.serializer(), payload)
+        } else {
+            ApiFormatStreamParser.decodeCompletion(format, payload)
+        }
+    }
+
+    /**
+     * Streams one turn and emits the protocol-agnostic events. Chat
+     * Completions keeps its dedicated parser (it is the behavioral
+     * reference); the other formats decode through
+     * [ApiFormatStreamParser].
+     */
+    fun createChatCompletionStream(request: ChatCompletionRequestDto): Flow<ChatStreamEvent> = flow {
+        val sse = streamSse(request)
+        val events = if (format == ApiFormat.CHAT) {
+            cc.ptoe.messenger.data.remote.sse.ChatStreamParser.parseToEvents(sse)
+        } else {
+            ApiFormatStreamParser.parseToEvents(format, sse)
+        }
+        events.collect { emit(it) }
+    }.flowOn(ioDispatcher)
+
+    /** Raw SSE `data:` payloads (including the terminal `[DONE]`). */
+    fun streamSse(request: ChatCompletionRequestDto): Flow<String> = flow {
+        client.preparePost("$root${ApiFormatRequests.path(format)}") {
+            contentType(ContentType.Application.Json)
+            ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) ->
+                header(name, value)
+            }
+            setBody(ApiFormatRequests.encode(format, request))
             timeout {
                 // Reasoning models can think for minutes before the first
                 // token arrives — disable the overall request timeout.

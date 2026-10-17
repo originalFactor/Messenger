@@ -160,6 +160,8 @@ data class TurnConfigBridge(
     val modelId: String,
     val baseUrl: String,
     val apiKey: String,
+    /** Provider wire protocol: `chat` / `responses` / `messages` / `interactions`. */
+    val apiFormat: String,
     val systemPrompt: String,
     val temperature: Double?,
     val topP: Double?,
@@ -193,6 +195,7 @@ data class StoredProviderDto(
     val name: String,
     @SerialName("base_url") val baseUrl: String,
     @SerialName("api_key") val apiKey: String,
+    @SerialName("api_format") val apiFormat: String = "chat",
     @SerialName("created_at") val createdAt: Long,
     @SerialName("updated_at") val updatedAt: Long,
 )

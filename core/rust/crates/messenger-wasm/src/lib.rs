@@ -62,6 +62,10 @@ struct TurnConfig {
     base_url: String,
     #[serde(rename = "apiKey")]
     api_key: String,
+    /// Wire protocol: `chat` (default) / `responses` / `messages` /
+    /// `interactions`. Missing = Chat Completions.
+    #[serde(rename = "apiFormat")]
+    api_format: String,
     #[serde(rename = "systemPrompt")]
     system_prompt: String,
     temperature: Option<f64>,
@@ -97,6 +101,7 @@ impl Default for TurnConfig {
             model_id: String::new(),
             base_url: String::new(),
             api_key: String::new(),
+            api_format: String::new(),
             system_prompt: String::new(),
             temperature: None,
             top_p: None,
@@ -916,6 +921,7 @@ fn build_turn_request(config: &TurnConfig) -> TurnRequest {
         model_id: config.model_id.clone(),
         base_url: config.base_url.clone(),
         api_key: config.api_key.clone(),
+        api_format: messenger_core::ApiFormat::from_store(Some(config.api_format.as_str())),
         system_prompt: config.system_prompt.clone(),
         temperature: config.temperature,
         top_p: config.top_p,

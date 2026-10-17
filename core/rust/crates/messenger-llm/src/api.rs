@@ -8,7 +8,8 @@ use crate::client::{ApiError, ChatStream, OpenAiClient};
 use crate::domain::{ContentPart, Message, MessageRole};
 use crate::dto::ChatCompletionResponse;
 use crate::events::ChatStreamEvent;
-use crate::parser::ChatStreamParser;
+use crate::formats::{FormatStreamDecoder, decoded_to_message};
+
 use crate::request::{
     ChatCompletionRequest, WireMessage, build_reasoning_params, build_request_messages,
     build_tool_spec, extract_response_content,
@@ -82,15 +83,17 @@ pub async fn stream_chat_completion(
     params: &ChatTurnParams,
 ) -> ChatEventStream {
     let request = build_request(model_id, messages, params, true);
+    let format = client.format();
     match client.stream_chat_completion(&request).await {
-        Ok(stream) => ChatEventStream::live(stream),
+        Ok(stream) => ChatEventStream::live(stream, format),
         Err(e) => ChatEventStream::failed(api_error_message(e)),
     }
 }
 
 /// Non-streaming chat turn: returns the final assistant message with
 /// reasoning wrapped into a leading think block and multipart replies
-/// coerced to flat text (port of `createChatCompletion`).
+/// coerced to flat text (port of `createChatCompletion`). Works for every
+/// wire format because the client decodes into the same reply shape.
 pub async fn create_chat_completion(
     client: &OpenAiClient,
     model_id: &str,
@@ -98,11 +101,11 @@ pub async fn create_chat_completion(
     params: &ChatTurnParams,
 ) -> Result<Message, String> {
     let request = build_request(model_id, messages, params, false);
-    let response = client
-        .create_chat_completion(&request)
+    let decoded = client
+        .create_completion(&request)
         .await
         .map_err(api_error_message)?;
-    Ok(response_to_assistant_message(response))
+    Ok(decoded_to_message(decoded))
 }
 
 /// Port of the non-streaming response coercion: first choice required,
@@ -156,17 +159,17 @@ fn api_error_message(e: ApiError) -> String {
 /// without Done/Error emits the [`ERROR_STREAM_NO_DATA`] sentinel error.
 pub struct ChatEventStream {
     inner: Option<ChatStream>,
-    parser: ChatStreamParser,
+    parser: FormatStreamDecoder,
     pending: std::collections::VecDeque<ChatStreamEvent>,
     has_finished: bool,
     startup_error: Option<String>,
 }
 
 impl ChatEventStream {
-    fn live(stream: ChatStream) -> Self {
+    fn live(stream: ChatStream, format: crate::formats::ApiFormat) -> Self {
         Self {
             inner: Some(stream),
-            parser: ChatStreamParser::new(),
+            parser: FormatStreamDecoder::new(format),
             pending: std::collections::VecDeque::new(),
             has_finished: false,
             startup_error: None,
@@ -176,7 +179,7 @@ impl ChatEventStream {
     fn failed(message: String) -> Self {
         Self {
             inner: None,
-            parser: ChatStreamParser::new(),
+            parser: FormatStreamDecoder::new(crate::formats::ApiFormat::Chat),
             pending: std::collections::VecDeque::new(),
             has_finished: true,
             startup_error: Some(message),
@@ -204,6 +207,14 @@ impl ChatEventStream {
                 }
                 Ok(None) => {
                     self.inner = None;
+                    // A clean EOF only counts as completion when the decoder
+                    // already saw its terminal event; otherwise the sentinel
+                    // error below fires.
+                    let trailing = self.parser.finish_on_eof();
+                    if !trailing.is_empty() {
+                        self.pending.extend(trailing);
+                        continue;
+                    }
                     if !self.has_finished {
                         // Stream ended without Done or Error — emit the
                         // proactive error (engineering convention 2).

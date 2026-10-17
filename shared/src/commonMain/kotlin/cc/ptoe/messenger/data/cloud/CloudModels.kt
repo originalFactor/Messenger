@@ -178,6 +178,8 @@ data class CloudProviderDocument(
     val name: String = "",
     val baseUrl: String = "",
     val apiKey: String = "",
+    /** Conversation protocol; absent on documents written by older clients. */
+    val apiFormat: String = "chat",
     val models: List<CloudModelDocument> = emptyList(),
     val createdAt: Long = 0,
     val updatedAt: Long = 0,

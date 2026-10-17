@@ -26,6 +26,7 @@ import cc.ptoe.messenger.core.StoredProjectDto
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Conversation
 import cc.ptoe.messenger.domain.model.Project
@@ -276,8 +277,9 @@ class RustRepositoriesTest {
         assertNotNull(fetched)
         assertEquals("sk-test", fetched.apiKey)
 
-        repo.update(provider.copy(name = "OpenAI Updated"))
+        repo.update(provider.copy(name = "OpenAI Updated", apiFormat = ApiFormat.MESSAGES))
         assertEquals("OpenAI Updated", repo.getById("p1").first()?.name)
+        assertEquals(ApiFormat.MESSAGES, repo.getById("p1").first()?.apiFormat)
 
         repo.delete("p1")
         assertTrue(repo.getAll().first().isEmpty())

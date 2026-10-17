@@ -4,6 +4,9 @@
 //! and localized strings are the platform's job.
 
 pub mod agent;
+/// Re-exported so the FFI/wasm boundaries and the TUI can name the wire
+/// protocol without depending on `messenger-llm` directly.
+pub use messenger_llm::ApiFormat;
 #[cfg(test)]
 mod agent_tests;
 pub mod context;

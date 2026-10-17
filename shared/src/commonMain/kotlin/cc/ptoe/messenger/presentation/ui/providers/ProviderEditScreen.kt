@@ -29,7 +29,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,12 +56,14 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.presentation.viewmodel.ProviderEditViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_hide
 import cc.ptoe.messenger.generated.resources.action_save
 import cc.ptoe.messenger.generated.resources.action_show
+import cc.ptoe.messenger.generated.resources.providers_api_format_label
 import cc.ptoe.messenger.generated.resources.providers_api_key_label
 import cc.ptoe.messenger.generated.resources.providers_api_url_label
 import cc.ptoe.messenger.generated.resources.providers_api_url_placeholder
@@ -207,6 +213,68 @@ fun ProviderEditScreen(
                     },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                ApiFormatDropdown(
+                    selected = uiState.apiFormat,
+                    onSelect = viewModel::onApiFormatChange
+                )
+            }
+        }
+    }
+}
+
+/** Protocol labels: the API name itself is the clearest description. */
+private val apiFormatOptions = listOf(
+    ApiFormat.CHAT to "Chat Completions",
+    ApiFormat.RESPONSES to "Responses",
+    ApiFormat.MESSAGES to "Messages",
+    ApiFormat.INTERACTIONS to "Interactions",
+    ApiFormat.AUTO to "Auto (follow request)"
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ApiFormatDropdown(
+    selected: ApiFormat,
+    onSelect: (ApiFormat) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayText = apiFormatOptions.find { it.first == selected }?.second
+        ?: apiFormatOptions.first().second
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = displayText,
+            onValueChange = { },
+            readOnly = true,
+            label = { Text(stringResource(Res.string.providers_api_format_label)) },
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+            },
+            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+                .fillMaxWidth()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            apiFormatOptions.forEach { (format, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(format)
+                        expanded = false
+                    }
                 )
             }
         }

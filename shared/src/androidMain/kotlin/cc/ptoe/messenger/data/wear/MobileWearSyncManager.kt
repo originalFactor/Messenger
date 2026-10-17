@@ -128,6 +128,7 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     modelId = activeModel.second.modelId,
                     baseUrl = activeModel.first.baseUrl,
                     apiKey = activeModel.first.apiKey,
+                    apiFormat = activeModel.first.apiFormat.requestFormat.wireName,
                     systemPrompt = resolvedAgent.systemPrompt.orEmpty(),
                     temperature = resolvedAgent.temperature.toDouble(),
                     topP = resolvedAgent.topP.toDouble(),

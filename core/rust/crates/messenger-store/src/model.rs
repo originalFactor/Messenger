@@ -11,8 +11,17 @@ pub struct StoredProvider {
     pub name: String,
     pub base_url: String,
     pub api_key: String,
+    /// Conversation protocol: `chat` (default) / `responses` / `messages` /
+    /// `interactions` / `auto`. `auto` only exists in the cloud document; a
+    /// turn resolves it to `chat` (the client is the one picking the format).
+    #[serde(default = "default_api_format")]
+    pub api_format: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+fn default_api_format() -> String {
+    "chat".to_string()
 }
 
 /// `models` row (one available model under a provider).

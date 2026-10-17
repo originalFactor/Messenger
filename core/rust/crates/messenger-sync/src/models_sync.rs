@@ -113,6 +113,7 @@ mod tests {
                 name: "Builtin".into(),
                 base_url: format!("{}/v1", server.uri()),
                 api_key: "sk-test".into(),
+                api_format: "chat".into(),
                 created_at: 1,
                 updated_at: 1,
             })

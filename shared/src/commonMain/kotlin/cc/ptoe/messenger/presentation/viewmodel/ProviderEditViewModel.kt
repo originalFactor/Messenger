@@ -20,6 +20,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import kotlinx.coroutines.Job
@@ -42,6 +43,7 @@ data class ProviderEditUiState(
     val name: String = "",
     val baseUrl: String = "",
     val apiKey: String = "",
+    val apiFormat: ApiFormat = ApiFormat.CHAT,
     val nameError: String? = null,
     val baseUrlError: String? = null,
     val apiKeyError: String? = null,
@@ -107,6 +109,7 @@ class ProviderEditViewModel(
                         name = provider.name,
                         baseUrl = provider.baseUrl,
                         apiKey = provider.apiKey,
+                        apiFormat = provider.apiFormat,
                         isEditing = true
                     )
                 }
@@ -133,6 +136,10 @@ class ProviderEditViewModel(
             apiKey = apiKey,
             apiKeyError = null
         )
+    }
+
+    fun onApiFormatChange(apiFormat: ApiFormat) {
+        _uiState.value = _uiState.value.copy(apiFormat = apiFormat)
     }
 
     fun save(): Boolean {
@@ -177,6 +184,7 @@ class ProviderEditViewModel(
                         name = currentState.name.trim(),
                         baseUrl = currentState.baseUrl.trim(),
                         apiKey = currentState.apiKey.trim(),
+                        apiFormat = currentState.apiFormat,
                         updatedAt = now
                     )
                     providerRepository.update(updatedProvider)
@@ -188,6 +196,7 @@ class ProviderEditViewModel(
                     name = currentState.name.trim(),
                     baseUrl = currentState.baseUrl.trim(),
                     apiKey = currentState.apiKey.trim(),
+                    apiFormat = currentState.apiFormat,
                     createdAt = now,
                     updatedAt = now
                 )

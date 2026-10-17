@@ -150,6 +150,17 @@ pub fn provider_document_to_row(doc: &CloudProviderDocument) -> StoredProvider {
         name: doc.name.clone(),
         base_url: doc.base_url.clone(),
         api_key: doc.api_key.clone(),
+        // Preserve the cloud value verbatim (including `auto`, which the
+        // server resolves against the calling client's protocol); turns
+        // resolve `auto` to Chat Completions via `ApiFormat::from_store`.
+        api_format: match doc.api_format.as_deref() {
+            Some("responses") => "responses",
+            Some("messages") => "messages",
+            Some("interactions") => "interactions",
+            Some("auto") => "auto",
+            _ => "chat",
+        }
+        .to_string(),
         created_at: doc.created_at,
         updated_at: doc.updated_at,
     }
@@ -254,6 +265,7 @@ pub fn provider_row_to_request(row: &StoredProvider, models: &[StoredModel]) -> 
         name: row.name.clone(),
         base_url: row.base_url.clone(),
         api_key: row.api_key.clone(),
+        api_format: row.api_format.clone(),
         models: models
             .iter()
             .map(|m| CloudModelDocument {

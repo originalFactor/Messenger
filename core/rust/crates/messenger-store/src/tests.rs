@@ -17,6 +17,7 @@ fn sample_provider(id: &str) -> StoredProvider {
         name: "OpenRouter".into(),
         base_url: "https://openrouter.ai/api/v1".into(),
         api_key: "sk-test".into(),
+        api_format: "chat".into(),
         created_at: 1_000,
         updated_at: 1_000,
     }
@@ -527,4 +528,54 @@ fn legacy_import_without_db_records_marker() {
     let summary = import_legacy(&store, dir.path(), 1).unwrap();
     assert!(summary.is_none());
     assert!(store.kv_get(IMPORT_MARKER).unwrap().is_some());
+}
+
+#[test]
+fn provider_api_format_round_trips_and_defaults_to_chat() {
+    let store = Store::open_memory().unwrap();
+    let mut provider = sample_provider("p1");
+    provider.api_format = "messages".into();
+    store.upsert_provider(&provider).unwrap();
+    assert_eq!(
+        store.get_provider("p1").unwrap().unwrap().api_format,
+        "messages"
+    );
+
+    // A provider document without the field (older FFI payload) still parses.
+    let parsed: StoredProvider = serde_json::from_value(serde_json::json!({
+        "id": "p2",
+        "name": "n",
+        "base_url": "u",
+        "api_key": "k",
+        "created_at": 1,
+        "updated_at": 1
+    }))
+    .unwrap();
+    assert_eq!(parsed.api_format, "chat");
+}
+
+#[test]
+fn v2_database_gains_the_provider_api_format_column() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v2.db");
+    {
+        // Simulate a v2 file: providers without apiFormat.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                baseUrl TEXT NOT NULL,
+                apiKey TEXT NOT NULL,
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            );
+            INSERT INTO providers (id, name, baseUrl, apiKey, createdAt, updatedAt)
+            VALUES ('p1','n','u','k',1,1);",
+        )
+        .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let provider = store.get_provider("p1").unwrap().unwrap();
+    assert_eq!(provider.api_format, "chat");
 }

@@ -153,6 +153,7 @@ class AndroidCoreBridge(
             modelId = config.modelId,
             baseUrl = config.baseUrl,
             apiKey = config.apiKey,
+            apiFormat = config.apiFormat,
             systemPrompt = config.systemPrompt,
             temperature = config.temperature,
             topP = config.topP,

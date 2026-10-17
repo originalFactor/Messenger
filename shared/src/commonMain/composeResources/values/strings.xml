@@ -235,6 +235,7 @@
     <string name="providers_api_url_label">API URL</string>
     <string name="providers_api_url_placeholder">https://api.openai.com/v1</string>
     <string name="providers_api_key_label">API Key</string>
+    <string name="providers_api_format_label">API format</string>
     <string name="providers_model_management">Model Management</string>
     <string name="providers_load_failed">Failed to load</string>
     <string name="providers_no_models">No models yet\nTap "Sync models" above to fetch from API\nor "Add manually" to enter a model ID</string>

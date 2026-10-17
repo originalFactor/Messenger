@@ -23,6 +23,7 @@ import cc.ptoe.messenger.data.local.entity.ConversationEntity
 import cc.ptoe.messenger.data.local.entity.MessageEntity
 import cc.ptoe.messenger.data.local.entity.ModelEntity
 import cc.ptoe.messenger.data.local.entity.ProviderEntity
+import cc.ptoe.messenger.domain.model.ApiFormat
 import cc.ptoe.messenger.data.remote.api.OpenAiClient
 import cc.ptoe.messenger.data.util.FileKit
 import cc.ptoe.messenger.data.util.ToolsConfigCodec
@@ -1172,7 +1173,7 @@ class CloudSyncRepository(
         if (existing == null) {
             val now = currentTimeMillis()
             database.providerDao().insert(
-                ProviderEntity(BUILTIN_PROVIDER_ID, BUILTIN_PROVIDER_NAME, baseUrl, apiKey, now, now)
+                ProviderEntity(BUILTIN_PROVIDER_ID, BUILTIN_PROVIDER_NAME, baseUrl, apiKey, "chat", now, now)
             )
             reconfigured = true
             logI(TAG, "Seeded built-in cloud AI provider baseUrl=$baseUrl")
@@ -1203,7 +1204,11 @@ class CloudSyncRepository(
         val hasModels = database.modelDao().getByProviderId(BUILTIN_PROVIDER_ID).first().isNotEmpty()
         if (!force && hasModels && now - lastBuiltinModelsSyncAt < BUILTIN_MODELS_SYNC_INTERVAL_MS) return
         runCatching {
-            val response = OpenAiClient(provider.baseUrl, provider.apiKey).getModels()
+            val response = OpenAiClient(
+                provider.baseUrl,
+                provider.apiKey,
+                ApiFormat.fromWireName(provider.apiFormat).requestFormat
+            ).getModels()
             val existingByModelId = database.modelDao().getByProviderId(BUILTIN_PROVIDER_ID)
                 .first()
                 .associateBy { it.modelId }
@@ -1535,6 +1540,7 @@ private fun ProviderEntity.toCloudRequest(models: List<ModelEntity>) = CloudProv
     name = name,
     baseUrl = baseUrl,
     apiKey = apiKey,
+    apiFormat = apiFormat,
     models = models.map {
         CloudModelRequest(
             id = it.id,
@@ -1649,7 +1655,8 @@ private fun AgentEntity.toDomain() = Agent(
     updatedAt = updatedAt
 )
 
-private fun CloudProviderDocument.toEntity() = ProviderEntity(id, name, baseUrl, apiKey, createdAt, updatedAt)
+private fun CloudProviderDocument.toEntity() =
+    ProviderEntity(id, name, baseUrl, apiKey, apiFormat = apiFormat, createdAt = createdAt, updatedAt = updatedAt)
 
 private fun CloudModelDocument.toEntity(providerId: String) =
     ModelEntity(

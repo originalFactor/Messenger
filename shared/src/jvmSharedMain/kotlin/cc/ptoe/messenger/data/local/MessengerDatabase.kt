@@ -42,7 +42,7 @@ import cc.ptoe.messenger.data.local.entity.ProjectEntity
         MessageEntity::class,
         ProjectEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = false
 )
 abstract class MessengerDatabase : RoomDatabase() {
@@ -156,6 +156,18 @@ abstract class MessengerDatabase : RoomDatabase() {
             override fun migrate(connection: SQLiteConnection) {
                 connection.prepare(
                     "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+                ).step()
+            }
+        }
+
+        /**
+         * v22：providers 表新增 apiFormat 列（chat / responses / messages /
+         * interactions），旧行默认 Chat Completions。
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE providers ADD COLUMN apiFormat TEXT NOT NULL DEFAULT 'chat'"
                 ).step()
             }
         }

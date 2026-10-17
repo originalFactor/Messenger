@@ -682,6 +682,7 @@ class ChatViewModel(
                 modelId = model.modelId,
                 baseUrl = provider.baseUrl,
                 apiKey = provider.apiKey,
+                apiFormat = provider.apiFormat.requestFormat.wireName,
                 systemPrompt = agent.systemPrompt,
                 temperature = agent.temperature.toDouble(),
                 topP = agent.topP.toDouble(),

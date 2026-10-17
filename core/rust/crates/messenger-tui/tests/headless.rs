@@ -107,6 +107,7 @@ fn seed_store(base_url: &str, workspace: &std::path::Path) -> Arc<Store> {
             name: "test".into(),
             base_url: base_url.to_string(),
             api_key: "sk".into(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })
@@ -376,6 +377,7 @@ fn model_fallback_order_and_follow_merge() {
             name: "p".into(),
             base_url: "https://example/v1".into(),
             api_key: "k".into(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })
@@ -497,6 +499,7 @@ fn builtin_cloud_provider_falls_back_to_the_account_ai_key() {
             name: "Messenger Cloud AI".into(),
             base_url: "https://cloud/v1".into(),
             api_key: String::new(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })
@@ -937,6 +940,7 @@ fn the_project_form_stores_a_project_with_the_cwd_as_its_workspace() {
             name: "test".into(),
             base_url: "http://localhost:1".into(),
             api_key: "sk".into(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })
@@ -1045,6 +1049,7 @@ fn bootstrap_session_lands_in_a_cwd_project_conversation() {
             name: "test".into(),
             base_url: "http://localhost:1".into(),
             api_key: "sk".into(),
+            api_format: "chat".into(),
             created_at: 1,
             updated_at: 1,
         })

@@ -764,6 +764,9 @@ impl<'a> SyncEngine<'a> {
                 name: BUILTIN_PROVIDER_NAME.to_string(),
                 base_url,
                 api_key: api_key.to_string(),
+                // The Messenger proxy speaks every protocol; Chat
+                // Completions is the historical default.
+                api_format: "chat".to_string(),
                 created_at: now,
                 updated_at: now,
             },

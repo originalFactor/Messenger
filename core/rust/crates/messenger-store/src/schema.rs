@@ -2,7 +2,7 @@
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -21,6 +21,23 @@ pub fn has_project_id_column(conn: &rusqlite::Connection) -> rusqlite::Result<bo
     Ok(false)
 }
 
+/// v2 → v3: `providers.apiFormat` selects the provider's conversation
+/// protocol (`chat` / `responses` / `messages` / `interactions`).
+pub const ADD_PROVIDER_API_FORMAT_COLUMN: &str =
+    "ALTER TABLE providers ADD COLUMN apiFormat TEXT NOT NULL DEFAULT 'chat'";
+
+/// Whether `providers` already carries the v3 `apiFormat` column.
+pub fn has_provider_api_format_column(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(providers)")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "apiFormat" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Created after the v1 → v2 ALTER, so a fresh database (whose table already
 /// has the column) and a migrated one converge on the same index.
 pub const CREATE_PROJECT_ID_INDEX: &str =
@@ -32,6 +49,7 @@ pub const CREATE_TABLES: &[&str] = &[
         name TEXT NOT NULL,
         baseUrl TEXT NOT NULL,
         apiKey TEXT NOT NULL,
+        apiFormat TEXT NOT NULL DEFAULT 'chat',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
     )",

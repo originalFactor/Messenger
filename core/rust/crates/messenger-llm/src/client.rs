@@ -12,6 +12,7 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 
 use crate::dto::{ChatCompletionResponse, ModelsResponse};
+use crate::formats::{ApiFormat, DecodedResponse, decode_response, encode_request};
 use crate::request::ChatCompletionRequest;
 use crate::request::extract_http_error_message;
 use futures_util::StreamExt;
@@ -30,20 +31,33 @@ pub enum ApiError {
     InvalidBody(String),
 }
 
-/// OpenAI-compatible client bound to one (base URL, API key) pair.
+/// Client bound to one (base URL, API key, wire format) triple. The format
+/// selects the request path, auth headers, and response/SSE decoding; the
+/// rest of the app only sees `ChatStreamEvent`s and decoded replies.
 pub struct OpenAiClient {
     http: Client,
     root: String,
     api_key: String,
+    format: ApiFormat,
 }
 
 impl OpenAiClient {
+    /// Chat Completions client (the historical default).
     pub fn new(base_url: &str, api_key: &str) -> Self {
+        Self::with_format(base_url, api_key, ApiFormat::Chat)
+    }
+
+    pub fn with_format(base_url: &str, api_key: &str, format: ApiFormat) -> Self {
         Self {
             http: Client::new(),
             root: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
+            format,
         }
+    }
+
+    pub fn format(&self) -> ApiFormat {
+        self.format
     }
 
     pub async fn get_models(&self) -> Result<ModelsResponse, ApiError> {
@@ -54,14 +68,32 @@ impl OpenAiClient {
             .map_err(|e| ApiError::InvalidBody(e.to_string()))
     }
 
+    /// Non-streaming turn decoded into the format-agnostic reply shape.
+    pub async fn create_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<DecodedResponse, ApiError> {
+        let body = encode_request(self.format, request);
+        let response = self
+            .request(Method::POST, self.format.path(), Some(body))
+            .await?;
+        let payload = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| ApiError::InvalidBody(e.to_string()))?;
+        Ok(decode_response(self.format, &payload))
+    }
+
+    /// Non-streaming turn in the historical Chat Completions DTO shape. Only
+    /// meaningful for [`ApiFormat::Chat`]; other formats decode through
+    /// [`Self::create_completion`].
     pub async fn create_chat_completion(
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ApiError> {
-        let body = serde_json::to_value(request)
-            .map_err(|e| ApiError::InvalidBody(e.to_string()))?;
+        let body = encode_request(self.format, request);
         let response = self
-            .request(Method::POST, "/chat/completions", Some(body))
+            .request(Method::POST, self.format.path(), Some(body))
             .await?;
         response
             .json::<ChatCompletionResponse>()
@@ -69,15 +101,22 @@ impl OpenAiClient {
             .map_err(|e| ApiError::InvalidBody(e.to_string()))
     }
 
-    /// Stream `chat/completions`; returns the raw SSE payload stream.
+    /// Stream one turn; returns the raw SSE payload stream (decoded per
+    /// format by [`FormatStreamDecoder`]).
     pub async fn stream_chat_completion(
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatStream, ApiError> {
-        let body = serde_json::to_value(request)
-            .map_err(|e| ApiError::InvalidBody(e.to_string()))?;
+        let mut body = encode_request(self.format, request);
+        if self.format == ApiFormat::Chat {
+            // Ask the upstream for a usage chunk; providers that ignore the
+            // extension simply omit it and the caller estimates.
+            if let Some(object) = body.as_object_mut() {
+                object.insert("stream_options".into(), serde_json::json!({ "include_usage": true }));
+            }
+        }
         let response = self
-            .request(Method::POST, "/chat/completions", Some(body))
+            .request(Method::POST, self.format.path(), Some(body))
             .await?;
         Ok(ChatStream::new(response))
     }
@@ -91,6 +130,9 @@ impl OpenAiClient {
         let mut builder = self.http.request(method, format!("{}{}", self.root, path));
         if !self.api_key.is_empty() {
             builder = builder.header(AUTHORIZATION, format!("Bearer {}", self.api_key));
+            for (name, value) in self.format.auth_headers(&self.api_key) {
+                builder = builder.header(name, value);
+            }
         }
         if json_body.is_some() {
             builder = builder.json(&json_body);
@@ -355,6 +397,62 @@ mod tests {
         let response = client.create_chat_completion(&request).await.unwrap();
         assert_eq!(response.choices[0].message.reasoning_content.as_deref(), Some("because"));
         assert_eq!(response.usage.unwrap().total_tokens, 8);
+    }
+
+    #[tokio::test]
+    async fn non_chat_formats_hit_their_own_path_and_auth_headers() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/messages"))
+            .and(wiremock::matchers::header("x-api-key", "sk-test"))
+            .and(wiremock::matchers::header("anthropic-version", "2023-06-01"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": "hi" }],
+                    "stop_reason": "end_turn",
+                    "usage": { "input_tokens": 1, "output_tokens": 2 }
+                }),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = OpenAiClient::with_format(
+            &format!("{}/v1", server.uri()),
+            "sk-test",
+            ApiFormat::Messages,
+        );
+        let mut request = sample_request();
+        request.stream = false;
+        let decoded = client.create_completion(&request).await.unwrap();
+        assert_eq!(decoded.text, "hi");
+        assert_eq!(decoded.usage.unwrap().completion_tokens, 2);
+    }
+
+    #[tokio::test]
+    async fn interactions_requests_carry_the_goog_api_key_header() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1beta/interactions"))
+            .and(wiremock::matchers::header("x-goog-api-key", "sk-test"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({
+                    "steps": [{ "type": "model_output", "content": [{ "type": "text", "text": "hi" }] }],
+                    "usage": { "total_input_tokens": 1, "total_output_tokens": 2, "total_tokens": 3 }
+                }),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = OpenAiClient::with_format(
+            &format!("{}/v1beta", server.uri()),
+            "sk-test",
+            ApiFormat::Interactions,
+        );
+        let mut request = sample_request();
+        request.stream = false;
+        let decoded = client.create_completion(&request).await.unwrap();
+        assert_eq!(decoded.text, "hi");
+        assert_eq!(decoded.finish_reason, "stop");
     }
 
     fn sample_request() -> ChatCompletionRequest {
