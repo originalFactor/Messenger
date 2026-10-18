@@ -35,7 +35,7 @@ cd core/rust && cargo build -p messenger-tui           # TUI binary
 cd server && pnpm install && pnpm dev                  # server; checks: pnpm lint && pnpm typecheck
 ```
 
-Prerequisites: JDK 17, Android SDK, NDK `29.0.14206865` + CMake `3.22.1` (for `:runtime`'s PTY JNI; both pinned in `runtime/build.gradle.kts`), Rust toolchain with `cargo-ndk`, `wasm32-unknown-unknown`, and `wasm-bindgen-cli` (version pinned in `Cargo.lock`) for the core/Web paths.
+Prerequisites: JDK 17, Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk`, `wasm32-unknown-unknown`, and `wasm-bindgen-cli` (version pinned in `Cargo.lock`) for the core/Web paths.
 
 ## Hard Constraints
 

@@ -117,7 +117,11 @@ import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
 import cc.ptoe.messenger.generated.resources.providers_model_context_window
+import cc.ptoe.messenger.generated.resources.providers_model_rate_label_cache
+import cc.ptoe.messenger.generated.resources.providers_model_rate_label_input
+import cc.ptoe.messenger.generated.resources.providers_model_rate_label_output
 import cc.ptoe.messenger.generated.resources.providers_model_rates
+import cc.ptoe.messenger.generated.resources.providers_model_rates_cache
 import cc.ptoe.messenger.generated.resources.providers_model_rates_free
 import cc.ptoe.messenger.generated.resources.providers_model_list
 import cc.ptoe.messenger.generated.resources.providers_model_management

@@ -54,8 +54,10 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           # :runtime builds the vendored PTY JNI (libtermux.so) with CMake; both
-          # tools are pinned in runtime/build.gradle.kts.
-          packages: 'ndk;29.0.14206865 cmake;3.22.1'
+          # tools are pinned in the root build script's ext block and must match
+          # exactly, because android.builder.sdkDownload=false forbids AGP from
+          # fetching anything else.
+          packages: 'ndk;30.0.16248370 cmake;4.1.2 build-tools;37.0.0 platforms;android-37.0'
 
       # :core-bindings compiles the Rust core (core/rust) via cargo-ndk for the
       # three phone ABIs; cargo-ndk picks the NDK up from ANDROID_HOME.

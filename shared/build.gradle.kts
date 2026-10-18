@@ -99,6 +99,7 @@ kotlin {
         compileSdk {
             version = release(37)
         }
+        buildToolsVersion = rootProject.ext["buildToolsVersion"] as String
         minSdk = 30
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)

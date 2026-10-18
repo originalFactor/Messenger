@@ -180,8 +180,10 @@ android {
         version = release(37)
     }
     // Pinned, as everywhere else in this repo: the vendored PTY JNI
-    // (src/main/cpp) is built per ABI split with CMake.
-    ndkVersion = "29.0.14206865"
+    // (src/main/cpp) is built per ABI split with CMake. Values come from the
+    // root ext block so every module shares one toolchain.
+    buildToolsVersion = rootProject.ext["buildToolsVersion"] as String
+    ndkVersion = rootProject.ext["ndkVersion"] as String
 
     defaultConfig {
         applicationId = "cc.ptoe.messenger.runtime"
@@ -260,7 +262,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = rootProject.ext["cmakeVersion"] as String
         }
     }
 

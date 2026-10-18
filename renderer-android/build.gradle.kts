@@ -24,6 +24,7 @@ android {
     compileSdk {
         version = release(37)
     }
+    buildToolsVersion = rootProject.ext["buildToolsVersion"] as String
 
     defaultConfig {
         minSdk = 30
