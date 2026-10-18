@@ -28,6 +28,14 @@ val buildRustWasm by tasks.registering(Exec::class) {
         "cargo", "build", "--release", "--target", "wasm32-unknown-unknown",
         "-p", "messenger-wasm",
     )
+    // sqlite-wasm-rs compiles C through `cc`, and Rust ships no C compiler.
+    // Use the LLVM from the pinned NDK (see the root build script) so a local
+    // build needs nothing beyond the Android SDK. Empty on hosts without it,
+    // where cargo's default lookup applies.
+    @Suppress("UNCHECKED_CAST")
+    (rootProject.ext["wasmHostToolchain"] as Map<String, String>).forEach { (key, value) ->
+        environment(key, value)
+    }
     outputs.file(rawWasm)
     outputs.cacheIf { false }
     rustInputs.execute(this)
