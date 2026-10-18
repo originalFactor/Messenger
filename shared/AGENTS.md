@@ -18,7 +18,7 @@ Manual DI via `di/AppContainer.kt` (constructs all repositories/data sources). A
 
 There is **no Room database and no Kotlin entity/DAO layer**. Every platform runs the Rust core: `providers`, `models`, `agents`, `projects`, `conversations`, `messages`, `sync_meta` and `kv` live in the core's SQLite store (`core/rust/crates/messenger-store`, schema v3, columns mirror the old Room names). `AppContainer` requires `CoreBridgeRegistry.bridge` and wires the `Rust*Repository` implementations; the entry points open the store (`CoreHandle.open`, with the legacy Room file passed as `legacy_db_dir` for the one-shot import).
 
-Key columns to know: `models.contextWindow/inputRate/outputRate/inputModalities/outputModalities/supports*`; `agents.role/toolsEnabled/toolsFollowDefault/toolsConfig/description`; `conversations.contextSummary*/contextTokens*/overrideToolsEnabled/overrideToolsConfig/writable/projectId`; `providers.apiFormat`. Schema changes belong in `messenger-store`, not here.
+Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/inputModalities/outputModalities/supports*`; `agents.role/toolsEnabled/toolsFollowDefault/toolsConfig/description`; `conversations.contextSummary*/contextTokens*/overrideToolsEnabled/overrideToolsConfig/writable/projectId`; `providers.apiFormat`. Schema changes belong in `messenger-store`, not here.
 
 ## Navigation & adaptive UI
 

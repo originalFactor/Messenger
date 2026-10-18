@@ -561,7 +561,11 @@ private fun ModelListItem(
                     modifier = Modifier.weight(1f, fill = false)
                 )
                 ContextWindowBadge(contextWindow = model.contextWindow)
-                RateBadge(inputRate = model.inputRate, outputRate = model.outputRate)
+                RateBadge(
+                    inputRate = model.inputRate,
+                    outputRate = model.outputRate,
+                    cacheReadRate = model.cacheReadRate
+                )
             }
             if (model.displayName != model.modelId) {
                 Text(
@@ -643,21 +647,35 @@ private fun ContextWindowBadge(contextWindow: Long) {
 }
 
 /**
- * 模型倍率紧凑标签（×0.15 / ×0.6，输入/输出）。两者均为 0 时显示「免费」。
- * 任一缺失（服务商未提供元数据）不显示。
+ * 模型倍率紧凑标签（输入/输出，含 Messenger Cloud 缓存读取倍率时显示
+ * 「输入 ×0.25 · 缓存 ×0.005 · 输出 ×1」）。三者均为 0 时显示「免费」。
+ * 输入/输出任一缺失（服务商未提供元数据）不显示。
  */
 @Composable
-private fun RateBadge(inputRate: Double?, outputRate: Double?) {
+private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Double? = null) {
     if (inputRate == null || outputRate == null) return
-    val isFree = inputRate <= 0.0 && outputRate <= 0.0
+    val isFree = inputRate <= 0.0 && outputRate <= 0.0 && (cacheReadRate == null || cacheReadRate <= 0.0)
     val label = if (isFree) {
         stringResource(Res.string.providers_model_rates_free)
+    } else if (cacheReadRate != null) {
+        listOf(
+            stringResource(Res.string.providers_model_rate_label_input) to inputRate,
+            stringResource(Res.string.providers_model_rate_label_cache) to cacheReadRate,
+            stringResource(Res.string.providers_model_rate_label_output) to outputRate
+        ).joinToString(" · ") { (name, rate) -> "$name ×${formatRate(rate)}" }
     } else {
         "×${formatRate(inputRate)} / ×${formatRate(outputRate)}"
     }
     Spacer(modifier = Modifier.width(8.dp))
     val description = if (isFree) {
         stringResource(Res.string.providers_model_rates_free)
+    } else if (cacheReadRate != null) {
+        stringResource(
+            Res.string.providers_model_rates_cache,
+            formatRate(inputRate),
+            formatRate(cacheReadRate),
+            formatRate(outputRate)
+        )
     } else {
         stringResource(Res.string.providers_model_rates, formatRate(inputRate), formatRate(outputRate))
     }
@@ -774,7 +792,11 @@ private fun SyncModelSelectionDialog(
                                 )
                             }
                             ContextWindowBadge(contextWindow = model.contextWindow)
-                            RateBadge(inputRate = model.inputRate, outputRate = model.outputRate)
+                            RateBadge(
+                                inputRate = model.inputRate,
+                                outputRate = model.outputRate,
+                                cacheReadRate = model.cacheReadRate
+                            )
                         }
                     }
                 }

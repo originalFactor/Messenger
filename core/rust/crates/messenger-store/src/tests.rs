@@ -104,6 +104,7 @@ fn crud_round_trips_all_five_entities() {
         context_window: 128_000,
         input_rate: Some(0.5),
         output_rate: None,
+        cache_read_rate: Some(0.1),
         input_modalities: "text,image".into(),
         output_modalities: "text".into(),
         supports_tool_calling: true,
@@ -165,6 +166,10 @@ fn crud_round_trips_all_five_entities() {
     model.is_enabled = false;
     store.upsert_model(&model).unwrap();
     assert!(!store.get_model("p1:gpt-x").unwrap().unwrap().is_enabled);
+    assert_eq!(
+        store.get_model("p1:gpt-x").unwrap().unwrap().cache_read_rate,
+        Some(0.1)
+    );
     store.set_model_enabled("p1:gpt-x", true).unwrap();
     assert!(store.get_model("p1:gpt-x").unwrap().unwrap().is_enabled);
 
@@ -419,6 +424,8 @@ fn upsert_json_with_default_valued_fields_omitted_parses() {
     assert!(!model.supports_thinking);
     assert!(!model.supports_json_output);
     assert!(!model.supports_temperature);
+    // The omitted `Option<f64>` rate is unknown, not zero.
+    assert_eq!(model.cache_read_rate, None);
 }
 
 #[test]
@@ -451,6 +458,13 @@ fn legacy_import_copies_room_rows_and_is_idempotent() {
     )
     .unwrap();
     conn.execute(
+        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow,
+                             inputRate, outputRate, cacheReadRate, createdAt)
+         VALUES ('p1:m','p1','m','m',1,4096,0.5,1.5,0.05,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
         "INSERT INTO messages (id, conversationId, role, content, partsJson, timestamp, status)
          VALUES ('m1','c1','user','hi',NULL,1,'sent')",
         [],
@@ -462,7 +476,7 @@ fn legacy_import_copies_room_rows_and_is_idempotent() {
     let summary = import_legacy(&store, &legacy_dir, 9_999).unwrap().unwrap();
     assert_eq!(
         summary,
-        ImportSummary { providers: 1, models: 0, agents: 1, conversations: 1, messages: 1 }
+        ImportSummary { providers: 1, models: 1, agents: 1, conversations: 1, messages: 1 }
     );
 
     // Second call is a no-op (marker present).
@@ -578,4 +592,48 @@ fn v2_database_gains_the_provider_api_format_column() {
     let store = Store::open(&path).unwrap();
     let provider = store.get_provider("p1").unwrap().unwrap();
     assert_eq!(provider.api_format, "chat");
+}
+
+#[test]
+fn v3_database_gains_the_model_cache_read_rate_column() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v3.db");
+    {
+        // Simulate a v3 file: models without cacheReadRate.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                baseUrl TEXT NOT NULL,
+                apiKey TEXT NOT NULL,
+                apiFormat TEXT NOT NULL DEFAULT 'chat',
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            );
+            CREATE TABLE models (
+                id TEXT PRIMARY KEY NOT NULL,
+                providerId TEXT NOT NULL,
+                modelId TEXT NOT NULL,
+                displayName TEXT NOT NULL,
+                isEnabled INTEGER NOT NULL DEFAULT 1,
+                contextWindow INTEGER NOT NULL DEFAULT 0,
+                inputRate REAL,
+                outputRate REAL,
+                inputModalities TEXT NOT NULL DEFAULT 'text',
+                outputModalities TEXT NOT NULL DEFAULT 'text',
+                supportsToolCalling INTEGER NOT NULL DEFAULT 0,
+                supportsThinking INTEGER NOT NULL DEFAULT 0,
+                supportsJsonOutput INTEGER NOT NULL DEFAULT 0,
+                supportsTemperature INTEGER NOT NULL DEFAULT 0,
+                createdAt INTEGER NOT NULL
+            );
+            INSERT INTO models (id, providerId, modelId, displayName, createdAt)
+            VALUES ('p1:m','p1','m','m',1);",
+        )
+        .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let model = store.get_model("p1:m").unwrap().unwrap();
+    assert_eq!(model.cache_read_rate, None);
 }

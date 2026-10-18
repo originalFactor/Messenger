@@ -216,6 +216,10 @@ pub struct CloudModelDocument {
     pub input_rate: Option<f64>,
     #[serde(rename = "outputRate")]
     pub output_rate: Option<f64>,
+    /// Multiplier billed for prompt tokens served from the provider's prompt
+    /// cache. `None` when unknown (a BYOK provider carries no metadata).
+    #[serde(rename = "cacheReadRate")]
+    pub cache_read_rate: Option<f64>,
     #[serde(rename = "inputModalities")]
     pub input_modalities: String,
     #[serde(rename = "outputModalities")]

@@ -2,7 +2,7 @@
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -38,6 +38,24 @@ pub fn has_provider_api_format_column(conn: &rusqlite::Connection) -> rusqlite::
     Ok(false)
 }
 
+/// v3 → v4: `models.cacheReadRate` is the multiplier billed for prompt tokens
+/// served from the provider's prompt cache (NULL = unknown, e.g. a BYOK
+/// provider with no metadata).
+pub const ADD_MODEL_CACHE_READ_RATE_COLUMN: &str =
+    "ALTER TABLE models ADD COLUMN cacheReadRate REAL";
+
+/// Whether `models` already carries the v4 `cacheReadRate` column.
+pub fn has_model_cache_read_rate_column(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(models)")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "cacheReadRate" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Created after the v1 → v2 ALTER, so a fresh database (whose table already
 /// has the column) and a migrated one converge on the same index.
 pub const CREATE_PROJECT_ID_INDEX: &str =
@@ -62,6 +80,7 @@ pub const CREATE_TABLES: &[&str] = &[
         contextWindow INTEGER NOT NULL DEFAULT 0,
         inputRate REAL,
         outputRate REAL,
+        cacheReadRate REAL,
         inputModalities TEXT NOT NULL DEFAULT 'text',
         outputModalities TEXT NOT NULL DEFAULT 'text',
         supportsToolCalling INTEGER NOT NULL DEFAULT 0,

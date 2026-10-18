@@ -215,9 +215,12 @@ impl TurnStatsLedger {
 }
 
 /// Quota units a turn was billed at, matching the server's formula exactly:
-/// `max(1, ceil(prompt × inputRate + completion × outputRate))`
-/// (`server/lib/quota.ts`). `None` when the model declares no rates at all —
-/// a BYOK provider has no rate metadata, so there is nothing to compute.
+/// `max(1, ceil((prompt − cached) × inputRate + cached × cacheReadRate
+/// + completion × outputRate))` (`server/lib/quota.ts`), where `cached` is
+/// the prompt-cache hit inside `prompt_tokens` (clamped to it, 0 when the
+/// provider reports no breakdown). A missing rate counts as 0.
+/// `None` when the model declares no rates at all — a BYOK provider has no
+/// rate metadata, so there is nothing to compute.
 ///
 /// The unit is a QUOTA unit, not a currency: rates are multipliers against the
 /// baseline model's output price, so the server's unit cancels the baseline out
@@ -225,21 +228,29 @@ impl TurnStatsLedger {
 pub fn cost_units(
     prompt_tokens: i64,
     completion_tokens: i64,
+    cached_tokens: i64,
     input_rate: Option<f64>,
     output_rate: Option<f64>,
+    cache_read_rate: Option<f64>,
 ) -> Option<i64> {
     let rate = |value: Option<f64>| match value {
-        Some(value) if value.is_finite() && value > 0.0 => value,
+        Some(value) if value > 0.0 => value,
         _ => 0.0,
     };
-    let (input_rate, output_rate) = (rate(input_rate), rate(output_rate));
+    let (input_rate, output_rate, cache_read_rate) =
+        (rate(input_rate), rate(output_rate), rate(cache_read_rate));
     // Both rates zero or missing: the server treats this as uncompiled / free.
     if input_rate <= 0.0 && output_rate <= 0.0 {
         return None;
     }
     let prompt = prompt_tokens.max(0) as f64;
     let completion = completion_tokens.max(0) as f64;
-    let cost = (prompt * input_rate + completion * output_rate).ceil();
+    // A provider that overshoots `prompt_tokens` with its cache breakdown is
+    // clamped, so the uncached half can never go negative.
+    let cached = (cached_tokens.max(0) as f64).clamp(0.0, prompt);
+    let cost = ((prompt - cached) * input_rate + cached * cache_read_rate
+        + completion * output_rate)
+        .ceil();
     Some(cost.max(1.0) as i64)
 }
 
@@ -358,15 +369,42 @@ mod tests {
     #[test]
     fn cost_matches_the_server_formula() {
         // 100 × 1.0 + 50 × 2.0 = 200.
-        assert_eq!(cost_units(100, 50, Some(1.0), Some(2.0)), Some(200));
+        assert_eq!(cost_units(100, 50, 0, Some(1.0), Some(2.0), None), Some(200));
         // Ceil, and floored at 1 so a tiny turn still bills something.
-        assert_eq!(cost_units(1, 0, Some(0.1), Some(0.1)), Some(1));
+        assert_eq!(cost_units(1, 0, 0, Some(0.1), Some(0.1), None), Some(1));
         // No rates at all: not billable at a known price.
-        assert_eq!(cost_units(100, 50, None, None), None);
+        assert_eq!(cost_units(100, 50, 0, None, None, None), None);
         // Zero rates mean "free / unmetered" on the server.
-        assert_eq!(cost_units(100, 50, Some(0.0), Some(0.0)), None);
+        assert_eq!(cost_units(100, 50, 0, Some(0.0), Some(0.0), None), None);
         // A missing rate is zero, not a reason to refuse the other one.
-        assert_eq!(cost_units(100, 0, Some(1.0), None), Some(100));
+        assert_eq!(cost_units(100, 0, 0, Some(1.0), None, None), Some(100));
+    }
+
+    #[test]
+    fn cached_prompt_tokens_bill_at_the_cache_read_rate() {
+        // 100 prompt, 40 of them cached: 60 × 1.0 + 40 × 0.1 = 64.
+        assert_eq!(
+            cost_units(100, 0, 40, Some(1.0), Some(2.0), Some(0.1)),
+            Some(64)
+        );
+        // Cache reads are free (rate 0) when no cache rate is declared.
+        assert_eq!(cost_units(100, 0, 40, Some(1.0), Some(2.0), None), Some(60));
+        // Without a cache breakdown the request bills exactly as before.
+        assert_eq!(
+            cost_units(100, 0, 0, Some(1.0), Some(2.0), Some(0.1)),
+            Some(100)
+        );
+        // An over-reported breakdown is clamped to the prompt, so the uncached
+        // half never goes negative.
+        assert_eq!(
+            cost_units(100, 0, 150, Some(1.0), Some(2.0), Some(0.1)),
+            Some(10)
+        );
+        // A cheap cache read can make a turn cheaper without making it free.
+        assert_eq!(
+            cost_units(1_000, 0, 999, Some(1.0), Some(1.0), Some(0.01)),
+            Some(11)
+        );
     }
 
     #[test]

@@ -184,4 +184,8 @@ pub struct ModelEntry {
     pub input_rate: Option<f64>,
     #[serde(rename = "output_rate")]
     pub output_rate: Option<f64>,
+    /// Multiplier billed for prompt tokens served from the provider's prompt
+    /// cache (absent = unknown, e.g. a provider with no rate metadata).
+    #[serde(rename = "cache_read_rate")]
+    pub cache_read_rate: Option<f64>,
 }

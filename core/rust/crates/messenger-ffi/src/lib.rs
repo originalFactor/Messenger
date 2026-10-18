@@ -101,6 +101,7 @@ mod tests {
             "context_window": 8192,
             "input_rate": null,
             "output_rate": null,
+            "cache_read_rate": 0.25,
             "input_modalities": "text",
             "output_modalities": "text",
             "supports_tool_calling": true,
@@ -115,6 +116,7 @@ mod tests {
         core.set_model_enabled("m1".into(), false).unwrap();
         let got_m = core.get_model_json("m1".into()).unwrap().unwrap();
         assert!(got_m.contains("\"is_enabled\":false"));
+        assert!(got_m.contains("\"cache_read_rate\":0.25"));
 
         // 3. Agents
         let agent_json = serde_json::json!({

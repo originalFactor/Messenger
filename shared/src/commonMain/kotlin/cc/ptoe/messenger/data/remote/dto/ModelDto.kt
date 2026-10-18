@@ -29,5 +29,7 @@ data class ModelDto(
     @SerialName("context_window") val contextWindow: Long? = null,
     /** Messenger 云端代理扩展字段：输入/输出倍率，0 = 免费。其他服务商通常不返回。 */
     @SerialName("input_rate") val inputRate: Double? = null,
-    @SerialName("output_rate") val outputRate: Double? = null
+    @SerialName("output_rate") val outputRate: Double? = null,
+    /** Messenger 云端代理扩展字段：缓存读取倍率，0 = 免费。其他服务商通常不返回。 */
+    @SerialName("cache_read_rate") val cacheReadRate: Double? = null
 )

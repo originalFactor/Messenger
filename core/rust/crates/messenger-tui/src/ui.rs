@@ -736,8 +736,10 @@ fn status_rail(app: &mut App, width: usize) -> Line<'static> {
         if let Some(units) = crate::turn_stats::cost_units(
             usage.0,
             usage.1,
+            usage.2,
             meta.input_rate,
             meta.output_rate,
+            meta.cache_read_rate,
         ) {
             chips.push(Chip {
                 text: format!("cost {}", crate::turn_stats::format_units(units)),

@@ -164,6 +164,7 @@ pub struct CurrentTurn {
     pub effort: Option<String>,
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
+    pub cache_read_rate: Option<f64>,
     pub started: Option<std::time::Instant>,
 }
 
@@ -229,6 +230,7 @@ pub struct ModelMeta {
     pub context_window: i64,
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
+    pub cache_read_rate: Option<f64>,
 }
 
 impl ChatState {
@@ -273,10 +275,11 @@ impl ChatState {
             .collect()
     }
 
-    /// The last turn's reported usage, for the cost chip.
-    pub fn last_usage(&self) -> Option<(i64, i64)> {
+    /// The last turn's reported usage, for the cost chip: prompt, completion
+    /// and the cached part of the prompt.
+    pub fn last_usage(&self) -> Option<(i64, i64, i64)> {
         self.last_usage
-            .map(|usage| (usage.prompt_tokens, usage.completion_tokens))
+            .map(|usage| (usage.prompt_tokens, usage.completion_tokens, usage.cached_tokens))
     }
 }
 
@@ -440,6 +443,7 @@ impl App {
                         .unwrap_or(0),
                     input_rate: existing.as_ref().and_then(|m| m.input_rate),
                     output_rate: existing.as_ref().and_then(|m| m.output_rate),
+                    cache_read_rate: existing.as_ref().and_then(|m| m.cache_read_rate),
                     input_modalities: existing
                         .as_ref()
                         .map(|m| m.input_modalities.clone())
@@ -957,8 +961,10 @@ impl App {
         let cost_units = crate::turn_stats::cost_units(
             usage.prompt_tokens,
             usage.completion_tokens,
+            usage.cached_tokens,
             current.input_rate,
             current.output_rate,
+            current.cache_read_rate,
         );
         self.turn_stats.record(
             TurnStats {
@@ -984,6 +990,7 @@ impl App {
             context_window: model.context_window,
             input_rate: model.input_rate,
             output_rate: model.output_rate,
+            cache_read_rate: model.cache_read_rate,
         });
         self.refresh_context_tokens();
     }
@@ -1256,6 +1263,7 @@ impl App {
             effort: resolved.request.reasoning_effort.clone(),
             input_rate: resolved.model_input_rate,
             output_rate: resolved.model_output_rate,
+            cache_read_rate: resolved.model_cache_read_rate,
             started: Some(std::time::Instant::now()),
         });
         self.chat.pending_usage = None;
@@ -2117,6 +2125,9 @@ impl App {
                             output_rate: entry
                                 .output_rate
                                 .or_else(|| previous.and_then(|m| m.output_rate)),
+                            cache_read_rate: entry
+                                .cache_read_rate
+                                .or_else(|| previous.and_then(|m| m.cache_read_rate)),
                             input_modalities: previous
                                 .map(|m| m.input_modalities.clone())
                                 .unwrap_or_else(|| "text".into()),

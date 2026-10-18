@@ -46,6 +46,9 @@ pub struct ResolvedTurn {
     /// at a known price" rather than "free".
     pub model_input_rate: Option<f64>,
     pub model_output_rate: Option<f64>,
+    /// The bound model's cache-read rate, for the cost chip and the ledger.
+    /// `None` when the provider declares no cache-read metadata.
+    pub model_cache_read_rate: Option<f64>,
 }
 
 /// Why a turn could not be resolved (shown verbatim in the status line).
@@ -441,6 +444,7 @@ pub fn resolve_turn(
         model_display_name: model.display_name.clone(),
         model_input_rate: model.input_rate,
         model_output_rate: model.output_rate,
+        model_cache_read_rate: model.cache_read_rate,
         request: TurnRequest {
             conversation_id: conversation.id.clone(),
             model_id: model.model_id.clone(),
