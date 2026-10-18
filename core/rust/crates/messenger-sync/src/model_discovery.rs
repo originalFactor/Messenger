@@ -323,12 +323,17 @@ async fn load_models_dev(store: &Store) -> Option<ModelsDevCatalogue> {
     }
 
     // The catalogue is a one-off GET with its own timeout; the sync engine's
-    // client carries the session cookie, which models.dev does not need.
-    let http = reqwest::Client::builder()
+    // client carries the session cookie, which models.dev does not need. The
+    // timeout goes on the REQUEST, not the builder: reqwest's wasm
+    // ClientBuilder has no `timeout()` (fetch has no connection lifetime to
+    // bound), while its RequestBuilder does support one via AbortController.
+    let http = reqwest::Client::builder().build().ok()?;
+    match http
+        .get(MODELS_DEV_URL)
         .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .ok()?;
-    match http.get(MODELS_DEV_URL).send().await {
+        .send()
+        .await
+    {
         Ok(response) if response.status().is_success() => {
             let body = response.text().await.ok()?;
             let catalogue = parse_catalogue(&body)?;
