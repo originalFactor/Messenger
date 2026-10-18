@@ -75,8 +75,11 @@ val ndkHome: String? by lazy {
             Properties().apply { props.inputStream().use { load(it) } }.getProperty("sdk.dir")
         }
         ?: return@lazy null
-    file(sdkDir).resolve("ndk").listFiles()
-        ?.maxByOrNull { it.name }?.absolutePath
+    // The pinned NDK, not "whatever is newest": cargo-ndk and the AGP native
+    // build must compile the same Rust/C code against the same toolchain, and
+    // an unpinned directory listing silently picks up any NDK a previous
+    // build downloaded.
+    file(sdkDir).resolve("ndk").resolve(rootProject.ext["ndkVersion"] as String).absolutePath
 }
 
 val cargoBuildHost by tasks.registering(Exec::class) {
@@ -187,6 +190,7 @@ android {
     compileSdk {
         version = release(37)
     }
+    buildToolsVersion = rootProject.ext["buildToolsVersion"] as String
 
     defaultConfig {
         minSdk = 30

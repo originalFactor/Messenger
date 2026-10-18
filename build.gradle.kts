@@ -163,6 +163,19 @@ val verName = computeVersionName()
 val verCode = computeVersionCode()
 ext["versionName"] = verName
 ext["versionCode"] = verCode
+
+/**
+ * Android SDK toolchain pins — exactly the packages installed in the local SDK
+ * (platforms/android-37.0, build-tools/37.0.0, ndk/30.0.16248370, cmake/4.1.2).
+ *
+ * AGP's defaults are older than what is installed (its default build-tools is
+ * 36.0.0), so leaving these implicit makes every build silently fetch another
+ * SDK package. `android.builder.sdkDownload=false` in gradle.properties turns
+ * any such miss into a hard failure instead of a download.
+ */
+ext["buildToolsVersion"] = "37.0.0"
+ext["ndkVersion"] = "30.0.16248370"
+ext["cmakeVersion"] = "4.1.2"
 ext["packageVersion"] = computeNativePackageVersion(verName, verCode)
 ext["keystoreFile"] = rootDir.resolve("keyring/messenger-release.jks")
 ext["keystorePassword"] = getEnv("KEYSTORE_PASSWORD") ?: ""
