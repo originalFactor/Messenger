@@ -160,6 +160,12 @@ fn read_models(legacy: &Connection) -> Result<Vec<StoredModel>, rusqlite::Error>
             context_window: row.get(5)?,
             input_rate: row.get(6)?,
             output_rate: row.get(7)?,
+            // Legacy Room schemas have no cache-read rate column; the models.dev
+            // enrichment fills it in later for models that have one.
+            cache_read_rate: row
+                .get::<_, Option<f64>>(15)
+                .ok()
+                .flatten(),
             input_modalities: row.get(8)?,
             output_modalities: row.get(9)?,
             supports_tool_calling: row.get::<_, i64>(10)? != 0,

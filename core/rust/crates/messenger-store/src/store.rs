@@ -118,6 +118,9 @@ impl Store {
         if !crate::schema::has_provider_api_format_column(&conn)? {
             conn.execute_batch(crate::schema::ADD_PROVIDER_API_FORMAT_COLUMN)?;
         }
+        if !crate::schema::has_model_cache_read_rate_column(&conn)? {
+            conn.execute_batch(crate::schema::ADD_MODEL_CACHE_READ_RATE_COLUMN)?;
+        }
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
@@ -613,7 +616,7 @@ const PROJECT_COLUMNS: &str = "id, name, workspace, createdAt, updatedAt";
 const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5";
 const PROJECT_UPDATES: &str = "name=?2, workspace=?3, updatedAt=?5";
 
-const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt";
+const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt";
 
 const AGENT_COLUMNS: &str = "id, name, avatar, systemPrompt, description, defaultModelId, temperature, topP, maxTokens, reasoningEffort, isDefault, followDefaultSystemPrompt, followDefaultModel, followDefaultTemperature, followDefaultTopP, followDefaultMaxTokens, followDefaultReasoningEffort, marketAgentId, marketAgentVersion, marketAgentRole, role, toolsEnabled, toolsFollowDefault, toolsConfig, createdAt, updatedAt";
 const AGENT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26";
@@ -670,13 +673,14 @@ fn map_model(row: &rusqlite::Row<'_>) -> Result<StoredModel, rusqlite::Error> {
         context_window: row.get(5)?,
         input_rate: row.get(6)?,
         output_rate: row.get(7)?,
-        input_modalities: row.get(8)?,
-        output_modalities: row.get(9)?,
-        supports_tool_calling: row.get::<_, i64>(10)? != 0,
-        supports_thinking: row.get::<_, i64>(11)? != 0,
-        supports_json_output: row.get::<_, i64>(12)? != 0,
-        supports_temperature: row.get::<_, i64>(13)? != 0,
-        created_at: row.get(14)?,
+        cache_read_rate: row.get(8)?,
+        input_modalities: row.get(9)?,
+        output_modalities: row.get(10)?,
+        supports_tool_calling: row.get::<_, i64>(11)? != 0,
+        supports_thinking: row.get::<_, i64>(12)? != 0,
+        supports_json_output: row.get::<_, i64>(13)? != 0,
+        supports_temperature: row.get::<_, i64>(14)? != 0,
+        created_at: row.get(15)?,
     })
 }
 
@@ -802,14 +806,15 @@ fn upsert_provider_sql(conn: &Connection, p: &StoredProvider) -> Result<(), rusq
 
 fn upsert_model_sql(conn: &Connection, m: &StoredModel) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, inputModalities=?9, outputModalities=?10, supportsToolCalling=?11, supportsThinking=?12, supportsJsonOutput=?13, supportsTemperature=?14",
+        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, cacheReadRate=?9, inputModalities=?10, outputModalities=?11, supportsToolCalling=?12, supportsThinking=?13, supportsJsonOutput=?14, supportsTemperature=?15",
         rusqlite::params![
             m.id, m.provider_id, m.model_id, m.display_name, m.is_enabled as i64,
-            m.context_window, m.input_rate, m.output_rate, m.input_modalities,
-            m.output_modalities, m.supports_tool_calling as i64, m.supports_thinking as i64,
-            m.supports_json_output as i64, m.supports_temperature as i64, m.created_at
+            m.context_window, m.input_rate, m.output_rate, m.cache_read_rate,
+            m.input_modalities, m.output_modalities, m.supports_tool_calling as i64,
+            m.supports_thinking as i64, m.supports_json_output as i64,
+            m.supports_temperature as i64, m.created_at
         ],
     )?;
     Ok(())

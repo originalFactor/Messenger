@@ -27,6 +27,8 @@ data class ChatModel(
     /** 输入/输出倍率。null = 未知（服务商未提供元数据），0 = 免费。 */
     val inputRate: Double? = null,
     val outputRate: Double? = null,
+    /** 缓存读取倍率（相对输入价）。null = 未知（Messenger Cloud 代理未提供元数据）。 */
+    val cacheReadRate: Double? = null,
     /** 输入/输出模态。默认仅文本。 */
     val inputModalities: Set<ModelModality> = setOf(ModelModality.TEXT),
     val outputModalities: Set<ModelModality> = setOf(ModelModality.TEXT),

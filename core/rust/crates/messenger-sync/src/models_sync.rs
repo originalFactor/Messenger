@@ -7,6 +7,7 @@
 use messenger_llm::client::OpenAiClient;
 use messenger_store::model::StoredModel;
 
+use crate::model_discovery::models_dev_context_window;
 use crate::models::BUILTIN_PROVIDER_ID;
 use crate::sync::SyncEngine;
 
@@ -67,9 +68,20 @@ impl<'a> SyncEngine<'a> {
                 model_id: dto.id.clone(),
                 display_name: dto.id.clone(),
                 is_enabled: prev.map(|p| p.is_enabled).unwrap_or(true),
-                context_window: dto.context_window.unwrap_or(0),
+                context_window: match dto.context_window {
+                    Some(context) => context,
+                    // The proxy omits the column, so the models.dev catalogue
+                    // fills the gap before the previous row's value falls back.
+                    None => models_dev_context_window(&self.store, &dto.id)
+                        .await
+                        .or_else(|| prev.map(|p| p.context_window))
+                        .unwrap_or(0),
+                },
                 input_rate: dto.input_rate.or_else(|| prev.and_then(|p| p.input_rate)),
                 output_rate: dto.output_rate.or_else(|| prev.and_then(|p| p.output_rate)),
+                cache_read_rate: dto
+                    .cache_read_rate
+                    .or_else(|| prev.and_then(|p| p.cache_read_rate)),
                 input_modalities: "text".to_string(),
                 output_modalities: "text".to_string(),
                 supports_tool_calling: false,
@@ -130,6 +142,7 @@ mod tests {
                 context_window: 1000,
                 input_rate: None,
                 output_rate: None,
+                cache_read_rate: Some(0.15),
                 input_modalities: "text".into(),
                 output_modalities: "text".into(),
                 supports_tool_calling: false,
@@ -144,7 +157,8 @@ mod tests {
             .and(wiremock::matchers::path("/v1/models"))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
-                    {"id": "gpt-4o", "context_window": 128000, "input_rate": 0.5},
+                    {"id": "gpt-4o", "context_window": 128000, "input_rate": 0.5,
+                     "cache_read_rate": 0.05},
                     {"id": "claude-3-5", "context_window": 200000}
                 ]
             })))
@@ -157,10 +171,12 @@ mod tests {
         let gpt4 = store.get_model(&format!("{BUILTIN_PROVIDER_ID}:gpt-4o")).unwrap().unwrap();
         assert_eq!(gpt4.context_window, 128000);
         assert_eq!(gpt4.input_rate, Some(0.5));
+        assert_eq!(gpt4.cache_read_rate, Some(0.05));
         assert!(!gpt4.is_enabled, "disabled state must survive sync");
 
         let claude = store.get_model(&format!("{BUILTIN_PROVIDER_ID}:claude-3-5")).unwrap().unwrap();
         assert_eq!(claude.context_window, 200000);
+        assert_eq!(claude.cache_read_rate, None);
         assert!(claude.is_enabled);
     }
 }

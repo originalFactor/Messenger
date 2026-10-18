@@ -32,6 +32,9 @@ pub struct DiscoveredModel {
     pub context_window: i64,
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
+    /// Multiplier billed for prompt tokens served from the provider's prompt
+    /// cache; `None` = unknown (a provider with no rate metadata).
+    pub cache_read_rate: Option<f64>,
     /// Comma-separated modality codes (`text,image`).
     pub input_modalities: String,
     pub output_modalities: String,
@@ -69,6 +72,7 @@ pub async fn discover_provider_models(
             context_window: entry.context_window.unwrap_or(0),
             input_rate: entry.input_rate,
             output_rate: entry.output_rate,
+            cache_read_rate: entry.cache_read_rate,
             input_modalities: "text".to_string(),
             output_modalities: "text".to_string(),
             supports_tool_calling: false,
@@ -87,6 +91,8 @@ pub async fn discover_provider_models(
 struct ModelsDevRecord {
     #[serde(rename = "contextWindow")]
     context_window: i64,
+    #[serde(rename = "cost")]
+    cost: Option<ModelsDevCost>,
     reasoning: Option<bool>,
     #[serde(rename = "tool_call")]
     tool_call: Option<bool>,
@@ -100,6 +106,15 @@ struct ModelsDevRecord {
     output: Option<Value>,
     modalities: Option<Value>,
     limit: Option<Value>,
+}
+
+/// models.dev `cost` block: USD per 1M tokens, plus the cached-prompt price
+/// some providers report separately.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct ModelsDevCost {
+    #[serde(rename = "cache_read")]
+    cache_read: Option<f64>,
 }
 
 /// Load the models.dev catalogue (network or 24 h cache), then merge it into
@@ -130,6 +145,7 @@ pub async fn models_dev_metadata(store: &Store, model_id: &str) -> Option<Discov
             context_window: 0,
             input_rate: None,
             output_rate: None,
+            cache_read_rate: None,
             input_modalities: "text".to_string(),
             output_modalities: "text".to_string(),
             supports_tool_calling: false,
@@ -139,6 +155,19 @@ pub async fn models_dev_metadata(store: &Store, model_id: &str) -> Option<Discov
         },
         Some(record),
     ))
+}
+
+/// The context window models.dev reports for [model_id], or `None` when the
+/// catalogue has no record for it (unknown). Same exact-id-then-bare-id
+/// lookup as [models_dev_metadata].
+pub async fn models_dev_context_window(store: &Store, model_id: &str) -> Option<i64> {
+    let catalogue = load_models_dev(store).await?;
+    let record = catalogue.find(model_id)?;
+    Some(
+        limit_context(record)
+            .or_else(|| Some(record.context_window).filter(|value| *value > 0))
+            .unwrap_or(0),
+    )
 }
 
 struct ModelsDevCatalogue {
@@ -171,6 +200,14 @@ fn apply_models_dev(mut model: DiscoveredModel, record: Option<&ModelsDevRecord>
         model.context_window = limit_context(record)
             .or(Some(record.context_window).filter(|value| *value > 0))
             .unwrap_or(0);
+    }
+
+    if model.cache_read_rate.is_none() {
+        model.cache_read_rate = record
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.cache_read)
+            .filter(|rate| *rate > 0.0);
     }
 
     let mut input = modalities_of(record.modalities.as_ref(), "input");
@@ -341,6 +378,7 @@ pub fn discovered_to_stored(
         context_window: discovered.context_window,
         input_rate: discovered.input_rate,
         output_rate: discovered.output_rate,
+        cache_read_rate: discovered.cache_read_rate,
         input_modalities: discovered.input_modalities.clone(),
         output_modalities: discovered.output_modalities.clone(),
         supports_tool_calling: discovered.supports_tool_calling,
@@ -367,6 +405,7 @@ mod tests {
             context_window: 0,
             input_rate: None,
             output_rate: None,
+            cache_read_rate: None,
             input_modalities: "text".into(),
             output_modalities: "text".into(),
             supports_tool_calling: false,
@@ -449,6 +488,39 @@ mod tests {
     }
 
     #[test]
+    fn models_dev_cache_read_rate_fills_the_gap() {
+        let enriched = apply_models_dev(
+            blank("deepseek-v4.1-flash"),
+            Some(&record(json!({
+                "limit": { "context": 131072 },
+                "cost": { "cache_read": 0.28 }
+            }))),
+        );
+        assert_eq!(enriched.context_window, 131072);
+        assert_eq!(enriched.cache_read_rate, Some(0.28));
+    }
+
+    #[test]
+    fn provider_reported_cache_read_rate_wins_over_models_dev() {
+        let mut model = blank("deepseek-v4.1-flash");
+        model.cache_read_rate = Some(0.15);
+        let enriched = apply_models_dev(
+            model,
+            Some(&record(json!({ "cost": { "cache_read": 0.28 } }))),
+        );
+        assert_eq!(enriched.cache_read_rate, Some(0.15));
+    }
+
+    #[test]
+    fn missing_cache_read_metadata_leaves_the_rate_unknown() {
+        let enriched = apply_models_dev(
+            blank("deepseek-v4.1-flash"),
+            Some(&record(json!({ "limit": { "context": 131072 } }))),
+        );
+        assert_eq!(enriched.cache_read_rate, None);
+    }
+
+    #[test]
     fn missing_metadata_leaves_the_row_untouched() {
         let model = blank("unknown-model");
         assert_eq!(apply_models_dev(model.clone(), None), model);
@@ -479,6 +551,7 @@ mod tests {
             context_window: 1,
             input_rate: None,
             output_rate: None,
+            cache_read_rate: None,
             input_modalities: "text".into(),
             output_modalities: "text".into(),
             supports_tool_calling: false,

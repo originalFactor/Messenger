@@ -154,6 +154,7 @@ internal data class CloudModelRequest(
     val contextWindow: Long = 0,
     val inputRate: Double? = null,
     val outputRate: Double? = null,
+    val cacheReadRate: Double? = null,
     /** 输入/输出模态（逗号分隔的模态 code），默认仅文本。旧服务端文档不含这些键。 */
     val inputModalities: String = "text",
     val outputModalities: String = "text",

@@ -31,7 +31,9 @@ fn default_api_format() -> String {
 /// capability `false`) are OMITTED from upsert JSON. serde fills missing
 /// `Option<T>` fields with `None` automatically, but plain scalar fields need
 /// an explicit `#[serde(default)]` — keep the two sides in sync when adding
-/// columns.
+/// columns. The three `…rate` fields are `Option<f64>` because `None` means
+/// "unknown", not zero: `cache_read_rate` is the multiplier billed for
+/// cached prompt tokens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredModel {
     pub id: String,
@@ -43,6 +45,7 @@ pub struct StoredModel {
     pub context_window: i64,
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
+    pub cache_read_rate: Option<f64>,
     #[serde(default = "default_text_modality")]
     pub input_modalities: String,
     #[serde(default = "default_text_modality")]
