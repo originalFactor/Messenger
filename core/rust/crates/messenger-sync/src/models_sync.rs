@@ -52,13 +52,26 @@ impl<'a> SyncEngine<'a> {
             .map(|m| (m.model_id.clone(), m))
             .collect();
 
-        let mut count = 0;
-        // Delete all old ones first to clean up removed models
-        for m in existing_map.values() {
-            let _ = self.store.delete_model(&m.id);
+        // A provider (or proxy) can answer with an empty list on a transient
+        // hiccup. Wiping the catalog then would also lose the user's
+        // `isEnabled` choices AND trip the throttle above (`!existing.is_empty()`),
+        // so the table could never refill. Treat it as a failed sync instead.
+        if models_resp.entries().is_empty() && !existing_map.is_empty() {
+            return Err("Built-in model sync returned no models; keeping the existing catalog".into());
         }
 
-        for dto in models_resp.entries() {
+        let entries = models_resp.entries();
+        let incoming: std::collections::HashSet<&str> =
+            entries.iter().map(|dto| dto.id.as_str()).collect();
+        let mut count = 0;
+        // Only drop models the provider no longer lists.
+        for (model_id, m) in &existing_map {
+            if !incoming.contains(model_id.as_str()) {
+                let _ = self.store.delete_model(&m.id);
+            }
+        }
+
+        for dto in &entries {
             let prev = existing_map.get(&dto.id);
             let row = StoredModel {
                 id: prev
@@ -178,5 +191,64 @@ mod tests {
         assert_eq!(claude.context_window, 200000);
         assert_eq!(claude.cache_read_rate, None);
         assert!(claude.is_enabled);
+    }
+
+    /// A provider (or proxy) answering with an empty list is a transient
+    /// failure, not "every model was removed": wiping the catalog would also
+    /// lose the user's `isEnabled` choices and trip the throttle, leaving the
+    /// table empty until a forced sync.
+    #[tokio::test]
+    async fn an_empty_model_list_keeps_the_existing_catalog() {
+        let server = wiremock::MockServer::start().await;
+        let store = Store::open_memory().unwrap();
+        let engine = SyncEngine::new(&store, Session::default());
+
+        store
+            .upsert_provider(&StoredProvider {
+                id: BUILTIN_PROVIDER_ID.into(),
+                name: "Builtin".into(),
+                base_url: format!("{}/v1", server.uri()),
+                api_key: "sk-test".into(),
+                api_format: "chat".into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .upsert_model(&StoredModel {
+                id: format!("{BUILTIN_PROVIDER_ID}:gpt-4o"),
+                provider_id: BUILTIN_PROVIDER_ID.into(),
+                model_id: "gpt-4o".into(),
+                display_name: "gpt-4o".into(),
+                is_enabled: false,
+                context_window: 1000,
+                input_rate: None,
+                output_rate: None,
+                cache_read_rate: None,
+                input_modalities: "text".into(),
+                output_modalities: "text".into(),
+                supports_tool_calling: false,
+                supports_thinking: false,
+                supports_json_output: false,
+                supports_temperature: false,
+                created_at: 1,
+            })
+            .unwrap();
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": []})),
+            )
+            .mount(&server)
+            .await;
+
+        assert!(engine.sync_builtin_provider_models(true).await.is_err());
+        let kept = store
+            .get_model(&format!("{BUILTIN_PROVIDER_ID}:gpt-4o"))
+            .unwrap()
+            .expect("an empty response must not delete the catalog");
+        assert!(!kept.is_enabled, "the user's choice must survive");
     }
 }

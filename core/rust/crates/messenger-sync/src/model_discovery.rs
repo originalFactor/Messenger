@@ -203,11 +203,9 @@ fn apply_models_dev(mut model: DiscoveredModel, record: Option<&ModelsDevRecord>
     }
 
     if model.cache_read_rate.is_none() {
-        model.cache_read_rate = record
-            .cost
-            .as_ref()
-            .and_then(|cost| cost.cache_read)
-            .filter(|rate| *rate > 0.0);
+        // `NULL` means "unknown"; a reported `0.0` means cached tokens are
+        // free, which is a real rate and must not collapse into "unknown".
+        model.cache_read_rate = record.cost.as_ref().and_then(|cost| cost.cache_read);
     }
 
     let mut input = modalities_of(record.modalities.as_ref(), "input");

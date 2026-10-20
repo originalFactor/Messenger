@@ -251,12 +251,18 @@ impl<'a> SyncEngine<'a> {
     pub async fn push_pending_changes(&self) -> CloudResult<SyncResult> {
         let account = self.signed_in()?;
         let pushed_version = self.push_local_snapshot(true).await?;
-        self.sync_internal(
-            Some(pushed_version.max(0)),
-            false,
-            Some(account.sync_version),
-        )
-        .await
+        // Nothing was pushed (the debounce fired with clean queues), so there
+        // is no post-push version to resume from: fall back to the stored
+        // cursor. `since=0` would re-apply the whole account.
+        let since = if pushed_version > 0 {
+            pushed_version
+        } else {
+            self.store
+                .sync_cursor(&account.id)
+                .map_err(|e| CloudError::Network(e.to_string()))?
+        };
+        self.sync_internal(Some(since.max(0)), false, Some(account.sync_version))
+            .await
     }
 
     /// Push local snapshot (full or pending-only), excluding the builtin
@@ -621,28 +627,43 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        // Providers (delete + reinsert models inside one delta apply).
+        // Providers (delete + reinsert models inside one transaction: a
+        // mid-loop failure must not leave the provider with zero models).
         for remote in &delta.providers {
             if remote.id == BUILTIN_PROVIDER_ID {
                 continue;
             }
             if remote.deleted {
-                self.delete_provider_models(&remote.id)?;
-                self.store.delete_provider(&remote.id).map_err(|e| e.to_string())?;
-            } else {
-                self.delete_provider_models(&remote.id)?;
                 self.store
-                    .upsert_provider(&provider_document_to_row(remote))
+                    .with_tx(|tx| {
+                        tx.delete_provider_n(&remote.id)?;
+                        tx.delete_models_by_provider_n(&remote.id)
+                    })
                     .map_err(|e| e.to_string())?;
-                for model in &remote.models {
-                    self.store
-                        .upsert_model(&messenger_store::model::StoredModel {
-                            is_enabled: model.is_enabled,
-                            context_window: model.context_window,
-                            ..model_document_to_row(model, &remote.id)
-                        })
-                        .map_err(|e| e.to_string())?;
-                }
+                self.store.notify(StoreEvent {
+                    kind: EntityKind::Provider,
+                    ids: vec![remote.id.clone()],
+                });
+            } else {
+                let row = provider_document_to_row(remote);
+                self.store
+                    .with_tx(|tx| {
+                        tx.delete_models_by_provider_n(&remote.id)?;
+                        tx.upsert_provider_n(&row)?;
+                        for model in &remote.models {
+                            tx.upsert_model_n(&messenger_store::model::StoredModel {
+                                is_enabled: model.is_enabled,
+                                context_window: model.context_window,
+                                ..model_document_to_row(model, &remote.id)
+                            })?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.store.notify(StoreEvent {
+                    kind: EntityKind::Provider,
+                    ids: vec![remote.id.clone()],
+                });
             }
         }
 
@@ -658,13 +679,21 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        // Conversations: replace-all semantics per conversation.
+        // Conversations: replace-all semantics per conversation, inside one
+        // transaction so a mid-loop failure cannot leave a conversation with
+        // partial history.
         for remote in &delta.conversations {
             if remote.deleted {
                 self.store
-                    .delete_messages_by_conversation(&remote.id)
+                    .with_tx(|tx| {
+                        tx.delete_messages_by_conversation_n(&remote.id)?;
+                        tx.delete_conversation_n(&remote.id)
+                    })
                     .map_err(|e| e.to_string())?;
-                self.store.delete_conversation(&remote.id).map_err(|e| e.to_string())?;
+                self.store.notify(StoreEvent {
+                    kind: EntityKind::Conversation,
+                    ids: vec![remote.id.clone()],
+                });
             } else {
                 if self
                     .store
@@ -673,33 +702,37 @@ impl<'a> SyncEngine<'a> {
                     .is_none()
                 {
                     self.store
-                        .delete_messages_by_conversation(&remote.id)
+                        .with_tx(|tx| {
+                            tx.delete_messages_by_conversation_n(&remote.id)?;
+                            tx.delete_conversation_n(&remote.id)
+                        })
                         .map_err(|e| e.to_string())?;
-                    self.store.delete_conversation(&remote.id).map_err(|e| e.to_string())?;
                     continue;
                 }
+                let row = conversation_document_to_row(remote);
+                let messages: Vec<_> = remote
+                    .messages
+                    .iter()
+                    .map(|message| message_document_to_row(message, &remote.id))
+                    .collect();
                 self.store
-                    .delete_messages_by_conversation(&remote.id)
+                    .with_tx(|tx| {
+                        tx.delete_messages_by_conversation_n(&remote.id)?;
+                        tx.upsert_conversation_n(&row)?;
+                        for message in &messages {
+                            tx.upsert_message_n(message)?;
+                        }
+                        Ok(())
+                    })
                     .map_err(|e| e.to_string())?;
-                self.store
-                    .upsert_conversation(&conversation_document_to_row(remote))
-                    .map_err(|e| e.to_string())?;
-                for message in &remote.messages {
-                    self.store
-                        .upsert_message(&message_document_to_row(message, &remote.id))
-                        .map_err(|e| e.to_string())?;
-                }
+                self.store.notify(StoreEvent {
+                    kind: EntityKind::Conversation,
+                    ids: vec![remote.id.clone()],
+                });
             }
         }
 
         self.store.notify(StoreEvent { kind: EntityKind::Other, ids: vec!["sync_apply".into()] });
-        Ok(())
-    }
-
-    fn delete_provider_models(&self, provider_id: &str) -> Result<(), String> {
-        for model in self.store.list_models_by_provider(provider_id).map_err(|e| e.to_string())? {
-            self.store.delete_model(&model.id).map_err(|e| e.to_string())?;
-        }
         Ok(())
     }
 

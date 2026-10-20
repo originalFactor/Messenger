@@ -190,16 +190,18 @@ impl Store {
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<(), rusqlite::Error> {
+        // Models cascade on the FK, so their ids must be collected BEFORE the
+        // DELETE — afterwards the child rows are already gone and the
+        // notification would always carry an empty id list.
+        let mut ids = Vec::new();
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached("SELECT id FROM models WHERE providerId = ?1")?;
+            let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+            ids.extend(rows.flatten());
+            Ok(())
+        })?;
         let deleted = self.with_conn(|conn| conn.execute("DELETE FROM providers WHERE id = ?1", [id]))?;
         if deleted > 0 {
-            // Models cascade on the FK; notify them too so UI refreshes.
-            let mut ids = Vec::new();
-            self.with_conn(|conn| {
-                let mut stmt = conn.prepare_cached("SELECT id FROM models WHERE providerId = ?1")?;
-                let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
-                ids.extend(rows.flatten());
-                Ok(())
-            })?;
             self.emit(StoreEvent { kind: EntityKind::Model, ids });
             self.emit(StoreEvent { kind: EntityKind::Provider, ids: vec![id.to_string()] });
         }
@@ -605,6 +607,31 @@ impl StoreTx<'_, '_> {
     }
     pub fn upsert_message_n(&self, m: &StoredMessage) -> Result<(), rusqlite::Error> {
         upsert_message_sql(self.tx, m)
+    }
+    /// Delete one provider's models inside the transaction (replace-all
+    /// semantics for a pulled provider).
+    pub fn delete_models_by_provider_n(&self, provider_id: &str) -> Result<(), rusqlite::Error> {
+        self.tx
+            .execute("DELETE FROM models WHERE providerId = ?1", [provider_id])?;
+        Ok(())
+    }
+    /// Delete one conversation's messages inside the transaction
+    /// (replace-all semantics for a pulled conversation).
+    pub fn delete_messages_by_conversation_n(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.tx
+            .execute("DELETE FROM messages WHERE conversationId = ?1", [conversation_id])?;
+        Ok(())
+    }
+    pub fn delete_provider_n(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.tx.execute("DELETE FROM providers WHERE id = ?1", [id])?;
+        Ok(())
+    }
+    pub fn delete_conversation_n(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.tx.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
+        Ok(())
     }
 }
 
