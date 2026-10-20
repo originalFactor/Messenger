@@ -17,13 +17,17 @@
 package cc.ptoe.messenger.presentation.ui.projects
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.presentation.ui.components.ProjectListItem
+import cc.ptoe.messenger.presentation.ui.components.UnprojectedFolderItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -72,5 +76,24 @@ class ProjectListItemTest {
 
         onNodeWithText("Messenger").performClick()
         assertEquals(listOf("proj1"), opened)
+    }
+
+    /** 普通对话收在“无项目”文件夹里，因此这个入口必须可点且显示会话数。 */
+    @Test
+    fun noProjectFolderShowsItsCountAndOpens() = runComposeUiTest {
+        var opened = false
+        setContent {
+            MaterialTheme {
+                UnprojectedFolderItem(
+                    conversationCount = 2,
+                    onClick = { opened = true },
+                    modifier = Modifier.testTag("no-project-folder")
+                )
+            }
+        }
+
+        onNodeWithTag("no-project-folder").assertIsDisplayed()
+        onNodeWithTag("no-project-folder").performClick()
+        assertTrue(opened)
     }
 }

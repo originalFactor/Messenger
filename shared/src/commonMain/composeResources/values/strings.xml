@@ -183,8 +183,7 @@
     <string name="projects_new">New project</string>
     <string name="projects_empty">No projects yet\nA project is a workspace — its chats can use the terminal and file tools</string>
     <string name="projects_section">Projects</string>
-    <string name="projects_recent_section">Recent Chats</string>
-    <string name="projects_no_recent">No recent chats</string>
+    <string name="projects_no_project_folder">No project</string>
     <string name="projects_create_title">New project</string>
     <string name="projects_name_label">Project name</string>
     <string name="projects_name_hint">Enter a project name</string>
@@ -196,6 +195,8 @@
     <string name="projects_delete_title">Delete project</string>
     <string name="projects_delete_confirm">Delete this project? Its chats are kept and become plain chats.</string>
     <string name="projects_count">%1$d chats</string>
+    <string name="projects_count_one">%1$d chat</string>
+    <string name="projects_folder_empty">No chats in this folder</string>
     <string name="projects_chats_title">Chats</string>
     <string name="projects_moved_to_chat">Moved to plain chats</string>
 

@@ -23,13 +23,11 @@ import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.Conversation
-import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.repository.ProjectRepository
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
-import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,7 +38,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
-import cc.ptoe.messenger.generated.resources.conversations_clone_suffix
 import cc.ptoe.messenger.generated.resources.conversations_new_chat
 import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.data.util.currentTimeMillis
@@ -55,7 +52,6 @@ class AgentConversationsViewModel(
     private val agentId: String,
     private val agentRepository: AgentRepository,
     private val conversationRepository: ConversationRepository,
-    private val messageRepository: MessageRepository,
     private val modelRepository: ModelRepository,
     private val currentAgentRepository: CurrentAgentRepository,
     private val projectRepository: ProjectRepository
@@ -76,8 +72,8 @@ class AgentConversationsViewModel(
         )
 
     /**
-     * 该 Agent 名下的项目（用于聊天列表顶部的 Projects 区）；从会话列表按
-     * agentId 过滤，所以项目进入的是"该项目里该 Agent 的会话"二级页。
+     * 该 Agent 名下的项目（聊天列表的文件夹行）；从会话列表按 agentId 过滤，
+     * 所以点进去的是“该项目里该 Agent 的会话”文件夹页。
      */
     val projects: StateFlow<List<Project>> = conversations
         .map { all -> all.mapNotNull { it.projectId }.toSet() }
@@ -96,24 +92,17 @@ class AgentConversationsViewModel(
             initialValue = emptyMap()
         )
 
-    /** Recent Chats：该 Agent 最近 [RECENT_CONVERSATION_LIMIT] 个会话。 */
-    val recentConversations: StateFlow<List<Conversation>> = conversations
-        .map { all -> all.take(RECENT_CONVERSATION_LIMIT) }
+    /** “无项目”文件夹里该 Agent 的普通对话数。 */
+    val unprojectedConversationCount: StateFlow<Int> = conversations
+        .map { all -> all.count { it.projectId == null } }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
+            initialValue = 0
         )
 
-    /** 「切换 Agent」菜单的目标列表（与主页会话行的菜单保持一致）。 */
-    val allAgents: StateFlow<List<Agent>> = agentRepository.getAll()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
-
-    fun createNewConversation(onCreated: (String) -> Unit = {}) {        viewModelScope.launch {
+    fun createNewConversation(onCreated: (String) -> Unit = {}) {
+        viewModelScope.launch {
             val agent = agentRepository.getById(agentId).first() ?: return@launch
             currentAgentRepository.setCurrentAgentId(agent.id)
             val now = currentTimeMillis()
@@ -140,29 +129,10 @@ class AgentConversationsViewModel(
         return (defaultModel ?: enabledModels.firstOrNull())?.providerId ?: ""
     }
 
-    fun renameConversation(conversationId: String, newTitle: String) {
-        viewModelScope.launch {
-            val conversation = conversationRepository.getById(conversationId).first()
-                ?: return@launch
-            conversationRepository.update(
-                conversation.copy(
-                    title = newTitle,
-                    updatedAt = currentTimeMillis()
-                )
-            )
-        }
-    }
-
-    fun deleteConversation(conversationId: String) {
-        viewModelScope.launch {
-            conversationRepository.delete(conversationId)
-        }
-    }
-
     /**
      * 清理建好后从未发过消息的空会话。规则在 Rust core
-     * （`messenger_core::conversation`），这里只负责触发；聊天列表页进入时
-     * 调用。[keepConversationId] 保护双栏布局中右栏正在展示的会话。
+     * （`messenger_core::conversation`），这里只负责触发；
+     * [keepConversationId] 保护双栏布局中右栏正在展示的会话。
      */
     fun sweepEmptyConversations(keepConversationId: String? = null) {
         viewModelScope.launch {
@@ -172,64 +142,11 @@ class AgentConversationsViewModel(
         }
     }
 
-    fun cloneConversation(
-        conversationId: String,
-        onCloned: (String) -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            val source = conversationRepository.getById(conversationId).first()
-                ?: return@launch
-            val clonedConversationId = randomUuid()
-            val now = currentTimeMillis()
-            val clonedConversation = source.copy(
-                id = clonedConversationId,
-                title = source.title + getString(Res.string.conversations_clone_suffix),
-                createdAt = now,
-                updatedAt = now
-            )
-
-            conversationRepository.insert(clonedConversation)
-            val clonedMessages = messageRepository.getByConversationId(source.id).first().map { message ->
-                message.copy(
-                    id = randomUuid(),
-                    conversationId = clonedConversationId,
-                    status = if (message.status == MessageStatus.SENDING) {
-                        MessageStatus.SENT
-                    } else {
-                        message.status
-                    }
-                )
-            }
-            messageRepository.insertAll(clonedMessages)
-            onCloned(clonedConversationId)
-        }
-    }
-
-    fun switchAgentForConversations(ids: List<String>, targetAgentId: String) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch {
-            val now = currentTimeMillis()
-            ids.forEach { id ->
-                val conversation = conversationRepository.getById(id).first() ?: return@forEach
-                conversationRepository.update(
-                    conversation.copy(
-                        agentId = targetAgentId,
-                        updatedAt = now
-                    )
-                )
-            }
-        }
-    }
-
     companion object {
-        /** Recent Chats 区展示的会话条数。 */
-        const val RECENT_CONVERSATION_LIMIT = 10
-
         fun provideFactory(
             agentId: String,
             agentRepository: AgentRepository,
             conversationRepository: ConversationRepository,
-            messageRepository: MessageRepository,
             modelRepository: ModelRepository,
             currentAgentRepository: CurrentAgentRepository,
             projectRepository: ProjectRepository
@@ -240,7 +157,6 @@ class AgentConversationsViewModel(
                     agentId,
                     agentRepository,
                     conversationRepository,
-                    messageRepository,
                     modelRepository,
                     currentAgentRepository,
                     projectRepository

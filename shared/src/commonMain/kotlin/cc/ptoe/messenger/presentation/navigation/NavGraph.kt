@@ -105,6 +105,9 @@ fun NavGraph(
                         },
                         onProjectClick = { projectId ->
                             navController.navigate(Screen.ProjectConversations.createRoute(projectId))
+                        },
+                        onUnprojectedClick = {
+                            navController.navigate(Screen.UnprojectedConversations.createRoute())
                         }
                     )
                 }
@@ -339,6 +342,9 @@ fun NavGraph(
                 },
                 onProjectClick = { projectId ->
                     navController.navigate(Screen.ProjectConversations.createRoute(projectId, agentId))
+                },
+                onUnprojectedClick = {
+                    navController.navigate(Screen.UnprojectedConversations.createRoute(agentId))
                 }
             )
         }
@@ -358,6 +364,27 @@ fun NavGraph(
             val agentId = backStackEntry.arguments?.read { getStringOrNull("agentId") }
             ProjectConversationsScreen(
                 projectId = projectId,
+                agentId = agentId,
+                onBackClick = { navController.popBackStack() },
+                onConversationClick = { conversationId ->
+                    navController.navigate(Screen.Chat.createRoute(conversationId))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.UnprojectedConversations.route,
+            arguments = listOf(
+                navArgument("agentId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val agentId = backStackEntry.arguments?.read { getStringOrNull("agentId") }
+            ProjectConversationsScreen(
+                projectId = null,
                 agentId = agentId,
                 onBackClick = { navController.popBackStack() },
                 onConversationClick = { conversationId ->

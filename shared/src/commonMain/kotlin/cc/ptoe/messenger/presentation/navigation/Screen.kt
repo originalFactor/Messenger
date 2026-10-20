@@ -61,6 +61,13 @@ sealed class Screen(val route: String) {
             else "project_conversations/$projectId"
     }
 
+    /** “无项目”文件夹的二级页：不属于任何项目的普通对话。 */
+    data object UnprojectedConversations : Screen("unprojected_conversations?agentId={agentId}") {
+        fun createRoute(agentId: String? = null) =
+            if (agentId != null) "unprojected_conversations?agentId=$agentId"
+            else "unprojected_conversations"
+    }
+
     data object ConversationRename : Screen("conversation_rename/{conversationId}") {
         fun createRoute(conversationId: String) = "conversation_rename/$conversationId"
     }
