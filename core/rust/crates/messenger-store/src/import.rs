@@ -144,13 +144,22 @@ fn read_providers(legacy: &Connection) -> Result<Vec<StoredProvider>, rusqlite::
 }
 
 fn read_models(legacy: &Connection) -> Result<Vec<StoredModel>, rusqlite::Error> {
-    let mut stmt = legacy.prepare(
+    // `cacheReadRate` only exists in newer legacy schemas; probe rather than
+    // select a column that may not be there (an out-of-range `row.get` would
+    // silently read as NULL and lose the value when it does exist).
+    let has_cache_rate = legacy
+        .prepare("PRAGMA table_info(models)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "cacheReadRate");
+    let cache_rate_column = if has_cache_rate { ", cacheReadRate" } else { "" };
+    let mut stmt = legacy.prepare(&format!(
         "SELECT id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate,
                 inputModalities, outputModalities, supportsToolCalling, supportsThinking,
-                supportsJsonOutput, supportsTemperature, createdAt
-         FROM models",
-    )?;
-    let rows = stmt.query_map([], |row| {
+                supportsJsonOutput, supportsTemperature, createdAt{cache_rate_column}
+         FROM models"
+    ))?;
+    let rows = stmt.query_map([], move |row| {
         Ok(StoredModel {
             id: row.get(0)?,
             provider_id: row.get(1)?,
@@ -160,12 +169,9 @@ fn read_models(legacy: &Connection) -> Result<Vec<StoredModel>, rusqlite::Error>
             context_window: row.get(5)?,
             input_rate: row.get(6)?,
             output_rate: row.get(7)?,
-            // Legacy Room schemas have no cache-read rate column; the models.dev
-            // enrichment fills it in later for models that have one.
-            cache_read_rate: row
-                .get::<_, Option<f64>>(15)
-                .ok()
-                .flatten(),
+            // Absent in older Room schemas; models.dev enrichment fills it in
+            // later for models that have one.
+            cache_read_rate: if has_cache_rate { row.get(15)? } else { None },
             input_modalities: row.get(8)?,
             output_modalities: row.get(9)?,
             supports_tool_calling: row.get::<_, i64>(10)? != 0,
