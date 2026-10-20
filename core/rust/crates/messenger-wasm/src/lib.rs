@@ -120,35 +120,67 @@ impl Default for TurnConfig {
     }
 }
 
-/// Tool execution routed back into Kotlin, synchronously, exactly like the
-/// UniFFI `PlatformToolHost` callback.
+/// Tool execution routed back into Kotlin.
+///
+/// The JS side may return either `[output, isError]` synchronously (built-in
+/// tools are pure Kotlin) or a Promise of that array — remote MCP tools must
+/// perform HTTP, which is only possible asynchronously on the single-threaded
+/// browser event loop. Awaiting a non-Promise value resolves immediately, so
+/// the synchronous path is unchanged.
 struct JsToolHost {
     execute: Arc<SendFn>,
 }
 
-#[async_trait::async_trait]
+// `?Send` on wasm: awaiting a JS Promise holds `Rc` state, and there is only
+// one thread, so the future never needs to cross one.
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ToolHost for JsToolHost {
     async fn execute(&self, name: &str, arguments_json: &str) -> ToolExecutionResult {
         let result = self
             .execute
             .0
             .call2(&JsValue::NULL, &JsValue::from_str(name), &JsValue::from_str(arguments_json));
-        match result {
+        let value = match result {
             Ok(value) => {
-                // Kotlin returns `Pair<String, Boolean>`, which arrives as a
-                // two-element JS array.
-                let array: js_sys::Array = value.unchecked_into();
-                ToolExecutionResult {
-                    output: array.get(0).as_string().unwrap_or_default(),
-                    is_error: array.get(1).as_bool().unwrap_or(true),
+                // `Promise.resolve` passes a non-Promise through unchanged.
+                match wasm_bindgen_futures::JsFuture::from(Promise::resolve(&value)).await {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        return ToolExecutionResult {
+                            output: format!("tool host failed: {}", js_error_text(&error)),
+                            is_error: true,
+                        }
+                    }
                 }
             }
-            Err(error) => ToolExecutionResult {
-                output: format!("tool host failed: {error:?}"),
-                is_error: true,
-            },
+            Err(error) => {
+                return ToolExecutionResult {
+                    output: format!("tool host failed: {error:?}"),
+                    is_error: true,
+                }
+            }
+        };
+        // Kotlin returns `Pair<String, Boolean>`, which arrives as a
+        // two-element JS array.
+        let array: js_sys::Array = value.unchecked_into();
+        ToolExecutionResult {
+            output: array.get(0).as_string().unwrap_or_default(),
+            is_error: array.get(1).as_bool().unwrap_or(true),
         }
     }
+}
+
+/// `String(error)` for a rejected JS promise.
+fn js_error_text(error: &JsValue) -> String {
+    error
+        .as_string()
+        .or_else(|| {
+            js_sys::Reflect::get(error, &JsValue::from_str("message"))
+                .ok()
+                .and_then(|message| message.as_string())
+        })
+        .unwrap_or_else(|| format!("{error:?}"))
 }
 
 struct JsEventSink {

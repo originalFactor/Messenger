@@ -683,6 +683,73 @@ fn streaming_turn_puts_the_text_and_the_tool_card_in_the_buffer() {
     assert!(finished || app.chat.messages.len() >= 4, "turn did not settle: {}", app.status);
 }
 
+/// Switching conversations must reset the scrollback watermark (rows of the
+/// PREVIOUS transcript) and drop staged images, otherwise the new
+/// conversation's first rows never reach the terminal and a pasted image
+/// lands in the wrong chat.
+#[test]
+fn switching_conversations_resets_history_and_pending_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = seed_store("http://127.0.0.1:1/v1", dir.path());
+    let (mut app, _engine, _rx, _runtime) = app_with(Arc::clone(&store), dir.path());
+
+    // A second conversation in the same project, so the FK holds.
+    let mut second = store.get_conversation("c1").unwrap().unwrap();
+    second.id = "c2".into();
+    second.title = "second".into();
+    store.upsert_conversation(&second).unwrap();
+
+    app.open_conversation("c1");
+    app.set_history_rows(7);
+    app.chat.pending_images.push(messenger_tui::app::PendingImage {
+        data_uri: "data:image/png;base64,AA==".into(),
+        local_path: "/tmp/pasted.png".into(),
+        width: 1,
+        height: 1,
+    });
+
+    app.open_conversation("c2");
+    assert_eq!(app.chat.conversation_id.as_deref(), Some("c2"));
+    assert_eq!(app.history_rows(), 0, "the watermark must not carry over");
+    assert!(
+        app.chat.pending_images.is_empty(),
+        "staged images belong to the conversation they were pasted in"
+    );
+}
+
+/// Esc must close every modal kind, not just the palette: Select, Form and
+/// Confirm all advertise "Esc cancel" in their hint line, and a Confirm is
+/// the only way out of a destructive action.
+#[test]
+fn esc_closes_select_form_and_confirm_popups() {
+    use messenger_tui::popup::{Confirm, ConfirmPurpose, Form, FormPurpose, Select, SelectPurpose};
+
+    let store = Arc::new(Store::open_memory().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, _engine, _rx, _runtime) = app_with(store, dir.path());
+
+    app.push(Popup::Select(Select {
+        title: "Agents".into(),
+        items: Vec::new(),
+        cursor: 0,
+        purpose: SelectPurpose::Agent,
+    }));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.is_empty(), "Esc must close a Select");
+
+    app.push(Popup::Form(Form::new("New project", FormPurpose::NewProject, Vec::new())));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.is_empty(), "Esc must close a Form");
+
+    app.push(Popup::Confirm(Confirm::new(
+        "Delete conversation",
+        "Delete it?",
+        ConfirmPurpose::DeleteConversation("c1".into()),
+    )));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.is_empty(), "Esc must close a Confirm");
+}
+
 /// There is no view switch any more: `?` pushes the help popup and Esc peels
 /// one layer off the stack. Function keys are ordinary, unhandled input.
 #[test]

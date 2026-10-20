@@ -714,6 +714,14 @@ impl App {
                 self.chat.follow = true;
                 self.chat.error = None;
                 self.chat.body_cache.clear();
+                // The scrollback watermark counts ROWS of the previous
+                // transcript; keeping it would make `compose` skip the new
+                // conversation's first rows (they are neither in scrollback
+                // nor in the viewport).
+                self.reset_history();
+                // Images staged for the previous conversation must not ride
+                // along to the next message in a different conversation.
+                self.chat.pending_images.clear();
                 // The model, the context usage and the workspace all belong to
                 // the conversation that just became current, so the rail's
                 // chips and the mention index are refreshed here rather than
@@ -2681,6 +2689,8 @@ impl App {
             }
             Popup::Select(mut select) => {
                 match key.code {
+                    // Esc peels this popup off the stack (the hint says so).
+                    KeyCode::Esc => return,
                     KeyCode::Down | KeyCode::Char('j') if !control => {
                         if !select.items.is_empty() {
                             select.cursor = (select.cursor + 1).min(select.items.len() - 1);
@@ -2781,6 +2791,7 @@ impl App {
             }
             Popup::Form(mut form) => {
                 match key.code {
+                KeyCode::Esc => return,
                 KeyCode::Tab | KeyCode::Down => {
                     form.focus = (form.focus + 1) % form.fields.len().max(1);
                 }
@@ -2845,6 +2856,7 @@ impl App {
             }
             Popup::Confirm(mut confirm) => {
                 match key.code {
+                KeyCode::Esc => return,
                 KeyCode::Backspace => {
                     confirm.typed.pop();
                 }
