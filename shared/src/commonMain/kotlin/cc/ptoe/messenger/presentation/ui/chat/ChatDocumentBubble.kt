@@ -51,6 +51,9 @@ fun ChatDocumentBubble(
     onRetryClick: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
+    // Stable across recompositions: the cache memoizes the parsed block list
+    // for the completed-line prefix of a streaming message.
+    val markdownCache = remember { StreamingMarkdownCache() }
     val isError = message.status == MessageStatus.ERROR
     val bubbleColor = if (isError) {
         MaterialTheme.colorScheme.errorContainer
@@ -102,14 +105,11 @@ fun ChatDocumentBubble(
                         }
                     }
                 } else if (message.content.isNotBlank()) {
-                    val parsed = remember(message.content) {
-                        val bridgeJson = cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.parseMarkdownToBlocksJson(message.content)
-                        if (!bridgeJson.isNullOrBlank() && bridgeJson != "[]") {
-                            ChatDocumentParser.parseBlocksJson(bridgeJson)
-                        } else {
-                            ChatDocumentParser.parseMarkdown(message.content)
-                        }
-                    }
+                    // Streaming text changes on every token. Re-parsing the
+                    // WHOLE accumulated markdown per token is O(n²) plus a
+                    // cross-language call each time; the cache only re-parses
+                    // the stable line prefix when it changes.
+                    val parsed = remember(message.content) { markdownCache.blocksFor(message.content) }
                     if (parsed.isNotEmpty()) {
                         ChatDocumentView(blocks = parsed)
                     } else {

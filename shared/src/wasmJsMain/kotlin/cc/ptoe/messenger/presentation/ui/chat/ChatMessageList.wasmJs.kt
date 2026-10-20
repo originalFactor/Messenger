@@ -115,12 +115,16 @@ internal actual fun ChatMessageList(
                         Modifier
                     }
                     val isLiveStreaming = streamingMessageId != null && item.finalMessage?.id == streamingMessageId
+                    // One cache per list item, kept across recompositions so
+                    // the streaming final text is parsed incrementally.
+                    val blockCache = remember { StreamingMarkdownCache() }
                     val blocks = remember(item.rounds, item.toolMessages, item.finalMessage?.content, streamingContent, isLiveStreaming) {
                         buildWebToolGroupBlocks(
                             rounds = item.rounds,
                             toolMessages = item.toolMessages,
                             finalMessage = item.finalMessage,
-                            streamingContent = if (isLiveStreaming) streamingContent else null
+                            streamingContent = if (isLiveStreaming) streamingContent else null,
+                            cache = blockCache
                         )
                     }
                     val anchorMessage = anchor ?: Message(
@@ -265,7 +269,8 @@ private fun buildWebToolGroupBlocks(
     rounds: List<Message>,
     toolMessages: List<Message>,
     finalMessage: Message?,
-    streamingContent: String?
+    streamingContent: String?,
+    cache: StreamingMarkdownCache
 ): List<ChatBlock> {
     val blocks = mutableListOf<ChatBlock>()
     var blockIdCounter = 1L
@@ -313,7 +318,13 @@ private fun buildWebToolGroupBlocks(
 
     val finalText = streamingContent ?: finalMessage?.content
     if (!finalText.isNullOrBlank()) {
-        val finalBlocks = ChatDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
+        // `streamingContent` grows on every token: parse only the completed
+        // line prefix (see StreamingMarkdownCache) instead of the whole text.
+        val finalBlocks = if (streamingContent != null) {
+            cache.blocksFor(streamingContent)
+        } else {
+            ChatDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
+        }
         blocks.addAll(finalBlocks)
     }
 
