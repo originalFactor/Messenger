@@ -58,12 +58,16 @@ import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.action_edit
 import cc.ptoe.messenger.generated.resources.action_more
 import cc.ptoe.messenger.generated.resources.projects_count
+import cc.ptoe.messenger.generated.resources.projects_count_one
+import cc.ptoe.messenger.generated.resources.projects_no_project_folder
 import cc.ptoe.messenger.generated.resources.projects_section
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 项目分组：聊天列表（会话主页与 Agent 聊天列表）顶部的 Projects 区。
+ * 聊天列表的文件夹分组：项目（= 工作区）各自一行，外加一个"无项目"
+ * 文件夹收纳不属于任何项目的普通对话。列表不再直接铺开会话行，避免与
+ * 其他分组重复展示。
  */
 fun LazyListScope.projectSection(
     projects: List<Project>,
@@ -71,9 +75,11 @@ fun LazyListScope.projectSection(
     onProjectClick: (String) -> Unit,
     onProjectEditClick: (String) -> Unit = {},
     onProjectDeleteClick: (String) -> Unit = {},
-    enableContextMenu: Boolean = false
+    enableContextMenu: Boolean = false,
+    unprojectedConversationCount: Int = 0,
+    onUnprojectedClick: () -> Unit = {}
 ) {
-    if (projects.isEmpty()) return
+    if (projects.isEmpty() && unprojectedConversationCount == 0) return
     item(key = "section_projects") {
         SectionHeader(stringResource(Res.string.projects_section))
     }
@@ -86,6 +92,76 @@ fun LazyListScope.projectSection(
             onDeleteClick = { onProjectDeleteClick(project.id) },
             enableContextMenu = enableContextMenu
         )
+    }
+    // 始终显示“无项目”文件夹：新建的普通对话总会落在这里，入口不应随
+    // 会话数忽隐忽现。
+    item(key = "unprojected_folder") {
+        UnprojectedFolderItem(
+            conversationCount = unprojectedConversationCount,
+            onClick = onUnprojectedClick,
+            enableContextMenu = enableContextMenu
+        )
+    }
+}
+
+/**
+ * "无项目"文件夹行：没有工作区的普通对话都收纳在这里，因此聊天列表
+ * 只有文件夹，不会再出现同一会话既在 Recent 又在底部的重复。
+ */
+@Composable
+fun UnprojectedFolderItem(
+    conversationCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enableContextMenu: Boolean = false
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val backgroundColor = if (hovered && enableContextMenu) {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    } else {
+        Color.Transparent
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(backgroundColor)
+            .hoverable(interactionSource)
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Folder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(40.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(Res.string.projects_no_project_folder),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = conversationCountText(conversationCount),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -149,7 +225,7 @@ fun ProjectListItem(
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = stringResource(Res.string.projects_count, conversationCount),
+                text = conversationCountText(conversationCount),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -212,3 +288,9 @@ fun ProjectListItem(
         }
     }
 }
+
+/** “1 个对话”用单数文案，避免英文出现 "1 chats"。 */
+@Composable
+private fun conversationCountText(count: Int): String =
+    if (count == 1) stringResource(Res.string.projects_count_one, count)
+    else stringResource(Res.string.projects_count, count)

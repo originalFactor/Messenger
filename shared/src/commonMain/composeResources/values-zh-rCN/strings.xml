@@ -182,8 +182,7 @@
     <string name="projects_new">新建项目</string>
     <string name="projects_empty">还没有项目\n项目即工作区 —— 其中的对话可使用终端与文件工具</string>
     <string name="projects_section">项目</string>
-    <string name="projects_recent_section">最近对话</string>
-    <string name="projects_no_recent">没有最近的对话</string>
+    <string name="projects_no_project_folder">无项目</string>
     <string name="projects_create_title">新建项目</string>
     <string name="projects_name_label">项目名称</string>
     <string name="projects_name_hint">输入项目名称</string>
@@ -195,6 +194,8 @@
     <string name="projects_delete_title">删除项目</string>
     <string name="projects_delete_confirm">删除该项目？其中的对话会保留并变为普通对话。</string>
     <string name="projects_count">%1$d 个对话</string>
+    <string name="projects_count_one">%1$d 个对话</string>
+    <string name="projects_folder_empty">这个文件夹里还没有对话</string>
     <string name="projects_chats_title">对话</string>
     <string name="projects_moved_to_chat">已转为普通对话</string>
 

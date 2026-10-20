@@ -21,42 +21,35 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
+import cc.ptoe.messenger.data.util.currentTimeMillis
+import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.model.Agent
-import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Conversation
 import cc.ptoe.messenger.domain.model.Project
-import cc.ptoe.messenger.domain.repository.ProjectRepository
-import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
-import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
+import cc.ptoe.messenger.domain.repository.ProjectRepository
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.conversations_new_chat
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import cc.ptoe.messenger.generated.resources.Res
-import cc.ptoe.messenger.generated.resources.conversations_clone_suffix
-import cc.ptoe.messenger.generated.resources.conversations_new_chat
 import org.jetbrains.compose.resources.getString
-import cc.ptoe.messenger.data.util.currentTimeMillis
-import cc.ptoe.messenger.data.util.randomUuid
 
-data class ConversationsUiState(
-    val isMultiSelectMode: Boolean = false,
-    val selectedConversationIds: Set<String> = emptySet()
-)
-
-@OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * 会话主页的 ViewModel：主页只展示文件夹（项目 + “无项目”），因此这里
+ * 只负责文件夹数据与“新建对话”。
+ *
+ * 会话级的操作（重命名、删除、多选、切换 Agent）都在文件夹二级页
+ * （[ProjectConversationsViewModel]）里做。
+ */
 class ConversationsViewModel(
     private val conversationRepository: ConversationRepository,
-    private val messageRepository: MessageRepository,
     private val currentAgentRepository: CurrentAgentRepository,
     private val agentRepository: AgentRepository,
     private val modelRepository: ModelRepository,
@@ -77,18 +70,15 @@ class ConversationsViewModel(
             initialValue = emptyList()
         )
 
-    private val _uiState = MutableStateFlow(ConversationsUiState())
-    val uiState: StateFlow<ConversationsUiState> = _uiState.asStateFlow()
-
-    /** 会话主页固定展示全部聊天（按 Agent 过滤在 Agent 聊天列表子页）。 */
-    val conversations: StateFlow<List<Conversation>> = conversationRepository.getAll()
+    /** 全部会话；只用于文件夹计数与空状态判断。 */
+    private val conversations: StateFlow<List<Conversation>> = conversationRepository.getAll()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
 
-    /** 聊天列表顶部的 Projects 区。 */
+    /** 聊天列表的 Project 文件夹。 */
     val projects: StateFlow<List<Project>> = projectRepository.getAll()
         .stateIn(
             scope = viewModelScope,
@@ -106,15 +96,15 @@ class ConversationsViewModel(
         )
 
     /**
-     * Recent Chats：最近 [RECENT_CONVERSATION_LIMIT] 个会话（无论是否属于
-     * 项目），让用户从聊天列表一键回到上一次的对话。
+     * “无项目”文件夹里的会话数：普通对话不再直接铺在列表里，而是收进
+     * 这个文件夹，避免同一会话重复展示。
      */
-    val recentConversations: StateFlow<List<Conversation>> = conversations
-        .map { all -> all.take(RECENT_CONVERSATION_LIMIT) }
+    val unprojectedConversationCount: StateFlow<Int> = conversations
+        .map { all -> all.count { it.projectId == null } }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
+            initialValue = 0
         )
 
     fun createNewConversation(
@@ -145,39 +135,6 @@ class ConversationsViewModel(
         }
     }
 
-    private suspend fun determineProviderId(agent: Agent): String {
-        val allModels = modelRepository.getAll().first()
-        val enabledModels = allModels.filter { it.isEnabled }
-
-        if (enabledModels.isEmpty()) return ""
-
-        val defaultModel = agent.defaultModelId?.let { modelId ->
-            enabledModels.find { it.id == modelId }
-        }
-
-        return (defaultModel ?: enabledModels.firstOrNull())?.providerId ?: ""
-    }
-
-    fun renameConversation(conversationId: String, newTitle: String) {
-        viewModelScope.launch {
-            val conversation = conversationRepository.getById(conversationId).first()
-                ?: return@launch
-            val now = currentTimeMillis()
-            conversationRepository.update(
-                conversation.copy(
-                    title = newTitle,
-                    updatedAt = now
-                )
-            )
-        }
-    }
-
-    fun deleteConversation(conversationId: String) {
-        viewModelScope.launch {
-            conversationRepository.delete(conversationId)
-        }
-    }
-
     /**
      * 清理建好后从未发过消息的空会话。规则在 Rust core
      * （`messenger_core::conversation`），这里只负责触发；聊天列表页进入时
@@ -191,110 +148,18 @@ class ConversationsViewModel(
         }
     }
 
-    fun cloneConversation(
-        conversationId: String,
-        onCloned: (String) -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            val source = conversationRepository.getById(conversationId).first()
-                ?: return@launch
-            val clonedConversationId = randomUuid()
-            val now = currentTimeMillis()
-            val clonedConversation = source.copy(
-                id = clonedConversationId,
-                title = source.title + getString(Res.string.conversations_clone_suffix),
-                createdAt = now,
-                updatedAt = now
-            )
-
-            conversationRepository.insert(clonedConversation)
-            val clonedMessages = messageRepository.getByConversationId(source.id).first().map { message ->
-                message.copy(
-                    id = randomUuid(),
-                    conversationId = clonedConversationId,
-                    status = if (message.status == MessageStatus.SENDING) {
-                        MessageStatus.SENT
-                    } else {
-                        message.status
-                    }
-                )
-            }
-            messageRepository.insertAll(clonedMessages)
-            onCloned(clonedConversationId)
+    private suspend fun determineProviderId(agent: Agent): String {
+        val enabledModels = modelRepository.getAll().first().filter { it.isEnabled }
+        if (enabledModels.isEmpty()) return ""
+        val defaultModel = agent.defaultModelId?.let { modelId ->
+            enabledModels.find { it.id == modelId }
         }
-    }
-
-    fun switchAgent(agentId: String) {
-        viewModelScope.launch {
-            currentAgentRepository.setCurrentAgentId(agentId)
-        }
-    }
-
-    fun enterMultiSelectMode(conversationId: String) {
-        _uiState.value = _uiState.value.copy(
-            isMultiSelectMode = true,
-            selectedConversationIds = setOf(conversationId)
-        )
-    }
-
-    fun exitMultiSelectMode() {
-        _uiState.value = _uiState.value.copy(
-            isMultiSelectMode = false,
-            selectedConversationIds = emptySet()
-        )
-    }
-
-    fun toggleSelection(conversationId: String) {
-        val current = _uiState.value.selectedConversationIds
-        val newSet = if (conversationId in current) {
-            current - conversationId
-        } else {
-            current + conversationId
-        }
-        _uiState.value = _uiState.value.copy(selectedConversationIds = newSet)
-    }
-
-    fun selectAll(conversationIds: List<String>) {
-        _uiState.value = _uiState.value.copy(selectedConversationIds = conversationIds.toSet())
-    }
-
-    fun deselectAll() {
-        _uiState.value = _uiState.value.copy(selectedConversationIds = emptySet())
-    }
-
-    fun deleteConversationsBatch(ids: List<String>) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch {
-            ids.forEach { id ->
-                conversationRepository.delete(id)
-            }
-            exitMultiSelectMode()
-        }
-    }
-
-    fun switchAgentForConversations(ids: List<String>, agentId: String) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch {
-            val now = currentTimeMillis()
-            ids.forEach { id ->
-                val conversation = conversationRepository.getById(id).first() ?: return@forEach
-                conversationRepository.update(
-                    conversation.copy(
-                        agentId = agentId,
-                        updatedAt = now
-                    )
-                )
-            }
-            exitMultiSelectMode()
-        }
+        return (defaultModel ?: enabledModels.firstOrNull())?.providerId ?: ""
     }
 
     companion object {
-        /** Recent Chats 区展示的会话条数。 */
-        const val RECENT_CONVERSATION_LIMIT = 10
         fun provideFactory(
             conversationRepository: ConversationRepository,
-            messageRepository: MessageRepository,
             currentAgentRepository: CurrentAgentRepository,
             agentRepository: AgentRepository,
             modelRepository: ModelRepository,
@@ -304,7 +169,6 @@ class ConversationsViewModel(
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
                 return ConversationsViewModel(
                     conversationRepository,
-                    messageRepository,
                     currentAgentRepository,
                     agentRepository,
                     modelRepository,

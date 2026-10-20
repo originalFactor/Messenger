@@ -35,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
+import cc.ptoe.messenger.presentation.ui.conversations.UNPROJECTED_FOLDER
+import cc.ptoe.messenger.presentation.ui.projects.ProjectConversationsScreen
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.agents_select_to_view
 import org.jetbrains.compose.resources.stringResource
@@ -67,6 +69,9 @@ fun AgentsDualPaneScreen(
     /** 非空 = 右栏进入该 Agent 的编辑器（列表设置图标 / 行编辑菜单触发）。 */
     var editingAgentId by rememberSaveable { mutableStateOf<String?>(null) }
     var creatingNewAgent by rememberSaveable { mutableStateOf(false) }
+    /** 非空 = 右栏展示该 Agent 的某个文件夹（项目 id 或“无项目”哨兵）。 */
+    var openFolderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var openConversationId by rememberSaveable { mutableStateOf<String?>(null) }
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
@@ -82,11 +87,15 @@ fun AgentsDualPaneScreen(
                     creatingNewAgent = false
                     selectedAgentId = id
                     editingAgentId = id
+                    openFolderId = null
+                    openConversationId = null
                 },
                 onAgentClick = { id ->
                     creatingNewAgent = false
                     selectedAgentId = id
                     editingAgentId = null
+                    openFolderId = null
+                    openConversationId = null
                 }
             )
         }
@@ -128,8 +137,8 @@ fun AgentsDualPaneScreen(
                     // 否则 viewModel() 会按 composable 位置缓存第一次创建的 ViewModel，
                     // 导致双栏下点击任意 Agent 始终显示首个 Agent 的内容。
                     key(agentId) {
-                        var openConversationId by rememberSaveable { mutableStateOf<String?>(null) }
                         val conversationId = openConversationId
+                        val folderId = openFolderId
                         when {
                             conversationId != null -> {
                                 ChatScreen(
@@ -149,12 +158,24 @@ fun AgentsDualPaneScreen(
                                     onPickedModelConsumed = onPickedModelConsumed
                                 )
                             }
+                            folderId != null -> {
+                                ProjectConversationsScreen(
+                                    projectId = folderId.takeIf { it != UNPROJECTED_FOLDER },
+                                    agentId = agentId,
+                                    showBackButton = false,
+                                    onBackClick = { openFolderId = null },
+                                    onConversationClick = { id -> openConversationId = id },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                             else -> {
                                 AgentConversationsScreen(
                                     agentId = agentId,
                                     showBackButton = false,
                                     onBackClick = { selectedAgentId = null },
                                     onEditClick = { editingAgentId = agentId },
+                                    onProjectClick = { projectId -> openFolderId = projectId },
+                                    onUnprojectedClick = { openFolderId = UNPROJECTED_FOLDER },
                                     onConversationClick = { id ->
                                         openConversationId = id
                                     },

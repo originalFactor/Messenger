@@ -23,10 +23,12 @@ import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
 import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
-import cc.ptoe.messenger.domain.model.Conversation
-import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.Conversation
+import cc.ptoe.messenger.domain.model.MessageStatus
+import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.conversations_clone_suffix
 import cc.ptoe.messenger.generated.resources.conversations_new_chat
 import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.domain.repository.AgentRepository
@@ -35,20 +37,30 @@ import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** 文件夹二级页的多选状态。 */
+data class FolderUiState(
+    val isMultiSelectMode: Boolean = false,
+    val selectedConversationIds: Set<String> = emptySet()
+)
+
 /**
- * 项目二级页的 ViewModel：某个项目的会话列表。
+ * 文件夹二级页的 ViewModel。
  *
+ * [projectId] 非 null = 项目的会话列表；null = “无项目”文件夹（普通对话）。
  * [agentId] 非 null 时只展示该 Agent 的会话（从 Agent 聊天列表进入的情形）。
  */
 class ProjectConversationsViewModel(
-    private val projectId: String,
+    private val projectId: String?,
     private val agentId: String?,
     private val projectRepository: ProjectRepository,
     private val conversationRepository: ConversationRepository,
@@ -58,21 +70,29 @@ class ProjectConversationsViewModel(
     private val currentAgentRepository: CurrentAgentRepository
 ) : ViewModel() {
 
-    val project: StateFlow<Project?> = projectRepository.getById(projectId)
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = null
-        )
+    private val _uiState = MutableStateFlow(FolderUiState())
+    val uiState: StateFlow<FolderUiState> = _uiState.asStateFlow()
 
-    val conversations: StateFlow<List<Conversation>> = conversationRepository
-        .getByProjectId(projectId)
-        .let { flow -> if (agentId == null) flow else flow.map { all -> all.filter { it.agentId == agentId } } }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    val project: StateFlow<Project?> =
+        (if (projectId == null) flowOf(null) else projectRepository.getById(projectId))
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = null
+            )
+
+    val conversations: StateFlow<List<Conversation>> =
+        (if (projectId == null) {
+            conversationRepository.getAll().map { all -> all.filter { it.projectId == null } }
+        } else {
+            conversationRepository.getByProjectId(projectId)
+        })
+            .let { flow -> if (agentId == null) flow else flow.map { all -> all.filter { it.agentId == agentId } } }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
 
     val allAgents: StateFlow<List<Agent>> = agentRepository.getAll()
         .stateIn(
@@ -81,9 +101,13 @@ class ProjectConversationsViewModel(
             initialValue = emptyList()
         )
 
-    fun createNewConversation(onCreated: (String) -> Unit = {}) {
+    fun createNewConversation(
+        agentIdOverride: String? = null,
+        onCreated: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
-            val agent = agentId?.let { agentRepository.getById(it).first() }
+            val agent = agentIdOverride?.let { agentRepository.getById(it).first() }
+                ?: agentId?.let { agentRepository.getById(it).first() }
                 ?: currentAgentRepository.currentAgent.first()
                 ?: return@launch
             currentAgentRepository.setCurrentAgentId(agent.id)
@@ -118,8 +142,8 @@ class ProjectConversationsViewModel(
 
     /**
      * 清理建好后从未发过消息的空会话。规则在 Rust core
-     * （`messenger_core::conversation`），这里只负责触发；项目会话列表页
-     * 进入时调用。[keepConversationId] 保护双栏布局中右栏正在展示的会话。
+     * （`messenger_core::conversation`），这里只负责触发；文件夹页进入时
+     * 调用。[keepConversationId] 保护双栏布局中右栏正在展示的会话。
      */
     fun sweepEmptyConversations(keepConversationId: String? = null) {
         viewModelScope.launch {
@@ -136,6 +160,87 @@ class ProjectConversationsViewModel(
         }
     }
 
+    fun cloneConversation(
+        conversationId: String,
+        onCloned: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val source = conversationRepository.getById(conversationId).first() ?: return@launch
+            val clonedConversationId = randomUuid()
+            val now = currentTimeMillis()
+            val clonedConversation = source.copy(
+                id = clonedConversationId,
+                title = source.title + getString(Res.string.conversations_clone_suffix),
+                createdAt = now,
+                updatedAt = now
+            )
+            conversationRepository.insert(clonedConversation)
+            val clonedMessages = messageRepository.getByConversationId(source.id).first().map { message ->
+                message.copy(
+                    id = randomUuid(),
+                    conversationId = clonedConversationId,
+                    status = if (message.status == MessageStatus.SENDING) {
+                        MessageStatus.SENT
+                    } else {
+                        message.status
+                    }
+                )
+            }
+            messageRepository.insertAll(clonedMessages)
+            onCloned(clonedConversationId)
+        }
+    }
+
+    fun enterMultiSelectMode(conversationId: String) {
+        _uiState.value = FolderUiState(
+            isMultiSelectMode = true,
+            selectedConversationIds = setOf(conversationId)
+        )
+    }
+
+    fun exitMultiSelectMode() {
+        _uiState.value = FolderUiState()
+    }
+
+    fun toggleSelection(conversationId: String) {
+        val current = _uiState.value.selectedConversationIds
+        val updated = if (conversationId in current) current - conversationId else current + conversationId
+        _uiState.value = _uiState.value.copy(selectedConversationIds = updated)
+    }
+
+    fun selectAll(conversationIds: List<String>) {
+        _uiState.value = _uiState.value.copy(selectedConversationIds = conversationIds.toSet())
+    }
+
+    fun deselectAll() {
+        _uiState.value = _uiState.value.copy(selectedConversationIds = emptySet())
+    }
+
+    fun deleteConversationsBatch(ids: List<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { id -> conversationRepository.delete(id) }
+            exitMultiSelectMode()
+        }
+    }
+
+    fun switchAgentForConversations(ids: List<String>, targetAgentId: String) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val now = currentTimeMillis()
+            ids.forEach { id ->
+                val conversation = conversationRepository.getById(id).first() ?: return@forEach
+                conversationRepository.update(
+                    conversation.copy(
+                        agentId = targetAgentId,
+                        updatedAt = now
+                    )
+                )
+            }
+            exitMultiSelectMode()
+        }
+    }
+
     private suspend fun determineProviderId(agent: Agent): String {
         val enabledModels = modelRepository.getAll().first().filter { it.isEnabled }
         if (enabledModels.isEmpty()) return ""
@@ -147,7 +252,7 @@ class ProjectConversationsViewModel(
 
     companion object {
         fun provideFactory(
-            projectId: String,
+            projectId: String?,
             agentId: String?,
             projectRepository: ProjectRepository,
             conversationRepository: ConversationRepository,

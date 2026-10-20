@@ -27,27 +27,28 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
-import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.chat_select_conversation
+import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
+import cc.ptoe.messenger.presentation.ui.components.EmptyState
+import cc.ptoe.messenger.presentation.ui.projects.ProjectConversationsScreen
 import org.jetbrains.compose.resources.stringResource
 
 /**
  * Material 3 List-Detail layout for Desktop / large windows.
  *
- * Left pane  : `ConversationsScreen` (list, fixed ~360 dp wide).
- * Right pane : `ChatScreen` for the currently selected conversation, or an
- *              empty placeholder prompting the user to pick a conversation.
+ * Left pane  : folder list — `ConversationsScreen` (fixed ~360 dp wide).
+ * Right pane : the selected folder's chat list (`ProjectConversationsScreen`),
+ *              and `ChatScreen` for the currently selected conversation.
  *
- * The conversation list stays visible while chatting — no back-stack push,
- * no back button on the chat pane. This is the canonical M3 desktop chat
- * surface (cf. Gmail / Messages for web).
+ * The list stays visible while browsing; the folder page and chat render in
+ * the right pane — no back-stack push, no back button there.
  *
  * Selection state is `rememberSaveable` so it survives rail navigation
  * to Agents / Settings and back.
@@ -59,6 +60,9 @@ fun ConversationsDualPaneScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedConversationId by rememberSaveable { mutableStateOf(initialConversationId) }
+    /** 非空 = 右栏展示该文件夹（项目 id，或 [UNPROJECTED_FOLDER] 表示“无项目”）。 */
+    var openFolderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var openFolderAgentId by rememberSaveable { mutableStateOf<String?>(null) }
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
@@ -70,6 +74,16 @@ fun ConversationsDualPaneScreen(
             ConversationsScreen(
                 onConversationClick = { id -> selectedConversationId = id },
                 selectedConversationId = selectedConversationId,
+                onProjectClick = { projectId ->
+                    selectedConversationId = null
+                    openFolderAgentId = null
+                    openFolderId = projectId
+                },
+                onUnprojectedClick = {
+                    selectedConversationId = null
+                    openFolderAgentId = null
+                    openFolderId = UNPROJECTED_FOLDER
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -87,21 +101,40 @@ fun ConversationsDualPaneScreen(
                 .weight(1f)
         ) {
             val conversationId = selectedConversationId
-            if (conversationId == null) {
-                EmptyState(
-                    icon = Icons.AutoMirrored.Filled.Chat,
-                    message = stringResource(Res.string.chat_select_conversation),
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                ChatScreen(
-                    conversationId = conversationId,
-                    onBackClick = { selectedConversationId = null },
-                    onSettingsClick = { onOpenConversationSettings(conversationId) },
-                    showBackButton = false,
-                    modifier = Modifier.fillMaxSize()
-                )
+            val folderId = openFolderId
+            when {
+                conversationId != null -> {
+                    ChatScreen(
+                        conversationId = conversationId,
+                        onBackClick = { selectedConversationId = null },
+                        onSettingsClick = { onOpenConversationSettings(conversationId) },
+                        showBackButton = false,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                folderId != null -> {
+                    key(folderId, openFolderAgentId) {
+                        ProjectConversationsScreen(
+                            projectId = folderId.takeIf { it != UNPROJECTED_FOLDER },
+                            agentId = openFolderAgentId,
+                            showBackButton = false,
+                            onBackClick = { openFolderId = null },
+                            onConversationClick = { id -> selectedConversationId = id },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+                else -> {
+                    EmptyState(
+                        icon = Icons.AutoMirrored.Filled.Chat,
+                        message = stringResource(Res.string.chat_select_conversation),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
 }
+
+/** “无项目”文件夹在保存状态里的哨兵 id（真实项目 id 是 UUID）。 */
+internal const val UNPROJECTED_FOLDER = "__unprojected__"
