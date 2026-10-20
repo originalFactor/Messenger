@@ -24,10 +24,11 @@ import kotlin.reflect.KClass
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.data.local.ThemePreferences
-import cc.ptoe.messenger.data.cloud.CloudSyncResult
 import cc.ptoe.messenger.data.cloud.CloudCardPreview
 import cc.ptoe.messenger.data.cloud.CloudLoginOutcome
 import cc.ptoe.messenger.data.cloud.CloudRedeemResponse
+import cc.ptoe.messenger.data.cloud.CloudSyncResult
+import cc.ptoe.messenger.data.cloud.DEFAULT_CLOUD_SERVER_URL
 import cc.ptoe.messenger.presentation.theme.ThemeMode
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -60,7 +61,7 @@ class SettingsViewModel(
     val cloudUser = cloudSyncRepository.user
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val cloudServerUrl = cloudSyncRepository.serverUrl
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "https://messenger.ptoe.cc")
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_CLOUD_SERVER_URL)
     val cloudSyncError = cloudSyncRepository.syncError
 
     fun setCloudServerUrl(url: String, onResult: (Result<Unit>) -> Unit) {
