@@ -113,6 +113,10 @@ impl McpClient {
             return false;
         }
         if !self.initialize_handshake().await {
+            // The transport is live at this point (a spawned child or an SSE
+            // reader task); leaving it running would leak it and orphan the
+            // first child when the caller retries.
+            self.transport.close().await;
             return false;
         }
         self.refresh_tools().await;

@@ -31,7 +31,9 @@ pub struct StdioTransport {
     command: String,
     args: Vec<String>,
     env: std::collections::HashMap<String, String>,
-    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    /// Shared with the stdout reader task, which reaps the child and reports
+    /// its real exit code when the pipe closes.
+    child: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
     stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
 }
 
@@ -41,7 +43,7 @@ impl StdioTransport {
             command,
             args,
             env,
-            child: tokio::sync::Mutex::new(None),
+            child: Arc::new(tokio::sync::Mutex::new(None)),
             stdin: tokio::sync::Mutex::new(None),
         }
     }
@@ -90,8 +92,13 @@ impl McpTransport for StdioTransport {
             });
         }
 
-        // stdout → on_line
+        // stdout → on_line. The exit status is reported when the pipe closes:
+        // a crashed server must not look like a clean `code 0` exit. The child
+        // is published to the shared slot BEFORE the reader spawns, so the
+        // reader can always reap it.
+        *self.child.lock().await = Some(child);
         let close_handler = Arc::clone(&handler);
+        let status_child = self.child.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let mut reader = tokio::io::BufReader::new(&mut stdout);
@@ -103,10 +110,19 @@ impl McpTransport for StdioTransport {
                     Ok(_) => handler.on_line(line.trim_end().to_string()),
                 }
             }
-            close_handler.on_close(0);
+            // Take the child OUT of the shared slot before awaiting: `wait()`
+            // must not be called while holding the lock `close()` needs.
+            let taken = status_child.lock().await.take();
+            let code = match taken {
+                Some(mut child) => match child.wait().await {
+                    Ok(status) => status.code().unwrap_or(-1),
+                    Err(_) => -1,
+                },
+                None => -1,
+            };
+            close_handler.on_close(code);
         });
 
-        *self.child.lock().await = Some(child);
         true
     }
 
@@ -132,9 +148,12 @@ impl McpTransport for StdioTransport {
     }
 }
 
-/// SSE down / HTTP POST up transport (remote servers). The server announces
-/// its message endpoint on the `endpoint` event; requests POST JSON-RPC to
-/// it and responses arrive as `message` events.
+/// One SSE field value; the space after the colon is optional per the spec.
+fn sse_field<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    line.strip_prefix(prefix)
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+}
+
 pub struct SseTransport {
     url: String,
     headers: std::collections::HashMap<String, String>,
@@ -250,9 +269,9 @@ impl McpTransport for SseTransport {
                         // SSE default event type is "message" when omitted.
                         event_name = "message".to_string();
                         data_lines.clear();
-                    } else if let Some(value) = line.strip_prefix("event: ") {
+                    } else if let Some(value) = sse_field(&line, "event:") {
                         event_name = value.trim().to_string();
-                    } else if let Some(value) = line.strip_prefix("data: ") {
+                    } else if let Some(value) = sse_field(&line, "data:") {
                         data_lines.push(value.to_string());
                     }
                 }
@@ -313,6 +332,15 @@ fn resolve_relative(base: &str, endpoint: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_fields_accept_the_optional_space() {
+        assert_eq!(sse_field("data: {}", "data:"), Some("{}"));
+        assert_eq!(sse_field("data:{}", "data:"), Some("{}"));
+        assert_eq!(sse_field("event:endpoint", "event:"), Some("endpoint"));
+        assert_eq!(sse_field("event: endpoint", "event:"), Some("endpoint"));
+        assert_eq!(sse_field(": keep-alive", "data:"), None);
+    }
 
     #[test]
     fn endpoint_resolution_matches_kotlin() {
