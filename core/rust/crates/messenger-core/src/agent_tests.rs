@@ -366,6 +366,49 @@ async fn cancellation_finalizes_partial_rows() {
     assert!(error_rows.is_empty());
 }
 
+/// Cancelled before the first token: the empty placeholder row must not be
+/// left behind in `sending` (it would render as a permanent empty bubble).
+#[tokio::test]
+async fn cancellation_before_the_first_token_removes_the_placeholder() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_string(r#"data: {"choices":[{"delta":{"content":"late"}}]}"#)
+                .set_delay(std::time::Duration::from_millis(1000)),
+        )
+        .mount(&server)
+        .await;
+
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel_clone.cancel();
+    });
+
+    run_chat_turn(&store, &StaticToolHost, &sink, &turn_request(&server.uri()), cancel)
+        .await
+        .unwrap();
+
+    let leftover: Vec<_> = store
+        .list_messages_by_conversation("c1")
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.status == "sending")
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "a cancelled turn must not leave a sending row: {leftover:?}"
+    );
+    assert!(matches!(
+        sink.0.lock().last(),
+        Some(AgentEvent::Cancelled)
+    ));
+}
+
 /// The turn loop has no round-count cap: many consecutive tool rounds must
 /// still end on the model's final text round instead of an
 /// `error_tool_rounds_exceeded` failure.
