@@ -214,11 +214,11 @@ class RustCloudFacade(
             decodeSync(core.cloudReplaceCloudWithLocal())
         } else {
             decodeSync(core.cloudSync(replaceLocal = true))
-        }
+        }.also { runCatching { refreshUser() } }
     }
 
     override suspend fun downloadAndRestore(): CloudSyncResult = request {
-        decodeSync(core.cloudSync(replaceLocal = true))
+        decodeSync(core.cloudSync(replaceLocal = true)).also { runCatching { refreshUser() } }
     }
 
     /**
