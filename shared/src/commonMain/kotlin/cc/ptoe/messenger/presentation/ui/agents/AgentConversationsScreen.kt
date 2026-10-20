@@ -49,6 +49,7 @@ import cc.ptoe.messenger.generated.resources.conversations_title
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.projectSection
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.displayName
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.AgentConversationsViewModel
 import org.jetbrains.compose.resources.stringResource
@@ -101,7 +102,7 @@ fun AgentConversationsScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            text = agent?.name ?: stringResource(Res.string.conversations_title),
+                            text = agent?.displayName() ?: stringResource(Res.string.conversations_title),
                             maxLines = 1
                         )
                     },

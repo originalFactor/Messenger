@@ -60,6 +60,8 @@
     <string name="agents_default_badge">默认</string>
     <string name="agents_builtin_badge">内置</string>
     <string name="agents_title_badge">标题生成器</string>
+    <string name="agent_builtin_default_name">默认 Agent</string>
+    <string name="agent_builtin_title_name">标题生成</string>
     <string name="agents_no_system_prompt">无系统提示词</string>
     <string name="agents_model_label">模型: %1$s</string>
     <string name="agents_model_default">默认</string>

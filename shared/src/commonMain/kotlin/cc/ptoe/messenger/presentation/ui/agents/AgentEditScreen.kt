@@ -99,6 +99,7 @@ import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.ui.components.toolIcon
+import cc.ptoe.messenger.presentation.utils.builtinAgentDisplayName
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.domain.model.Agent
@@ -383,9 +384,19 @@ fun AgentEditScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    // 内置 Agent 的种子名按系统语言展示（改过名的照原样）。表单里
+                    // 只换了展示文案：用户没动过输入框时仍提交原始存库名称，免得
+                    // 「打开又保存」把种子名改成本地化字面值。
+                    val displayedName = builtinAgentDisplayName(
+                        id = agentId,
+                        isDefault = uiState.isDefault,
+                        name = uiState.name
+                    )
                     OutlinedTextField(
-                        value = uiState.name,
-                        onValueChange = { viewModel.onNameChange(it) },
+                        value = displayedName,
+                        onValueChange = { text ->
+                            viewModel.onNameChange(if (text == displayedName) uiState.name else text)
+                        },
                         label = { Text(stringResource(Res.string.agent_edit_name_label)) },
                         isError = uiState.nameError != null,
                         supportingText = {

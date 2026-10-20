@@ -62,8 +62,15 @@ data class Agent(
         const val BUILTIN_TITLE_AGENT_ID = "builtin-title-agent"
 
         /**
-         * 内置智能体的显示名。与「默认 Agent」同理按字面存库（isDefaultAgentBaseline
-         * 等基线判断依赖字面比较），不做资源本地化。
+         * 内置默认 Agent 的种子显示名。按字面存库（云同步与本地数据基线都按行
+         * 判断，不依赖名称），界面展示时再按系统语言本地化，见
+         * `Agent.displayName()`。
+         */
+        const val DEFAULT_AGENT_NAME = "默认 Agent"
+
+        /**
+         * 内置智能体的显示名。与「默认 Agent」同理按字面存库（云同步与本地数据
+         * 基线都按行判断，不依赖名称），界面展示时再按系统语言本地化。
          */
         const val BUILTIN_TITLE_AGENT_NAME = "标题生成"
 

@@ -825,7 +825,7 @@ impl<'a> SyncEngine<'a> {
         let now = now_ms();
         self.store.upsert_agent(&StoredAgent {
             id: BUILTIN_TITLE_AGENT_ID.to_string(),
-            name: "标题生成".to_string(),
+            name: BUILTIN_TITLE_AGENT_NAME.to_string(),
             avatar: None,
             system_prompt: BUILTIN_TITLE_AGENT_PROMPT.to_string(),
             description: String::new(),

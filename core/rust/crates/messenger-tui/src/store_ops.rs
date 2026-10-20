@@ -96,7 +96,7 @@ pub fn ensure_default_agent(store: &Store) -> Result<(), String> {
         store
             .upsert_agent(&StoredAgent {
                 id: id.clone(),
-                name: "默认 Agent".into(),
+                name: messenger_sync::DEFAULT_AGENT_NAME.into(),
                 system_prompt: "You are a helpful assistant.".into(),
                 avatar: None,
                 description: String::new(),
@@ -440,7 +440,7 @@ pub fn resolve_turn(
     Ok(ResolvedTurn {
         conversation_title: conversation.title.clone(),
         workspace: workspace.as_deref().map(|dir| strip_verbatim(Path::new(dir))),
-        agent_name: effective.name.clone(),
+        agent_name: crate::agent_name::display_name(&effective),
         model_display_name: model.display_name.clone(),
         model_input_rate: model.input_rate,
         model_output_rate: model.output_rate,

@@ -228,7 +228,7 @@ class AppContainer(
             val now = currentTimeMillis()
             val defaultAgent = Agent(
                 id = randomUuid(),
-                name = "默认 Agent",
+                name = Agent.DEFAULT_AGENT_NAME,
                 systemPrompt = "You are a helpful assistant.",
                 defaultModelId = null,
                 temperature = 0.7f,

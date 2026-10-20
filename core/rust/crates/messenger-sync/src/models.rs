@@ -11,6 +11,12 @@ pub const BUILTIN_PROVIDER_ID: &str = "builtin-messenger-cloud-ai";
 pub const BUILTIN_PROVIDER_NAME: &str = "Messenger Cloud AI";
 /// The builtin title agent never syncs (locally seeded, see the core crate).
 pub const BUILTIN_TITLE_AGENT_ID: &str = "builtin-title-agent";
+/// Seed name of the locally created default Agent. Rows are matched by
+/// identity, so the literal is only ever a display value: clients localize it
+/// at render time (`messenger-tui`'s `agent_name` module).
+pub const DEFAULT_AGENT_NAME: &str = "默认 Agent";
+/// Seed name of the builtin title agent (same display-only rule).
+pub const BUILTIN_TITLE_AGENT_NAME: &str = "标题生成";
 pub const ROLE_CHAT: &str = "chat";
 pub const ROLE_TITLE: &str = "title";
 

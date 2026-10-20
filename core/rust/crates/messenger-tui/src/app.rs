@@ -1359,7 +1359,7 @@ impl App {
             .agents
             .iter()
             .find(|agent| agent.id == agent_id)
-            .map(|agent| agent.name.clone())
+            .map(crate::agent_name::display_name)
             .unwrap_or_else(|| agent_id.to_string());
         self.note_info(format!("Agent: {name}"));
     }
@@ -1651,7 +1651,9 @@ impl App {
     }
 
     fn submit_agent_form(&mut self, form: Form, existing: Option<StoredAgent>) {
-        let name = form.value("Name");
+        // The form shows the localized builtin label; saving it untouched must
+        // keep the stored seed literal (a rewrite would read as a rename).
+        let name = crate::agent_name::canonical_name(existing.as_ref(), &form.value("Name"));
         let now = messenger_store::now_ms();
         let model_id = form.index("Model").and_then(|index| {
             self.engine
@@ -1731,7 +1733,8 @@ impl App {
         match self.engine.store.upsert_agent(&agent) {
             Ok(()) => {
                 self.reload_agents();
-                self.note_info(format!("Saved Agent “{name}”."));
+                let shown = crate::agent_name::display_name(&agent);
+                self.note_info(format!("Saved Agent “{shown}”."));
             }
             Err(error) => self.note(ChatNote::error(error.to_string())),
         }
@@ -1821,7 +1824,10 @@ impl App {
                 } else {
                     detail
                 };
-                SelectItem::new(format!("{}{badge}", agent.name), agent.id.clone())
+                SelectItem::new(
+                    format!("{}{badge}", crate::agent_name::display_name(agent)),
+                    agent.id.clone(),
+                )
                     .detail(detail)
                     .selected(Some(&agent.id) == current.as_ref())
             })
@@ -2194,7 +2200,13 @@ impl App {
                 .unwrap_or(""),
         );
         let mut fields = vec![
-            Field::text("Name", existing.as_ref().map(|a| a.name.clone()).unwrap_or_default()),
+            Field::text(
+                "Name",
+                existing
+                    .as_ref()
+                    .map(crate::agent_name::display_name)
+                    .unwrap_or_default(),
+            ),
             Field::text(
                 "Description",
                 existing.as_ref().map(|a| a.description.clone()).unwrap_or_default(),
@@ -3431,7 +3443,7 @@ impl App {
         match agents.get(index) {
             Some(agent) if delete => {
                 let id = agent.id.clone();
-                let name = agent.name.clone();
+                let name = crate::agent_name::display_name(agent);
                 self.push_confirm(Confirm::new(
                     "Delete Agent",
                     format!("Delete Agent “{name}”?"),

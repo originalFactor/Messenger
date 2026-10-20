@@ -60,6 +60,8 @@
     <string name="agents_default_badge">Default</string>
     <string name="agents_builtin_badge">Built-in</string>
     <string name="agents_title_badge">Title Generator</string>
+    <string name="agent_builtin_default_name">Default Agent</string>
+    <string name="agent_builtin_title_name">Title Generator</string>
     <string name="agents_no_system_prompt">No system prompt</string>
     <string name="agents_model_label">Model: %1$s</string>
     <string name="agents_model_default">Default</string>

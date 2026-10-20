@@ -84,6 +84,7 @@ import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.displayName
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.AgentWithModel
 import cc.ptoe.messenger.presentation.viewmodel.AgentsViewModel
@@ -389,7 +390,7 @@ private fun AgentListItem(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = item.agent.name,
+                    text = item.agent.displayName(),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,

@@ -84,6 +84,7 @@ import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.ui.components.projectSection
 import cc.ptoe.messenger.presentation.ui.projects.ProjectEditorDialog
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.agentDisplayNames
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ConversationsViewModel
 import cc.ptoe.messenger.presentation.viewmodel.ProjectEditorState
@@ -121,6 +122,8 @@ fun ConversationsScreen(
     val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
     val unprojectedCount by viewModel.unprojectedConversationCount.collectAsStateWithLifecycle()
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
+    // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
+    val agentNames = agentDisplayNames(allAgents)
 
     // 进入列表页时触发一次空会话清理（规则在 Rust core）；双栏布局下右栏
     // 正在展示的会话要豁免，否则会被从脚下删掉。
@@ -271,7 +274,7 @@ fun ConversationsScreen(
                     items = selectableAgents,
                     initialSelectedId = currentAgent?.id ?: selectableAgents.firstOrNull()?.id,
                     itemId = { it.id },
-                    itemLabel = { it.name },
+                    itemLabel = { agentNames[it.id] ?: it.name },
                     confirmButtonText = stringResource(Res.string.action_confirm),
                     dismissButtonText = stringResource(Res.string.action_cancel),
                     onConfirm = { agent ->
