@@ -32,6 +32,12 @@ import java.nio.file.StandardOpenOption
 internal object WorkspaceOps {
     private const val MAX_FILE_BYTES = 4L * 1024 * 1024
     private const val MAX_FILES_SCANNED = 20_000
+    /**
+     * Chars per synchronous AIDL reply. UTF-8 puts a 3-byte CJK char at ~1.5
+     * bytes of the Binder budget, so 256 K chars stays far below the ~1 MiB
+     * kernel buffer even with the Parcelable overhead.
+     */
+    private const val MAX_REPLY_CHARS = 256 * 1024
 
     fun glob(root: File, pattern: String, maxResults: Int): ToolResult = guarded {
         require(pattern.isNotBlank()) { "Glob pattern cannot be empty." }
@@ -166,9 +172,27 @@ internal object WorkspaceOps {
     }
 
     private inline fun guarded(block: () -> ToolResult): ToolResult = try {
-        block()
+        binderSafe(block())
     } catch (e: Exception) {
         ToolResult(e.message ?: "I/O error", isError = true)
+    }
+
+    /**
+     * A synchronous AIDL reply marshals the whole `ToolResult` in ONE Binder
+     * transaction, and the kernel buffer is ~1 MiB per process (shared with
+     * every other in-flight call). A 4 MiB `read` or a 1000-row `grep` would
+     * overflow it and surface as a `TransactionTooLargeException` — i.e. the
+     * tool "failing" well inside its own advertised limits. Truncate here,
+     * where the boundary is, instead of silently lowering the tool limits.
+     */
+    private fun binderSafe(result: ToolResult): ToolResult {
+        val output = result.output
+        if (output.length <= MAX_REPLY_CHARS) return result
+        val kept = output.substring(0, MAX_REPLY_CHARS)
+        return result.copy(
+            output = kept + "\n(output truncated at $MAX_REPLY_CHARS characters; " +
+                "narrow the range/pattern to see more)"
+        )
     }
 
     /**
