@@ -75,7 +75,6 @@ import cc.ptoe.messenger.generated.resources.tool_unknown_tool
 import org.jetbrains.compose.resources.getString
 import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
-import cc.ptoe.messenger.data.util.runBlockingCall
 import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
 import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
 
@@ -318,6 +317,20 @@ class ChatViewModel(
     }
 
     fun loadConversation(conversationId: String) {
+        // Switching conversations must not leave the previous conversation's
+        // turn running: its events would keep mutating the streaming
+        // StateFlows (whose message ids belong to the old conversation) and
+        // `_isGenerating` would stay true, blocking sends in the new one.
+        if (_conversationId.value != conversationId && _isGenerating.value) {
+            coreBridge.cancelTurn()
+            currentGenerationJob?.cancel()
+            currentGenerationJob = null
+            currentDocSession = null
+            _isGenerating.value = false
+            _streamingContent.value = null
+            _streamingMessageId.value = null
+            _streamingDiff.value = null
+        }
         // Switching conversations implicitly discards any unsent
         // images: the pending preview is bound to the input bar of a
         // single chat, not a global draft.
@@ -493,13 +506,13 @@ class ChatViewModel(
                     toolExecutor = { name, argumentsJson ->
                         val tool = toolsByName[name]
                         if (tool != null) {
-                            // NEVER let an exception escape into the JNI
-                            // upcall: a foreign callback exception turns
-                            // into a Rust panic (spawn_blocking JoinError
-                            // → "tool host cancelled"). Report it to the
+                            // Never let an exception escape the tool host: on
+                            // Android/Desktop this lambda runs inside a JNI
+                            // upcall, where a foreign exception becomes a Rust
+                            // panic ("tool host cancelled"). Report it to the
                             // model as an error result for self-correction.
                             try {
-                                val r = runBlockingCall { tool.execute(argumentsJson) }
+                                val r = tool.execute(argumentsJson)
                                 r.output to r.isError
                             } catch (e: CancellationException) {
                                 throw e

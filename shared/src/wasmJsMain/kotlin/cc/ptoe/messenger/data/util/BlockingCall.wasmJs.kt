@@ -17,9 +17,10 @@
 package cc.ptoe.messenger.data.util
 
 /**
- * The browser build registers no built-in tools (`createBuiltinChatTools()`
- * is empty), so this is unreachable there; failing loudly beats silently
- * blocking the single-threaded event loop.
+ * wasmJs has no `runBlocking` (single-threaded event loop). Nothing on this
+ * target calls it: `WasmCoreBridge` hands the Rust tool host a `Promise`
+ * instead of bridging a synchronous callback, so suspending tools work there.
+ * Failing loudly beats silently blocking the event loop.
  */
 actual fun <T> runBlockingCall(block: suspend () -> T): T =
     throw UnsupportedOperationException("No blocking calls on wasmJs")
