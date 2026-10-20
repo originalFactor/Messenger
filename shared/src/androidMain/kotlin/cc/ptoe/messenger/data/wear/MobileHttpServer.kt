@@ -154,9 +154,20 @@ class MobileHttpServer : Service() {
     private fun startServer() {
         if (isRunning) return
         isRunning = true
+        val expectedToken = WearBridgeToken.current(this)
         serviceScope.launch {
             val server = object : WebSocketServer(InetSocketAddress(PORT)) {
                 override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
+                    // The socket is reachable from the whole L2 network, so the
+                    // handshake token (advertised only in the mDNS TXT record)
+                    // is the access control. Reject before any request runs.
+                    val provided = tokenFromHandshake(handshake)
+                        ?: tokenFromQuery(handshake.resourceDescriptor)
+                    if (provided == null || !constantTimeEquals(provided, expectedToken)) {
+                        Log.w(TAG, "Rejecting unauthenticated client: ${conn.remoteSocketAddress}")
+                        conn.close(UNAUTHORIZED_CLOSE_CODE, "unauthorized")
+                        return
+                    }
                     Log.d(TAG, "Client connected: ${conn.remoteSocketAddress}")
                 }
 
@@ -244,6 +255,9 @@ class MobileHttpServer : Service() {
             serviceName = SERVICE_NAME
             serviceType = SERVICE_TYPE
             port = PORT
+            // The token travels in the TXT record so the paired watch can
+            // complete the handshake without pairing UI.
+            setAttribute(WearBridgeToken.ATTRIBUTE, WearBridgeToken.current(this@MobileHttpServer))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
@@ -441,6 +455,31 @@ class MobileHttpServer : Service() {
         }
     }
 
+    /**
+     * The token rides a custom handshake header (`X-Messenger-Bridge`), with a
+     * query parameter as a fallback for clients that cannot set headers.
+     * Java-WebSocket exposes both on the handshake object.
+     */
+    private fun tokenFromHandshake(handshake: ClientHandshake): String? =
+        handshake.getFieldValue(TOKEN_HEADER)?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun tokenFromQuery(resourceDescriptor: String): String? {
+        val query = resourceDescriptor.substringAfter('?', "")
+        if (query.isEmpty()) return null
+        return query.split('&')
+            .firstOrNull { it.startsWith("${WearBridgeToken.QUERY_PARAM}=") }
+            ?.substringAfter('=')
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    /** Length-independent comparison so the token is not timing-probeable. */
+    private fun constantTimeEquals(a: String, b: String): Boolean {
+        if (a.length != b.length) return false
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].code xor b[i].code)
+        return diff == 0
+    }
+
     private suspend fun isAgentReady(agent: Agent): Boolean {
         val enabledModels = app.modelRepository.getAll().first().filter { it.isEnabled }
         if (enabledModels.isEmpty()) return false
@@ -462,5 +501,9 @@ class MobileHttpServer : Service() {
         private const val MULTICAST_LOCK_TAG = "MessengerWearSync"
         private const val MAX_CONVERSATIONS = 30
         private const val MAX_MESSAGES_PER_CONVERSATION = 40
+        /** Handshake header carrying the bridge token. */
+        private const val TOKEN_HEADER = "X-Messenger-Bridge"
+        /** WebSocket close code 1008 = policy violation. */
+        private const val UNAUTHORIZED_CLOSE_CODE = 1008
     }
 }
