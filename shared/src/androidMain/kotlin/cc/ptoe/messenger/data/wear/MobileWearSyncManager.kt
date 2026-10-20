@@ -42,24 +42,25 @@ import java.util.UUID
 class MobileWearChatHandler(private val app: AppContainer) {
 
     /**
-     * Streaming wear chat handler. Instead of buffering the whole reply into
-     * a single frame, it:
+     * Streaming wear chat handler. It:
      *
-     *  1. Inserts the user message and a SENDING assistant placeholder into
-     *     Room immediately (so the phone's own chat UI shows a pending bubble).
-     *  2. Drives [ApiRepository.streamChatCompletion], updating the assistant
-     *     message content on every delta (so the phone streams too).
+     *  1. Inserts the user message into the store immediately.
+     *  2. Drives the Rust agent loop (`coreBridge.runTurn`), which creates and
+     *     fills the assistant placeholder row itself.
      *  3. Pushes incremental frames to the watch via [sendFrame]:
      *
      *       chat_delta  {"requestId","delta"}      (zero or more)
      *       chat_done   {"requestId","content","userMessageId","assistantMessageId"}
      *       chat_error   {"requestId","error"}
      *
-     *     Exactly one terminal frame (chat_done / chat_error) is always sent.
+     *     Exactly ONE terminal frame is always sent — `Finished`, `Cancelled`
+     *     and `Error` all end the turn, and the watch stops at the first
+     *     terminal frame it sees.
      *
-     * Replaces the previous single-shot [createChatCompletion] path, which
-     * meant the watch sat on a "Thinking..." bubble for the whole duration
-     * and neither side saw streaming.
+     * The assistant row is NOT inserted here: the loop owns it, and a second
+     * locally-inserted `sending` row would never be filled (a permanent empty
+     * bubble on the phone). The id reported by `StreamingStarted` is the one
+     * the watch must bind to.
      */
     suspend fun handleChatRequestStreaming(
         payloadBytes: ByteArray,
@@ -74,6 +75,14 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 put("type", type)
                 block()
             })
+        }
+
+        // Exactly one terminal frame per request, even on the error path.
+        var terminalSent = false
+        fun sendTerminal(type: String, block: JSONObject.() -> Unit) {
+            if (terminalSent) return
+            terminalSent = true
+            frame(type, block)
         }
 
         try {
@@ -108,17 +117,6 @@ class MobileWearChatHandler(private val app: AppContainer) {
             )
             app.messageRepository.insert(userMessage)
 
-            val assistantMessageId = UUID.randomUUID().toString()
-            val assistantMessage = Message(
-                id = assistantMessageId,
-                conversationId = conversationId,
-                role = MessageRole.ASSISTANT,
-                content = "",
-                timestamp = System.currentTimeMillis(),
-                status = MessageStatus.SENDING
-            )
-            app.messageRepository.insert(assistantMessage)
-
             val bridge = app.coreBridge
             val titleHolder = app.agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
             val config = TurnConfigBridge(
@@ -146,6 +144,15 @@ class MobileWearChatHandler(private val app: AppContainer) {
             )
 
             var currentContent = ""
+            // The loop creates the placeholder row; bind to ITS id.
+            var assistantMessageId: String? = null
+
+            fun sendDone() = sendTerminal("chat_done") {
+                put("content", currentContent)
+                put("userMessageId", userMessage.id)
+                assistantMessageId?.let { put("assistantMessageId", it) }
+            }
+
             bridge.runTurn(
                 config = config,
                 toolExecutor = { _, _ -> "Tool execution disabled on watch" to true },
@@ -157,35 +164,30 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     }
                     val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
                     when (type) {
+                        "StreamingStarted" -> {
+                            assistantMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull
+                        }
                         "TextDelta" -> {
                             val delta = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                             currentContent += delta
                             frame("chat_delta") { put("delta", delta) }
                         }
-                        "Finished" -> {
-                            frame("chat_done") {
-                                put("content", currentContent)
-                                put("userMessageId", userMessage.id)
-                                put("assistantMessageId", assistantMessage.id)
-                            }
-                        }
+                        // Finished and Cancelled are both clean terminal
+                        // events (cancellation keeps the partial text).
+                        "Finished", "Cancelled" -> sendDone()
                         "Error" -> {
                             val msg = root["message"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
-                            if (currentContent.isNotBlank()) {
-                                frame("chat_done") {
-                                    put("content", currentContent)
-                                    put("userMessageId", userMessage.id)
-                                    put("assistantMessageId", assistantMessage.id)
-                                }
-                            }
-                            frame("chat_error") { put("error", msg) }
+                            sendTerminal("chat_error") { put("error", msg) }
                         }
                     }
                 }
             )
+            // Defensive: a loop that returned without a terminal event must
+            // still release the watch (it waits for exactly one).
+            sendDone()
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            frame("chat_error") { put("error", e.message ?: "Unknown error") }
+            sendTerminal("chat_error") { put("error", e.message ?: "Unknown error") }
         }
     }
 

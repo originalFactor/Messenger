@@ -145,9 +145,13 @@ class WearNetworkBridge(
         }
 
         _connectionState.value = WearConnectionState.Connecting("正在连 ${endpoint.host}:${endpoint.port}")
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("ws://${endpoint.host}:${endpoint.port}")
-            .build()
+        // The server rejects any handshake without its token; the token comes
+        // from the mDNS TXT record, so only a device that discovered the
+        // service can connect.
+        endpoint.token?.let { builder.header(TOKEN_HEADER, it) }
+        val request = builder.build()
 
         val result = CompletableDeferred<Result<Unit>>()
 
@@ -179,6 +183,10 @@ class WearNetworkBridge(
                 this@WearNetworkBridge.webSocket = null
                 _isConnected.value = false
                 _connectionState.value = WearConnectionState.Disconnected
+                // 1008 = the phone rejected our bridge token (e.g. its data was
+                // cleared and a new token was minted). Drop the cached endpoint
+                // so the next attempt rediscovers the service and its token.
+                if (code == 1008) forgetCachedEndpoint()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -189,6 +197,7 @@ class WearNetworkBridge(
                 _connectionState.value = WearConnectionState.Error(
                     "连不上手机: ${t.message ?: t.javaClass.simpleName}"
                 )
+                if (response?.code == 403 || response?.code == 401) forgetCachedEndpoint()
                 if (!result.isCompleted) result.complete(Result.failure(t))
             }
         }
@@ -260,7 +269,9 @@ class WearNetworkBridge(
                                 return
                             }
                             Log.d(TAG, "NSD resolved: ${service.serviceName} -> $host:${service.port}")
-                            resolved.complete(Endpoint(host, service.port))
+                            resolved.complete(
+                                Endpoint(host, service.port, service.bridgeToken())
+                            )
                         }
                     })
                 }.onFailure { Log.w(TAG, "NSD resolveService threw", it) }
@@ -486,7 +497,12 @@ class WearNetworkBridge(
     private fun newRequestId(): String =
         "req-${System.currentTimeMillis()}-${(0..0xffff).random()}"
 
-    private data class Endpoint(val host: String, val port: Int)
+    /** Forget the cached endpoint so the next connect rediscovers it. */
+    private fun forgetCachedEndpoint() {
+        synchronized(endpointCacheLock) { cachedEndpoint = null }
+    }
+
+    private data class Endpoint(val host: String, val port: Int, val token: String?)
 
     // NsdManager.resolveService(NsdServiceInfo, ResolveListener) and NsdServiceInfo.host are
     // deprecated on API 34+ (Executor-based resolveService / hostAddresses), but those
@@ -500,10 +516,23 @@ class WearNetworkBridge(
     @Suppress("DEPRECATION")
     private fun NsdServiceInfo.firstHostAddress(): String? = host?.hostAddress
 
+    /**
+     * The phone publishes its bridge token in the mDNS TXT record; it is the
+     * handshake credential for the WebSocket server.
+     */
+    private fun NsdServiceInfo.bridgeToken(): String? =
+        attributes[TOKEN_ATTRIBUTE]
+            ?.let { String(it, Charsets.UTF_8) }
+            ?.takeIf { it.isNotBlank() }
+
     companion object {
         private const val TAG = "WearNetworkBridge"
         // NSD service type — DNS-SD. Must match the phone's registration.
         private const val SERVICE_TYPE = "_messenger._tcp."
+        /** TXT attribute carrying the phone's bridge token. */
+        private const val TOKEN_ATTRIBUTE = "token"
+        /** Handshake header carrying the token (must match the phone). */
+        private const val TOKEN_HEADER = "X-Messenger-Bridge"
         private const val DISCOVERY_TIMEOUT_MS = 4_000L  // 优化：从 8s 降到 4s
         private const val REQUEST_TIMEOUT_MS = 60_000L
     }
