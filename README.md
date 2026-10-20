@@ -9,7 +9,7 @@
 
 <br />
 <div align="center">
-  <a href="https://github.com/ECSDevs/Messenger">
+  <a href="https://github.com/originalFactor/Messenger">
     <img src="logo.svg" alt="Logo" width="80" height="80">
   </a>
 
@@ -109,7 +109,7 @@ To get a local copy up and running, follow these simple steps.
 
 1. Clone the repo
    ```sh
-   git clone https://github.com/ECSDevs/Messenger.git
+   git clone https://github.com/originalFactor/Messenger.git
    ```
 2. Create a `local.properties` file in the project root pointing to your Android SDK
    ```properties
@@ -136,7 +136,7 @@ To get a local copy up and running, follow these simple steps.
 
    cd core/rust && cargo build -p messenger-tui     # terminal client
    ```
-   The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI republishes it to a rolling `web-client` GitHub release, and the account server (`server/`) downloads and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
+   The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI uploads it as the `web-distribution` artifact on every successful run (`.github/workflows/ci.yml` → `build-all.yml` → `build-web.yml`), and the account server (`server/`) downloads it through nightly.link and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
 6. Cutting a release
    ```sh
    ./release.ps1 -Bump patch     # 1.0.0 -> 1.0.1: bumps VERSION, commits it, tags v1.0.1, pushes
@@ -146,7 +146,7 @@ To get a local copy up and running, follow these simple steps.
    The push is what triggers the release build. The script refuses to tag when `VERSION` is uncommitted or differs from `HEAD` (a tag names a commit, so the mismatch would publish the wrong version), when the tree is dirty, or when the tag already exists locally or on origin; `-WhatIf` previews, and `-AllowDirty` tolerates unrelated local edits. `.github/workflows/release.yml` re-checks the tag against `VERSION` at the tagged commit and fails rather than publishing a mismatch.
 7. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
-   git remote set-url origin ECSDevs/Messenger
+   git remote set-url origin originalFactor/Messenger
    git remote -v # confirm the changes
    ```
 
@@ -203,8 +203,8 @@ Don't forget to give the project a star! Thanks again!
 
 ### Top contributors
 
-<a href="https://github.com/ECSDevs/Messenger/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=ECSDevs/Messenger" alt="contrib.rocks image" />
+<a href="https://github.com/originalFactor/Messenger/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=originalFactor/Messenger" alt="contrib.rocks image" />
 </a>
 
 ## License
@@ -215,7 +215,7 @@ Distributed under the Apache License, Version 2.0. See `LICENSE` for more inform
 
 ## Contact
 
-ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.com/ECSDevs/Messenger)
+originalFactor - Project Link: [https://github.com/originalFactor/Messenger](https://github.com/originalFactor/Messenger)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -234,16 +234,16 @@ ECSDevs - Project Link: [https://github.com/ECSDevs/Messenger](https://github.co
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/ECSDevs/Messenger.svg?style=for-the-badge
-[contributors-url]: https://github.com/ECSDevs/Messenger/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/ECSDevs/Messenger.svg?style=for-the-badge
-[forks-url]: https://github.com/ECSDevs/Messenger/network/members
-[stars-shield]: https://img.shields.io/github/stars/ECSDevs/Messenger.svg?style=for-the-badge
-[stars-url]: https://github.com/ECSDevs/Messenger/stargazers
-[issues-shield]: https://img.shields.io/github/issues/ECSDevs/Messenger.svg?style=for-the-badge
-[issues-url]: https://github.com/ECSDevs/Messenger/issues
-[license-shield]: https://img.shields.io/github/license/ECSDevs/Messenger.svg?style=for-the-badge
-[license-url]: https://github.com/ECSDevs/Messenger/blob/main/LICENSE
+[contributors-shield]: https://img.shields.io/github/contributors/originalFactor/Messenger.svg?style=for-the-badge
+[contributors-url]: https://github.com/originalFactor/Messenger/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/originalFactor/Messenger.svg?style=for-the-badge
+[forks-url]: https://github.com/originalFactor/Messenger/network/members
+[stars-shield]: https://img.shields.io/github/stars/originalFactor/Messenger.svg?style=for-the-badge
+[stars-url]: https://github.com/originalFactor/Messenger/stargazers
+[issues-shield]: https://img.shields.io/github/issues/originalFactor/Messenger.svg?style=for-the-badge
+[issues-url]: https://github.com/originalFactor/Messenger/issues
+[license-shield]: https://img.shields.io/github/license/originalFactor/Messenger.svg?style=for-the-badge
+[license-url]: https://github.com/originalFactor/Messenger/blob/main/LICENSE
 
 [Kotlin-badge]: https://img.shields.io/badge/Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white
 [Kotlin-url]: https://kotlinlang.org/
