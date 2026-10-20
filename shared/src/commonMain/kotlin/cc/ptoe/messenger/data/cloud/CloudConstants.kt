@@ -21,7 +21,7 @@ package cc.ptoe.messenger.data.cloud
  * bundle from the cloud's own origin, so it defaults to the empty string
  * (relative, resolved against `window.location.origin`) instead.
  */
-const val DEFAULT_CLOUD_SERVER_URL = "https://messenger.ptoe.cc"
+const val DEFAULT_CLOUD_SERVER_URL = "https://meowx.vip"
 
 /** Fallback cloud base for the current platform ("" = same origin on web). */
 expect val defaultCloudServerUrl: String

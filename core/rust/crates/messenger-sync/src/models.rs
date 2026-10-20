@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const DEFAULT_CLOUD_SERVER_URL: &str = "https://messenger.ptoe.cc";
+pub const DEFAULT_CLOUD_SERVER_URL: &str = "https://meowx.vip";
 pub const BUILTIN_PROVIDER_ID: &str = "builtin-messenger-cloud-ai";
 pub const BUILTIN_PROVIDER_NAME: &str = "Messenger Cloud AI";
 /// The builtin title agent never syncs (locally seeded, see the core crate).
