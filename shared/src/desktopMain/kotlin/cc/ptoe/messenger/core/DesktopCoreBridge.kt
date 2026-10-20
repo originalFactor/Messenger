@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.core
 
+import cc.ptoe.messenger.data.util.runBlockingCall
+
 /**
  * Desktop bridge over the same UniFFI surface [AndroidCoreBridge] uses.
  *
@@ -174,7 +176,7 @@ class DesktopCoreBridge(
 
     override suspend fun runTurn(
         config: TurnConfigBridge,
-        toolExecutor: (name: String, argumentsJson: String) -> Pair<String, Boolean>,
+        toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     ) {
         val ffiConfig = TurnConfig(
@@ -200,7 +202,10 @@ class DesktopCoreBridge(
         )
         val toolHost = object : PlatformToolHost {
             override fun execute(name: String, argumentsJson: String): ToolResultFfi {
-                val (output, isError) = toolExecutor(name, argumentsJson)
+                // The FFI callback is synchronous; the tool may suspend (a
+                // remote MCP call), so bridge it the same way the old
+                // repository layer did.
+                val (output, isError) = runBlockingCall { toolExecutor(name, argumentsJson) }
                 return ToolResultFfi(output = output, isError = isError)
             }
         }

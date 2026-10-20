@@ -19,6 +19,9 @@
 package cc.ptoe.messenger.core
 
 import cc.ptoe.messenger.data.remote.NetworkClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.promise
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.Serializable
@@ -240,16 +243,22 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
 
     override suspend fun runTurn(
         config: TurnConfigBridge,
-        toolExecutor: (name: String, argumentsJson: String) -> Pair<String, Boolean>,
+        toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     ) {
         val configJson = NetworkClient.json.encodeToString(TurnConfigJson.of(config))
+        // The Rust side awaits whatever the tool host returns, so a suspend
+        // tool (remote MCP over HTTP) can resolve a Promise instead of
+        // blocking the single-threaded event loop.
+        val toolScope = CoroutineScope(currentCoroutineContext())
         val promise = core.run_turn(
             configJson,
             { name, argumentsJson ->
-                val (output, isError) = toolExecutor(name, argumentsJson)
-                // Rust reads the result as a two-element JS array.
-                jsArrayOf(output, isError)
+                toolScope.promise {
+                    val (output, isError) = toolExecutor(name, argumentsJson)
+                    // Rust reads the result as a two-element JS array.
+                    jsArrayOf(output, isError)
+                }
             },
             onEventJson
         )

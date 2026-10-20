@@ -153,9 +153,16 @@ interface CoreBridge {
 
     // Agent turn loop
     fun cancelTurn()
+    /**
+     * Runs one turn. [toolExecutor] is `suspend` because a tool may need to
+     * perform I/O (remote MCP over HTTP). Platforms whose native callback is
+     * synchronous (the UniFFI `PlatformToolHost` on Android/Desktop) bridge it
+     * with `runBlockingCall`; wasm returns a Promise instead, since the browser
+     * event loop cannot block.
+     */
     suspend fun runTurn(
         config: TurnConfigBridge,
-        toolExecutor: (name: String, argumentsJson: String) -> Pair<String, Boolean>,
+        toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     )
 

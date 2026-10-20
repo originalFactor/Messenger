@@ -254,7 +254,7 @@ class RustRepositoriesTest {
         override suspend fun modelsDevMetadataJson(modelId: String): String? = null
 
         override fun cancelTurn() {}
-        override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: (String, String) -> Pair<String, Boolean>, onEventJson: (String) -> Unit) {}
+        override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>, onEventJson: (String) -> Unit) {}
     }
 
     @Test
