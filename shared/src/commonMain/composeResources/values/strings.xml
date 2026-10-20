@@ -165,6 +165,7 @@
     <!-- Conversations -->
     <string name="conversations_title">Chats</string>
     <string name="conversations_new">New chat</string>
+    <string name="conversations_new_menu">New chat or project</string>
     <string name="conversations_switch_agent">Switch Agent</string>
     <string name="conversations_empty">No conversations yet\nTap the button below to start a new chat</string>
     <string name="conversations_rename_title">Rename conversation</string>

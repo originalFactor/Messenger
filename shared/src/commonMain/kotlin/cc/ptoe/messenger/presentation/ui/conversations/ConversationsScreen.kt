@@ -16,13 +16,12 @@
 
 package cc.ptoe.messenger.presentation.ui.conversations
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,16 +30,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonMenu
+import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleFloatingActionButton
+import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,10 +55,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.ui.projects.ProjectEditorDialog
 import cc.ptoe.messenger.presentation.viewmodel.ProjectEditorState
 import cc.ptoe.messenger.presentation.viewmodel.ProjectsViewModel
@@ -71,6 +81,7 @@ import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ConversationsViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_cancel
+import cc.ptoe.messenger.generated.resources.action_close
 import cc.ptoe.messenger.generated.resources.action_confirm
 import cc.ptoe.messenger.generated.resources.projects_create_title
 import cc.ptoe.messenger.generated.resources.projects_delete_confirm
@@ -84,6 +95,7 @@ import cc.ptoe.messenger.generated.resources.conversations_delete_title
 import cc.ptoe.messenger.generated.resources.conversations_empty
 import cc.ptoe.messenger.generated.resources.projects_recent_section
 import cc.ptoe.messenger.generated.resources.conversations_new
+import cc.ptoe.messenger.generated.resources.conversations_new_menu
 import cc.ptoe.messenger.generated.resources.conversations_rename_hint
 import cc.ptoe.messenger.generated.resources.conversations_rename_title
 import cc.ptoe.messenger.generated.resources.conversations_select_agent_title
@@ -138,10 +150,17 @@ fun ConversationsScreen(
     var deleteConversationId by remember { mutableStateOf<String?>(null) }
     var renameInitialTitle by remember { mutableStateOf("") }
     var showAgentPicker by remember { mutableStateOf(false) }
+    var fabMenuExpanded by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var switchAgentTargetIds by remember { mutableStateOf<List<String>?>(null) }
     var projectEditor by remember { mutableStateOf<ProjectEditorState?>(null) }
     var deleteProjectId by remember { mutableStateOf<String?>(null) }
+    // 多选模式会隐藏 FAB，菜单不应在退出多选后仍然展开。
+    LaunchedEffect(uiState.isMultiSelectMode) {
+        if (uiState.isMultiSelectMode) fabMenuExpanded = false
+    }
+    // 展开时按返回键先收起菜单，而不是直接退出页面。
+    BackHandler(enabled = fabMenuExpanded, onBack = { fabMenuExpanded = false }) {}
     val projectsViewModel: ProjectsViewModel = viewModel(
         factory = ProjectsViewModel.provideFactory(
             projectRepository = AppContainerHolder.instance.projectRepository,
@@ -196,33 +215,79 @@ fun ConversationsScreen(
             },
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
+                    // 单个 FAB 展开为 M3 Expressive FAB menu：新建对话 / 新建项目。
+                    // 项目（= 工作区）入口收进菜单，不再作为第二个小 FAB 并排摆放；
+                    // 只有项目里的对话能用终端与文件工具。
+                    //
                     // Keep the FAB above the floating bottom navigation pill
                     // (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
                     // rail layout (desktop / large windows), which has no pill.
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    //
+                    // FloatingActionButtonMenu 自带 16dp 横向内边距和 16dp 底部
+                    // 内边距，而 Scaffold 的 FAB 槽位也留了 16dp；用等量反向偏移
+                    // 抵消，让 FAB 与菜单都回到常规的 16dp 屏幕边距。
+                    val fabMenuOffsetX =
+                        if (LocalLayoutDirection.current == LayoutDirection.Ltr) 16.dp else (-16).dp
+                    FloatingActionButtonMenu(
+                        expanded = fabMenuExpanded,
+                        button = {
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                                    if (fabMenuExpanded) TooltipAnchorPosition.Start
+                                    else TooltipAnchorPosition.Above
+                                ),
+                                tooltip = {
+                                    PlainTooltip {
+                                        Text(
+                                            stringResource(
+                                                if (fabMenuExpanded) Res.string.action_close
+                                                else Res.string.conversations_new_menu
+                                            )
+                                        )
+                                    }
+                                },
+                                state = rememberTooltipState()
+                            ) {
+                                ToggleFloatingActionButton(
+                                    checked = fabMenuExpanded,
+                                    onCheckedChange = { fabMenuExpanded = it }
+                                ) {
+                                    val expanded = checkedProgress > 0.5f
+                                    Icon(
+                                        imageVector = if (expanded) Icons.Default.Close
+                                        else Icons.Default.Add,
+                                        contentDescription = stringResource(
+                                            if (expanded) Res.string.action_close
+                                            else Res.string.conversations_new_menu
+                                        ),
+                                        modifier = Modifier.animateIcon({ checkedProgress })
+                                    )
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .navigationBarsPadding()
                             .padding(bottom = LocalBottomNavClearance.current)
+                            .offset(x = fabMenuOffsetX, y = 16.dp)
                     ) {
-                        FloatingActionButton(
-                            onClick = { showAgentPicker = true }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = stringResource(Res.string.conversations_new)
-                            )
-                        }
-                        // 项目（= 工作区）入口：只有项目里的对话能用终端与文件工具。
-                        Spacer(Modifier.width(12.dp))
-                        SmallFloatingActionButton(
-                            onClick = { projectEditor = projectsViewModel.startCreate() }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CreateNewFolder,
-                                contentDescription = stringResource(Res.string.projects_new)
-                            )
-                        }
+                        FloatingActionButtonMenuItem(
+                            onClick = {
+                                fabMenuExpanded = false
+                                projectEditor = projectsViewModel.startCreate()
+                            },
+                            text = { Text(stringResource(Res.string.projects_new)) },
+                            icon = {
+                                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                            }
+                        )
+                        FloatingActionButtonMenuItem(
+                            onClick = {
+                                fabMenuExpanded = false
+                                showAgentPicker = true
+                            },
+                            text = { Text(stringResource(Res.string.conversations_new)) },
+                            icon = { Icon(Icons.Default.Add, contentDescription = null) }
+                        )
                     }
                 }
             }
@@ -440,6 +505,18 @@ fun ConversationsScreen(
                         deleteProjectId = null
                     },
                     onDismiss = { deleteProjectId = null }
+                )
+            }
+
+            // 菜单展开时点击空白处收起。Scaffold 的 FAB 槽位最后绘制，因此这层
+            // 覆盖物位于列表之上、FAB 菜单之下。
+            if (fabMenuExpanded && !uiState.isMultiSelectMode) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures { fabMenuExpanded = false }
+                        }
                 )
             }
         }

@@ -164,6 +164,7 @@
     <!-- Conversations -->
     <string name="conversations_title">对话</string>
     <string name="conversations_new">新建对话</string>
+    <string name="conversations_new_menu">新建对话或项目</string>
     <string name="conversations_switch_agent">切换 Agent</string>
     <string name="conversations_empty">暂无对话\n点击右下角开始新对话</string>
     <string name="conversations_rename_title">重命名对话</string>
