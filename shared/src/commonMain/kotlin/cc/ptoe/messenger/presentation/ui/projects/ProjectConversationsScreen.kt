@@ -71,6 +71,7 @@ import cc.ptoe.messenger.presentation.ui.components.InputDialog
 import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.agentDisplayNames
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ProjectConversationsViewModel
 import org.jetbrains.compose.resources.stringResource
@@ -109,6 +110,8 @@ fun ProjectConversationsScreen(
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy { it.id } }
+    // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
+    val agentNames = agentDisplayNames(allAgents)
 
     // 进入列表页时触发一次空会话清理（规则在 Rust core）。
     LaunchedEffect(Unit) {
@@ -311,7 +314,7 @@ fun ProjectConversationsScreen(
                     items = allAgents,
                     initialSelectedId = null,
                     itemId = { it.id },
-                    itemLabel = { it.name },
+                    itemLabel = { agentNames[it.id] ?: it.name },
                     confirmButtonText = stringResource(Res.string.action_confirm),
                     dismissButtonText = stringResource(Res.string.action_cancel),
                     onConfirm = { agent ->

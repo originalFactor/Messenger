@@ -29,6 +29,7 @@
 //! composes those rows plus the bottom chrome into a frame, and [`screen`]
 //! diffs that frame against what the terminal already shows.
 
+pub mod agent_name;
 pub mod app;
 pub mod banner;
 pub mod clipboard;

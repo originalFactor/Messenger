@@ -85,6 +85,7 @@ import cc.ptoe.messenger.presentation.ui.components.ListItem
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.ui.components.toolIcon
 import cc.ptoe.messenger.presentation.platform.BackHandler
+import cc.ptoe.messenger.presentation.utils.displayName
 import cc.ptoe.messenger.presentation.utils.formatOneDecimal
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
@@ -205,7 +206,7 @@ fun ConversationSettingsScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = stringResource(Res.string.conversation_settings_agent_label, agent?.name ?: ""),
+                        text = stringResource(Res.string.conversation_settings_agent_label, agent?.displayName() ?: ""),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp)

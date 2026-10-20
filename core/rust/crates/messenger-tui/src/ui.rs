@@ -672,7 +672,7 @@ fn status_rail(app: &mut App, width: usize) -> Line<'static> {
         .as_deref()
         .and_then(|id| app.engine.store.get_conversation(id).ok().flatten())
         .and_then(|conversation| app.engine.store.get_agent(&conversation.agent_id).ok().flatten())
-        .map(|agent| agent.name);
+        .map(|agent| crate::agent_name::display_name(&agent));
     if let Some(agent) = agent {
         chips.push(Chip {
             text: agent,

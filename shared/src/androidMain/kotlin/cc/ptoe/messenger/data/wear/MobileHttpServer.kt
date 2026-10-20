@@ -33,6 +33,7 @@ import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
+import cc.ptoe.messenger.presentation.utils.resolvedDisplayName
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -334,7 +335,8 @@ class MobileHttpServer : Service() {
             agents.forEach { agent ->
                 put(JSONObject().apply {
                     put("id", agent.id)
-                    put("name", agent.name)
+                    // 内置 Agent 的种子名按系统语言下发，手表直接展示。
+                    put("name", agent.resolvedDisplayName())
                     put("isDefault", agent.isDefault)
                     put("isReady", isAgentReady(agent))
                     // avatarVersion lets the watch decide whether it needs to

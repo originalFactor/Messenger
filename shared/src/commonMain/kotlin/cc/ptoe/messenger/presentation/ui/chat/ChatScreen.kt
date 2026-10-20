@@ -87,6 +87,7 @@ import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
+import cc.ptoe.messenger.presentation.utils.displayName
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
@@ -225,7 +226,7 @@ fun ChatScreen(
                                 maxLines = 1
                             )
                             Text(
-                                text = agent?.name ?: "",
+                                text = agent?.displayName() ?: "",
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1
@@ -315,7 +316,7 @@ fun ChatScreen(
             if (messages.isEmpty()) {
                 EmptyChatState(
                     avatar = agent?.avatar,
-                    agentName = agent?.name,
+                    agentName = agent?.displayName(),
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
