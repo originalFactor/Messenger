@@ -71,6 +71,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -186,6 +187,9 @@ fun CloudSettingsScreen(
 ) {
     val user by viewModel.cloudUser.collectAsStateWithLifecycle()
     val savedServerUrl by viewModel.cloudServerUrl.collectAsStateWithLifecycle()
+    // 进入页面即静默拉一次 /me：额度是服务端实时状态，本地快照可能停在
+    // 上次登录/兑换的时刻（旧版本登录响应里根本没有额度字段）。
+    LaunchedEffect(Unit) { viewModel.refreshCloudUser() }
     var showServerPage by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -401,10 +405,16 @@ fun CloudSettingsScreen(
                             title = stringResource(Res.string.cloud_settings_plan_title),
                             icon = Icons.Default.WorkspacePremium
                         ) {
+                            val entitlements = user!!.quotaEntitlements
+                            // 老服务端的 /me 不带汇总字段：条目仍在，按「未过期条目
+                            // 之和 + 最晚到期」现算，避免显示 0 额度。
+                            val balance = user!!.quotaBalance ?: entitlements.sumOf { it.balance }
+                            val expiresAt = user!!.quotaExpiresAt
+                                ?: entitlements.mapNotNull { it.expiresAt }.maxOrNull()
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = formatQuota(user!!.quotaBalance ?: 0L),
+                                        text = formatQuota(balance),
                                         style = MaterialTheme.typography.headlineSmall
                                     )
                                     Text(
@@ -419,14 +429,19 @@ fun CloudSettingsScreen(
                                         style = MaterialTheme.typography.labelLarge
                                     )
                                     Text(
-                                        text = user!!.quotaExpiresAt?.let { formatQuotaExpiry(it) }
-                                            ?: stringResource(Res.string.cloud_settings_plan_no_expiry),
+                                        text = when {
+                                            // 有限期条目取最晚到期；只有不限期条目才是「不限期」；
+                                            // 一条都没有时不该声称不限期。
+                                            expiresAt != null -> formatQuotaExpiry(expiresAt)
+                                            entitlements.isNotEmpty() ->
+                                                stringResource(Res.string.cloud_settings_plan_no_expiry)
+                                            else -> "—"
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
-                            val entitlements = user!!.quotaEntitlements
                             if (entitlements.isEmpty()) {
                                 Text(
                                     text = stringResource(Res.string.cloud_settings_plan_empty),

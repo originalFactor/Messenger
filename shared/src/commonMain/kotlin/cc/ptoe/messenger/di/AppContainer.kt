@@ -179,7 +179,10 @@ class AppContainer(
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */
     fun initializeLocalAndCloudData() {
         applicationScope.launch {
-            if (appPreferences.cloudSession.first() != null) {
+            // 会话存在 Rust core 的 kv 里（cloud_session），DataStore 的
+            // appPreferences.cloudSession 只在已删除的 Ktor 客户端里写过，
+            // 拿它当门禁会让老会话永远不刷新用户快照（额度停在登录时的值）。
+            if (cloud.user.first() != null) {
                 runCatching {
                     cloud.refreshUser()
                     cloud.sync()
@@ -215,7 +218,9 @@ class AppContainer(
     }
 
     private suspend fun createDefaultAgentIfNeededLocked() {
-        if (appPreferences.cloudSession.first() != null) return
+        // 已登录时默认 Agent 由服务端在同一事务里种下，本地再插一条会被推上云，
+        // 破坏「全局恰好一个 isDefault」的不变量。
+        if (cloud.user.first() != null) return
         val agents = agentRepository.getAll().first()
         val existingDefault = agents.firstOrNull { it.isDefault }
         if (existingDefault == null) {

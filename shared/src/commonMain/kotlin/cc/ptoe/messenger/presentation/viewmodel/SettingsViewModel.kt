@@ -108,6 +108,14 @@ class SettingsViewModel(
         }
     }
 
+    /** 静默刷新账号快照（额度/套餐条目），失败不打扰用户。 */
+    fun refreshCloudUser() {
+        if (cloudUser.value == null) return
+        viewModelScope.launch {
+            runCatching { withContext(ioDispatcher) { cloudSyncRepository.refreshUser() } }
+        }
+    }
+
     fun changePassword(currentPassword: String, newPassword: String, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
