@@ -1038,7 +1038,18 @@ impl FormatStreamDecoder {
                         .and_then(Value::as_i64)
                         .unwrap_or(0);
                     let prompt = self.usage.map(|usage| usage.prompt_tokens).unwrap_or(0);
-                    self.usage = Some(usage_from(prompt, completion, None, None));
+                    // Anthropic reports the cumulative cache figure on the
+                    // delta; dropping it would lose the cached-token
+                    // breakdown from the final `Done` usage.
+                    let cached = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(Value::as_i64)
+                        .or_else(|| {
+                            self.usage
+                                .and_then(|usage| usage.prompt_tokens_details)
+                                .map(|details| details.cached_tokens)
+                        });
+                    self.usage = Some(usage_from(prompt, completion, None, cached));
                 }
                 if let Some(reason) = record
                     .get("delta")

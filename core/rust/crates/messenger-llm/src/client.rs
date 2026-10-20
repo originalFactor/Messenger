@@ -194,7 +194,9 @@ impl SseLineBuffer {
 fn data_payload_of_line(line: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(line);
     let text = text.trim_end_matches(['\n', '\r']);
-    text.strip_prefix("data: ").map(str::to_string)
+    // SSE allows the single space after the colon to be omitted.
+    text.strip_prefix("data:")
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest).to_string())
 }
 
 /// Streaming response handle: yields each SSE `data:` payload in order,
@@ -296,6 +298,16 @@ mod tests {
         payloads.extend(buffer.feed(b));
         payloads.extend(buffer.finish());
         assert_eq!(payloads, vec!["你好".to_string(), "[DONE]".to_string()]);
+    }
+
+    /// The space after `data:` is optional in the SSE grammar; a server that
+    /// omits it must still deliver payloads (including the `[DONE]` sentinel,
+    /// otherwise a clean finish becomes a spurious "stream ended" error).
+    #[test]
+    fn data_lines_without_the_optional_space_are_accepted() {
+        let mut buffer = SseLineBuffer::default();
+        let payloads = buffer.feed(b"data:{\"x\":1}\n\ndata:[DONE]\n\n");
+        assert_eq!(payloads, vec![r#"{"x":1}"#.to_string(), "[DONE]".to_string()]);
     }
 
     #[test]
