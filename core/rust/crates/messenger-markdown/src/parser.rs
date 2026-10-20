@@ -437,9 +437,7 @@ impl IncrementalParser {
                     || line.starts_with("$$")
                     || line.starts_with("<think>")
                     || line.starts_with("<tool_call>")
-                    || line.starts_with("# ")
-                    || line.starts_with("## ")
-                    || line.starts_with("### ")
+                    || starts_with_heading(line)
                     || line.starts_with("> ")
                 {
                     // New block type interrupted the paragraph
@@ -1028,6 +1026,11 @@ fn plain_cell(text: &str) -> String {
     out
 }
 
+/// GFM: all six heading levels interrupt a paragraph, not just h1-h3.
+fn starts_with_heading(line: &str) -> bool {
+    parse_heading(line).is_some()
+}
+
 fn parse_heading(line: &str) -> Option<(u8, &str)> {
     if let Some(text) = line.strip_prefix("# ") {
         Some((1, text))
@@ -1062,6 +1065,25 @@ fn parse_tool_call_json(raw: &str) -> (String, String, String, Option<String>, b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GFM: every heading level interrupts a paragraph. h4-h6 used to be
+    /// absorbed as paragraph text while streaming.
+    #[test]
+    fn h4_to_h6_interrupt_a_streaming_paragraph() {
+        for marker in ["#### ", "##### ", "###### "] {
+            let mut doc = Document::new();
+            let mut parser = IncrementalParser::new();
+            parser.feed("intro text\n", &mut doc);
+            parser.feed(&format!("{marker}Deep heading\n"), &mut doc);
+            parser.feed("\n", &mut doc);
+            let headings = doc
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block, Block::Heading { .. }))
+                .count();
+            assert_eq!(headings, 1, "{marker} must start a heading block");
+        }
+    }
 
     #[test]
     fn parse_streaming_paragraph_and_code() {
