@@ -61,7 +61,13 @@ pub trait TurnSink: Send + Sync {
 }
 
 /// Platform tool executor (terminal/workspace/MCP are routed here).
-#[async_trait]
+///
+/// On wasm32 the browser's single thread means the future never crosses a
+/// thread boundary, and awaiting a JS `Promise` (which holds `Rc`) is not
+/// `Send`. Native targets keep the `Send` bound because the turn runs on a
+/// multi-threaded tokio runtime.
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ToolHost: Send + Sync {
     async fn execute(&self, name: &str, arguments_json: &str) -> ToolExecutionResult;
 }
@@ -642,18 +648,25 @@ fn promote_partial(store: &Store, placeholder_id: &str, content: &str) -> Result
 }
 
 /// Cancellation: SENDING assistant rows keep their partial content as SENT
-/// (future context), SENDING tool rows finalize as interrupted.
+/// (future context), SENDING tool rows finalize as interrupted. A placeholder
+/// with no content yet (cancelled before the first token, or during a tool
+/// round after its text moved into the round row) is deleted instead of being
+/// left in `sending` forever — nothing was produced, so there is no bubble.
 async fn finalize_cancellation(
     store: &Store,
     sink: &dyn TurnSink,
     placeholder_id: &str,
 ) -> Result<(), String> {
     if let Some(row) = store.get_message(placeholder_id).map_err(|e| e.to_string())? {
-        if row.status == "sending" && !row.content.is_empty() {
-            let mut row = row;
-            row.status = "sent".into();
-            row.parts_json = encode_parts(&[ContentPart::Text { text: row.content.clone() }]);
-            store.upsert_message(&row).map_err(|e| e.to_string())?;
+        if row.status == "sending" {
+            if row.content.is_empty() {
+                store.delete_message(placeholder_id).map_err(|e| e.to_string())?;
+            } else {
+                let mut row = row;
+                row.status = "sent".into();
+                row.parts_json = encode_parts(&[ContentPart::Text { text: row.content.clone() }]);
+                store.upsert_message(&row).map_err(|e| e.to_string())?;
+            }
         }
     }
     sink.on_event(&AgentEvent::Cancelled);
