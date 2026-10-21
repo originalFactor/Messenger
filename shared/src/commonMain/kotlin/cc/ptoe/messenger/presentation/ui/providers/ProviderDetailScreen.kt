@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.TooltipAnchorPosition
@@ -83,6 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.CursorDropdownMenu
@@ -119,6 +121,7 @@ import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
 import cc.ptoe.messenger.generated.resources.providers_model_context_window
+import cc.ptoe.messenger.generated.resources.providers_provider_settings
 import cc.ptoe.messenger.generated.resources.providers_model_disabled
 import cc.ptoe.messenger.generated.resources.providers_model_rates
 import cc.ptoe.messenger.generated.resources.providers_model_rates_cache
@@ -143,6 +146,7 @@ fun ProviderDetailScreen(
     providerId: String,
     onBackClick: () -> Unit,
     onModelClick: (ChatModel) -> Unit = {},
+    onEditProviderClick: () -> Unit = {},
     /** 模型编辑页保存返回后置为 true，用于在列表页弹出「已保存」提示。 */
     showModelSavedMessage: Boolean = false,
     onModelSavedMessageShown: () -> Unit = {},
@@ -228,23 +232,12 @@ fun ProviderDetailScreen(
                         }
                     )
                 } else {
-                    TopAppBar(
-                        title = {
-                            Text(
-                                text = uiState.provider?.name
-                                    ?: stringResource(Res.string.providers_model_management),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        navigationIcon = {
-                            IconButton(onClick = onBackClick) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(Res.string.action_back)
-                                )
-                            }
-                        }
+                    ProviderDetailTopBar(
+                        title = uiState.provider?.name
+                            ?: stringResource(Res.string.providers_model_management),
+                        canEditProvider = uiState.provider?.id?.let { it != BUILTIN_PROVIDER_ID } == true,
+                        onBackClick = onBackClick,
+                        onEditProviderClick = onEditProviderClick
                     )
                 }
             },
@@ -400,6 +393,50 @@ fun ProviderDetailScreen(
             }
         }
     }
+}
+
+/**
+ * 模型列表页顶栏。右上角的设置按钮进入 Provider 编辑页——模型列表本身就是
+ * Provider 的主页面，编辑入口放在这里比藏在 Provider 列表的溢出菜单里更直观。
+ * 内置云服务商由登录流程配置，不显示该入口。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ProviderDetailTopBar(
+    title: String,
+    canEditProvider: Boolean,
+    onBackClick: () -> Unit,
+    onEditProviderClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TopAppBar(
+        modifier = modifier,
+        title = {
+            Text(
+                text = title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onBackClick) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(Res.string.action_back)
+                )
+            }
+        },
+        actions = {
+            if (canEditProvider) {
+                IconButton(onClick = onEditProviderClick) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = stringResource(Res.string.providers_provider_settings)
+                    )
+                }
+            }
+        }
+    )
 }
 
 @Composable

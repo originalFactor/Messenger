@@ -233,6 +233,7 @@
     <string name="providers_delete_confirm">Are you sure you want to delete this provider? Associated models will also be deleted.</string>
     <string name="providers_model_count">%1$d models · tap to manage</string>
     <string name="providers_edit_title">Edit provider</string>
+    <string name="providers_provider_settings">Provider settings</string>
     <string name="providers_new_title">New provider</string>
     <string name="providers_name_label">Name</string>
     <string name="providers_api_url_label">API URL</string>

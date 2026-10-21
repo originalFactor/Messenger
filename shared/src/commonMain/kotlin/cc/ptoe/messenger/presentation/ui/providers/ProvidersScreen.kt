@@ -37,7 +37,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.MoreVert
@@ -195,7 +194,7 @@ fun ProvidersScreen(
 }
 
 @Composable
-private fun ProviderListItem(
+internal fun ProviderListItem(
     item: ProviderWithModelCount,
     onClick: () -> Unit,
     onEditClick: () -> Unit,
@@ -295,12 +294,6 @@ private fun ProviderListItem(
                 }
             }
         }
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = stringResource(Res.string.providers_view_models),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
         if (enableContextMenu) {
             CursorDropdownMenu(
                 state = contextMenuState,
