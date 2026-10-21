@@ -143,6 +143,9 @@ fun ProviderDetailScreen(
     providerId: String,
     onBackClick: () -> Unit,
     onModelClick: (ChatModel) -> Unit = {},
+    /** 模型编辑页保存返回后置为 true，用于在列表页弹出「已保存」提示。 */
+    showModelSavedMessage: Boolean = false,
+    onModelSavedMessageShown: () -> Unit = {},
     viewModel: ProviderDetailViewModel = viewModel(
         factory = ProviderDetailViewModel.provideFactory(
             providerRepository = AppContainerHolder.instance.providerRepository,
@@ -168,6 +171,14 @@ fun ProviderDetailScreen(
     // 双栏布局下切换 Provider 时按 id 重新加载，避免依赖 ViewModel 重建
     LaunchedEffect(providerId) {
         viewModel.loadProvider(providerId)
+    }
+
+    // 模型保存后的提示落在列表页：编辑页会在保存瞬间退出，它的 Snackbar 留不住。
+    LaunchedEffect(showModelSavedMessage) {
+        if (showModelSavedMessage) {
+            snackbarHostState.showSnackbar(strModelSaved)
+            onModelSavedMessageShown()
+        }
     }
 
     LaunchedEffect(uiState.syncStatus) {
