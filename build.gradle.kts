@@ -183,11 +183,13 @@ ext["cmakeVersion"] = "4.1.2"
  * `splits.abi` in both modules, the cargo-ndk target list in `:core-bindings`,
  * and the Termux bootstrap archives `:runtime` packages.
  *
- * The release matrix is ARM only: every real device is `arm64-v8a` or
- * `armeabi-v7a`, so those two APKs are all CI builds and publishes. `x86_64`
- * (the emulator ABI) is opt-in per build — `-Pmessenger.abis=…` or
- * `ANDROID_ABIS=…` — so local emulator work stays possible without dragging a
- * third APK and a third Rust cross-build into every CI run.
+ * The release matrix is `arm64-v8a` only: that is the ABI every supported
+ * Android device and every CI artifact uses. `armeabi-v7a` (32-bit phones) and
+ * `x86_64` (the emulator) stay selectable per build — `-Pmessenger.abis=…` or
+ * `ANDROID_ABIS=…` — so old-device and emulator builds remain possible without
+ * dragging a second APK and a second Rust cross-build into every CI run.
+ * `:wear` is the exception: Wear OS is 32-bit userspace, so that module pins
+ * `armeabi-v7a` on its own (see wear/build.gradle.kts).
  */
 val abiToRustTarget = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -195,7 +197,7 @@ val abiToRustTarget = mapOf(
     "x86_64" to "x86_64-linux-android",
     "x86" to "i686-linux-android",
 )
-private val DEFAULT_ANDROID_ABIS = "arm64-v8a,armeabi-v7a"
+private val DEFAULT_ANDROID_ABIS = "arm64-v8a"
 
 fun androidAbis(): List<String> {
     val raw = providers.gradleProperty("messenger.abis").orNull
