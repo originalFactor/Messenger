@@ -17,36 +17,48 @@
 package cc.ptoe.messenger.presentation.ui.providers
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import cc.ptoe.messenger.domain.model.ChatModel
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * 模型行的元数据标签（上下文窗口、倍率）必须独占一行、排在模型名称下方。
+ * 模型行的多选表现：选中只改整行底色，行内控件与排版不动。
  *
- * 回归：标签曾与名称挤在同一行，窄屏上「1M」+ 三段倍率把名称压成省略号，
- * 用户几乎看不到模型名。标签换行后名称重新拿到整行宽度。
+ * 回归一：元数据标签曾与名称同排，窄屏上名称被挤成省略号。
+ * 回归二：多选曾靠插入复选框、隐藏开关/删除按钮表达，长按后整行“跳版”；
+ * 现在只改底色，选中状态同时通过 semantics 暴露给无障碍与测试。
  */
 @OptIn(ExperimentalTestApi::class)
 class ModelListItemTest {
 
-    private val model = ChatModel(
-        id = "m1",
+    private fun model(id: String) = ChatModel(
+        id = id,
         providerId = "p1",
-        modelId = "kimi-k3-very-long-model-id",
-        displayName = "kimi-k3-very-long-model-id",
+        modelId = "$id-very-long-model-id",
+        displayName = "$id-very-long-model-id",
         isEnabled = true,
         contextWindow = 1_000_000,
         inputRate = 0.33,
@@ -57,6 +69,7 @@ class ModelListItemTest {
 
     @Test
     fun metadataBadgesSitBelowTheModelName() = runComposeUiTest {
+        val model = model("plain")
         setContent {
             MaterialTheme {
                 Box(modifier = Modifier.width(320.dp)) {
@@ -99,5 +112,140 @@ class ModelListItemTest {
             rateBounds.right <= switchBounds.left,
             "badges must stay clear of the switch (badge=$rateBounds, switch=$switchBounds)"
         )
+    }
+
+    @Test
+    fun enteringMultiSelectModeKeepsTheRowLayout() = runComposeUiTest {
+        val model = model("selected")
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = true,
+                        isSelected = true,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // 多选态下名称与开关仍在原位：不插入复选框、不隐藏右侧控件。
+        onNodeWithText(model.displayName, useUnmergedTree = true).assertIsDisplayed()
+        onNode(isToggleable(), useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /**
+     * 选中态与普通态在同一张截图里对比：行高一致、只有底色不同，
+     * 且选中底色就是主题的 secondaryContainer。
+     */
+    @Test
+    fun selectionOnlyChangesTheRowBackground() = runComposeUiTest {
+        val plain = model("plain")
+        val selected = model("selected")
+        var expectedColor: Color? = null
+        setContent {
+            MaterialTheme {
+                expectedColor = MaterialTheme.colorScheme.secondaryContainer
+                Column(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = plain,
+                        isMultiSelectMode = false,
+                        isSelected = false,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    ModelListItem(
+                        model = selected,
+                        isMultiSelectMode = true,
+                        isSelected = true,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        val plainRow = onNodeWithText(plain.displayName, useUnmergedTree = false).getUnclippedBoundsInRoot()
+        val selectedRow = onNodeWithText(selected.displayName, useUnmergedTree = false).getUnclippedBoundsInRoot()
+        assertEquals(
+            plainRow.height,
+            selectedRow.height,
+            "selection must not change the row height (plain=$plainRow, selected=$selectedRow)",
+        )
+
+        val pixels = onRoot().captureToImage().toPixelMap()
+        // 行顶内边距处没有子控件，取那里的像素即整行底色。
+        val plainPixel = pixels[sampleX(plainRow), sampleY(plainRow)]
+        val selectedPixel = pixels[sampleX(selectedRow), sampleY(selectedRow)]
+        assertEquals(
+            expectedColor,
+            selectedPixel,
+            "a selected row must be painted with secondaryContainer (actual=$selectedPixel)"
+        )
+        assertTrue(
+            plainPixel != selectedPixel,
+            "selection must change the row background (plain=$plainPixel, selected=$selectedPixel)"
+        )
+    }
+
+    private fun ComposeUiTest.sampleX(row: DpRect): Int =
+        with(density) { (row.right - 12.dp).roundToPx() }
+
+    private fun ComposeUiTest.sampleY(row: DpRect): Int =
+        with(density) { (row.top + 6.dp).roundToPx() }
+
+    @Test
+    fun selectionIsExposedToAccessibility() = runComposeUiTest {
+        val model = model("unselected")
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = true,
+                        isSelected = false,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        onNodeWithText(model.displayName, useUnmergedTree = false).assertIsNotSelected()
+    }
+
+    @Test
+    fun selectedRowIsMarkedSelectedForAccessibility() = runComposeUiTest {
+        val model = model("selected")
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = true,
+                        isSelected = true,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        onNodeWithText(model.displayName, useUnmergedTree = false).assertIsSelected()
     }
 }

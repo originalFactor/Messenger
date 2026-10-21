@@ -75,8 +75,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -522,12 +524,16 @@ internal fun ModelListItem(
     val interactionSource = remember { MutableInteractionSource() }
     val contextMenuState = rememberContextMenuState()
     val hovered by interactionSource.collectIsHoveredAsState()
+    // 多选只改变整行底色：行内控件与排版保持不变，避免长按后列表“跳版”。
     val backgroundColor = when {
+        isMultiSelectMode && isSelected -> MaterialTheme.colorScheme.secondaryContainer
         hovered && enableContextMenu -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> Color.Transparent
     }
     Row(
         modifier = modifier
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.medium)
             .background(backgroundColor)
             .hoverable(interactionSource)
             .combinedClickable(
@@ -540,16 +546,10 @@ internal fun ModelListItem(
                 if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
                 else Modifier
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .semantics { if (isMultiSelectMode) selected = isSelected }
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isMultiSelectMode) {
-            androidx.compose.material3.Checkbox(
-                checked = isSelected,
-                onCheckedChange = null,
-                modifier = Modifier.padding(end = 8.dp)
-            )
-        }
         Column(
             modifier = Modifier.weight(1f)
         ) {
@@ -577,19 +577,17 @@ internal fun ModelListItem(
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
-        if (!isMultiSelectMode) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Switch(
-                checked = model.isEnabled,
-                onCheckedChange = onToggleEnabled
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(
+            checked = model.isEnabled,
+            onCheckedChange = onToggleEnabled
+        )
+        IconButton(onClick = onDeleteClick) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = stringResource(Res.string.action_delete),
+                tint = MaterialTheme.colorScheme.error
             )
-            IconButton(onClick = onDeleteClick) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(Res.string.action_delete),
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
         }
 
         if (enableContextMenu) {
