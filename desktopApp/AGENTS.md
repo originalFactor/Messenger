@@ -8,8 +8,8 @@ Thin `org.jetbrains.kotlin.jvm` + `compose.multiplatform` + `kotlin.compose` she
 - CI builds four artifacts: Windows x86_64 (MSI), Windows ARM64 (zipped app image — jpackage cannot emit an arm64 MSI, openjdk JDK-8361207), Linux x86_64 and Linux ARM64 (`.deb`).
 
 ```bash
-./gradlew --no-daemon :desktopApp:run
-./gradlew --no-daemon :desktopApp:packageReleaseMsi   # Windows (CI uses windows-latest + .\gradlew.bat)
-./gradlew --no-daemon :desktopApp:packageReleaseDmg   # macOS
-./gradlew --no-daemon :desktopApp:packageReleaseDeb   # Linux
+./gradlew-cli :desktopApp:run
+./gradlew-cli :desktopApp:packageReleaseMsi   # Windows (CI uses windows-latest + .\gradlew.bat)
+./gradlew-cli :desktopApp:packageReleaseDmg   # macOS
+./gradlew-cli :desktopApp:packageReleaseDeb   # Linux
 ```

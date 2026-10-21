@@ -10,7 +10,7 @@ Thin `com.android.application` shell over `shared` (AGP 9 built-in Kotlin + `kot
 - ABIs come from the root build script and are applied as per-build-type `ndk.abiFilters` (NOT `splits.abi`, which is global; and NOT `defaultConfig`, whose list AGP unions into every build type): release `ext["releaseAbis"]` = `arm64-v8a`, debug `ext["debugAbis"]` = `x86_64` for Android Studio Run on an AVD. The two share no ABI so each build type compiles exactly one Rust target. Override with `-Pmessenger.abis` / `ANDROID_ABIS` (release) and `-Pmessenger.debugAbis` / `ANDROID_DEBUG_ABIS` (debug).
 
 ```bash
-./gradlew --no-daemon :androidApp:assembleDebug
-./gradlew --no-daemon :androidApp:assembleRelease   # R8 on; one APK per ABI
-./gradlew --no-daemon :androidApp:lintDebug
+./gradlew-cli :androidApp:assembleDebug
+./gradlew-cli :androidApp:assembleRelease   # R8 on; one APK per ABI
+./gradlew-cli :androidApp:lintDebug
 ```
