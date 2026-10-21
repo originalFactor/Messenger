@@ -19,9 +19,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Shared wear ABI matrix (root build script): armeabi-v7a by default, x86_64
-// selectable for AVD testing.
-val wearAbis = rootProject.ext["wearAbis"] as List<String>
+// Shared wear ABI matrix (root build script): release ships armeabi-v7a, debug
+// adds x86_64 so the watch app installs on a Wear OS AVD.
+val wearReleaseAbis = rootProject.ext["wearReleaseAbis"] as List<String>
+val wearDebugAbis = rootProject.ext["wearDebugAbis"] as List<String>
 
 android {
     namespace = "cc.ptoe.messenger"
@@ -36,20 +37,10 @@ android {
         targetSdk = 36
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
-
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            // Default: armeabi-v7a only — Wear OS devices run a 64-bit kernel with
-            // a 32-bit userspace, and that is the single ABI CI builds and
-            // publishes. ext["wearAbis"] can add x86_64 for an AVD, which is the
-            // only reason that ABI exists here (see the root build script).
-            include(*wearAbis.toTypedArray())
-            isUniversalApk = false
-        }
+        // Per-build-type ABI filtering, not splits.abi: the watch release ships
+        // armeabi-v7a only, while debug adds x86_64 for Wear OS AVDs (splits are
+        // global and cannot be scoped to one build type).
+        ndk { abiFilters.addAll(wearReleaseAbis) }
     }
 
     signingConfigs {
@@ -63,6 +54,7 @@ android {
 
     buildTypes {
         debug {
+            ndk { abiFilters.addAll(wearDebugAbis) }
             val messengerKeystore = signingConfigs["messenger"]
             val hasPassword = messengerKeystore.storePassword?.isNotBlank() == true
             if (hasPassword && messengerKeystore.storeFile?.exists() == true) {
