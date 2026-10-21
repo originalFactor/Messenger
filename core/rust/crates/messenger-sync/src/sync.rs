@@ -524,6 +524,22 @@ impl<'a> SyncEngine<'a> {
     // ------------------------------------------------------------------
 
     pub(crate) async fn fetch_cloud_sync(&self, since: i64) -> CloudResult<(CloudSyncResponse, i64)> {
+        // The version this client has durably applied — the stored cursor, NOT
+        // `since`. A post-push pull passes `since = pushed_version`, which is
+        // not applied yet; acking it would let the server delete tombstones
+        // this client still needs.
+        //
+        // A full pull (`since == 0`) acks nothing: the caller wipes the local
+        // rows first (`replace_local`) or is rebuilding from scratch, so the
+        // stored cursor describes a state that no longer exists. The next
+        // cycle acks the cursor this pull persisted.
+        let ack = if since == 0 {
+            None
+        } else {
+            self.current_user()
+                .and_then(|user| self.store.sync_cursor(&user.id).ok())
+                .filter(|ack| *ack > 0)
+        };
         let mut agents = Vec::new();
         let mut agents_latest = since;
         let mut raw_server_latest = 0i64;
@@ -532,7 +548,13 @@ impl<'a> SyncEngine<'a> {
             let page = self
                 .with_session(
                     self.client
-                        .sync_agents_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                        .sync_agents_page(
+                            &self.endpoint("api/sync"),
+                            since,
+                            cursor.as_deref(),
+                            SYNC_PAGE_SIZE,
+                            ack,
+                        ),
                 )
                 .await?;
             agents.extend(page.documents);
@@ -551,7 +573,13 @@ impl<'a> SyncEngine<'a> {
             let page = self
                 .with_session(
                     self.client
-                        .sync_conversations_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                        .sync_conversations_page(
+                            &self.endpoint("api/sync"),
+                            since,
+                            cursor.as_deref(),
+                            SYNC_PAGE_SIZE,
+                            ack,
+                        ),
                 )
                 .await?;
             conversations.extend(page.documents);
@@ -569,7 +597,13 @@ impl<'a> SyncEngine<'a> {
             let page = self
                 .with_session(
                     self.client
-                        .sync_providers_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                        .sync_providers_page(
+                            &self.endpoint("api/sync"),
+                            since,
+                            cursor.as_deref(),
+                            SYNC_PAGE_SIZE,
+                            ack,
+                        ),
                 )
                 .await?;
             providers.extend(page.documents);
@@ -587,7 +621,13 @@ impl<'a> SyncEngine<'a> {
             let page = self
                 .with_session(
                     self.client
-                        .sync_projects_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                        .sync_projects_page(
+                            &self.endpoint("api/sync"),
+                            since,
+                            cursor.as_deref(),
+                            SYNC_PAGE_SIZE,
+                            ack,
+                        ),
                 )
                 .await?;
             projects.extend(page.documents);
