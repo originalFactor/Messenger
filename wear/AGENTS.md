@@ -26,7 +26,7 @@ Phone-backed companion with no settings UI: a two-screen chat flow — chat list
 ./gradlew --no-daemon :wear:assembleRelease   # R8 on; armeabi-v7a only
 ```
 
-ABIs are per-build-type `ndk.abiFilters` (not `splits.abi`, which is global): release filters on `ext["wearReleaseAbis"]` = `armeabi-v7a` — Wear OS devices run a 64-bit kernel with a 32-bit userspace, so that is the only ABI CI builds and publishes — while debug filters on `ext["wearDebugAbis"]` = `armeabi-v7a` + `x86_64`, so `:wear:assembleDebug` installs on a Wear OS AVD with no extra flags. Overrides: `-Pmessenger.wearAbis` / `WEAR_ABIS` (release) and `-Pmessenger.wearDebugAbis` / `WEAR_DEBUG_ABIS` (debug). The watch never links the Rust core, so its x86_64 build costs no extra Rust target. R8 + resource shrinking are on for release, same as `:androidApp` and `:runtime`.
+ABIs are per-build-type `ndk.abiFilters` (not `splits.abi`, which is global): release filters on `ext["wearReleaseAbis"]` = `armeabi-v7a` — Wear OS devices run a 64-bit kernel with a 32-bit userspace, so that is the only ABI CI builds and publishes — while debug filters on `ext["wearDebugAbis"]` = `x86_64`, so `:wear:assembleDebug` installs on a Wear OS AVD with no extra flags. Overrides: `-Pmessenger.wearAbis` / `WEAR_ABIS` (release) and `-Pmessenger.wearDebugAbis` / `WEAR_DEBUG_ABIS` (debug). The watch never links the Rust core, so its x86_64 build costs no extra Rust target. R8 + resource shrinking are on for release, same as `:androidApp` and `:runtime`.
 
 ## R8 troubleshooting (R8 runs on every Android release build)
 
