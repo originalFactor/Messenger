@@ -56,7 +56,7 @@
     <string name="agents_empty_message">No agents yet\nCreate your first Agent</string>
     <string name="agents_delete_title">Delete Agent</string>
     <string name="agents_delete_confirm">Are you sure you want to delete this Agent?</string>
-    <string name="agents_delete_batch_confirm">Are you sure you want to delete these %1$d Agents? The default Agent and the title generator will not be deleted.</string>
+    <string name="agents_delete_batch_confirm">Are you sure you want to delete these %1$d Agents? The default Agent will not be deleted.</string>
     <string name="agents_default_badge">Default</string>
     <string name="agents_title_badge">Title Generator</string>
     <string name="agent_builtin_default_name">Default Agent</string>

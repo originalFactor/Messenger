@@ -580,10 +580,10 @@ impl<'a> SyncEngine<'a> {
                 continue;
             }
             if remote.deleted {
-                let local = self.store.get_agent(&remote.id).map_err(|e| e.to_string())?;
-                if local.map(|a| a.role == ROLE_TITLE).unwrap_or(false) {
-                    continue;
-                }
+                // No title-holder veto: the role is re-seeded by
+                // `ensure_builtin_title_agent` right after this delta, so a
+                // tombstone for a holder that moved on another device applies
+                // instead of leaving a stale holder behind.
                 let conversations = self
                     .store
                     .list_conversations_by_agent(&remote.id)
@@ -808,7 +808,9 @@ impl<'a> SyncEngine<'a> {
     }
 
     /// Seed the builtin title agent only when no title-role holder exists at
-    /// all (transfers survive; the builtin never re-seeds afterwards).
+    /// all. The invariant is "exactly one title generator", not "this row is
+    /// permanent": transfers survive, and deleting the holder (the builtin
+    /// included) re-seeds a fresh builtin, so callers may delete it freely.
     pub fn ensure_builtin_title_agent(&self) -> Result<(), String> {
         let has_holder = self
             .store

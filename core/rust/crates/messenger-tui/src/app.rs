@@ -1393,27 +1393,28 @@ impl App {
     }
 
     fn delete_agent(&mut self, id: &str) {
+        // Only the default Agent is an undeletable ROW. "Exactly one title
+        // generator" is a ROLE invariant, not a row guard: deleting the holder
+        // re-seeds a builtin one below.
         if let Some(agent) = self.engine.store.list_agents().unwrap_or_default().into_iter().find(|a| a.id == id) {
             if agent.is_default {
                 self.note(ChatNote::warn("The default Agent cannot be deleted."));
-                return;
-            }
-            if agent.role == messenger_sync::ROLE_TITLE {
-                self.note(ChatNote::warn(
-                    "The title generator cannot be deleted (transfer the role first).",
-                ));
-                return;
-            }
-            if agent.id == messenger_sync::BUILTIN_TITLE_AGENT_ID {
-                self.note(ChatNote::warn(
-                    "The built-in title generator cannot be deleted.",
-                ));
                 return;
             }
         }
         if let Err(error) = self.engine.store.delete_agent(id) {
             self.note(ChatNote::error(error.to_string()));
             return;
+        }
+        // The role is single-holder: if the deleted row was the title holder
+        // (or the builtin that holds it), seed a fresh builtin holder so title
+        // generation keeps working. Idempotent for any other Agent.
+        let sync = messenger_sync::SyncEngine::new(
+            &self.engine.store,
+            store_ops::session_from_kv(&self.engine.store),
+        );
+        if let Err(error) = sync.ensure_builtin_title_agent() {
+            self.note(ChatNote::error(error.to_string()));
         }
         self.note_info("Agent deleted.");
         self.reload_agents();
@@ -1732,6 +1733,15 @@ impl App {
         };
         match self.engine.store.upsert_agent(&agent) {
             Ok(()) => {
+                // Saving the title holder as a regular Agent would leave the
+                // single-holder role empty; re-seed the builtin holder.
+                let sync = messenger_sync::SyncEngine::new(
+                    &self.engine.store,
+                    store_ops::session_from_kv(&self.engine.store),
+                );
+                if let Err(error) = sync.ensure_builtin_title_agent() {
+                    self.note(ChatNote::error(error));
+                }
                 self.reload_agents();
                 let shown = crate::agent_name::display_name(&agent);
                 self.note_info(format!("Saved Agent “{shown}”."));

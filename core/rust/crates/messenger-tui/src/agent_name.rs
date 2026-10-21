@@ -46,9 +46,9 @@ fn chinese_locale() -> bool {
 /// Is this row an unrenamed builtin? (Identity + seed literal, so transferring
 /// the title role to a user Agent or renaming a builtin opts out.)
 fn is_unrenamed_builtin(agent: &StoredAgent) -> bool {
-    let is_title = agent.id == BUILTIN_TITLE_AGENT_ID || agent.role == ROLE_TITLE;
     (agent.is_default && DEFAULT_AGENT_LITERALS.contains(&agent.name.as_str()))
-        || (is_title && TITLE_AGENT_LITERALS.contains(&agent.name.as_str()))
+        || (agent.id == BUILTIN_TITLE_AGENT_ID
+            && TITLE_AGENT_LITERALS.contains(&agent.name.as_str()))
 }
 
 /// [`display_name`] with the language decided by the caller (testable).
@@ -132,13 +132,13 @@ mod tests {
     }
 
     #[test]
-    fn transferred_title_role_is_not_localized() {
-        // The role moved to a user Agent whose name happens to be the literal.
+    fn user_agents_are_never_localized() {
+        // A user Agent that took over the title role keeps its own name...
         let user = agent("user-1", "标题生成", ROLE_TITLE, false);
-        assert_eq!(display_name_for(&user, false), "Title Generator");
-        // ...and a regular Agent named like the seed stays verbatim.
-        let other = agent("user-2", "标题生成", "chat", false);
-        assert_eq!(display_name_for(&other, false), "标题生成");
+        assert_eq!(display_name_for(&user, false), "标题生成");
+        // ...and so does any regular Agent named like a seed literal.
+        let other = agent("user-2", "默认 Agent", "chat", false);
+        assert_eq!(display_name_for(&other, false), "默认 Agent");
     }
 
     #[test]

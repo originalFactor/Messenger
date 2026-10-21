@@ -249,18 +249,19 @@ fun AgentsScreen(
                         )
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
-                        val isBuiltin = item.agent.id == Agent.BUILTIN_TITLE_AGENT_ID
+                        // 「必须有且恰好一个标题生成器」只约束角色归属，不约束这一行
+                        // 本身：内置标题智能体照常可克隆、可删除，删掉后仓库会在
+                        // 没有持有者时补种一个。唯一仍然受保护的是默认 Agent。
                         val isTitleAgent = item.agent.role == Agent.ROLE_TITLE
                         AgentListItem(
                             item = item,
                             isMultiSelectMode = uiState.isMultiSelectMode,
                             isMultiSelected = item.agent.id in uiState.selectedAgentIds,
                             enableContextMenu = enableContextMenu,
-                            isBuiltin = isBuiltin,
                             isTitleAgent = isTitleAgent,
                             onClick = {
                                 if (uiState.isMultiSelectMode) {
-                                    if (!item.agent.isDefault && !isTitleAgent && !isBuiltin) {
+                                    if (!item.agent.isDefault) {
                                         viewModel.toggleSelection(item.agent.id)
                                     }
                                 } else if (isTitleAgent) {
@@ -271,18 +272,18 @@ fun AgentsScreen(
                                 }
                             },
                             onLongClick = {
-                                if (!isTitleAgent && !isBuiltin) {
+                                if (!item.agent.isDefault) {
                                     viewModel.enterMultiSelectMode(item.agent.id)
                                 }
                             },
                             onEditClick = { onEditClick(item.agent.id) },
                             onCloneClick = { viewModel.cloneAgent(item.agent.id) },
                             onDeleteClick = {
-                                if (!item.agent.isDefault && !isTitleAgent && !isBuiltin) {
+                                if (!item.agent.isDefault) {
                                     showDeleteDialog = item.agent.id
                                 }
                             },
-                            canDelete = !item.agent.isDefault && !isTitleAgent && !isBuiltin
+                            canDelete = !item.agent.isDefault
                         )
                     }
                     }
@@ -338,7 +339,6 @@ private fun AgentListItem(
     isMultiSelectMode: Boolean = false,
     isMultiSelected: Boolean = false,
     enableContextMenu: Boolean = false,
-    isBuiltin: Boolean = false,
     isTitleAgent: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -375,7 +375,7 @@ private fun AgentListItem(
             Checkbox(
                 checked = isMultiSelected,
                 onCheckedChange = null,
-                enabled = !item.agent.isDefault && !isTitleAgent && !isBuiltin,
+                enabled = !item.agent.isDefault,
                 modifier = Modifier.padding(end = 8.dp)
             )
         }
@@ -448,15 +448,13 @@ private fun AgentListItem(
                             onEditClick()
                         }
                     )
-                    if (!isBuiltin) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(Res.string.action_clone)) },
-                            onClick = {
-                                expanded = false
-                                onCloneClick()
-                            }
-                        )
-                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.action_clone)) },
+                        onClick = {
+                            expanded = false
+                            onCloneClick()
+                        }
+                    )
                     if (canDelete) {
                         DropdownMenuItem(
                             text = { Text(stringResource(Res.string.action_delete)) },
@@ -482,15 +480,13 @@ private fun AgentListItem(
                         onEditClick()
                     }
                 )
-                if (!isBuiltin) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(Res.string.action_clone)) },
-                        onClick = {
-                            contextMenuState.hide()
-                            onCloneClick()
-                        }
-                    )
-                }
+                DropdownMenuItem(
+                    text = { Text(stringResource(Res.string.action_clone)) },
+                    onClick = {
+                        contextMenuState.hide()
+                        onCloneClick()
+                    }
+                )
                 if (canDelete) {
                     DropdownMenuItem(
                         text = { Text(stringResource(Res.string.action_delete)) },

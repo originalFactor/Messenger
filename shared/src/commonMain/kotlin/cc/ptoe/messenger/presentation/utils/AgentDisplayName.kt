@@ -36,9 +36,9 @@ private val TITLE_AGENT_NAME_LITERALS = setOf(Agent.BUILTIN_TITLE_AGENT_NAME, "T
  * 判定，不依赖名称），但**展示**时跟随系统语言：用户没有改过名的内置 Agent 显示
  * 本地化名称，改过名的照原样显示。
  *
- * 判定同时要求「内置身份」和「种子字面值」，因此用户重命名内置 Agent 之后不再被
- * 本地化；把标题生成角色转移给自建 Agent 时，那个 Agent 保留自己的名字（只有保留
- * ID 的内置标题智能体才本地化）。
+ * 判定同时要求「内置身份」（默认 Agent，或保留 ID 的标题智能体）和「种子字面值」，
+ * 因此用户重命名内置 Agent 之后不再被本地化；把标题生成角色转移给自建 Agent 时，
+ * 那个 Agent 保留自己的名字。
  */
 fun builtinAgentNameResource(
     id: String,
