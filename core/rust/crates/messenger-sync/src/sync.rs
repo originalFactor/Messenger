@@ -24,6 +24,8 @@ pub const KV_SESSION: &str = "cloud_session";
 pub const KV_SESSION_HOST: &str = "cloud_session_host";
 pub const KV_USER: &str = "cloud_user_json";
 pub const KV_SERVER_URL: &str = "cloud_server_url";
+/// One-shot marker for the missing-default-Agent repair (see `sync_internal`).
+const KV_DEFAULT_AGENT_REPAIR: &str = "default_agent_repair_attempted";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncResult {
@@ -226,12 +228,45 @@ impl<'a> SyncEngine<'a> {
         expected_server_version: Option<i64>,
     ) -> CloudResult<SyncResult> {
         let account = self.signed_in()?;
-        let since = match since_override {
-            Some(v) => v,
-            None => self
-                .store
-                .sync_cursor(&account.id)
-                .map_err(|e| CloudError::Network(e.to_string()))?,
+        // `replace_local` rebuilds the local rows, so it must re-read the whole
+        // account: the stored cursor describes exactly the rows about to be
+        // wiped. Pulling `since = cursor` after the wipe applied an almost
+        // always empty delta to an empty database and dropped every row at or
+        // below the cursor — most visibly the server-seeded default Agent,
+        // leaving only the locally seeded title generator ("restore from
+        // cloud" emptied the Agents screen).
+        //
+        // A signed-in account also always has exactly one default Agent (the
+        // server seeds it at registration and refuses to delete it), so a
+        // missing one means the local rows no longer match the cursor: re-read
+        // from zero instead of pulling a delta onto that broken state. That is
+        // the repair path for devices that already ran the buggy restore.
+        let missing_default = self
+            .store
+            .get_default_agent()
+            .map_err(|e| CloudError::Network(e.to_string()))?
+            .is_none();
+        // Attempt the repair once, not on every sync: an account whose server
+        // side genuinely has no default Agent would otherwise full-pull on
+        // every debounced sync. The marker is only written after the pull
+        // succeeds, so a network failure retries; it clears as soon as a
+        // default Agent exists again.
+        let repair_attempted = self
+            .store
+            .kv_get(KV_DEFAULT_AGENT_REPAIR)
+            .map_err(|e| CloudError::Network(e.to_string()))?
+            .is_some();
+        let repairing = missing_default && !repair_attempted;
+        let since = if replace_local || repairing {
+            0
+        } else {
+            match since_override {
+                Some(v) => v,
+                None => self
+                    .store
+                    .sync_cursor(&account.id)
+                    .map_err(|e| CloudError::Network(e.to_string()))?,
+            }
         };
 
         let (delta, raw_server_latest) = self.fetch_cloud_sync(since).await?;
@@ -265,6 +300,11 @@ impl<'a> SyncEngine<'a> {
         self.store
             .set_sync_meta(&account.id, delta.latest_version, &self.pending_upserts(&account.id)?, &self.pending_deletes(&account.id)?)
             .map_err(|e| CloudError::Network(e.to_string()))?;
+        if repairing {
+            let _ = self.store.kv_set(KV_DEFAULT_AGENT_REPAIR, "1");
+        } else if !missing_default && repair_attempted {
+            let _ = self.store.kv_delete(KV_DEFAULT_AGENT_REPAIR);
+        }
 
         Ok(SyncResult {
             latest_version: delta.latest_version,
