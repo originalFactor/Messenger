@@ -183,13 +183,12 @@ ext["cmakeVersion"] = "4.1.2"
  * `splits.abi` in both modules, the cargo-ndk target list in `:core-bindings`,
  * and the Termux bootstrap archives `:runtime` packages.
  *
- * The release matrix is `arm64-v8a` only: that is the ABI every supported
- * Android device and every CI artifact uses. `armeabi-v7a` (32-bit phones) and
- * `x86_64` (the emulator) stay selectable per build — `-Pmessenger.abis=…` or
- * `ANDROID_ABIS=…` — so old-device and emulator builds remain possible without
- * dragging a second APK and a second Rust cross-build into every CI run.
- * `:wear` is the exception: Wear OS is 32-bit userspace, so that module pins
- * `armeabi-v7a` on its own (see wear/build.gradle.kts).
+ * The shipped matrix is `arm64-v8a` only: that is the ABI every supported
+ * Android device and every CI artifact uses. `x86_64` is kept for AVD testing
+ * (the emulator has no ARM translation here), and `armeabi-v7a` for 32-bit
+ * phones; both stay selectable per build — `-Pmessenger.abis=…` or
+ * `ANDROID_ABIS=…` — so neither drags a second APK and a second Rust
+ * cross-build into a normal CI run. `:wear` has its own list, see below.
  */
 val abiToRustTarget = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -199,25 +198,47 @@ val abiToRustTarget = mapOf(
 )
 private val DEFAULT_ANDROID_ABIS = "arm64-v8a"
 
-fun androidAbis(): List<String> {
-    val raw = providers.gradleProperty("messenger.abis").orNull
-        ?: getEnv("ANDROID_ABIS")
-        ?: DEFAULT_ANDROID_ABIS
+/**
+ * `:wear` ABIs. The watch APK ships `armeabi-v7a` (Wear OS = 64-bit kernel with
+ * a 32-bit userspace); `x86_64` is kept ONLY so the watch app can be installed
+ * on a Wear OS AVD, which has no ARM translation. Wear never reaches the Rust
+ * core, so an x86_64 wear build needs no extra Rust target.
+ */
+private val WEAR_ABIS = setOf("armeabi-v7a", "x86_64")
+private val DEFAULT_WEAR_ABIS = "armeabi-v7a"
+
+/** Parses and validates one module's ABI list: Gradle property → env var → default. */
+private fun resolveAbis(
+    property: String,
+    envVar: String,
+    default: String,
+    allowed: Set<String>,
+): List<String> {
+    val raw = providers.gradleProperty(property).orNull
+        ?: getEnv(envVar)
+        ?: default
     val abis = raw.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
     if (abis.isEmpty()) {
-        throw GradleException("Android ABI list is empty (messenger.abis / ANDROID_ABIS = \"$raw\").")
+        throw GradleException("Android ABI list is empty ($property / $envVar = \"$raw\").")
     }
-    val unknown = abis.filterNot { abiToRustTarget.containsKey(it) }
+    val unknown = abis.filterNot { it in allowed }
     if (unknown.isNotEmpty()) {
         throw GradleException(
             "Unknown Android ABI(s) ${unknown.joinToString()} in \"$raw\"; " +
-                "expected a subset of ${abiToRustTarget.keys.joinToString()}."
+                "expected a subset of ${allowed.joinToString()}."
         )
     }
     return abis
 }
 
+fun androidAbis(): List<String> =
+    resolveAbis("messenger.abis", "ANDROID_ABIS", DEFAULT_ANDROID_ABIS, abiToRustTarget.keys)
+
+fun wearAbis(): List<String> =
+    resolveAbis("messenger.wearAbis", "WEAR_ABIS", DEFAULT_WEAR_ABIS, WEAR_ABIS)
+
 ext["androidAbis"] = androidAbis()
+ext["wearAbis"] = wearAbis()
 ext["androidRustTargets"] = (ext["androidAbis"] as List<*>)
     .map { abiToRustTarget.getValue(it as String) }
 
