@@ -33,6 +33,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -40,9 +41,13 @@ import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import cc.ptoe.messenger.domain.model.ChatModel
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.action_delete
+import cc.ptoe.messenger.generated.resources.providers_model_disabled
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import org.jetbrains.compose.resources.getString
 
 /**
  * 模型行的多选表现：选中只改整行底色，行内控件与排版不动。
@@ -50,6 +55,8 @@ import kotlin.test.assertTrue
  * 回归一：元数据标签曾与名称同排，窄屏上名称被挤成省略号。
  * 回归二：多选曾靠插入复选框、隐藏开关/删除按钮表达，长按后整行“跳版”；
  * 现在只改底色，选中状态同时通过 semantics 暴露给无障碍与测试。
+ * 回归三：行内不再有启用开关和删除按钮（改到模型编辑页），
+ * 禁用状态改为在标签行显示「已禁用」。
  */
 @OptIn(ExperimentalTestApi::class)
 class ModelListItemTest {
@@ -91,7 +98,6 @@ class ModelListItemTest {
         val name = onNodeWithText(model.displayName, useUnmergedTree = true)
         val contextBadge = onNodeWithText("1M", useUnmergedTree = true)
         val rateBadge = onNode(hasText("×0.33", substring = true), useUnmergedTree = true)
-        val switch = onNode(isToggleable(), useUnmergedTree = true)
         name.assertIsDisplayed()
         contextBadge.assertIsDisplayed()
         rateBadge.assertIsDisplayed()
@@ -99,7 +105,6 @@ class ModelListItemTest {
         val nameBounds = name.getUnclippedBoundsInRoot()
         val contextBounds = contextBadge.getUnclippedBoundsInRoot()
         val rateBounds = rateBadge.getUnclippedBoundsInRoot()
-        val switchBounds = switch.getUnclippedBoundsInRoot()
         assertTrue(
             contextBounds.top >= nameBounds.bottom,
             "context badge must start on a new line below the name (name=$nameBounds, badge=$contextBounds)"
@@ -108,10 +113,70 @@ class ModelListItemTest {
             rateBounds.top >= nameBounds.bottom,
             "rate badge must start on a new line below the name (name=$nameBounds, badge=$rateBounds)"
         )
+        // 行尾不再有开关/删除按钮，标签可以用满整行宽度。
         assertTrue(
-            rateBounds.right <= switchBounds.left,
-            "badges must stay clear of the switch (badge=$rateBounds, switch=$switchBounds)"
+            rateBounds.right <= nameBounds.right + 1.dp,
+            "badges must stay inside the row (badge=$rateBounds, name=$nameBounds)"
         )
+    }
+
+    @Test
+    fun rowHasNoSwitchOrDeleteButton() = runComposeUiTest {
+        val model = model("plain")
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = false,
+                        isSelected = false,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // 启停与删除都移到模型编辑页，行内只保留可点击的整行。
+        assertEquals(
+            0,
+            onAllNodes(isToggleable(), useUnmergedTree = true).fetchSemanticsNodes().size,
+            "the model row must not contain an enable switch",
+        )
+        assertEquals(
+            0,
+            onAllNodesWithContentDescription(
+                getString(Res.string.action_delete),
+                useUnmergedTree = true
+            ).fetchSemanticsNodes().size,
+            "the model row must not contain a delete button",
+        )
+    }
+
+    @Test
+    fun disabledModelShowsADisabledBadge() = runComposeUiTest {
+        val model = model("disabled").copy(isEnabled = false)
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(320.dp)) {
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = false,
+                        isSelected = false,
+                        onToggleEnabled = {},
+                        onDeleteClick = {},
+                        onLongClick = {},
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        onNodeWithText(getString(Res.string.providers_model_disabled), useUnmergedTree = true)
+            .assertIsDisplayed()
     }
 
     @Test
@@ -134,9 +199,8 @@ class ModelListItemTest {
             }
         }
 
-        // 多选态下名称与开关仍在原位：不插入复选框、不隐藏右侧控件。
+        // 多选态下名称仍在原位：不插入复选框、不隐藏行内内容。
         onNodeWithText(model.displayName, useUnmergedTree = true).assertIsDisplayed()
-        onNode(isToggleable(), useUnmergedTree = true).assertIsDisplayed()
     }
 
     /**

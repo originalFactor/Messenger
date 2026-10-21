@@ -272,6 +272,10 @@
     <string name="providers_model_detail_title">Model details</string>
     <string name="providers_model_context_window_label">Context window (tokens)</string>
     <string name="providers_model_context_window_hint">Unknown / unlimited</string>
+    <string name="providers_model_enabled_label">Enabled</string>
+    <string name="providers_model_enabled_desc">Disabled models are hidden from the model picker</string>
+    <string name="providers_model_disabled">Disabled</string>
+    <string name="providers_model_delete_action">Delete model</string>
     <string name="providers_model_capabilities">Capabilities</string>
     <string name="providers_model_input_modalities">Input modalities</string>
     <string name="providers_model_output_modalities">Output modalities</string>

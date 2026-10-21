@@ -295,7 +295,8 @@ fun NavGraph(
             val modelId = backStackEntry.arguments?.read { getStringOrNull("modelId") } ?: ""
             ModelDetailScreen(
                 modelId = modelId,
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                onDeleted = { navController.popBackStack() }
             )
         }
 

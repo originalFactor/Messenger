@@ -46,7 +46,10 @@ data class ModelDetailUiState(
     val supportsThinking: Boolean = false,
     val supportsJsonOutput: Boolean = false,
     val supportsTemperature: Boolean = false,
-    val isSaved: Boolean = false
+    /** 模型是否启用（禁用的模型不会出现在模型选择器中）。 */
+    val isEnabled: Boolean = true,
+    val isSaved: Boolean = false,
+    val isDeleted: Boolean = false
 )
 
 class ModelDetailViewModel(
@@ -66,6 +69,8 @@ class ModelDetailViewModel(
         viewModelScope.launch {
             try {
                 modelRepository.getById(modelId).collect { model ->
+                    // 删除后 store 会推一次 null，不要把它当成加载失败。
+                    if (_uiState.value.isDeleted) return@collect
                     if (model != null) {
                         _uiState.value = ModelDetailUiState(
                             model = model,
@@ -78,7 +83,8 @@ class ModelDetailViewModel(
                             supportsToolCalling = model.supportsToolCalling,
                             supportsThinking = model.supportsThinking,
                             supportsJsonOutput = model.supportsJsonOutput,
-                            supportsTemperature = model.supportsTemperature
+                            supportsTemperature = model.supportsTemperature,
+                            isEnabled = model.isEnabled
                         )
                     } else {
                         _uiState.value = _uiState.value.copy(
@@ -140,6 +146,10 @@ class ModelDetailViewModel(
         _uiState.value = _uiState.value.copy(supportsTemperature = enabled)
     }
 
+    fun onEnabledChange(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isEnabled = enabled)
+    }
+
     fun save() {
         val state = _uiState.value
         val model = state.model ?: return
@@ -155,13 +165,26 @@ class ModelDetailViewModel(
                 supportsToolCalling = state.supportsToolCalling,
                 supportsThinking = state.supportsThinking,
                 supportsJsonOutput = state.supportsJsonOutput,
-                supportsTemperature = state.supportsTemperature
+                supportsTemperature = state.supportsTemperature,
+                isEnabled = state.isEnabled
             )
             modelRepository.update(updated)
             _uiState.value = state.copy(
                 model = updated,
                 isSaved = true
             )
+        }
+    }
+
+    /**
+     * 删除当前模型。删除即时生效（不像表单字段那样等保存），
+     * 成功后界面直接退出编辑页。
+     */
+    fun delete() {
+        val model = _uiState.value.model ?: return
+        viewModelScope.launch {
+            modelRepository.delete(model.id)
+            _uiState.value = _uiState.value.copy(isDeleted = true)
         }
     }
 
