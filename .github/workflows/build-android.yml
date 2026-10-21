@@ -28,11 +28,10 @@ on:
 
 jobs:
   build-android:
-    # One job, two ABIs: `splits.abi` (driven by the root build script's
-    # ext["androidAbis"] = arm64-v8a,armeabi-v7a) emits one APK per ABI for both
-    # :androidApp and its :runtime companion in a single Gradle invocation, so
-    # splitting them across runners would only duplicate the Rust/AGP work.
-    name: Build androidApp + runtime release APKs (arm64-v8a, armeabi-v7a)
+    # One job, one ABI: `splits.abi` (driven by the root build script's
+    # ext["androidAbis"] = arm64-v8a) emits the arm64-v8a APK for both
+    # :androidApp and its :runtime companion in a single Gradle invocation.
+    name: Build androidApp + runtime release APKs (arm64-v8a)
     runs-on: ubuntu-latest
 
     steps:
@@ -64,13 +63,13 @@ jobs:
           packages: 'ndk;30.0.16248370 cmake;4.1.2 build-tools;37.0.0 platforms;android-37.0'
 
       # :core-bindings compiles the Rust core (core/rust) via cargo-ndk for the
-      # two shipped ABIs; cargo-ndk picks the NDK up from ANDROID_HOME. The target
+      # shipped ABI; cargo-ndk picks the NDK up from ANDROID_HOME. The target
       # list is derived from the same ext["androidAbis"] as the APK splits, so
       # keep these in sync if the matrix ever changes.
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
+          targets: aarch64-linux-android
 
       - name: Install cargo-ndk
         uses: taiki-e/install-action@v2
@@ -112,9 +111,9 @@ jobs:
       - name: Build androidApp and runtime release APKs
         env:
           VERSION_CODE: ${{ env.VERSION_CODE }}
-          # Explicit, even though it is the default: the release matrix is ARM
-          # only, and this is the one place a reviewer should see it.
-          ANDROID_ABIS: arm64-v8a,armeabi-v7a
+          # Explicit, even though it is the default: the phone apps ship
+          # arm64-v8a only, and this is the one place a reviewer should see it.
+          ANDROID_ABIS: arm64-v8a
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
