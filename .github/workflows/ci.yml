@@ -36,6 +36,8 @@ on:
       - gradle/wrapper/**
       - gradlew
       - gradlew.bat
+      - gradlew-cli
+      - gradlew-cli.bat
       - .github/workflows/**
   pull_request:
     branches:
@@ -56,6 +58,8 @@ on:
       - gradle/wrapper/**
       - gradlew
       - gradlew.bat
+      - gradlew-cli
+      - gradlew-cli.bat
       - .github/workflows/**
 
 jobs:
