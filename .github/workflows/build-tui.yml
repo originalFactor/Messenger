@@ -23,18 +23,26 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
-      # The two platforms are independent release assets: one failing must not
-      # cancel the other, so both results are visible in a single run.
+      # The four binaries are independent release assets: one failing target
+      # must not cancel the others, so every result is visible in a single run.
       fail-fast: false
       matrix:
         include:
-          # Both targets are the runners' host triples, so this is a plain host
-          # `cargo build` — no cross toolchain and no `--target`.
+          # Each target is its runner's host triple, so this is a plain host
+          # `cargo build` — no cross toolchain, no `--target`, no linker setup.
+          # That is why the arm64 entries run on arm64 runners rather than
+          # cross-compiling from x64.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             exe: messenger-tui
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            exe: messenger-tui
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            exe: messenger-tui.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             exe: messenger-tui.exe
 
     steps:
@@ -53,6 +61,8 @@ jobs:
           echo "VERSION_CODE=$commitCount" >> "$GITHUB_ENV"
           echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($commitCount)"
 
+      # The host triple must be the runner's own: rustup's default toolchain on
+      # windows-11-arm / ubuntu-24.04-arm is already the aarch64 one.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -60,6 +70,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core/rust
+
+      # Linux only: the TUI's clipboard/image support (arboard) builds against
+      # X11 and Wayland client libraries, which the Ubuntu images do not ship
+      # by default. Installed on both Linux runners so x86_64 and arm64 are
+      # built identically.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libwayland-dev libxkbcommon-dev
 
       # Deliberately cargo, not Gradle: the TUI links the Rust crates directly
       # (no UniFFI, no Kotlin), and Gradle stays out of this path. This job only

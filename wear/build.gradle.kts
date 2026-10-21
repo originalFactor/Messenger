@@ -35,6 +35,18 @@ android {
 
     }
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            // Wear OS devices run a 64-bit kernel with a 32-bit userspace, so the
+            // shipped watch APK is armeabi-v7a only — the single ABI CI builds and
+            // publishes (see .github/workflows/build-wear.yml).
+            include("armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
     signingConfigs {
         create("messenger") {
             storeFile = rootProject.ext["keystoreFile"] as java.io.File

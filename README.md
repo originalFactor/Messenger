@@ -121,12 +121,12 @@ To get a local copy up and running, follow these simple steps.
    ```
 4. Build the debug APK / Desktop app
    ```sh
-   ./gradlew :androidApp:assembleDebug     # ABI-specific arm64-v8a/armeabi-v7a/x86_64 APKs
-   ./gradlew :wear:assembleDebug           # Wear OS companion
+   ./gradlew :androidApp:assembleDebug     # arm64-v8a + armeabi-v7a APKs
+   ./gradlew :wear:assembleDebug           # Wear OS companion (armeabi-v7a)
    ./gradlew :desktopApp:run               # Desktop (JVM)
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
-   Android release builds produce the same three ABI-specific APKs; place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux).
+   Android release builds are minified (R8 + resource shrinking) and produce one APK per shipped ABI — `arm64-v8a` and `armeabi-v7a`; the emulator ABI is opt-in with `-Pmessenger.abis=x86_64` (or `ANDROID_ABIS=x86_64`). Place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux); the release build runs ProGuard.
    Android/Wear/Runtime, Desktop, Web and the terminal client all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
 5. Build the browser client and the terminal client (optional)
    ```sh
