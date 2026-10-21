@@ -232,7 +232,10 @@ class RustRepositoriesTest {
         override suspend fun cloudReplaceCloudWithLocal(): String = "{}"
         override suspend fun cloudChangePassword(currentPassword: String, newPassword: String) {}
         override suspend fun cloudDeleteAccount(currentPassword: String) {}
-        override suspend fun cloudEnsureBuiltinTitleAgent() {}
+        var titleReseedCalls = 0
+        override suspend fun cloudEnsureBuiltinTitleAgent() {
+            titleReseedCalls++
+        }
         override suspend fun cloudUploadUserAvatar(bytes: ByteArray, filename: String, mime: String): String = ""
         override suspend fun cloudDeleteUserAvatar(): String = ""
         override suspend fun cloudUploadAgentAvatar(
@@ -347,6 +350,51 @@ class RustRepositoriesTest {
         assertEquals(false, cloned.isDefault)
 
         assertEquals(2, repo.getAll().first().size)
+    }
+
+    @Test
+    fun testTitleAgentIsDeletableAndReseedsTheRole() = runBlocking {
+        val bridge = FakeCoreBridge()
+        val repo = RustAgentRepository(bridge)
+
+        repo.insert(
+            Agent(
+                id = "a1",
+                name = "Default",
+                systemPrompt = "sys",
+                defaultModelId = null,
+                temperature = 0.7f,
+                topP = 1.0f,
+                maxTokens = null,
+                isDefault = true,
+                createdAt = 1000L,
+                updatedAt = 1000L
+            )
+        )
+        repo.insert(
+            Agent(
+                id = Agent.BUILTIN_TITLE_AGENT_ID,
+                name = Agent.BUILTIN_TITLE_AGENT_NAME,
+                systemPrompt = "titles",
+                defaultModelId = null,
+                temperature = 0.4f,
+                topP = 1.0f,
+                maxTokens = null,
+                role = Agent.ROLE_TITLE,
+                createdAt = 1000L,
+                updatedAt = 1000L
+            )
+        )
+
+        // The title generator is a role invariant, not an undeletable row.
+        repo.delete(Agent.BUILTIN_TITLE_AGENT_ID)
+        assertNull(repo.getById(Agent.BUILTIN_TITLE_AGENT_ID).first())
+        assertEquals(1, bridge.titleReseedCalls, "deleting the title holder must re-seed the role")
+
+        // The default Agent stays protected.
+        repo.delete("a1")
+        assertNotNull(repo.getById("a1").first())
+        assertEquals(1, bridge.titleReseedCalls, "a blocked delete must not re-seed")
     }
 
     @Test

@@ -99,9 +99,10 @@ class RustAgentRepository(
     }
 
     override suspend fun delete(id: String) {
-        if (id == Agent.BUILTIN_TITLE_AGENT_ID) return
         val current = getById(id).first() ?: return
-        if (current.isDefault || current.role == Agent.ROLE_TITLE) return
+        // 只有默认 Agent 是不可删除的行。「恰好一个标题生成器」是角色不变量，
+        // 不是对某一行的保护：删掉持有者后由核心补种，见下面的 ensure。
+        if (current.isDefault) return
 
         current.avatar?.let { avatarPath ->
             if (!avatarPath.startsWith("http://") && !avatarPath.startsWith("https://")) {
@@ -111,6 +112,17 @@ class RustAgentRepository(
         coreBridge.deleteAgent(id)
         version.value = currentTimeMillis()
         onChanged(current, null)
+        reseedTitleAgentIfNeeded(current)
+    }
+
+    /**
+     * 删除掉标题生成器的持有者后补种一个（核心侧只在「没有任何 title 角色持有者」
+     * 时插入，所以这里无条件调用即可：删除普通 Agent 时它是幂等的空操作）。
+     */
+    private suspend fun reseedTitleAgentIfNeeded(deleted: Agent) {
+        if (deleted.role != Agent.ROLE_TITLE && deleted.id != Agent.BUILTIN_TITLE_AGENT_ID) return
+        runCatching { coreBridge.cloudEnsureBuiltinTitleAgent() }
+        version.value = currentTimeMillis()
     }
 
     private fun StoredAgentDto.toDomain() = Agent(
