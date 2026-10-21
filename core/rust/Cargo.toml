@@ -33,6 +33,15 @@ strip = true
 # only the Linux CI job failed. Nothing ships this artifact: the Android
 # jniLibs come from cargo-ndk targeting the Android triples and keep the
 # stripped release profile, and the host library's only consumer is bindgen.
+#
+# Link-time optimization is deliberately OFF here. This artifact is never
+# shipped or executed by users — bindgen only reads its metadata symbols — yet
+# inheriting release's `lto = "thin"` + `codegen-units = 1` made a one-line
+# edit in a sibling crate cost ~57 s to rebuild (and a full rebuild ~2 min).
+# Dropping LTO and widening codegen units keeps the symbol table intact and
+# cuts that to a plain optimized compile.
 [profile.bindgen]
 inherits = "release"
 strip = "none"
+lto = false
+codegen-units = 16

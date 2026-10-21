@@ -22,8 +22,8 @@ Phone-backed companion with no settings UI: a two-screen chat flow — chat list
 ## Build
 
 ```bash
-./gradlew --no-daemon :wear:assembleDebug
-./gradlew --no-daemon :wear:assembleRelease   # R8 on; armeabi-v7a only
+./gradlew-cli :wear:assembleDebug
+./gradlew-cli :wear:assembleRelease   # R8 on; armeabi-v7a only
 ```
 
 ABIs are per-build-type `ndk.abiFilters` (not `splits.abi`, which is global): release filters on `ext["wearReleaseAbis"]` = `armeabi-v7a` — Wear OS devices run a 64-bit kernel with a 32-bit userspace, so that is the only ABI CI builds and publishes — while debug filters on `ext["wearDebugAbis"]` = `x86_64`, so `:wear:assembleDebug` installs on a Wear OS AVD with no extra flags. Overrides: `-Pmessenger.wearAbis` / `WEAR_ABIS` (release) and `-Pmessenger.wearDebugAbis` / `WEAR_DEBUG_ABIS` (debug). The watch never links the Rust core, so its x86_64 build costs no extra Rust target. R8 + resource shrinking are on for release, same as `:androidApp` and `:runtime`.
@@ -34,7 +34,7 @@ R8 is an investigation point for release-only failures (reflection, serializatio
 
 When investigating:
 
-1. Reproduce from a clean run: `./gradlew --no-daemon :wear:assembleRelease --rerun-tasks`.
+1. Reproduce from a clean run: `./gradlew-cli :wear:assembleRelease --rerun-tasks`.
 2. Inspect `wear/build/outputs/mapping/release/`: `mapping.txt` (survivors + obfuscated names), `usage.txt` (removed classes/members — a member under a surviving class is optimized, not removed), `seeds.txt` (keep-rule matches, not proof of APK presence), `configuration.txt` (effective rules incl. consumer rules).
 3. Compare with the final APK (APK Analyzer / `apkanalyzer`). Watch Manifest components, the UniFFI-generated `cc.ptoe.messenger.core` classes + JNA, kotlinx.serialization DTOs/serializers, ucrop's activity (`:androidApp`), the vendored Termux classes and AIDL stubs (`:runtime`), and `WearNetworkBridge` WebSocket/NSD callbacks (`:wear`).
 4. Identify the reflective/serialized entry point before adding a rule. Preserve only the smallest scope; keep annotations/signature metadata when a library reads them (`RuntimeVisibleAnnotations`, `Signature`, …).

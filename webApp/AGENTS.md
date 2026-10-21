@@ -15,8 +15,8 @@ A third target of the same KMP app — not a second UI: the browser runs the ide
 ## Commands
 
 ```bash
-./gradlew --no-daemon :webApp:wasmJsBrowserDevelopmentRun   # dev server (COOP/COEP on)
-./gradlew --no-daemon :webApp:wasmJsBrowserDistribution     # production bundle
-./gradlew --no-daemon :webApp:copyWebAppDistribution        # local: sync into server/public/app/
+./gradlew-cli :webApp:wasmJsBrowserDevelopmentRun   # dev server (COOP/COEP on)
+./gradlew-cli :webApp:wasmJsBrowserDistribution     # production bundle
+./gradlew-cli :webApp:copyWebAppDistribution        # local: sync into server/public/app/
 cd core/rust && cargo check --target wasm32-unknown-unknown -p messenger-wasm
 ```
