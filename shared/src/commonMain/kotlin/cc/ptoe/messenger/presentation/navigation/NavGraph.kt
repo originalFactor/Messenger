@@ -290,6 +290,9 @@ fun NavGraph(
                 onModelClick = { model ->
                     navController.navigate(Screen.ModelDetail.createRoute(model.id))
                 },
+                onEditProviderClick = {
+                    navController.navigate(Screen.ProviderEdit.createRoute(providerId))
+                },
                 showModelSavedMessage = modelSaved,
                 onModelSavedMessageShown = { savedStateHandle[KEY_MODEL_SAVED] = false }
             )

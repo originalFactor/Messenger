@@ -123,6 +123,10 @@ fun ProvidersDualPaneScreen(
                         onModelClick = { model ->
                             selectedModelId = model.id
                         },
+                        onEditProviderClick = {
+                            editProviderId = selectedProviderId
+                            isEditing = true
+                        },
                         showModelSavedMessage = modelSavedMessage,
                         onModelSavedMessageShown = { modelSavedMessage = false }
                     )

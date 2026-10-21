@@ -232,6 +232,7 @@
     <string name="providers_delete_confirm">确定要删除这个提供商吗？相关的模型也会被删除。</string>
     <string name="providers_model_count">%1$d 个模型 · 点击管理模型</string>
     <string name="providers_edit_title">编辑提供商</string>
+    <string name="providers_provider_settings">提供商设置</string>
     <string name="providers_new_title">新建提供商</string>
     <string name="providers_name_label">名称</string>
     <string name="providers_api_url_label">API 地址</string>
