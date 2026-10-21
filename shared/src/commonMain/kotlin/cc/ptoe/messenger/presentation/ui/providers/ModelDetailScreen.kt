@@ -40,8 +40,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -87,7 +85,6 @@ import cc.ptoe.messenger.generated.resources.providers_model_enabled_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_input_modalities
 import cc.ptoe.messenger.generated.resources.providers_model_output_modalities
-import cc.ptoe.messenger.generated.resources.providers_model_saved
 import cc.ptoe.messenger.generated.resources.providers_model_supports_json_output
 import cc.ptoe.messenger.generated.resources.providers_model_supports_temperature
 import cc.ptoe.messenger.generated.resources.providers_model_supports_thinking
@@ -110,8 +107,6 @@ fun ModelDetailScreen(
     )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-    val strSaved = stringResource(Res.string.providers_model_saved)
     val strLoadFailed = stringResource(Res.string.error_load_failed)
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -120,11 +115,10 @@ fun ModelDetailScreen(
         viewModel.loadModel(modelId)
     }
 
+    // 保存成功后立即返回模型列表；「已保存」提示由列表页显示
+    //（本页的 Snackbar 会随页面一起销毁，等它消失再返回会让按钮看起来没反应）。
     LaunchedEffect(uiState.isSaved) {
-        if (uiState.isSaved) {
-            snackbarHostState.showSnackbar(strSaved)
-            onSaved()
-        }
+        if (uiState.isSaved) onSaved()
     }
 
     // 删除后立即离开编辑页；提示留给上一级列表（本页的 Snackbar 会随页面一起消失）。
@@ -178,7 +172,6 @@ fun ModelDetailScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = Modifier.fillMaxSize()
     ) { innerPadding ->
         val contentModifier = Modifier

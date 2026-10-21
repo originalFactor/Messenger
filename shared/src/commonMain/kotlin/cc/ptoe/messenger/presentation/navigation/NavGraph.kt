@@ -70,6 +70,9 @@ import cc.ptoe.messenger.di.AppContainerHolder
 /** SavedState 结果回传 key：ModelPicker 选中模型 */
 private const val KEY_PICKED_MODEL_ID = "conversation_settings_picked_model_id"
 
+/** SavedState 结果回传 key：模型编辑页保存成功，返回列表时提示「已保存」 */
+private const val KEY_MODEL_SAVED = "providers_model_saved"
+
 @Composable
 fun NavGraph(
     navController: NavHostController,
@@ -277,12 +280,18 @@ fun NavGraph(
             )
         ) { backStackEntry ->
             val providerId = backStackEntry.arguments?.read { getStringOrNull("providerId") } ?: ""
+            val savedStateHandle = backStackEntry.savedStateHandle
+            val modelSaved by savedStateHandle
+                .getStateFlow(KEY_MODEL_SAVED, false)
+                .collectAsStateWithLifecycle()
             ProviderDetailScreen(
                 providerId = providerId,
                 onBackClick = { navController.popBackStack() },
                 onModelClick = { model ->
                     navController.navigate(Screen.ModelDetail.createRoute(model.id))
-                }
+                },
+                showModelSavedMessage = modelSaved,
+                onModelSavedMessageShown = { savedStateHandle[KEY_MODEL_SAVED] = false }
             )
         }
 
@@ -296,6 +305,11 @@ fun NavGraph(
             ModelDetailScreen(
                 modelId = modelId,
                 onBackClick = { navController.popBackStack() },
+                onSaved = {
+                    // 结果回传给列表页，由它弹出「已保存」提示
+                    navController.previousBackStackEntry?.savedStateHandle?.set(KEY_MODEL_SAVED, true)
+                    navController.popBackStack()
+                },
                 onDeleted = { navController.popBackStack() }
             )
         }

@@ -71,6 +71,9 @@ class ModelDetailViewModel(
                 modelRepository.getById(modelId).collect { model ->
                     // 删除后 store 会推一次 null，不要把它当成加载失败。
                     if (_uiState.value.isDeleted) return@collect
+                    // 保存后 store 会回推新值；不要用它清掉 isSaved，
+                    // 否则界面可能在观察到保存成功之前就被重置。
+                    if (_uiState.value.isSaved) return@collect
                     if (model != null) {
                         _uiState.value = ModelDetailUiState(
                             model = model,

@@ -46,6 +46,7 @@ fun ProvidersDualPaneScreen(
     var selectedModelId by rememberSaveable { mutableStateOf<String?>(null) }
     var editProviderId by rememberSaveable { mutableStateOf<String?>(null) }
     var isEditing by rememberSaveable { mutableStateOf(false) }
+    var modelSavedMessage by rememberSaveable { mutableStateOf(false) }
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
@@ -108,6 +109,10 @@ fun ProvidersDualPaneScreen(
                     ModelDetailScreen(
                         modelId = selectedModelId!!,
                         onBackClick = { selectedModelId = null },
+                        onSaved = {
+                            modelSavedMessage = true
+                            selectedModelId = null
+                        },
                         onDeleted = { selectedModelId = null }
                     )
                 }
@@ -117,7 +122,9 @@ fun ProvidersDualPaneScreen(
                         onBackClick = { selectedProviderId = null },
                         onModelClick = { model ->
                             selectedModelId = model.id
-                        }
+                        },
+                        showModelSavedMessage = modelSavedMessage,
+                        onModelSavedMessageShown = { modelSavedMessage = false }
                     )
                 }
                 else -> EmptyState(
