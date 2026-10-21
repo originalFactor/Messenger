@@ -576,3 +576,56 @@ async fn a_wrong_current_password_is_not_reported_as_an_expired_session() {
     assert!(engine.current_user().is_some());
     assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_some());
 }
+
+/// The server purges entity tombstones based on the cursor a client acks, so
+/// the ack must be the version this client has DURABLY applied — never the
+/// `since` of a post-push pull (that version has not been applied yet).
+#[tokio::test]
+async fn the_pull_acks_the_stored_cursor_not_the_requested_since() {
+    let server = wiremock::MockServer::start().await;
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("ack", "5"))
+            .and(wiremock::matchers::query_param("since", "9"))
+            .respond_with(page_response(serde_json::json!([]), 9))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let store = Store::open_memory().unwrap();
+    let engine = signed_in_engine(&store, &server);
+    // The account is durably synced up to version 5 (its stored cursor).
+    store.set_sync_meta("acct-1", 5, "[]", "[]").unwrap();
+
+    engine.sync_internal(Some(9), false, None).await.unwrap();
+    server.verify().await;
+}
+
+/// A full pull (since = 0) acks nothing: the caller is rebuilding local state,
+/// so the stored cursor describes a state that no longer exists. Acking it
+/// could let the server purge tombstones this rebuild still needs.
+#[tokio::test]
+async fn a_full_pull_acks_no_cursor() {
+    let server = wiremock::MockServer::start().await;
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("since", "0"))
+            .and(wiremock::matchers::query_param_is_missing("ack"))
+            .respond_with(page_response(serde_json::json!([]), 7))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let store = Store::open_memory().unwrap();
+    let engine = signed_in_engine(&store, &server);
+    store.set_sync_meta("acct-1", 5, "[]", "[]").unwrap();
+
+    engine.sync_internal(Some(0), false, None).await.unwrap();
+    server.verify().await;
+}

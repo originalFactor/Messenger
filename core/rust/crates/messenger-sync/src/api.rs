@@ -156,8 +156,9 @@ impl CloudApiClient {
         since: i64,
         cursor: Option<&str>,
         limit: u32,
+        ack: Option<i64>,
     ) -> CloudResult<CloudSyncPage<CloudAgentDocument>> {
-        let full = with_query(url, &sync_params(since, "agents", cursor, limit));
+        let full = with_query(url, &sync_params(since, "agents", cursor, limit, ack));
         self.get_json(&full).await
     }
 
@@ -167,8 +168,9 @@ impl CloudApiClient {
         since: i64,
         cursor: Option<&str>,
         limit: u32,
+        ack: Option<i64>,
     ) -> CloudResult<CloudSyncPage<CloudConversationDocument>> {
-        let full = with_query(url, &sync_params(since, "conversations", cursor, limit));
+        let full = with_query(url, &sync_params(since, "conversations", cursor, limit, ack));
         self.get_json(&full).await
     }
 
@@ -178,8 +180,9 @@ impl CloudApiClient {
         since: i64,
         cursor: Option<&str>,
         limit: u32,
+        ack: Option<i64>,
     ) -> CloudResult<CloudSyncPage<CloudProviderDocument>> {
-        let full = with_query(url, &sync_params(since, "providers", cursor, limit));
+        let full = with_query(url, &sync_params(since, "providers", cursor, limit, ack));
         self.get_json(&full).await
     }
 
@@ -189,8 +192,9 @@ impl CloudApiClient {
         since: i64,
         cursor: Option<&str>,
         limit: u32,
+        ack: Option<i64>,
     ) -> CloudResult<CloudSyncPage<CloudProjectDocument>> {
-        let full = with_query(url, &sync_params(since, "projects", cursor, limit));
+        let full = with_query(url, &sync_params(since, "projects", cursor, limit, ack));
         self.get_json(&full).await
     }
 
@@ -466,7 +470,19 @@ fn session_cookie(response: &reqwest::Response) -> Option<String> {
         .map(str::to_string)
 }
 
-fn sync_params(since: i64, collection: &str, cursor: Option<&str>, limit: u32) -> Vec<(String, String)> {
+/// `ack` is the version this client has DURABLY applied (its stored cursor),
+/// which is what the server uses to decide when an entity tombstone is no
+/// longer needed by anyone. It is deliberately separate from `since`: a
+/// post-push pull passes `since = pushed_version`, which the client has not
+/// applied yet, so acking that would let the server delete tombstones the
+/// client still needs.
+fn sync_params(
+    since: i64,
+    collection: &str,
+    cursor: Option<&str>,
+    limit: u32,
+    ack: Option<i64>,
+) -> Vec<(String, String)> {
     let mut params = vec![
         ("since".to_string(), since.to_string()),
         ("collection".to_string(), collection.to_string()),
@@ -474,6 +490,9 @@ fn sync_params(since: i64, collection: &str, cursor: Option<&str>, limit: u32) -
     ];
     if let Some(cursor) = cursor {
         params.push(("cursor".to_string(), cursor.to_string()));
+    }
+    if let Some(ack) = ack.filter(|ack| *ack > 0) {
+        params.push(("ack".to_string(), ack.to_string()));
     }
     params
 }
