@@ -27,6 +27,18 @@ fn signed_in_engine<'a>(store: &'a Store, _server: &wiremock::MockServer) -> Syn
     }).unwrap();
     // Point the server URL at the mock.
     store.kv_set("cloud_server_url", _server.uri().as_str()).unwrap();
+    // Every signed-in account has exactly one server-seeded default Agent; the
+    // sync engine relies on that invariant (see `sync_internal`).
+    if store.get_default_agent().unwrap().is_none() {
+        store
+            .upsert_agent(&StoredAgent {
+                id: "acct-default".into(),
+                name: "默认 Agent".into(),
+                is_default: true,
+                ..seed_agent_base("acct-default")
+            })
+            .unwrap();
+    }
     engine
 }
 
@@ -398,6 +410,114 @@ async fn replace_local_restores_from_cloud() {
     engine.sync_internal(None, true, None).await.unwrap();
     assert!(store.get_agent("local-only").unwrap().is_none());
     assert!(store.get_agent("a1").unwrap().is_some());
+}
+
+/// Restore is a rebuild, not a delta: it must re-read the whole account even
+/// when the stored cursor is already at the server's latest version. Pulling
+/// from the cursor after wiping the rows drops everything at or below it —
+/// most visibly the server-seeded default Agent, leaving only the locally
+/// seeded title generator (the reported "default agent disappeared" bug).
+#[tokio::test]
+async fn replace_local_pulls_from_zero_despite_a_current_cursor() {
+    let server = wiremock::MockServer::start().await;
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("since", "0"))
+            .respond_with(page_response(
+                if collection == "agents" { delta_body()["agents"].clone() } else { serde_json::json!([]) },
+                40,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let store = Store::open_memory().unwrap();
+    let engine = signed_in_engine(&store, &server);
+    // Fully synced already: the cursor is at the server's latest version, so a
+    // cursor-based pull would return an empty delta.
+    store.set_sync_meta("acct-1", 40, "[]", "[]").unwrap();
+
+    let result = engine.sync_internal(None, true, None).await.unwrap();
+    assert_eq!(result.latest_version, 40);
+    let default = store.get_agent("a1").unwrap().unwrap();
+    assert!(default.is_default, "restore must bring the default Agent back");
+    // The rebuild's cursor is the server's latest version, not 0.
+    assert_eq!(store.sync_cursor("acct-1").unwrap(), 40);
+    server.verify().await;
+}
+
+/// A device left without a default Agent (the buggy restore dropped it) must
+/// repair itself: the next ordinary sync re-reads the account instead of
+/// pulling a delta onto the broken state.
+#[tokio::test]
+async fn a_sync_repairs_a_missing_default_agent() {
+    let server = wiremock::MockServer::start().await;
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("since", "0"))
+            .respond_with(page_response(
+                if collection == "agents" { delta_body()["agents"].clone() } else { serde_json::json!([]) },
+                40,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let store = Store::open_memory().unwrap();
+    let engine = signed_in_engine(&store, &server);
+    // Simulate the damaged state: cursor claims the account is applied, but the
+    // default Agent is gone.
+    store.set_sync_meta("acct-1", 40, "[]", "[]").unwrap();
+    store.delete_agent("acct-default").unwrap();
+
+    engine.sync_internal(None, false, None).await.unwrap();
+    let default = store.get_agent("a1").unwrap().unwrap();
+    assert!(default.is_default, "the sync must restore the default Agent");
+    assert_eq!(store.sync_cursor("acct-1").unwrap(), 40);
+    server.verify().await;
+}
+
+/// The repair must not turn into a full pull on every sync when the server
+/// side has no default Agent to restore: one attempt, then normal deltas.
+#[tokio::test]
+async fn the_missing_default_repair_is_attempted_only_once() {
+    let server = wiremock::MockServer::start().await;
+    // The account has no default Agent at all (no agents come back).
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("since", "0"))
+            .respond_with(page_response(serde_json::json!([]), 40))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    // Later syncs resume from the stored cursor.
+    for collection in ["agents", "conversations", "providers", "projects"] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .and(wiremock::matchers::query_param("since", "40"))
+            .respond_with(page_response(serde_json::json!([]), 40))
+            .mount(&server)
+            .await;
+    }
+
+    let store = Store::open_memory().unwrap();
+    let engine = signed_in_engine(&store, &server);
+    store.delete_agent("acct-default").unwrap();
+    store.set_sync_meta("acct-1", 40, "[]", "[]").unwrap();
+
+    engine.sync_internal(None, false, None).await.unwrap();
+    engine.sync_internal(None, false, None).await.unwrap();
+    server.verify().await;
 }
 
 #[tokio::test]
