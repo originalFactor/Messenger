@@ -19,6 +19,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Shared wear ABI matrix (root build script): armeabi-v7a by default, x86_64
+// selectable for AVD testing.
+val wearAbis = rootProject.ext["wearAbis"] as List<String>
+
 android {
     namespace = "cc.ptoe.messenger"
     compileSdk {
@@ -39,10 +43,11 @@ android {
         abi {
             isEnable = true
             reset()
-            // Wear OS devices run a 64-bit kernel with a 32-bit userspace, so the
-            // shipped watch APK is armeabi-v7a only — the single ABI CI builds and
-            // publishes (see .github/workflows/build-wear.yml).
-            include("armeabi-v7a")
+            // Default: armeabi-v7a only — Wear OS devices run a 64-bit kernel with
+            // a 32-bit userspace, and that is the single ABI CI builds and
+            // publishes. ext["wearAbis"] can add x86_64 for an AVD, which is the
+            // only reason that ABI exists here (see the root build script).
+            include(*wearAbis.toTypedArray())
             isUniversalApk = false
         }
     }
