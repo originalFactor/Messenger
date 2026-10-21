@@ -24,6 +24,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -117,9 +118,6 @@ import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
 import cc.ptoe.messenger.generated.resources.providers_model_context_window
-import cc.ptoe.messenger.generated.resources.providers_model_rate_label_cache
-import cc.ptoe.messenger.generated.resources.providers_model_rate_label_input
-import cc.ptoe.messenger.generated.resources.providers_model_rate_label_output
 import cc.ptoe.messenger.generated.resources.providers_model_rates
 import cc.ptoe.messenger.generated.resources.providers_model_rates_cache
 import cc.ptoe.messenger.generated.resources.providers_model_rates_free
@@ -510,7 +508,7 @@ private fun ModelListHeader(
 }
 
 @Composable
-private fun ModelListItem(
+internal fun ModelListItem(
     model: ChatModel,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
@@ -555,22 +553,13 @@ private fun ModelListItem(
         Column(
             modifier = Modifier.weight(1f)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = model.displayName,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                ContextWindowBadge(contextWindow = model.contextWindow)
-                RateBadge(
-                    inputRate = model.inputRate,
-                    outputRate = model.outputRate,
-                    cacheReadRate = model.cacheReadRate
-                )
-            }
+            Text(
+                text = model.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             if (model.displayName != model.modelId) {
                 Text(
                     text = model.modelId,
@@ -580,6 +569,13 @@ private fun ModelListItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            ModelMetadataBadges(
+                contextWindow = model.contextWindow,
+                inputRate = model.inputRate,
+                outputRate = model.outputRate,
+                cacheReadRate = model.cacheReadRate,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
         if (!isMultiSelectMode) {
             Spacer(modifier = Modifier.width(8.dp))
@@ -628,13 +624,42 @@ private fun ModelListItem(
 }
 
 /**
+ * 模型元数据标签行：上下文窗口 + 倍率。单独占一行、排在模型名称下方，
+ * 名称因此拿到整行宽度（此前标签与名称同排，窄屏上名称只剩省略号）。
+ * 用 FlowRow 让标签在极窄屏上逐个换行，而不是把标签内部文字挤断。
+ */
+@Composable
+private fun ModelMetadataBadges(
+    contextWindow: Long,
+    inputRate: Double?,
+    outputRate: Double?,
+    cacheReadRate: Double?,
+    modifier: Modifier = Modifier
+) {
+    val hasContext = formatContextWindow(contextWindow).isNotEmpty()
+    val hasRate = inputRate != null && outputRate != null
+    if (!hasContext && !hasRate) return
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        ContextWindowBadge(contextWindow = contextWindow)
+        RateBadge(
+            inputRate = inputRate,
+            outputRate = outputRate,
+            cacheReadRate = cacheReadRate
+        )
+    }
+}
+
+/**
  * 模型上下文窗口紧凑标签（272K / 1M / 1.5M）。0 = 未知/不限，不显示。
  */
 @Composable
 private fun ContextWindowBadge(contextWindow: Long) {
     val label = formatContextWindow(contextWindow)
     if (label.isEmpty()) return
-    Spacer(modifier = Modifier.width(8.dp))
     val description = stringResource(Res.string.providers_model_context_window, label)
     Surface(
         shape = MaterialTheme.shapes.small,
@@ -645,32 +670,27 @@ private fun ContextWindowBadge(contextWindow: Long) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
         )
     }
 }
 
 /**
- * 模型倍率紧凑标签（输入/输出，含 Messenger Cloud 缓存读取倍率时显示
- * 「输入 ×0.25 · 缓存 ×0.005 · 输出 ×1」）。三者均为 0 时显示「免费」。
- * 输入/输出任一缺失（服务商未提供元数据）不显示。
+ * 模型倍率紧凑标签：依次为输入 / 缓存读取 / 输出（如「×0.33 · ×4.35 · ×0.99」）。
+ * 三者均为 0 时显示「免费」；输入/输出任一缺失（服务商未提供元数据）不显示。
+ * 标签不带文字前缀（完整含义见无障碍描述），以保持一行、不与模型名抢宽度。
  */
 @Composable
-private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Double? = null) {
+private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Double?) {
     if (inputRate == null || outputRate == null) return
     val isFree = inputRate <= 0.0 && outputRate <= 0.0 && (cacheReadRate == null || cacheReadRate <= 0.0)
     val label = if (isFree) {
         stringResource(Res.string.providers_model_rates_free)
     } else if (cacheReadRate != null) {
-        listOf(
-            stringResource(Res.string.providers_model_rate_label_input) to inputRate,
-            stringResource(Res.string.providers_model_rate_label_cache) to cacheReadRate,
-            stringResource(Res.string.providers_model_rate_label_output) to outputRate
-        ).joinToString(" · ") { (name, rate) -> "$name ×${formatRate(rate)}" }
+        "×${formatRate(inputRate)} · ×${formatRate(cacheReadRate)} · ×${formatRate(outputRate)}"
     } else {
         "×${formatRate(inputRate)} / ×${formatRate(outputRate)}"
     }
-    Spacer(modifier = Modifier.width(8.dp))
     val description = if (isFree) {
         stringResource(Res.string.providers_model_rates_free)
     } else if (cacheReadRate != null) {
@@ -692,7 +712,7 @@ private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Do
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
         )
     }
 }
@@ -794,13 +814,14 @@ private fun SyncModelSelectionDialog(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                ModelMetadataBadges(
+                                    contextWindow = model.contextWindow,
+                                    inputRate = model.inputRate,
+                                    outputRate = model.outputRate,
+                                    cacheReadRate = model.cacheReadRate,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
                             }
-                            ContextWindowBadge(contextWindow = model.contextWindow)
-                            RateBadge(
-                                inputRate = model.inputRate,
-                                outputRate = model.outputRate,
-                                cacheReadRate = model.cacheReadRate
-                            )
                         }
                     }
                 }
