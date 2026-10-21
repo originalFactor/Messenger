@@ -20,20 +20,22 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 
 ## Commands
 
-Every local Gradle invocation MUST use `--no-daemon` (the Android Studio daemon in the same Gradle user home deadlocks CLI builds; CI does not need the flag):
+Every local Gradle invocation MUST go through the `gradlew-cli` wrapper (`gradlew-cli.bat` on Windows), never bare `./gradlew`:
 
 ```bash
-./gradlew --no-daemon :androidApp:assembleDebug        # also :wear, :runtime (companion app)
-./gradlew --no-daemon :shared:allTests                 # Kotlin unit tests
-./gradlew --no-daemon :androidApp:lintDebug            # lint
-./gradlew --no-daemon :desktopApp:run                  # Desktop app
-./gradlew --no-daemon :desktopApp:packageReleaseMsi    # native distribution (also Dmg/Deb)
+./gradlew-cli :androidApp:assembleDebug               # also :wear, :runtime (companion app)
+./gradlew-cli :shared:allTests                        # Kotlin unit tests
+./gradlew-cli :androidApp:lintDebug                   # lint
+./gradlew-cli :desktopApp:run                         # Desktop app
+./gradlew-cli :desktopApp:packageReleaseMsi           # native distribution (also Dmg/Deb)
 
 cd core/rust && cargo test --workspace                 # Rust core + TUI tests
 cd core/rust && cargo build -p messenger-tui           # TUI binary
 
 cd server && pnpm install && pnpm dev                  # server; checks: pnpm lint && pnpm typecheck
 ```
+
+The wrapper runs Gradle with `--daemon` but under its own daemon registry (`~/.gradle/cli-daemon`), so a CLI build never queues behind Android Studio's busy daemon — that collision is why this repo used to mandate `--no-daemon`, which cost ~4 s of JVM start plus a lost VFS/Kotlin-daemon warm-up on every invocation. Do not use bare `./gradlew` for local builds, and do not add `--no-daemon`: with the isolated registry a warm daemon is both safe and ~4 s faster per run. If a cache-lock stall is ever observed anyway (both daemons share `~/.gradle/caches`), fall back to `./gradlew --no-daemon` for that one run and note it here.
 
 Prerequisites: JDK 17, Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk`, `wasm32-unknown-unknown`, and `wasm-bindgen-cli` (version pinned in `Cargo.lock`) for the core/Web paths.
 
