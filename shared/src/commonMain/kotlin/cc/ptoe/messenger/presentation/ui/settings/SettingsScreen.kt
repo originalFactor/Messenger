@@ -80,6 +80,7 @@ import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_cancel
+import cc.ptoe.messenger.generated.resources.cloud_settings_session_expired
 import cc.ptoe.messenger.generated.resources.action_change_avatar
 import cc.ptoe.messenger.generated.resources.agent_edit_remove_avatar
 import cc.ptoe.messenger.generated.resources.settings_about
@@ -134,6 +135,7 @@ fun SettingsScreen(
     val userAvatar by viewModel.userAvatar.collectAsStateWithLifecycle()
     val cloudUser by viewModel.cloudUser.collectAsStateWithLifecycle()
     val cloudSyncError by viewModel.cloudSyncError.collectAsStateWithLifecycle()
+    val cloudSessionExpired by viewModel.cloudSessionExpired.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -149,6 +151,16 @@ fun SettingsScreen(
 
     LaunchedEffect(cloudSyncError) {
         cloudSyncError?.let { showPlatformToast(it) }
+    }
+
+    // 会话被服务端判定失效（其它设备注销、30 天到期、账号已删）：本地会话
+    // 已清空，这里只解释一次为什么账号消失了，用户去 Cloud 设置页重新登录。
+    val sessionExpiredMessage = stringResource(Res.string.cloud_settings_session_expired)
+    LaunchedEffect(cloudSessionExpired) {
+        if (cloudSessionExpired) {
+            showPlatformToast(sessionExpiredMessage)
+            viewModel.acknowledgeCloudSessionExpired()
+        }
     }
 
     val avatarPicker = rememberAvatarImagePicker { croppedPath ->

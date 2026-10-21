@@ -382,6 +382,7 @@
     <string name="cloud_settings_login_failed">登录失败</string>
     <string name="cloud_settings_account">账户</string>
     <string name="cloud_settings_connected">已连接到 Messenger Cloud</string>
+    <string name="cloud_settings_session_expired">会话已过期，请重新登录。</string>
     <string name="cloud_settings_sync_data">同步数据</string>
     <string name="cloud_settings_sync_data_desc">上传会以本地数据覆盖云端；恢复会以云端数据覆盖本地。</string>
     <string name="cloud_settings_upload_sync">上传并同步本地数据</string>

@@ -17,13 +17,14 @@ impl<'a> SyncEngine<'a> {
     ) -> CloudResult<CloudMarketAgentListResponse> {
         let _ = self.signed_in()?;
         let endpoint = self.endpoint("api/market/agents");
-        self.client.list_market_agents(&endpoint, query.trim(), cursor).await
+        self.with_session(self.client.list_market_agents(&endpoint, query.trim(), cursor))
+            .await
     }
 
     pub async fn get_market_agent(&self, id: &str) -> CloudResult<CloudMarketAgent> {
         let _ = self.signed_in()?;
         let endpoint = self.endpoint(&format!("api/market/agents/{id}"));
-        let resp = self.client.get_market_agent(&endpoint).await?;
+        let resp = self.with_session(self.client.get_market_agent(&endpoint)).await?;
         Ok(resp.agent)
     }
 
@@ -52,7 +53,10 @@ impl<'a> SyncEngine<'a> {
             reasoning_effort: agent.reasoning_effort.clone(),
         };
 
-        let response = self.client.create_market_agent(&endpoint, &body).await?.agent;
+        let response = self
+            .with_session(self.client.create_market_agent(&endpoint, &body))
+            .await?
+            .agent;
 
         // Persist publisher market link locally
         let mut updated = agent;
@@ -93,7 +97,10 @@ impl<'a> SyncEngine<'a> {
             reasoning_effort: agent.reasoning_effort.clone(),
         };
 
-        let response = self.client.update_market_agent(&endpoint, &body).await?.agent;
+        let response = self
+            .with_session(self.client.update_market_agent(&endpoint, &body))
+            .await?
+            .agent;
 
         let mut updated = agent;
         updated.market_agent_version = Some(response.version);
@@ -122,7 +129,7 @@ impl<'a> SyncEngine<'a> {
         }
 
         let endpoint = self.endpoint(&format!("api/market/agents/{market_id}"));
-        let _ = self.client.delete_market_agent(&endpoint).await;
+        let _ = self.with_session(self.client.delete_market_agent(&endpoint)).await;
 
         let mut updated = agent;
         updated.market_agent_id = None;

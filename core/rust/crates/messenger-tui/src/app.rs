@@ -1522,9 +1522,12 @@ impl App {
             let session = store_ops::session_from_kv(&engine.store);
             let sync = messenger_sync::SyncEngine::new(&engine.store, session);
             if let Err(error) = sync.refresh_user().await {
-                let _ = engine
-                    .tx
-                    .send(UiMsg::CloudStatus(format!("Not signed in: {error}")));
+                let message = if sync.current_user().is_none() {
+                    "Session expired — run /login.".to_string()
+                } else {
+                    format!("Not signed in: {error}")
+                };
+                let _ = engine.tx.send(UiMsg::CloudStatus(message));
                 return;
             }
             match sync.push_pending_changes().await {

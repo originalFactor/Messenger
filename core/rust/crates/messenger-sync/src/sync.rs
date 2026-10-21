@@ -83,6 +83,33 @@ impl<'a> SyncEngine<'a> {
         self.store.kv_delete(KV_USER).map_err(|e| e.to_string())
     }
 
+    /// The server rejected the stored session (revoked on another device,
+    /// expired after 30 days, or the account is gone). Forget it locally so
+    /// the next request — and the next app start — is signed out instead of
+    /// replaying a dead cookie. `kv_delete` emits a store event, so every
+    /// platform's UI sees `current_user()` go null without extra plumbing.
+    fn note_session_rejected(&self) {
+        if let Err(detail) = self.clear_session() {
+            eprintln!("messenger-sync: clearing the rejected session failed: {detail}");
+        }
+    }
+
+    /// Runs an authenticated call and, on [`CloudError::SessionExpired`],
+    /// drops the stored session before propagating. Every engine call that
+    /// carries the session cookie goes through here, so "the server says the
+    /// session is dead" always has the same consequence regardless of which
+    /// request noticed it first.
+    pub(crate) async fn with_session<T, F>(&self, call: F) -> CloudResult<T>
+    where
+        F: std::future::Future<Output = CloudResult<T>>,
+    {
+        let result = call.await;
+        if let Err(CloudError::SessionExpired { .. }) = &result {
+            self.note_session_rejected();
+        }
+        result
+    }
+
     pub fn current_user(&self) -> Option<CloudUser> {
         self.store
             .kv_get(KV_USER)
@@ -153,7 +180,9 @@ impl<'a> SyncEngine<'a> {
     }
 
     pub async fn refresh_user(&self) -> CloudResult<CloudUser> {
-        let user = self.client.me(&self.endpoint("api/auth/me")).await?;
+        let user = self
+            .with_session(self.client.me(&self.endpoint("api/auth/me")))
+            .await?;
         self.save_user(&user).map_err(|e| CloudError::Network(e))?;
         Ok(user)
     }
@@ -276,10 +305,10 @@ impl<'a> SyncEngine<'a> {
             let (kind, id) = entry;
             let url = self.endpoint(&format!("api/{kind}s/{id}"));
             let response = match kind.as_str() {
-                "agent" => self.client.delete_agent(&url).await?,
-                "provider" => self.client.delete_provider(&url).await?,
-                "conversation" => self.client.delete_conversation(&url).await?,
-                "project" => self.client.delete_project(&url).await?,
+                "agent" => self.with_session(self.client.delete_agent(&url)).await?,
+                "provider" => self.with_session(self.client.delete_provider(&url)).await?,
+                "conversation" => self.with_session(self.client.delete_conversation(&url)).await?,
+                "project" => self.with_session(self.client.delete_project(&url)).await?,
                 _ => continue,
             };
             latest_version = latest_version.max(response.version);
@@ -300,7 +329,9 @@ impl<'a> SyncEngine<'a> {
                 continue;
             }
             let url = self.endpoint(&format!("api/agents/{}", agent.id));
-            let response = self.client.put_agent(&url, &agent_row_to_request(&agent)).await?;
+            let response = self
+                .with_session(self.client.put_agent(&url, &agent_row_to_request(&agent)))
+                .await?;
             latest_version = latest_version.max(response.version);
             self.remove_pending_upsert(&account.id, "agent", &agent.id)?;
         }
@@ -319,8 +350,10 @@ impl<'a> SyncEngine<'a> {
                 .map_err(|e| CloudError::Network(e.to_string()))?;
             let url = self.endpoint(&format!("api/providers/{}", provider.id));
             let response = self
-                .client
-                .put_provider(&url, &provider_row_to_request(&provider, &models))
+                .with_session(
+                    self.client
+                        .put_provider(&url, &provider_row_to_request(&provider, &models)),
+                )
                 .await?;
             latest_version = latest_version.max(response.version);
             self.remove_pending_upsert(&account.id, "provider", &provider.id)?;
@@ -339,8 +372,7 @@ impl<'a> SyncEngine<'a> {
             }
             let url = self.endpoint(&format!("api/projects/{}", project.id));
             let response = self
-                .client
-                .put_project(&url, &project_row_to_request(&project))
+                .with_session(self.client.put_project(&url, &project_row_to_request(&project)))
                 .await?;
             latest_version = latest_version.max(response.version);
             self.remove_pending_upsert(&account.id, "project", &project.id)?;
@@ -360,8 +392,10 @@ impl<'a> SyncEngine<'a> {
                 .map_err(|e| CloudError::Network(e.to_string()))?;
             let url = self.endpoint(&format!("api/conversations/{}", conversation.id));
             let response = self
-                .client
-                .put_conversation(&url, &conversation_row_to_request(&conversation, &messages))
+                .with_session(
+                    self.client
+                        .put_conversation(&url, &conversation_row_to_request(&conversation, &messages)),
+                )
                 .await?;
             latest_version = latest_version.max(response.version);
             self.remove_pending_upsert(&account.id, "conversation", &conversation.id)?;
@@ -496,8 +530,10 @@ impl<'a> SyncEngine<'a> {
         let mut cursor: Option<String> = None;
         loop {
             let page = self
-                .client
-                .sync_agents_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE)
+                .with_session(
+                    self.client
+                        .sync_agents_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                )
                 .await?;
             agents.extend(page.documents);
             agents_latest = agents_latest.max(page.latest_version);
@@ -513,8 +549,10 @@ impl<'a> SyncEngine<'a> {
         let mut cursor: Option<String> = None;
         loop {
             let page = self
-                .client
-                .sync_conversations_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE)
+                .with_session(
+                    self.client
+                        .sync_conversations_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                )
                 .await?;
             conversations.extend(page.documents);
             conversations_latest = conversations_latest.max(page.latest_version);
@@ -529,8 +567,10 @@ impl<'a> SyncEngine<'a> {
         let mut cursor: Option<String> = None;
         loop {
             let page = self
-                .client
-                .sync_providers_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE)
+                .with_session(
+                    self.client
+                        .sync_providers_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                )
                 .await?;
             providers.extend(page.documents);
             providers_latest = providers_latest.max(page.latest_version);
@@ -545,8 +585,10 @@ impl<'a> SyncEngine<'a> {
         let mut cursor: Option<String> = None;
         loop {
             let page = self
-                .client
-                .sync_projects_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE)
+                .with_session(
+                    self.client
+                        .sync_projects_page(&self.endpoint("api/sync"), since, cursor.as_deref(), SYNC_PAGE_SIZE),
+                )
                 .await?;
             projects.extend(page.documents);
             projects_latest = projects_latest.max(page.latest_version);

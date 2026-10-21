@@ -12,6 +12,12 @@ use crate::models::*;
 pub enum CloudError {
     #[error("HTTP {status}: {message}")]
     Http { status: u16, message: String },
+    /// The server rejected the SESSION itself, not the request: the record was
+    /// revoked on another device, expired (30 days), or its account is gone.
+    /// Distinct from a plain `Http { status: 401 }` because only this variant
+    /// means the stored session must be dropped and the user signed in again.
+    #[error("session expired: {message}")]
+    SessionExpired { message: String },
     #[error("network error: {0}")]
     Network(String),
     #[error("failed to decode response: {0}")]
@@ -19,6 +25,35 @@ pub enum CloudError {
 }
 
 pub type CloudResult<T> = Result<T, CloudError>;
+
+impl CloudError {
+    /// Re-shapes the 401 of a credential-gated call back into a plain HTTP
+    /// error. `api/auth/password` and `api/auth/account` answer 401 for a
+    /// WRONG CURRENT PASSWORD — a form error, not a dead session — so they
+    /// must not reach the engine's sign-out path (nor say "session expired").
+    pub(crate) fn into_credential_error(self) -> Self {
+        match self {
+            CloudError::SessionExpired { message } => CloudError::Http { status: 401, message },
+            other => other,
+        }
+    }
+}
+
+/// Maps a non-2xx response of an AUTHENTICATED call. 401 becomes
+/// [`CloudError::SessionExpired`] so the engine can drop the local session;
+/// every other status keeps the plain HTTP shape.
+fn authenticated_http_error(status: u16, body: String) -> CloudError {
+    let message = if body.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        crate::documents::extract_error_message(&body)
+    };
+    if status == 401 {
+        CloudError::SessionExpired { message }
+    } else {
+        CloudError::Http { status, message }
+    }
+}
 
 /// Session state: cookie string (`name=value`) + the host it belongs to.
 #[derive(Debug, Clone, Default)]
@@ -276,12 +311,7 @@ impl CloudApiClient {
         if !status.is_success() {
             let code = status.as_u16();
             let raw = response.text().await.unwrap_or_default();
-            let message = if raw.is_empty() {
-                format!("HTTP {code}")
-            } else {
-                crate::documents::extract_error_message(&raw)
-            };
-            return Err(CloudError::Http { status: code, message });
+            return Err(authenticated_http_error(code, raw));
         }
         response
             .json::<CloudAvatarResponse>()
@@ -318,12 +348,7 @@ impl CloudApiClient {
         if !status.is_success() {
             let code = status.as_u16();
             let raw = response.text().await.unwrap_or_default();
-            let message = if raw.is_empty() {
-                format!("HTTP {code}")
-            } else {
-                crate::documents::extract_error_message(&raw)
-            };
-            return Err(CloudError::Http { status: code, message });
+            return Err(authenticated_http_error(code, raw));
         }
         let etag = response
             .headers()
@@ -364,12 +389,7 @@ impl CloudApiClient {
         if !status.is_success() {
             let code = status.as_u16();
             let raw = response.text().await.unwrap_or_default();
-            let message = if raw.is_empty() {
-                format!("HTTP {code}")
-            } else {
-                crate::documents::extract_error_message(&raw)
-            };
-            return Err(CloudError::Http { status: code, message });
+            return Err(authenticated_http_error(code, raw));
         }
         response
             .json::<T>()

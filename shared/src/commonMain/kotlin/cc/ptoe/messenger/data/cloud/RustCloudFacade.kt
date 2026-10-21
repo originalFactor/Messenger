@@ -79,6 +79,13 @@ class RustCloudFacade(
     private val _syncError = MutableStateFlow<String?>(null)
     override val syncError: StateFlow<String?> = _syncError.asStateFlow()
 
+    private val _sessionExpired = MutableStateFlow(false)
+    override val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+
+    override fun acknowledgeSessionExpired() {
+        _sessionExpired.value = false
+    }
+
     private val _user = MutableStateFlow<CloudUser?>(null)
     private val _serverUrl = MutableStateFlow(defaultCloudServerUrl)
 
@@ -121,6 +128,29 @@ class RustCloudFacade(
         }
     }
 
+    /**
+     * The Rust engine drops the stored session by itself the moment the server
+     * answers 401 on an authenticated call (see `SyncEngine::with_session`),
+     * so "the call started signed in and the core now has no user" is exactly
+     * a rejected session — no error-string matching needed. Mirroring logout's
+     * local cleanup keeps a dead cookie's builtin provider from lingering, and
+     * raises [sessionExpired] so the UI can say why the account vanished.
+     *
+     * `wasSignedIn` is captured BEFORE the failing call: the core's kv listener
+     * already cleared [user] by the time the exception surfaces here, so
+     * re-reading it cannot tell an expiry from a call made while signed out.
+     */
+    private suspend fun detectRejectedSession(wasSignedIn: Boolean) {
+        if (!wasSignedIn || _sessionExpired.value) return
+        if (runCatching { core.cloudCurrentUserJson() }.getOrNull() != null) return
+        _user.value = null
+        localChangesEnabled = false
+        runCatching { localDataMutex.withLock { core.cloudClearMarketLinksAndBuiltinProvider() } }
+        clearSessionKeys()
+        _sessionExpired.value = true
+        logW(TAG, "Cloud session rejected by the server; signed out locally.")
+    }
+
     // ------------------------------------------------------------------
     // server / auth
     // ------------------------------------------------------------------
@@ -143,6 +173,8 @@ class RustCloudFacade(
             val user = json.decodeFromString(CloudUser.serializer(), core.cloudLogin(email.trim(), password))
             _user.value = user
             localChangesEnabled = true
+            // A fresh session supersedes any earlier expiry notice.
+            _sessionExpired.value = false
             CloudLoginOutcome(
                 user = user,
                 hasLocalData = core.cloudHasLocalData(),
@@ -156,6 +188,8 @@ class RustCloudFacade(
             val user = json.decodeFromString(CloudUser.serializer(), core.cloudRegister(email.trim(), password))
             _user.value = user
             localChangesEnabled = true
+            // A fresh session supersedes any earlier expiry notice.
+            _sessionExpired.value = false
             CloudLoginOutcome(
                 user = user,
                 hasLocalData = core.cloudHasLocalData(),
@@ -229,8 +263,12 @@ class RustCloudFacade(
         scheduledSync?.cancel()
         scheduledSync = syncScope.launch {
             delay(750.milliseconds)
+            val wasSignedIn = _user.value != null
             runCatching { core.cloudPushPending() }
-                .onFailure { _syncError.value = it.message ?: "Cloud synchronization failed" }
+                .onFailure {
+                    detectRejectedSession(wasSignedIn)
+                    _syncError.value = it.message ?: "Cloud synchronization failed"
+                }
         }
     }
 
@@ -460,9 +498,11 @@ class RustCloudFacade(
     /** Kotlin-only error channel: set on failure, cleared on success. */
     private suspend fun <T> request(block: suspend () -> T): T =
         withContext(ioDispatcher) {
+            val wasSignedIn = _user.value != null
             try {
                 block().also { _syncError.value = null }
             } catch (error: Throwable) {
+                detectRejectedSession(wasSignedIn)
                 _syncError.value = error.message ?: "Cloud synchronization failed"
                 logW(TAG, "Cloud request failed: ${error.message}")
                 throw error

@@ -25,10 +25,15 @@ impl<'a> SyncEngine<'a> {
             current_password: current.to_string(),
             new_password: new.to_string(),
         };
+        // Deliberately NOT wrapped in `with_session`, and the error is re-shaped:
+        // this endpoint answers 401 for a WRONG CURRENT PASSWORD, which must
+        // surface as a form error rather than sign the user out. A genuinely
+        // dead session is caught by the next authenticated call (refresh/sync).
         let _: SuccessResponse = self
             .client
             .change_password(&self.endpoint("api/auth/password"), &body)
-            .await?;
+            .await
+            .map_err(CloudError::into_credential_error)?;
         Ok(())
     }
 
@@ -43,7 +48,8 @@ impl<'a> SyncEngine<'a> {
         let _: SuccessResponse = self
             .client
             .delete_account(&self.endpoint("api/auth/account"), &body)
-            .await?;
+            .await
+            .map_err(CloudError::into_credential_error)?;
 
         self.remove_builtin_provider()?;
         self.clear_session().map_err(CloudError::Network)?;
@@ -64,8 +70,10 @@ impl<'a> SyncEngine<'a> {
     ) -> CloudResult<String> {
         let _ = self.signed_in()?;
         let response = self
-            .client
-            .upload_avatar(&self.endpoint("api/avatars/user"), filename, bytes, mime)
+            .with_session(
+                self.client
+                    .upload_avatar(&self.endpoint("api/avatars/user"), filename, bytes, mime),
+            )
             .await?;
         Ok(response.url.unwrap_or_default())
     }
@@ -79,13 +87,12 @@ impl<'a> SyncEngine<'a> {
     ) -> CloudResult<String> {
         let _ = self.signed_in()?;
         let response = self
-            .client
-            .upload_avatar(
+            .with_session(self.client.upload_avatar(
                 &self.endpoint(&format!("api/avatars/agents/{agent_id}")),
                 filename,
                 bytes,
                 mime,
-            )
+            ))
             .await?;
         Ok(response.url.unwrap_or_default())
     }
@@ -93,8 +100,7 @@ impl<'a> SyncEngine<'a> {
     pub async fn delete_user_avatar(&self) -> CloudResult<String> {
         let _ = self.signed_in()?;
         let response = self
-            .client
-            .delete_avatar(&self.endpoint("api/avatars/user"))
+            .with_session(self.client.delete_avatar(&self.endpoint("api/avatars/user")))
             .await?;
         Ok(response.url.unwrap_or_default())
     }
@@ -102,8 +108,9 @@ impl<'a> SyncEngine<'a> {
     pub async fn delete_agent_avatar(&self, agent_id: &str) -> CloudResult<String> {
         let _ = self.signed_in()?;
         let response = self
-            .client
-            .delete_avatar(&self.endpoint(&format!("api/avatars/agents/{agent_id}")))
+            .with_session(
+                self.client.delete_avatar(&self.endpoint(&format!("api/avatars/agents/{agent_id}"))),
+            )
             .await?;
         Ok(response.url.unwrap_or_default())
     }
@@ -369,9 +376,10 @@ impl<'a> SyncEngine<'a> {
         // `data:` URI and ignores the directory entirely.
         let dir = self.avatars_dir.clone().unwrap_or_default();
         let manager = crate::avatar::AvatarManager::new(self.client(), dir);
-        manager
-            .cache_remote_avatar(scope, account_id, id, url, version, &self.server_url())
-            .await
+        self.with_session(
+            manager.cache_remote_avatar(scope, account_id, id, url, version, &self.server_url()),
+        )
+        .await
     }
 }
 
