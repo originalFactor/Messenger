@@ -64,7 +64,7 @@ import cc.ptoe.messenger.domain.model.ModelModality
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.LoadingIndicator
-import cc.ptoe.messenger.presentation.ui.components.SectionHeader
+import cc.ptoe.messenger.presentation.viewmodel.ModelDetailUiState
 import cc.ptoe.messenger.presentation.viewmodel.ModelDetailViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
@@ -76,7 +76,6 @@ import cc.ptoe.messenger.generated.resources.modality_audio
 import cc.ptoe.messenger.generated.resources.modality_image
 import cc.ptoe.messenger.generated.resources.modality_text
 import cc.ptoe.messenger.generated.resources.modality_video
-import cc.ptoe.messenger.generated.resources.providers_model_capabilities
 import cc.ptoe.messenger.generated.resources.providers_model_context_window_hint
 import cc.ptoe.messenger.generated.resources.providers_model_context_window_label
 import cc.ptoe.messenger.generated.resources.providers_delete_model_confirm
@@ -195,103 +194,119 @@ fun ModelDetailScreen(
                 modifier = contentModifier
             )
         } else {
-            Column(
+            ModelDetailForm(
+                state = uiState,
+                onContextWindowChange = { viewModel.onContextWindowChange(it) },
+                onEnabledChange = { viewModel.onEnabledChange(it) },
+                onToggleInputModality = { viewModel.toggleInputModality(it) },
+                onToggleOutputModality = { viewModel.toggleOutputModality(it) },
+                onToolCallingChange = { viewModel.onToolCallingChange(it) },
+                onThinkingChange = { viewModel.onThinkingChange(it) },
+                onJsonOutputChange = { viewModel.onJsonOutputChange(it) },
+                onTemperatureChange = { viewModel.onTemperatureChange(it) },
+                onDeleteClick = { showDeleteDialog = true },
                 modifier = contentModifier
                     .verticalScroll(rememberScrollState())
                     .widthIn(max = 600.dp)
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // 只读：模型 ID
-                Column {
-                    Text(
-                        text = stringResource(Res.string.providers_model_id_label),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = uiState.model?.modelId.orEmpty(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                ModelEnabledSwitchRow(
-                    checked = uiState.isEnabled,
-                    onCheckedChange = { viewModel.onEnabledChange(it) }
-                )
-
-                SectionHeader(title = stringResource(Res.string.providers_model_context_window_label))
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 上下文窗口
-                OutlinedTextField(
-                    value = uiState.contextWindowText,
-                    onValueChange = { viewModel.onContextWindowChange(it) },
-                    label = { Text(stringResource(Res.string.providers_model_context_window_label)) },
-                    placeholder = { Text(stringResource(Res.string.providers_model_context_window_hint)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                SectionHeader(title = stringResource(Res.string.providers_model_capabilities))
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 输入模态
-                ModalityChipGroup(
-                    label = stringResource(Res.string.providers_model_input_modalities),
-                    selected = uiState.inputModalities,
-                    onToggle = { viewModel.toggleInputModality(it) }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // 输出模态
-                ModalityChipGroup(
-                    label = stringResource(Res.string.providers_model_output_modalities),
-                    selected = uiState.outputModalities,
-                    onToggle = { viewModel.toggleOutputModality(it) }
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // 能力开关
-                CapabilitySwitchRow(
-                    label = stringResource(Res.string.providers_model_supports_tool_calling),
-                    checked = uiState.supportsToolCalling,
-                    onCheckedChange = { viewModel.onToolCallingChange(it) }
-                )
-                CapabilitySwitchRow(
-                    label = stringResource(Res.string.providers_model_supports_thinking),
-                    checked = uiState.supportsThinking,
-                    onCheckedChange = { viewModel.onThinkingChange(it) }
-                )
-                CapabilitySwitchRow(
-                    label = stringResource(Res.string.providers_model_supports_json_output),
-                    checked = uiState.supportsJsonOutput,
-                    onCheckedChange = { viewModel.onJsonOutputChange(it) }
-                )
-                CapabilitySwitchRow(
-                    label = stringResource(Res.string.providers_model_supports_temperature),
-                    checked = uiState.supportsTemperature,
-                    onCheckedChange = { viewModel.onTemperatureChange(it) }
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                ModelDeleteButton(
-                    enabled = uiState.model != null,
-                    onClick = { showDeleteDialog = true }
-                )
-            }
+            )
         }
+    }
+}
+
+/**
+ * 模型编辑表单。字段标题由各控件自身的 label 承担，不再使用分区标题，
+ * 字段之间只留 12dp，整页更紧凑。
+ */
+@Composable
+internal fun ModelDetailForm(
+    state: ModelDetailUiState,
+    onContextWindowChange: (String) -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    onToggleInputModality: (ModelModality) -> Unit,
+    onToggleOutputModality: (ModelModality) -> Unit,
+    onToolCallingChange: (Boolean) -> Unit,
+    onThinkingChange: (Boolean) -> Unit,
+    onJsonOutputChange: (Boolean) -> Unit,
+    onTemperatureChange: (Boolean) -> Unit,
+    onDeleteClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 只读：模型 ID
+        Column {
+            Text(
+                text = stringResource(Res.string.providers_model_id_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = state.model?.modelId.orEmpty(),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        ModelEnabledSwitchRow(
+            checked = state.isEnabled,
+            onCheckedChange = onEnabledChange
+        )
+
+        // 上下文窗口：输入框自带的 label 已表明字段含义，不再单独加标题
+        OutlinedTextField(
+            value = state.contextWindowText,
+            onValueChange = onContextWindowChange,
+            label = { Text(stringResource(Res.string.providers_model_context_window_label)) },
+            placeholder = { Text(stringResource(Res.string.providers_model_context_window_hint)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        ModalityChipGroup(
+            label = stringResource(Res.string.providers_model_input_modalities),
+            selected = state.inputModalities,
+            onToggle = onToggleInputModality
+        )
+
+        ModalityChipGroup(
+            label = stringResource(Res.string.providers_model_output_modalities),
+            selected = state.outputModalities,
+            onToggle = onToggleOutputModality
+        )
+
+        // 能力开关放在同一组里，行间只留 2dp
+        Column {
+            CapabilitySwitchRow(
+                label = stringResource(Res.string.providers_model_supports_tool_calling),
+                checked = state.supportsToolCalling,
+                onCheckedChange = onToolCallingChange
+            )
+            CapabilitySwitchRow(
+                label = stringResource(Res.string.providers_model_supports_thinking),
+                checked = state.supportsThinking,
+                onCheckedChange = onThinkingChange
+            )
+            CapabilitySwitchRow(
+                label = stringResource(Res.string.providers_model_supports_json_output),
+                checked = state.supportsJsonOutput,
+                onCheckedChange = onJsonOutputChange
+            )
+            CapabilitySwitchRow(
+                label = stringResource(Res.string.providers_model_supports_temperature),
+                checked = state.supportsTemperature,
+                onCheckedChange = onTemperatureChange
+            )
+        }
+
+        ModelDeleteButton(
+            enabled = state.model != null,
+            onClick = onDeleteClick
+        )
     }
 }
 
@@ -372,7 +387,7 @@ private fun ModalityChipGroup(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -415,7 +430,7 @@ private fun CapabilitySwitchRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 4.dp),
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
