@@ -183,13 +183,15 @@ ext["cmakeVersion"] = "4.1.2"
  * `ndk.abiFilters` per build type in both modules, the cargo-ndk target list in
  * `:core-bindings`, and the Termux bootstrap archives `:runtime` packages.
  *
- * Release ships `arm64-v8a` only. Debug additionally packages `x86_64` so
- * Android Studio's Run button can install on an AVD — the emulator has no ARM
- * translation here. This is per-build-type `abiFilters`, NOT `splits.abi`:
- * splits are global (they cannot be scoped to a build type) and AGP rejects
- * `ndk.abiFilters` that contradict them, so a split-based setup could only ever
- * produce arm64 debug APKs. `armeabi-v7a` (32-bit phones) stays selectable for
- * either build type via `-Pmessenger.abis=…` / `ANDROID_ABIS=…`.
+ * Release ships `arm64-v8a` only. Debug ships `x86_64` only: Android Studio Run
+ * installs the debug variant on an AVD, the emulator has no ARM translation
+ * here, and a Rust cross-compile of this workspace costs minutes — so the two
+ * build types share no ABI and each compiles exactly one target. This is
+ * per-build-type `ndk.abiFilters`, NOT `splits.abi`: splits are global (they
+ * cannot be scoped to a build type) and AGP rejects `ndk.abiFilters` that
+ * contradict them, so a split-based setup could only ever produce arm64 debug
+ * APKs. `armeabi-v7a` (32-bit phones) stays selectable for either build type via
+ * `-Pmessenger.abis=…` / `ANDROID_ABIS=…`.
  *
  * `:wear` has its own pair of lists, see below.
  */
@@ -200,18 +202,20 @@ val abiToRustTarget = mapOf(
     "x86" to "i686-linux-android",
 )
 private val DEFAULT_RELEASE_ABIS = "arm64-v8a"
-private val DEFAULT_DEBUG_ABIS = "arm64-v8a,x86_64"
+// Debug is the emulator target only: Android Studio Run installs debug, an AVD is
+// x86_64, and a debug build must not pay for a second Rust cross-compile.
+private val DEFAULT_DEBUG_ABIS = "x86_64"
 
 /**
  * `:wear` ABIs. The watch release APK ships `armeabi-v7a` (Wear OS = 64-bit
- * kernel with a 32-bit userspace); `x86_64` is added to DEBUG builds only so the
- * watch app can be installed on a Wear OS AVD, which has no ARM translation.
- * Wear never reaches the Rust core, so an x86_64 wear build needs no extra Rust
- * target.
+ * kernel with a 32-bit userspace); DEBUG is `x86_64` only, for Wear OS AVDs,
+ * which have no ARM translation. Wear never reaches the Rust core, so an x86_64
+ * wear build needs no extra Rust target.
  */
 private val WEAR_ABIS = setOf("armeabi-v7a", "x86_64")
 private val DEFAULT_WEAR_RELEASE_ABIS = "armeabi-v7a"
-private val DEFAULT_WEAR_DEBUG_ABIS = "armeabi-v7a,x86_64"
+// Watch debug is the AVD target only, same reasoning as the phone apps.
+private val DEFAULT_WEAR_DEBUG_ABIS = "x86_64"
 
 /** Parses and validates one module's ABI list: Gradle property → env var → default. */
 private fun resolveAbis(
@@ -249,32 +253,18 @@ fun wearReleaseAbis(): List<String> =
 fun wearDebugAbis(): List<String> =
     resolveAbis("messenger.wearDebugAbis", "WEAR_DEBUG_ABIS", DEFAULT_WEAR_DEBUG_ABIS, WEAR_ABIS)
 
-// A debug ABI list must still cover the release one: Android Studio installs the
-// debug variant, but a build that silently dropped the shipped ABI would look
-// green here and fail on a real device.
-private fun requireSuperset(buildType: String, release: List<String>, debug: List<String>) {
-    val missing = release.filterNot { it in debug }
-    if (missing.isNotEmpty()) {
-        throw GradleException(
-            "$buildType debug ABIs (${debug.joinToString()}) are missing release ABI(s) " +
-                "${missing.joinToString()}; a debug build must be a superset of the release one."
-        )
-    }
-}
-
-requireSuperset(":androidApp/:runtime", releaseAbis(), debugAbis())
-requireSuperset(":wear", wearReleaseAbis(), wearDebugAbis())
-
+ext["abiToRustTarget"] = abiToRustTarget
 ext["releaseAbis"] = releaseAbis()
 ext["debugAbis"] = debugAbis()
 ext["wearReleaseAbis"] = wearReleaseAbis()
 ext["wearDebugAbis"] = wearDebugAbis()
-// cargo-ndk builds every ABI either build type can package, so a debug APK on an
-// AVD never references a jniLib that was not produced.
-ext["androidRustTargets"] =
-    ((ext["releaseAbis"] as List<String>) + (ext["debugAbis"] as List<String>))
-        .distinct()
-        .map { abiToRustTarget.getValue(it) }
+// cargo-ndk runs once per build type over that build type's own ABI list (see
+// :core-bindings), so these are kept separate rather than unioned — that is what
+// keeps `assembleDebug` from also cross-compiling the release ABI.
+ext["releaseRustTargets"] = (ext["releaseAbis"] as List<*>)
+    .map { abiToRustTarget.getValue(it as String) }
+ext["debugRustTargets"] = (ext["debugAbis"] as List<*>)
+    .map { abiToRustTarget.getValue(it as String) }
 
 /**
  * Host C compiler for the wasm32 Rust build (`sqlite-wasm-rs` compiles C through

@@ -41,10 +41,6 @@ android {
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // Per-build-type ABI filtering, not splits.abi: splits are global and
-        // cannot be scoped to release only, which left debug — the variant
-        // Android Studio Run installs — arm64-only and unusable on an AVD.
-        ndk { abiFilters.addAll(releaseAbis) }
     }
 
     signingConfigs {
@@ -58,13 +54,24 @@ android {
 
     buildTypes {
         debug {
-            ndk { abiFilters.addAll(debugAbis) }
+            ndk {
+                // clear() first: buildType abiFilters are ADDED to defaultConfig's,
+                // so without it debug would keep the release ABI and pay for its
+                // Rust cross-compile too.
+                abiFilters.clear()
+                abiFilters.addAll(debugAbis)
+            }
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k
             }
         }
         release {
+            // ABI filtering lives per build type, not in defaultConfig: AGP
+            // UNIONS defaultConfig's abiFilters into every build type, so a
+            // narrower debug list there would silently keep the release ABI (and
+            // pay for its Rust cross-compile).
+            ndk { abiFilters.addAll(releaseAbis) }
             // Full R8 on every release build (all Android modules): minification
             // plus resource shrinking. Rules live in proguard-rules.pro next to
             // this file; shared/android libraries contribute consumer rules

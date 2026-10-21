@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+@file:Suppress("UNCHECKED_CAST", "DEPRECATION")
+
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.Exec
 import org.gradle.internal.os.OperatingSystem
 import java.util.Properties
@@ -24,11 +27,26 @@ plugins {
 
 // The Rust core lives in a Cargo workspace outside Gradle's model; the Exec
 // tasks below bridge the two. The host build feeds the UniFFI bindgen and the
-// cargo-ndk build feeds jniLibs; both are wired into preBuild so every
-// assemble of this module stays in sync with the Rust sources.
+// per-build-type cargo-ndk builds feed jniLibs; the Kotlin side is wired into
+// preBuild, and each variant pulls in only its own jniLibs task.
 val rustWorkspaceDir = rootProject.layout.projectDirectory.dir("core/rust")
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffiKotlin")
-val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs")
+
+// One directory per build type: a shared one would make the two cargo-ndk tasks
+// invalidate each other's output (each wipes what it owns before running).
+val rustJniLibsDebugDir = objects.directoryProperty().apply {
+    set(layout.buildDirectory.dir("rustJniLibs/debug"))
+}
+val rustJniLibsReleaseDir = objects.directoryProperty().apply {
+    set(layout.buildDirectory.dir("rustJniLibs/release"))
+}
+
+// Plain snapshot of the root build script's abi -> Rust triple map: the
+// configuration cache rejects task actions that read rootProject.ext directly.
+val abiToRustTargetMap: Map<String, String> =
+    (rootProject.ext["abiToRustTarget"] as Map<*, *>).entries.associate { it.key as String to it.value as String }
+val debugAbiList: List<String> = rootProject.ext["debugAbis"] as List<String>
+val releaseAbiList: List<String> = rootProject.ext["releaseAbis"] as List<String>
 
 // Plain values captured at configuration time for the CI diagnostics below: the
 // configuration cache rejects task actions that close over `project` or other
@@ -172,31 +190,46 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
     rustInputs.execute(this)
 }
 
-val buildRustAndroid by tasks.registering(Exec::class) {
-    workingDir(rustWorkspaceDir)
-    // ABI list comes from the root build script's ext["androidRustTargets"], the
-    // union of the release and debug ABI lists (arm64-v8a always, x86_64 for AVD
-    // debug builds), so the jniLibs always match what the APKs package.
-    // cargo-ndk takes one `-t` per ABI.
-    val abiTargets = (rootProject.ext["androidRustTargets"] as List<String>)
-        .flatMap { listOf("-t", it) }
-    commandLine(
-        listOf(
-            "cargo", "ndk", "--platform", "30",
-        ) + abiTargets + listOf(
-            "-o", rustJniLibsDir.get().asFile.absolutePath,
-            "build", "--release", "-p", "messenger-ffi",
+/**
+ * cargo-ndk for ONE build type's ABI list.
+ *
+ * Deliberately one task per build type rather than a single task over the union
+ * of every ABI: a Rust cross-build of this workspace costs minutes, and a union
+ * made every `assembleDebug` cross-compile the release ABI too. Each task owns
+ * its own output directory, so the two never invalidate each other, and each
+ * variant registers only its own directory as jniLibs (see androidComponents).
+ */
+fun registerRustAndroidTask(buildType: String, abiList: List<String>, outDir: DirectoryProperty) =
+    tasks.register<Exec>("buildRustAndroid${buildType.replaceFirstChar { it.uppercase() }}") {
+        workingDir(rustWorkspaceDir)
+        val rustTargets = abiList.map { abiToRustTargetMap.getValue(it) }
+        commandLine(
+            listOf("cargo", "ndk", "--platform", "30") +
+                rustTargets.flatMap { listOf("-t", it) } +
+                listOf("-o", outDir.get().asFile.absolutePath, "build", "--release", "-p", "messenger-ffi")
         )
-    )
-    ndkHome?.let { environment("ANDROID_NDK_HOME", it) }
-    // Wipe the output first: cargo-ndk only writes the ABIs it is asked for, so a
-    // previous build with a different ABI list (e.g. the opt-in x86_64) would
-    // otherwise leave stale jniLibs behind and quietly ship an outdated library.
-    val jniLibsDir = rustJniLibsDir.get().asFile
-    doFirst { jniLibsDir.deleteRecursively() }
-    outputs.dir(rustJniLibsDir)
-    rustInputs.execute(this)
-}
+        ndkHome?.let { environment("ANDROID_NDK_HOME", it) }
+        // Wipe first: cargo-ndk only writes the ABIs it is asked for, so a stale
+        // directory from an earlier ABI list would ship an outdated library.
+        val jniLibsDir = outDir.get().asFile
+        doFirst { jniLibsDir.deleteRecursively() }
+        outputs.dir(outDir)
+        // Track the WHOLE workspace: messenger-ffi depends on the sibling crates.
+        inputs.file(rustWorkspaceDir.file("Cargo.toml"))
+        inputs.file(rustWorkspaceDir.file("Cargo.lock"))
+        inputs.dir(rustWorkspaceDir.dir("crates"))
+    }
+
+val rustAndroidDebug = registerRustAndroidTask(
+    "debug",
+    debugAbiList,
+    rustJniLibsDebugDir,
+)
+val rustAndroidRelease = registerRustAndroidTask(
+    "release",
+    releaseAbiList,
+    rustJniLibsReleaseDir,
+)
 
 android {
     namespace = "cc.ptoe.messenger.core"
@@ -221,7 +254,6 @@ android {
             // generated bindings under both so the Kotlin task always sees them.
             java.srcDirs(generatedKotlinDir.get().asFile)
             kotlin.srcDirs(generatedKotlinDir.get().asFile)
-            jniLibs.srcDir(rustJniLibsDir.get().asFile)
         }
     }
 }
@@ -235,9 +267,27 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 }
 
-tasks.named("preBuild") {
-    dependsOn(generateUniFFIBindings, buildRustAndroid)
+// Bind each variant to its own cargo-ndk output: the debug variant only ever gets
+// the debug ABIs' jniLibs, so building it never waits for (or drags in) the
+// release ABI's cross-build. `addStaticSourceDirectory` keeps AGP from treating
+// the directory as a task output it must snapshot, and the dependency is wired
+// explicitly on the variant's own preBuild.
+androidComponents {
+    onVariants { variant ->
+        val debug = variant.buildType == "debug"
+        val dir = if (debug) rustJniLibsDebugDir else rustJniLibsReleaseDir
+        variant.sources.jniLibs?.addStaticSourceDirectory(dir.get().asFile.absolutePath)
+    }
 }
+
+tasks.named("preBuild") {
+    dependsOn(generateUniFFIBindings)
+}
+// The jniLibs merge task is where the variant's native libs are collected; hook
+// the matching cargo-ndk task there so `assembleDebug` never runs the release
+// cross-build (and vice versa).
+tasks.matching { it.name == "mergeDebugJniLibFolders" }.configureEach { dependsOn(rustAndroidDebug) }
+tasks.matching { it.name == "mergeReleaseJniLibFolders" }.configureEach { dependsOn(rustAndroidRelease) }
 
 // NOTE(ci): the second half of the NO-SOURCE diagnosis. Whether a Kotlin source
 // directory that does not exist at snapshot time gets picked up is exactly what

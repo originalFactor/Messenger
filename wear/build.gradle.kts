@@ -37,10 +37,6 @@ android {
         targetSdk = 36
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
-        // Per-build-type ABI filtering, not splits.abi: the watch release ships
-        // armeabi-v7a only, while debug adds x86_64 for Wear OS AVDs (splits are
-        // global and cannot be scoped to one build type).
-        ndk { abiFilters.addAll(wearReleaseAbis) }
     }
 
     signingConfigs {
@@ -54,7 +50,13 @@ android {
 
     buildTypes {
         debug {
-            ndk { abiFilters.addAll(wearDebugAbis) }
+            ndk {
+                // clear() first: buildType abiFilters are ADDED to defaultConfig's,
+                // so without it debug would keep the release ABI and pay for its
+                // Rust cross-compile too.
+                abiFilters.clear()
+                abiFilters.addAll(wearDebugAbis)
+            }
             val messengerKeystore = signingConfigs["messenger"]
             val hasPassword = messengerKeystore.storePassword?.isNotBlank() == true
             if (hasPassword && messengerKeystore.storeFile?.exists() == true) {
@@ -62,6 +64,9 @@ android {
             }
         }
         release {
+            // ABI filtering per build type (AGP unions defaultConfig's list into
+            // every build type, so it must not be set there).
+            ndk { abiFilters.addAll(wearReleaseAbis) }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

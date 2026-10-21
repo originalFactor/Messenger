@@ -211,9 +211,6 @@ android {
         targetSdk = 28
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
-        // Per-build-type ABI filtering (see androidApp): release is arm64-v8a,
-        // debug adds x86_64 so the companion installs on an AVD.
-        ndk { abiFilters.addAll(rootProject.ext["releaseAbis"] as List<String>) }
     }
 
 
@@ -242,13 +239,20 @@ android {
 
     buildTypes {
         debug {
-            ndk { abiFilters.addAll(rootProject.ext["debugAbis"] as List<String>) }
+            ndk {
+                // clear() first: buildType abiFilters are ADDED to defaultConfig's.
+                abiFilters.clear()
+                abiFilters.addAll(rootProject.ext["debugAbis"] as List<String>)
+            }
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k
             }
         }
         release {
+            // ABI filtering per build type (AGP unions defaultConfig's list into
+            // every build type, so it must not be set there).
+            ndk { abiFilters.addAll(rootProject.ext["releaseAbis"] as List<String>) }
             // Full R8 on every release build, like the other Android modules.
             // The reflection-sensitive surface here is the AIDL stub/Parcelable
             // surface (ToolResult.CREATOR) plus the vendored Termux classes that

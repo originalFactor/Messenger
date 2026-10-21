@@ -113,7 +113,8 @@ jobs:
           VERSION_CODE: ${{ env.VERSION_CODE }}
           # Explicit, even though it is the default: the phone apps ship
           # arm64-v8a only, and this is the one place a reviewer should see it.
-          # (The debug variant also packages x86_64 for AVDs; release never does.)
+          # (Debug is x86_64 only, for Android Studio Run on an AVD; the two
+          # build types share no ABI, so neither pays for the other's Rust build.)
           ANDROID_ABIS: arm64-v8a
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
