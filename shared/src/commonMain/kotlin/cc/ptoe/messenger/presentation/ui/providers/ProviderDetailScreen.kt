@@ -270,63 +270,29 @@ fun ProviderDetailScreen(
                         )
                     }
 
-                    if (!uiState.isMultiSelectMode) {
-                        ModelListHeader(
-                            onSyncClick = {
-                                viewModel.syncModels()
-                            },
-                            onAddClick = {
-                                showAddDialog = true
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    if (models.isEmpty()) {
-                        EmptyState(
-                            icon = Icons.Default.Cloud,
-                            message = stringResource(Res.string.providers_no_models),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        ) {
-                            items(models, key = { it.id }) { model ->
-                                ModelListItem(
-                                    model = model,
-                                    isMultiSelectMode = uiState.isMultiSelectMode,
-                                    isSelected = model.id in uiState.selectedModelIds,
-                                    onToggleEnabled = { enabled ->
-                                        viewModel.toggleModelEnabled(model.id, enabled)
-                                    },
-                                    onDeleteClick = {
-                                        showDeleteDialog = model
-                                    },
-                                    onLongClick = {
-                                        viewModel.enterMultiSelectMode(model.id)
-                                    },
-                                    onClick = {
-                                        if (uiState.isMultiSelectMode) {
-                                            viewModel.toggleModelSelection(model.id)
-                                        } else {
-                                            onModelClick(model)
-                                        }
-                                    },
-                                    enableContextMenu = enableContextMenu,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                    ProviderModelList(
+                        models = models,
+                        isMultiSelectMode = uiState.isMultiSelectMode,
+                        selectedModelIds = uiState.selectedModelIds,
+                        onSyncClick = { viewModel.syncModels() },
+                        onAddClick = { showAddDialog = true },
+                        onToggleEnabled = { model, enabled ->
+                            viewModel.toggleModelEnabled(model.id, enabled)
+                        },
+                        onDeleteClick = { model -> showDeleteDialog = model },
+                        onLongClick = { model -> viewModel.enterMultiSelectMode(model.id) },
+                        onClick = { model ->
+                            if (uiState.isMultiSelectMode) {
+                                viewModel.toggleModelSelection(model.id)
+                            } else {
+                                onModelClick(model)
                             }
-                        }
-                    }
+                        },
+                        enableContextMenu = enableContextMenu,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    )
                 }
             }
 
@@ -457,12 +423,77 @@ private fun ProviderInfoCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Provider 详情里的模型列表：标题行 + 模型行。
+ *
+ * 标题行始终存在，多选时只禁用同步/添加按钮——此前整行在多选态被移除，
+ * 列表整体上移约 56dp，长按的一瞬间画面会明显跳动。
+ */
 @Composable
-private fun ModelListHeader(
+internal fun ProviderModelList(
+    models: List<ChatModel>,
+    isMultiSelectMode: Boolean,
+    selectedModelIds: Set<String>,
     onSyncClick: () -> Unit,
     onAddClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onToggleEnabled: (ChatModel, Boolean) -> Unit,
+    onDeleteClick: (ChatModel) -> Unit,
+    onLongClick: (ChatModel) -> Unit,
+    onClick: (ChatModel) -> Unit,
+    modifier: Modifier = Modifier,
+    enableContextMenu: Boolean = false
+) {
+    Column(modifier = modifier) {
+        ModelListHeader(
+            onSyncClick = onSyncClick,
+            onAddClick = onAddClick,
+            actionsEnabled = !isMultiSelectMode,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (models.isEmpty()) {
+            EmptyState(
+                icon = Icons.Default.Cloud,
+                message = stringResource(Res.string.providers_no_models),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                items(models, key = { it.id }) { model ->
+                    ModelListItem(
+                        model = model,
+                        isMultiSelectMode = isMultiSelectMode,
+                        isSelected = model.id in selectedModelIds,
+                        onToggleEnabled = { enabled -> onToggleEnabled(model, enabled) },
+                        onDeleteClick = { onDeleteClick(model) },
+                        onLongClick = { onLongClick(model) },
+                        onClick = { onClick(model) },
+                        enableContextMenu = enableContextMenu,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ModelListHeader(
+    onSyncClick: () -> Unit,
+    onAddClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    actionsEnabled: Boolean = true
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -484,7 +515,7 @@ private fun ModelListHeader(
                 },
                 state = rememberTooltipState()
             ) {
-                IconButton(onClick = onSyncClick) {
+                IconButton(onClick = onSyncClick, enabled = actionsEnabled) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = stringResource(Res.string.action_sync_models)
@@ -498,7 +529,7 @@ private fun ModelListHeader(
                 },
                 state = rememberTooltipState()
             ) {
-                IconButton(onClick = onAddClick) {
+                IconButton(onClick = onAddClick, enabled = actionsEnabled) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = stringResource(Res.string.action_manual_add)
