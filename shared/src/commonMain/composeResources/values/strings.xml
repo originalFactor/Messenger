@@ -383,6 +383,7 @@
     <string name="cloud_settings_login_failed">Sign-in failed</string>
     <string name="cloud_settings_account">Account</string>
     <string name="cloud_settings_connected">Connected to Messenger Cloud</string>
+    <string name="cloud_settings_session_expired">Your session expired. Please sign in again.</string>
     <string name="cloud_settings_sync_data">Sync data</string>
     <string name="cloud_settings_sync_data_desc">Upload overwrites cloud with local data; restore overwrites local with cloud data.</string>
     <string name="cloud_settings_upload_sync">Upload &amp; sync local data</string>

@@ -64,6 +64,11 @@ class SettingsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_CLOUD_SERVER_URL)
     val cloudSyncError = cloudSyncRepository.syncError
 
+    /** 服务端已判定会话失效（注销/超时/账号消失），App 需重新登录。 */
+    val cloudSessionExpired = cloudSyncRepository.sessionExpired
+
+    fun acknowledgeCloudSessionExpired() = cloudSyncRepository.acknowledgeSessionExpired()
+
     fun setCloudServerUrl(url: String, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch { onResult(runCatching { cloudSyncRepository.setServerUrl(url) }) }
     }

@@ -123,6 +123,7 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_login_account
 import cc.ptoe.messenger.generated.resources.cloud_settings_login_account_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_login_failed
 import cc.ptoe.messenger.generated.resources.cloud_settings_login_success
+import cc.ptoe.messenger.generated.resources.cloud_settings_session_expired
 import cc.ptoe.messenger.generated.resources.cloud_settings_logout
 import cc.ptoe.messenger.generated.resources.cloud_settings_logout_success
 import cc.ptoe.messenger.generated.resources.cloud_settings_new_password_label
@@ -206,6 +207,9 @@ fun CloudSettingsScreen(
     var redeemPreview by remember { mutableStateOf<CloudCardPreview?>(null) }
     var redeeming by remember { mutableStateOf(false) }
 
+    val cloudSessionExpired by viewModel.cloudSessionExpired.collectAsStateWithLifecycle()
+    val sessionExpiredMessage = stringResource(Res.string.cloud_settings_session_expired)
+
     val loginSuccess = stringResource(Res.string.cloud_settings_login_success)
     val localDataUploaded = stringResource(Res.string.cloud_settings_local_data_uploaded)
     val cloudDataRestored = stringResource(Res.string.cloud_settings_cloud_data_restored)
@@ -221,6 +225,15 @@ fun CloudSettingsScreen(
     fun showMessage(message: String) {
         coroutineScope.launch {
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    // 会话失效后本页已经是未登录状态（登录表单）；再说一次原因，避免用户
+    // 以为是自己误触了退出登录。
+    LaunchedEffect(cloudSessionExpired) {
+        if (cloudSessionExpired) {
+            showMessage(sessionExpiredMessage)
+            viewModel.acknowledgeCloudSessionExpired()
         }
     }
 

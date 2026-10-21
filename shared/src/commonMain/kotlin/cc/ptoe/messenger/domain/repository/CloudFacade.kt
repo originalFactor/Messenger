@@ -42,6 +42,15 @@ interface CloudFacade {
     val serverUrl: Flow<String>
     val syncError: StateFlow<String?>
 
+    /**
+     * True once the server has rejected the stored session (revoked on another
+     * device, expired after 30 days, account deleted). The facade has already
+     * dropped the local session at that point, so [user] is null and the user
+     * must sign in again; the UI shows the explanation once and clears it.
+     */
+    val sessionExpired: StateFlow<Boolean>
+    fun acknowledgeSessionExpired()
+
     /** Cookie-aware Ktor client used by Coil to load authenticated avatars. */
     val avatarHttpClient: HttpClient
 

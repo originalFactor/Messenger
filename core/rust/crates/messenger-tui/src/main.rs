@@ -200,11 +200,17 @@ fn run() -> Result<(), String> {
                 }
                 if store_ops::session_from_kv(&store).cookie.is_some() {
                     if let Err(error) = sync.refresh_user().await {
+                        // A rejected session is already dropped by the engine;
+                        // say what the user has to do instead of echoing the
+                        // HTTP error.
+                        let message = if sync.current_user().is_none() {
+                            "Session expired — run /login.".to_string()
+                        } else {
+                            format!("Session refresh failed: {error}")
+                        };
                         let _ = engine
                             .tx
-                            .send(messenger_tui::engine::UiMsg::CloudStatus(format!(
-                                "Session refresh failed: {error}"
-                            )));
+                            .send(messenger_tui::engine::UiMsg::CloudStatus(message));
                     }
                     if let Ok(user) = sync.signed_in() {
                         let _ = sync.ensure_builtin_provider(&user);

@@ -9,7 +9,9 @@ impl<'a> SyncEngine<'a> {
     pub async fn preview_redeem_card(&self, code: &str) -> CloudResult<CloudCardPreview> {
         let _ = self.signed_in()?;
         let endpoint = self.endpoint("api/console/cards/preview");
-        let resp = self.client.preview_redeem_card(&endpoint, code.trim()).await?;
+        let resp = self
+            .with_session(self.client.preview_redeem_card(&endpoint, code.trim()))
+            .await?;
         Ok(resp.card)
     }
 
@@ -17,7 +19,9 @@ impl<'a> SyncEngine<'a> {
     pub async fn redeem_card(&self, code: &str) -> CloudResult<CloudRedeemResponse> {
         let _ = self.signed_in()?;
         let endpoint = self.endpoint("api/console/redeem");
-        let resp = self.client.redeem_card(&endpoint, code.trim()).await?;
+        let resp = self
+            .with_session(self.client.redeem_card(&endpoint, code.trim()))
+            .await?;
         // Refresh local user snapshot so UI immediately reflects updated quota entitlements
         let _ = self.refresh_user().await;
         Ok(resp)

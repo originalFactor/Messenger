@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use messenger_store::model::{StoredAgent, StoredConversation, StoredMessage};
 use messenger_store::Store;
 
-use crate::api::Session;
+use crate::api::{CloudError, Session};
 use crate::models::*;
 use crate::models::{BUILTIN_PROVIDER_ID, BUILTIN_TITLE_AGENT_ID};
 use crate::sync::SyncEngine;
@@ -487,4 +487,92 @@ async fn failed_login_surfaces_the_server_error_message() {
     let text = error.to_string();
     assert!(text.contains("Invalid credentials"), "{text}");
     assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_401_on_an_authenticated_call_drops_the_stored_session() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/auth/me"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "Unauthorized."})),
+        )
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    engine
+        .save_session(&Session {
+            cookie: Some("messenger_session=dead".into()),
+            host: Some(server.uri()),
+        })
+        .unwrap();
+    engine
+        .save_user(&CloudUser { id: "acct-1".into(), ..Default::default() })
+        .unwrap();
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    let error = engine.refresh_user().await.unwrap_err();
+    assert!(matches!(error, CloudError::SessionExpired { .. }), "{error}");
+    // The dead cookie must not be replayed: the next request has no session,
+    // which is what the UI reads as "signed out".
+    assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
+    assert!(store.kv_get(crate::sync::KV_SESSION_HOST).unwrap().is_none());
+    assert!(engine.current_user().is_none());
+}
+
+#[tokio::test]
+async fn a_401_on_login_stays_a_credential_error() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/auth/login"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "Invalid email or password."})),
+        )
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    // A wrong password must NOT be reported as an expired session: nothing was
+    // signed in, so there is no session to drop and no re-login prompt.
+    let error = engine.login("a@b.c", "nope").await.unwrap_err();
+    assert!(matches!(error, CloudError::Http { status: 401, .. }), "{error}");
+}
+
+#[tokio::test]
+async fn a_wrong_current_password_is_not_reported_as_an_expired_session() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("PUT"))
+        .and(wiremock::matchers::path("/api/auth/password"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "The current password is incorrect."})),
+        )
+        .mount(&server)
+        .await;
+
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    engine
+        .save_session(&Session {
+            cookie: Some("messenger_session=live".into()),
+            host: Some(server.uri()),
+        })
+        .unwrap();
+    engine
+        .save_user(&CloudUser { id: "acct-1".into(), ..Default::default() })
+        .unwrap();
+    store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
+
+    let error = engine.change_password("wrong", "new-password").await.unwrap_err();
+    assert!(matches!(error, CloudError::Http { status: 401, .. }), "{error}");
+    // The session is still good: only the password attempt failed.
+    assert!(engine.current_user().is_some());
+    assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_some());
 }
