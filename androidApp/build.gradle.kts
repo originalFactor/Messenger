@@ -22,8 +22,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// Shared ABI matrix (root build script): ARM by default, emulator ABI opt-in.
-val androidAbis = rootProject.ext["androidAbis"] as List<String>
+// Shared ABI matrix (root build script): release ships arm64-v8a, debug adds
+// x86_64 so Android Studio Run works on an AVD.
+val releaseAbis = rootProject.ext["releaseAbis"] as List<String>
+val debugAbis = rootProject.ext["debugAbis"] as List<String>
 
 android {
     namespace = "cc.ptoe.messenger"
@@ -39,18 +41,10 @@ android {
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            // Release matrix is ARM only (see the root build script's
-            // ext["androidAbis"]); the emulator ABI is opt-in via
-            // -Pmessenger.abis / ANDROID_ABIS.
-            include(*androidAbis.toTypedArray())
-            isUniversalApk = false
-        }
+        // Per-build-type ABI filtering, not splits.abi: splits are global and
+        // cannot be scoped to release only, which left debug — the variant
+        // Android Studio Run installs — arm64-only and unusable on an AVD.
+        ndk { abiFilters.addAll(releaseAbis) }
     }
 
     signingConfigs {
@@ -64,6 +58,7 @@ android {
 
     buildTypes {
         debug {
+            ndk { abiFilters.addAll(debugAbis) }
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k

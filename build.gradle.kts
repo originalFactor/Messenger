@@ -178,17 +178,20 @@ ext["ndkVersion"] = "30.0.16248370"
 ext["cmakeVersion"] = "4.1.2"
 
 /**
- * Android ABIs shipped by the phone apps (`:androidApp` and its `:runtime`
+ * Android ABIs packaged by the phone apps (`:androidApp` and its `:runtime`
  * companion) — ONE source of truth for three places that must agree:
- * `splits.abi` in both modules, the cargo-ndk target list in `:core-bindings`,
- * and the Termux bootstrap archives `:runtime` packages.
+ * `ndk.abiFilters` per build type in both modules, the cargo-ndk target list in
+ * `:core-bindings`, and the Termux bootstrap archives `:runtime` packages.
  *
- * The shipped matrix is `arm64-v8a` only: that is the ABI every supported
- * Android device and every CI artifact uses. `x86_64` is kept for AVD testing
- * (the emulator has no ARM translation here), and `armeabi-v7a` for 32-bit
- * phones; both stay selectable per build — `-Pmessenger.abis=…` or
- * `ANDROID_ABIS=…` — so neither drags a second APK and a second Rust
- * cross-build into a normal CI run. `:wear` has its own list, see below.
+ * Release ships `arm64-v8a` only. Debug additionally packages `x86_64` so
+ * Android Studio's Run button can install on an AVD — the emulator has no ARM
+ * translation here. This is per-build-type `abiFilters`, NOT `splits.abi`:
+ * splits are global (they cannot be scoped to a build type) and AGP rejects
+ * `ndk.abiFilters` that contradict them, so a split-based setup could only ever
+ * produce arm64 debug APKs. `armeabi-v7a` (32-bit phones) stays selectable for
+ * either build type via `-Pmessenger.abis=…` / `ANDROID_ABIS=…`.
+ *
+ * `:wear` has its own pair of lists, see below.
  */
 val abiToRustTarget = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -196,16 +199,19 @@ val abiToRustTarget = mapOf(
     "x86_64" to "x86_64-linux-android",
     "x86" to "i686-linux-android",
 )
-private val DEFAULT_ANDROID_ABIS = "arm64-v8a"
+private val DEFAULT_RELEASE_ABIS = "arm64-v8a"
+private val DEFAULT_DEBUG_ABIS = "arm64-v8a,x86_64"
 
 /**
- * `:wear` ABIs. The watch APK ships `armeabi-v7a` (Wear OS = 64-bit kernel with
- * a 32-bit userspace); `x86_64` is kept ONLY so the watch app can be installed
- * on a Wear OS AVD, which has no ARM translation. Wear never reaches the Rust
- * core, so an x86_64 wear build needs no extra Rust target.
+ * `:wear` ABIs. The watch release APK ships `armeabi-v7a` (Wear OS = 64-bit
+ * kernel with a 32-bit userspace); `x86_64` is added to DEBUG builds only so the
+ * watch app can be installed on a Wear OS AVD, which has no ARM translation.
+ * Wear never reaches the Rust core, so an x86_64 wear build needs no extra Rust
+ * target.
  */
 private val WEAR_ABIS = setOf("armeabi-v7a", "x86_64")
-private val DEFAULT_WEAR_ABIS = "armeabi-v7a"
+private val DEFAULT_WEAR_RELEASE_ABIS = "armeabi-v7a"
+private val DEFAULT_WEAR_DEBUG_ABIS = "armeabi-v7a,x86_64"
 
 /** Parses and validates one module's ABI list: Gradle property → env var → default. */
 private fun resolveAbis(
@@ -231,16 +237,44 @@ private fun resolveAbis(
     return abis
 }
 
-fun androidAbis(): List<String> =
-    resolveAbis("messenger.abis", "ANDROID_ABIS", DEFAULT_ANDROID_ABIS, abiToRustTarget.keys)
+fun releaseAbis(): List<String> =
+    resolveAbis("messenger.abis", "ANDROID_ABIS", DEFAULT_RELEASE_ABIS, abiToRustTarget.keys)
 
-fun wearAbis(): List<String> =
-    resolveAbis("messenger.wearAbis", "WEAR_ABIS", DEFAULT_WEAR_ABIS, WEAR_ABIS)
+fun debugAbis(): List<String> =
+    resolveAbis("messenger.debugAbis", "ANDROID_DEBUG_ABIS", DEFAULT_DEBUG_ABIS, abiToRustTarget.keys)
 
-ext["androidAbis"] = androidAbis()
-ext["wearAbis"] = wearAbis()
-ext["androidRustTargets"] = (ext["androidAbis"] as List<*>)
-    .map { abiToRustTarget.getValue(it as String) }
+fun wearReleaseAbis(): List<String> =
+    resolveAbis("messenger.wearAbis", "WEAR_ABIS", DEFAULT_WEAR_RELEASE_ABIS, WEAR_ABIS)
+
+fun wearDebugAbis(): List<String> =
+    resolveAbis("messenger.wearDebugAbis", "WEAR_DEBUG_ABIS", DEFAULT_WEAR_DEBUG_ABIS, WEAR_ABIS)
+
+// A debug ABI list must still cover the release one: Android Studio installs the
+// debug variant, but a build that silently dropped the shipped ABI would look
+// green here and fail on a real device.
+private fun requireSuperset(buildType: String, release: List<String>, debug: List<String>) {
+    val missing = release.filterNot { it in debug }
+    if (missing.isNotEmpty()) {
+        throw GradleException(
+            "$buildType debug ABIs (${debug.joinToString()}) are missing release ABI(s) " +
+                "${missing.joinToString()}; a debug build must be a superset of the release one."
+        )
+    }
+}
+
+requireSuperset(":androidApp/:runtime", releaseAbis(), debugAbis())
+requireSuperset(":wear", wearReleaseAbis(), wearDebugAbis())
+
+ext["releaseAbis"] = releaseAbis()
+ext["debugAbis"] = debugAbis()
+ext["wearReleaseAbis"] = wearReleaseAbis()
+ext["wearDebugAbis"] = wearDebugAbis()
+// cargo-ndk builds every ABI either build type can package, so a debug APK on an
+// AVD never references a jniLib that was not produced.
+ext["androidRustTargets"] =
+    ((ext["releaseAbis"] as List<String>) + (ext["debugAbis"] as List<String>))
+        .distinct()
+        .map { abiToRustTarget.getValue(it) }
 
 /**
  * Host C compiler for the wasm32 Rust build (`sqlite-wasm-rs` compiles C through

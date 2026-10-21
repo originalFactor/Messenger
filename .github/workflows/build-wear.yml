@@ -81,9 +81,10 @@ jobs:
           mkdir -p keyring
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > keyring/messenger-release.jks
 
-      # wear/build.gradle.kts pins splits.abi to armeabi-v7a: Wear OS devices run
-      # a 64-bit kernel with a 32-bit userspace, so that is the only ABI the
-      # watch APK ships. R8 + resource shrinking are on for this release build.
+      # wear/build.gradle.kts filters release to armeabi-v7a (ext["wearReleaseAbis"]):
+      # Wear OS devices run a 64-bit kernel with a 32-bit userspace, so that is the
+      # only ABI the watch APK ships — x86_64 is debug-only, for Wear OS AVDs.
+      # R8 + resource shrinking are on for this release build.
       - name: Build wear release APK
         env:
           VERSION_CODE: ${{ env.VERSION_CODE }}
@@ -97,8 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wear-release
-          # ABI splits rename the output to wear-armeabi-v7a-release.apk; the
-          # glob also matches an unsplit wear-release.apk if the split is ever
-          # dropped.
-          path: wear/build/outputs/apk/release/wear-*-release*.apk
+          # No ABI splits any more: the watch release APK is a single
+          # wear-release.apk with armeabi-v7a natives (see wear/build.gradle.kts).
+          path: wear/build/outputs/apk/release/*.apk
           if-no-files-found: error

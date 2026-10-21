@@ -28,8 +28,8 @@ on:
 
 jobs:
   build-android:
-    # One job, one ABI: `splits.abi` (driven by the root build script's
-    # ext["androidAbis"] = arm64-v8a) emits the arm64-v8a APK for both
+    # One job, one ABI: release `ndk.abiFilters` (root build script's
+    # ext["releaseAbis"] = arm64-v8a) emits the arm64-v8a APK for both
     # :androidApp and its :runtime companion in a single Gradle invocation.
     name: Build androidApp + runtime release APKs (arm64-v8a)
     runs-on: ubuntu-latest
@@ -64,8 +64,8 @@ jobs:
 
       # :core-bindings compiles the Rust core (core/rust) via cargo-ndk for the
       # shipped ABI; cargo-ndk picks the NDK up from ANDROID_HOME. The target
-      # list is derived from the same ext["androidAbis"] as the APK splits, so
-      # keep these in sync if the matrix ever changes.
+      # list is derived from the same release/debug ABI lists the APKs filter on,
+      # so keep these in sync if the matrix ever changes.
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -113,6 +113,7 @@ jobs:
           VERSION_CODE: ${{ env.VERSION_CODE }}
           # Explicit, even though it is the default: the phone apps ship
           # arm64-v8a only, and this is the one place a reviewer should see it.
+          # (The debug variant also packages x86_64 for AVDs; release never does.)
           ANDROID_ABIS: arm64-v8a
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -124,12 +125,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: androidApp-release
-          path: androidApp/build/outputs/apk/release/androidApp-*-release*.apk
+          path: androidApp/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       - name: Upload runtime release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: runtime-release
-          path: runtime/build/outputs/apk/release/runtime-*-release*.apk
+          path: runtime/build/outputs/apk/release/*.apk
           if-no-files-found: error

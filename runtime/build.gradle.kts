@@ -40,18 +40,16 @@ private data class BootstrapSpec(
 private val bootstrapRelease = "bootstrap-2026.09.27-r1%2Bapt.android-7"
 
 // Every archive :runtime can package. The build only downloads the ones whose
-// ABI is actually being built (see selectedBootstrapSpecs below), so the ARM-only
-// release matrix never fetches the emulator archive.
+// ABI is actually being built (see bootstrapSpecsFor below), so a release build
+// never fetches the emulator archive.
 private val bootstrapSpecs = listOf(
     BootstrapSpec("arm64-v8a", "bootstrap-aarch64.zip", "9ddc32921187c85b04556bf56c6cce94e00b813ecd9299959a2d9b7c33386994"),
     BootstrapSpec("armeabi-v7a", "bootstrap-arm.zip", "3c856821189c658446ef2a527d264ac9848772d0cae1aa318ecab16315ef732d"),
     BootstrapSpec("x86_64", "bootstrap-x86_64.zip", "d8abd8714f8aab19ce923202e647d09b137b0ea34edc25a57b9fb93db6b1c00e")
 )
 
-/** The subset of [bootstrapSpecs] matching the ABIs this build actually targets. */
-private val selectedBootstrapSpecs = bootstrapSpecs.filter {
-    it.abi in (rootProject.ext["androidAbis"] as List<String>)
-}
+/** The subset of [bootstrapSpecs] matching the ABIs one build type packages. */
+private fun bootstrapSpecsFor(abis: List<String>) = bootstrapSpecs.filter { it.abi in abis }
 
 abstract class DownloadBootstrapTask : DefaultTask() {
     companion object {
@@ -213,18 +211,11 @@ android {
         targetSdk = 28
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
+        // Per-build-type ABI filtering (see androidApp): release is arm64-v8a,
+        // debug adds x86_64 so the companion installs on an AVD.
+        ndk { abiFilters.addAll(rootProject.ext["releaseAbis"] as List<String>) }
     }
 
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            // Same shared ARM-only matrix as :androidApp — one APK per ABI, and
-            // only the matching Termux bootstrap archive is downloaded/packaged.
-            include(*(rootProject.ext["androidAbis"] as List<String>).toTypedArray())
-            isUniversalApk = false
-        }
-    }
 
     packaging {
         jniLibs {
@@ -251,6 +242,7 @@ android {
 
     buildTypes {
         debug {
+            ndk { abiFilters.addAll(rootProject.ext["debugAbis"] as List<String>) }
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k
@@ -307,9 +299,16 @@ android {
 
 androidComponents {
     onVariants { variant ->
+        // Debug packages arm64-v8a + x86_64, release only arm64-v8a, so the set of
+        // bootstrap archives to download is a per-variant decision.
+        val variantAbis = if (variant.buildType == "debug") {
+            rootProject.ext["debugAbis"] as List<String>
+        } else {
+            rootProject.ext["releaseAbis"] as List<String>
+        }
         val task = tasks.register<DownloadBootstrapTask>("download${variant.name.replaceFirstChar { it.uppercase() }}Bootstrap") {
             releaseTag.set(bootstrapRelease)
-            specs.set(selectedBootstrapSpecs.map { "${it.abi}|${it.archiveName}|${it.sha256}" })
+            specs.set(bootstrapSpecsFor(variantAbis).map { "${it.abi}|${it.archiveName}|${it.sha256}" })
             cacheDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/bootstrap-cache"))
             lockPath.set(rootProject.file(".gradle/bootstrap-download.lock").absolutePath)
             outputDirectory.set(layout.buildDirectory.dir("generated/bootstrap/${variant.name}/jniLibs"))
