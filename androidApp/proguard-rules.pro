@@ -1,8 +1,20 @@
 # ---------------------------------------------------------------------------
-# Messenger (mobile) R8/ProGuard rules
-# Full R8 minification is enabled for release builds. These rules keep every
-# class that is loaded reflectively (Retrofit/Gson, Java-WebSocket,
-# CommonMark, ucrop) and the manifest-declared application/service classes.
+# Messenger (androidApp) R8/ProGuard rules
+#
+# Full R8 minification + resource shrinking is enabled for release builds
+# (androidApp, wear, runtime). The app shell itself is thin: the reflection-
+# sensitive surface comes from
+#   * the Rust core bridge (UniFFI-generated Kotlin + JNA), kept by
+#     :core-bindings' consumer rules,
+#   * the RaTeX renderer (JNI + kotlinx.serialization), kept by
+#     :renderer-android's consumer rules,
+#   * kotlinx.serialization (20 @Serializable DTOs decoded reified),
+#   * OkHttp/Ktor/Coil service-loader entry points,
+#   * the manifest-declared components and ucrop's activity,
+#   * ViewModels instantiated reflectively by viewmodel-compose.
+#
+# There is no Room, Retrofit, Gson or CommonMark left in this app — do not
+# re-add blanket rules for them.
 # ---------------------------------------------------------------------------
 
 # --- Debuggability: keep line numbers for crash reports --------------------
@@ -10,155 +22,113 @@
 -renamesourcefileattribute SourceFile
 
 # --- Annotations / signatures / inner-class metadata -----------------------
-# Gson needs Signature to resolve generic types; Retrofit needs
-# RuntimeVisibleAnnotations to read @POST/@Query etc.; inner classes
-# are needed for the anonymous WebSocketServer / WebSocketListener subclasses.
 -keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations
 -keepattributes RuntimeVisibleParameterAnnotations,RuntimeInvisibleParameterAnnotations
 -keepattributes Signature,InnerClasses,EnclosingMethod
 -keepattributes AnnotationDefault
 -keepattributes Exceptions,Deprecated
+-keepattributes KotlinMetadata
 
 # ===========================================================================
 # App manifest-declared components
 # ===========================================================================
-# R8 normally keeps manifest-referenced classes, but we reference them via the
-# shorthand ".ClassName" form; be explicit to avoid any chance of stripping.
+# Referenced from the manifest with the shorthand ".ClassName" form; be
+# explicit so no keep-analysis subtlety can strip them.
 -keep class cc.ptoe.messenger.MessengerApplication { *; }
 -keep class cc.ptoe.messenger.MainActivity { *; }
--keep class cc.ptoe.messenger.data.wear.MobileHttpServer { *; }
+-keep class cc.ptoe.messenger.RuntimeShellClient { *; }
 
-# Wear sync handler invoked by MobileHttpServer
+# Declared by FQN in androidApp/src/main/AndroidManifest.xml but living in
+# :shared's androidMain — R8 sees the class only through the manifest.
+-keep class cc.ptoe.messenger.data.wear.MobileHttpServer { *; }
+-keep class cc.ptoe.messenger.data.wear.MobileHttpServer$* { *; }
 -keep class cc.ptoe.messenger.data.wear.MobileWearChatHandler { *; }
 
+# ucrop's activity is manifest-declared (com.yalantis.ucrop.UCropActivity).
+-keep class com.yalantis.ucrop.UCropActivity { *; }
+-keep class com.yalantis.ucrop.** { *; }
+-dontwarn com.yalantis.ucrop.**
+
 # ===========================================================================
-# Retrofit + Gson
+# Kotlinx Serialization (JSON DTOs, decoded reified)
 # ===========================================================================
-# Retrofit reflects over the API interface (method annotations, parameter types).
--keep,allowobfuscation interface cc.ptoe.messenger.data.remote.api.OpenAiApi
--keepclassmembers interface cc.ptoe.messenger.data.remote.api.OpenAiApi { *; }
--keep class retrofit2.** { *; }
--keep,allowobfuscation,allowshrinking class retrofit2.Response
--keepclassmembers,allowshrinking,allowobfuscation class * {
-    @retrofit2.http.* <methods>;
+# The compiler plugin generates the serializers; these keep the runtime's
+# reflective lookups (named companions, $serializer descriptor field) working
+# under obfuscation. Mirrors kotlinx-serialization's own consumer rules, which
+# also ship in the artifact's META-INF/proguard/.
+-keepclassmembers @kotlinx.serialization.Serializable class ** {
+    static ** Companion;
 }
--dontwarn retrofit2.**
-
-# Gson: reflects over field names + reads @SerializedName annotations.
--keep class com.google.gson.** { *; }
--keep class com.google.gson.reflect.TypeToken { *; }
--keep class com.google.gson.JsonElement { *; }
--keepclasseswithmembers,allowobfuscation class * {
-    @com.google.gson.annotations.SerializedName <fields>;
+-if @kotlinx.serialization.Serializable class ** {
+    static **$* *;
 }
-
-# DTOs are serialized via Gson both through Retrofit (request/response bodies)
-# and directly via Gson().fromJson() in ChatStreamParser (SSE chunks).
--keep class cc.ptoe.messenger.data.remote.dto.** { *; }
--keepclassmembers class cc.ptoe.messenger.data.remote.dto.** { *; }
-
-# Cloud authentication and sync models are also serialized reflectively through
-# Retrofit/Gson. Keep the whole small cloud package so R8 cannot rename or
-# remove request fields such as CredentialsRequest.email/password, the private
-# CloudApi method annotations, or the response models.
--keep class cc.ptoe.messenger.data.cloud.** { *; }
-
-# Kotlin metadata so Gson can still see Kotlin data-class field info.
--keep class kotlin.Metadata { *; }
--keepattributes KotlinModule
+-keepclassmembers class <2>$<3> {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-if @kotlinx.serialization.Serializable class ** {
+    public static ** INSTANCE;
+}
+-keepclassmembers class <1> {
+    public static <1> INSTANCE;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keepclassmembers public class **$$serializer {
+    private ** descriptor;
+}
+-dontnote kotlinx.serialization.**
 
 # ===========================================================================
-# OkHttp / Okio
+# Service-loader entry points (kept by name; R8 rewrites the service files)
 # ===========================================================================
--keep class okhttp3.** { *; }
--keep interface okhttp3.** { *; }
--keep class okio.** { *; }
--keep interface okio.** { *; }
--dontwarn okhttp3.**
--dontwarn okio.**
+# Coil 3 resolves network fetchers through ServiceLoader.
+-keep class coil3.network.ktor3.internal.KtorNetworkFetcherServiceLoaderTarget { *; }
+# Ktor's engine auto-discovery (HttpClient(OkHttp) is used explicitly, but the
+# service file still names the container).
+-keep class io.ktor.client.engine.okhttp.OkHttpEngineContainer { *; }
 
-# OkHttp platform detection uses reflection on platform-specific classes.
+# ===========================================================================
+# OkHttp / Okio (WebSocket server for the Wear bridge, Ktor engine)
+# ===========================================================================
+# OkHttp's platform detection reflects over these optional TLS providers.
 -keep,allowobfuscation,allowshrinking class org.conscrypt.** { *; }
 -keep,allowobfuscation,allowshrinking class org.bouncycastle.** { *; }
 -keep,allowobfuscation,allowshrinking class org.openjsse.** { *; }
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+-dontwarn org.graalvm.**
+-dontwarn com.oracle.svm.**
 
 # ===========================================================================
 # Java-WebSocket (MobileHttpServer extends WebSocketServer)
 # ===========================================================================
+# The anonymous WebSocketServer / handshake subclasses are instantiated by the
+# library through its own types; keep the server class graph intact.
 -keep class org.java_websocket.** { *; }
 -keep interface org.java_websocket.** { *; }
 -dontwarn org.java_websocket.**
 
-# Keep the anonymous WebSocketServer subclass inside MobileHttpServer.
--keep class cc.ptoe.messenger.data.wear.MobileHttpServer$* { *; }
-
 # ===========================================================================
-# CommonMark (markdown rendering)
+# ViewModels (viewmodel-compose instantiates them reflectively)
 # ===========================================================================
-# CommonMark loads node/visitor/extension classes reflectively.
--keep class org.commonmark.** { *; }
--keep interface org.commonmark.** { *; }
--dontwarn org.commonmark.**
-
-# ===========================================================================
-# RaTeX (LaTeX rendering)
-# ===========================================================================
-# LaTeX rendering is backed by RaTeX-CMP (Rust core). Keep the renderer stack
-# intact for release builds in case RaTeX-CMP does not ship its own consumer rules.
--keep class io.ratex.** { *; }
--keep class io.ratex.**$* { *; }
--dontwarn io.ratex.**
-
-# ===========================================================================
-# ucrop (image cropping) — UCropActivity is declared in the manifest
-# ===========================================================================
--keep class com.yalantis.ucrop.** { *; }
--keep interface com.yalantis.ucrop.** { *; }
--keepclassmembers class com.yalantis.ucrop.** { *; }
--dontwarn com.yalantis.ucrop.**
-
-# ===========================================================================
-# Coil (image loading)
-# ===========================================================================
-# Coil ships consumer rules, but be explicit to survive API churn.
--keep class coil.** { *; }
--dontwarn coil.**
-
-# ===========================================================================
-# Kotlin / Coroutines
-# ===========================================================================
--keep class kotlin.coroutines.** { *; }
--keep class kotlinx.coroutines.** { *; }
--keepclassmembers class kotlinx.coroutines.** {
-    volatile <fields>;
-}
--dontwarn kotlinx.coroutines.**
-
-# Keep Kotlin Companion object instances so reflective callers (Coil, etc.)
-# can still find them.
--keepclassmembers class **$Companion {
-    *;
-}
-
-# ===========================================================================
-# AndroidX / Compose (defensive — most ship their own consumer rules)
-# ===========================================================================
--keep class androidx.compose.** { *; }
--keep class androidx.lifecycle.** { *; }
--keep class androidx.navigation.** { *; }
--keep class androidx.datastore.** { *; }
--keep class androidx.security.** { *; }
--dontwarn androidx.compose.**
--dontwarn androidx.lifecycle.**
--dontwarn androidx.navigation.**
-
-# ViewModel factories instantiated by reflection in viewmodel-compose.
 -keepclassmembers class * extends androidx.lifecycle.ViewModel {
     <init>(...);
 }
 -keepclassmembers class * extends androidx.lifecycle.AndroidViewModel {
     <init>(...);
+}
+
+# ===========================================================================
+# Kotlin / Coroutines
+# ===========================================================================
+-keepclassmembers class kotlinx.coroutines.** {
+    volatile <fields>;
+}
+-keep class kotlin.coroutines.SafeContinuation { *; }
+-keepclassmembers class kotlin.coroutines.SafeContinuation {
+    volatile <fields>;
+}
+-dontwarn kotlinx.coroutines.**
+-keepclassmembers class **$Companion {
+    *;
 }

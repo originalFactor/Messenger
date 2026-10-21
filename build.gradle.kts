@@ -178,6 +178,48 @@ ext["ndkVersion"] = "30.0.16248370"
 ext["cmakeVersion"] = "4.1.2"
 
 /**
+ * Android ABIs shipped by the phone apps (`:androidApp` and its `:runtime`
+ * companion) — ONE source of truth for three places that must agree:
+ * `splits.abi` in both modules, the cargo-ndk target list in `:core-bindings`,
+ * and the Termux bootstrap archives `:runtime` packages.
+ *
+ * The release matrix is ARM only: every real device is `arm64-v8a` or
+ * `armeabi-v7a`, so those two APKs are all CI builds and publishes. `x86_64`
+ * (the emulator ABI) is opt-in per build — `-Pmessenger.abis=…` or
+ * `ANDROID_ABIS=…` — so local emulator work stays possible without dragging a
+ * third APK and a third Rust cross-build into every CI run.
+ */
+val abiToRustTarget = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "armeabi-v7a" to "armv7-linux-androideabi",
+    "x86_64" to "x86_64-linux-android",
+    "x86" to "i686-linux-android",
+)
+private val DEFAULT_ANDROID_ABIS = "arm64-v8a,armeabi-v7a"
+
+fun androidAbis(): List<String> {
+    val raw = providers.gradleProperty("messenger.abis").orNull
+        ?: getEnv("ANDROID_ABIS")
+        ?: DEFAULT_ANDROID_ABIS
+    val abis = raw.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    if (abis.isEmpty()) {
+        throw GradleException("Android ABI list is empty (messenger.abis / ANDROID_ABIS = \"$raw\").")
+    }
+    val unknown = abis.filterNot { abiToRustTarget.containsKey(it) }
+    if (unknown.isNotEmpty()) {
+        throw GradleException(
+            "Unknown Android ABI(s) ${unknown.joinToString()} in \"$raw\"; " +
+                "expected a subset of ${abiToRustTarget.keys.joinToString()}."
+        )
+    }
+    return abis
+}
+
+ext["androidAbis"] = androidAbis()
+ext["androidRustTargets"] = (ext["androidAbis"] as List<*>)
+    .map { abiToRustTarget.getValue(it as String) }
+
+/**
  * Host C compiler for the wasm32 Rust build (`sqlite-wasm-rs` compiles C through
  * `cc`). Rust ships no C toolchain, and a Windows host has no `clang` on PATH
  * unless LLVM is installed separately, so the build borrows the LLVM already in

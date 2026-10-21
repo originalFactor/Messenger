@@ -38,11 +38,20 @@ private data class BootstrapSpec(
 )
 
 private val bootstrapRelease = "bootstrap-2026.09.27-r1%2Bapt.android-7"
+
+// Every archive :runtime can package. The build only downloads the ones whose
+// ABI is actually being built (see selectedBootstrapSpecs below), so the ARM-only
+// release matrix never fetches the emulator archive.
 private val bootstrapSpecs = listOf(
     BootstrapSpec("arm64-v8a", "bootstrap-aarch64.zip", "9ddc32921187c85b04556bf56c6cce94e00b813ecd9299959a2d9b7c33386994"),
     BootstrapSpec("armeabi-v7a", "bootstrap-arm.zip", "3c856821189c658446ef2a527d264ac9848772d0cae1aa318ecab16315ef732d"),
     BootstrapSpec("x86_64", "bootstrap-x86_64.zip", "d8abd8714f8aab19ce923202e647d09b137b0ea34edc25a57b9fb93db6b1c00e")
 )
+
+/** The subset of [bootstrapSpecs] matching the ABIs this build actually targets. */
+private val selectedBootstrapSpecs = bootstrapSpecs.filter {
+    it.abi in (rootProject.ext["androidAbis"] as List<String>)
+}
 
 abstract class DownloadBootstrapTask : DefaultTask() {
     companion object {
@@ -61,6 +70,14 @@ abstract class DownloadBootstrapTask : DefaultTask() {
         val cacheDir = cacheDirectory.get().asFile
         outputDir.mkdirs()
         cacheDir.mkdirs()
+
+        // Drop archives for ABIs this build no longer targets: the output dir is
+        // a jniLibs source root, so a leftover x86_64 bootstrap from an emulator
+        // build would otherwise be packaged into an ARM-only APK.
+        val wantedAbis = specs.get().map { it.substringBefore('|') }.toSet()
+        outputDir.listFiles()
+            ?.filter { it.isDirectory && it.name !in wantedAbis }
+            ?.forEach { it.deleteRecursively() }
 
         for (rawSpec in specs.get()) {
             val parts = rawSpec.split('|')
@@ -202,7 +219,9 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            // Same shared ARM-only matrix as :androidApp — one APK per ABI, and
+            // only the matching Termux bootstrap archive is downloaded/packaged.
+            include(*(rootProject.ext["androidAbis"] as List<String>).toTypedArray())
             isUniversalApk = false
         }
     }
@@ -238,8 +257,16 @@ android {
             }
         }
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // Full R8 on every release build, like the other Android modules.
+            // The reflection-sensitive surface here is the AIDL stub/Parcelable
+            // surface (ToolResult.CREATOR) plus the vendored Termux classes that
+            // the layouts name by FQN — see proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k
@@ -282,7 +309,7 @@ androidComponents {
     onVariants { variant ->
         val task = tasks.register<DownloadBootstrapTask>("download${variant.name.replaceFirstChar { it.uppercase() }}Bootstrap") {
             releaseTag.set(bootstrapRelease)
-            specs.set(bootstrapSpecs.map { "${it.abi}|${it.archiveName}|${it.sha256}" })
+            specs.set(selectedBootstrapSpecs.map { "${it.abi}|${it.archiveName}|${it.sha256}" })
             cacheDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/bootstrap-cache"))
             lockPath.set(rootProject.file(".gradle/bootstrap-download.lock").absolutePath)
             outputDirectory.set(layout.buildDirectory.dir("generated/bootstrap/${variant.name}/jniLibs"))

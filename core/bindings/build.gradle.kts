@@ -174,13 +174,25 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
 
 val buildRustAndroid by tasks.registering(Exec::class) {
     workingDir(rustWorkspaceDir)
+    // ABI list comes from the root build script's ext["androidAbis"] (ARM only by
+    // default, x86_64 opt-in), so the jniLibs built here always match the
+    // splits.abi set of :androidApp / :runtime. cargo-ndk takes one `-t` per ABI.
+    val abiTargets = (rootProject.ext["androidRustTargets"] as List<String>)
+        .flatMap { listOf("-t", it) }
     commandLine(
-        "cargo", "ndk", "--platform", "30",
-        "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64",
-        "-o", rustJniLibsDir.get().asFile.absolutePath,
-        "build", "--release", "-p", "messenger-ffi",
+        listOf(
+            "cargo", "ndk", "--platform", "30",
+        ) + abiTargets + listOf(
+            "-o", rustJniLibsDir.get().asFile.absolutePath,
+            "build", "--release", "-p", "messenger-ffi",
+        )
     )
     ndkHome?.let { environment("ANDROID_NDK_HOME", it) }
+    // Wipe the output first: cargo-ndk only writes the ABIs it is asked for, so a
+    // previous build with a different ABI list (e.g. the opt-in x86_64) would
+    // otherwise leave stale jniLibs behind and quietly ship an outdated library.
+    val jniLibsDir = rustJniLibsDir.get().asFile
+    doFirst { jniLibsDir.deleteRecursively() }
     outputs.dir(rustJniLibsDir)
     rustInputs.execute(this)
 }

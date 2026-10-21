@@ -23,18 +23,20 @@ Phone-backed companion with no settings UI: a two-screen chat flow — chat list
 
 ```bash
 ./gradlew --no-daemon :wear:assembleDebug
-./gradlew --no-daemon :wear:assembleRelease   # the only module where R8 runs
+./gradlew --no-daemon :wear:assembleRelease   # R8 on; armeabi-v7a only
 ```
 
-## R8 troubleshooting (R8 runs only on `:wear`)
+`splits.abi` pins the release APK to `armeabi-v7a`: Wear OS devices run a 64-bit kernel with a 32-bit userspace, so that is the only ABI CI builds and publishes. R8 + resource shrinking are on for release, same as `:androidApp` and `:runtime`.
 
-R8 is an investigation point for release-only failures (reflection, serialization, generated code, manifest components) — not a routine check. Do NOT run R8-enabled `assembleRelease` for ordinary tasks (slow). Keep `wear/proguard-rules.pro` updated whenever an R8-sensitive class/method/annotation/serialized model/generated callback/manifest component changes; remove stale rules and keep rules narrow.
+## R8 troubleshooting (R8 runs on every Android release build)
+
+R8 is an investigation point for release-only failures (reflection, serialization, generated code, manifest components) — not a routine check. Do NOT run release builds for ordinary tasks (slow). Keep the module's `proguard-rules.pro` (`:wear`, `:androidApp`, `:runtime`) updated whenever an R8-sensitive class/method/annotation/serialized model/generated callback/manifest component changes; remove stale rules and keep rules narrow. The procedure below applies to any of the three Android modules — substitute the module name in the paths.
 
 When investigating:
 
 1. Reproduce from a clean run: `./gradlew --no-daemon :wear:assembleRelease --rerun-tasks`.
 2. Inspect `wear/build/outputs/mapping/release/`: `mapping.txt` (survivors + obfuscated names), `usage.txt` (removed classes/members — a member under a surviving class is optimized, not removed), `seeds.txt` (keep-rule matches, not proof of APK presence), `configuration.txt` (effective rules incl. consumer rules).
-3. Compare with the final APK (APK Analyzer / `apkanalyzer`). Watch Manifest components, the UniFFI-generated `cc.ptoe.messenger.core` classes + JNA, Gson DTOs, and `WearNetworkBridge` WebSocket/NSD callbacks.
+3. Compare with the final APK (APK Analyzer / `apkanalyzer`). Watch Manifest components, the UniFFI-generated `cc.ptoe.messenger.core` classes + JNA, kotlinx.serialization DTOs/serializers, ucrop's activity (`:androidApp`), the vendored Termux classes and AIDL stubs (`:runtime`), and `WearNetworkBridge` WebSocket/NSD callbacks (`:wear`).
 4. Identify the reflective/serialized entry point before adding a rule. Preserve only the smallest scope; keep annotations/signature metadata when a library reads them (`RuntimeVisibleAnnotations`, `Signature`, …).
 5. Rebuild and confirm the rule in `configuration.txt`, the class in `usage.txt`/`mapping.txt`, and its presence in the APK. Never `-keep class ** { *; }`.
 6. If unclear, temporarily add `-whyareyoukeeping class <FQN>`, read the reason chain, remove the diagnostic rule afterwards.

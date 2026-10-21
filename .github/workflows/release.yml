@@ -40,17 +40,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # --- Android (arm64-v8a + armeabi-v7a) ------------------------------
       - name: Download androidApp release artifact
         uses: actions/download-artifact@v4
         with:
           name: androidApp-release
           path: artifacts/androidApp
-
-      - name: Download wear release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wear-release
-          path: artifacts/wear
 
       - name: Download runtime release artifact
         uses: actions/download-artifact@v4
@@ -58,29 +53,68 @@ jobs:
           name: runtime-release
           path: artifacts/runtime
 
-      - name: Download Desktop artifact
+      - name: Download wear release artifact
         uses: actions/download-artifact@v4
         with:
-          name: desktop-msi
-          path: artifacts/desktop-msi
+          name: wear-release
+          path: artifacts/wear
 
+      # --- Desktop (Windows x86_64/ARM64, Linux x86_64/ARM64) -------------
+      - name: Download Desktop artifact (Windows x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows-x86_64
+          path: artifacts/desktop/windows-x86_64
+
+      - name: Download Desktop artifact (Windows ARM64)
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows-arm64
+          path: artifacts/desktop/windows-arm64
+
+      - name: Download Desktop artifact (Linux x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-x86_64
+          path: artifacts/desktop/linux-x86_64
+
+      - name: Download Desktop artifact (Linux ARM64)
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: artifacts/desktop/linux-arm64
+
+      # --- Web -----------------------------------------------------------
       - name: Download Web artifact
         uses: actions/download-artifact@v4
         with:
           name: web-distribution
           path: artifacts/web
 
-      - name: Download TUI Linux artifact
+      # --- TUI (Windows/Linux x x86_64/arm64) -----------------------------
+      - name: Download TUI Linux x86_64 artifact
         uses: actions/download-artifact@v4
         with:
           name: tui-x86_64-unknown-linux-gnu
           path: artifacts/tui/x86_64-unknown-linux-gnu
 
-      - name: Download TUI Windows artifact
+      - name: Download TUI Linux ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tui-aarch64-unknown-linux-gnu
+          path: artifacts/tui/aarch64-unknown-linux-gnu
+
+      - name: Download TUI Windows x86_64 artifact
         uses: actions/download-artifact@v4
         with:
           name: tui-x86_64-pc-windows-msvc
           path: artifacts/tui/x86_64-pc-windows-msvc
+
+      - name: Download TUI Windows ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tui-aarch64-pc-windows-msvc
+          path: artifacts/tui/aarch64-pc-windows-msvc
 
       - name: Package Web distribution
         run: |
@@ -89,8 +123,10 @@ jobs:
       - name: Package TUI binaries
         run: |
           cd artifacts/tui
-          zip -j ../messenger-tui-${GITHUB_REF#refs/tags/}-x86_64-unknown-linux-gnu.zip x86_64-unknown-linux-gnu/*
-          zip -j ../messenger-tui-${GITHUB_REF#refs/tags/}-x86_64-pc-windows-msvc.zip x86_64-pc-windows-msvc/*
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+                        x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            zip -j "../messenger-tui-${GITHUB_REF#refs/tags/}-${target}.zip" "${target}/"*
+          done
 
       - name: Get version from tag
         id: get_version
@@ -99,8 +135,8 @@ jobs:
 
       # The tag is the published identity of a release, so it must agree with
       # the VERSION file the artifacts were built from: a `v1.0.1` tag on a
-      # tree whose VERSION still says 1.0.0 would ship five clients that all
-      # report 1.0.0 under a 1.0.1 release. Fail here instead.
+      # tree whose VERSION still says 1.0.0 would ship every client reporting
+      # 1.0.0 under a 1.0.1 release. Fail here instead.
       - name: Verify the tag matches the VERSION file
         shell: bash
         run: |
@@ -126,7 +162,10 @@ jobs:
           files: |
             artifacts/androidApp/**/*.apk
             artifacts/runtime/**/*.apk
-            artifacts/wear/wear-release.apk
-            artifacts/desktop-msi/*.msi
+            artifacts/wear/*.apk
+            artifacts/desktop/windows-x86_64/*.msi
+            artifacts/desktop/windows-arm64/*.zip
+            artifacts/desktop/linux-x86_64/*.deb
+            artifacts/desktop/linux-arm64/*.deb
             artifacts/messenger-web-*.zip
             artifacts/messenger-tui-*.zip

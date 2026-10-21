@@ -75,15 +75,22 @@ compose.desktop {
                 iconFile.set(project.file("src/main/resources/icon.ico"))
             }
         }
-        // ProGuard (enabled by default for the release build type) fails because
-        // OkHttp's optional platform classes (org.conscrypt, org.openjsse,
-        // org.bouncycastle.jsse, org.graalvm) and Skiko's JBR adapter
-        // (com.jetbrains.SharedTextures) are not on the Desktop classpath.
-        // Disable it, mirroring the androidApp R8-disabled approach.
+        // ProGuard runs on every release build (the Desktop counterpart of R8 in
+        // the Android modules). Shrinking + optimization are on; obfuscation is
+        // off, because Compose Desktop/Skiko/JNA resolve classes by name in too
+        // many places for renaming to be worth unreadable crash reports.
+        // Rules live in proguard-rules.pro; JetBrains' default Compose Desktop
+        // rules are added automatically by the plugin.
         buildTypes {
             release {
                 proguard {
-                    isEnabled.set(false)
+                    isEnabled.set(true)
+                    obfuscate.set(false)
+                    optimize.set(true)
+                    // Keep every jar separate: the native distribution and
+                    // `runDistributable` both consume the per-jar outputs.
+                    joinOutputJars.set(false)
+                    configurationFiles.from(project.file("proguard-rules.pro"))
                 }
             }
         }

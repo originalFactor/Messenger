@@ -22,6 +22,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Shared ABI matrix (root build script): ARM by default, emulator ABI opt-in.
+val androidAbis = rootProject.ext["androidAbis"] as List<String>
+
 android {
     namespace = "cc.ptoe.messenger"
     compileSdk {
@@ -42,7 +45,10 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            // Release matrix is ARM only (see the root build script's
+            // ext["androidAbis"]); the emulator ABI is opt-in via
+            // -Pmessenger.abis / ANDROID_ABIS.
+            include(*androidAbis.toTypedArray())
             isUniversalApk = false
         }
     }
@@ -64,10 +70,16 @@ android {
             }
         }
         release {
-            // R8 / minification disabled for androidApp — keep wear's R8 intact.
-            // AGENTS.md's R8 chapter still applies to :wear; androidApp ships unminified.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // Full R8 on every release build (all Android modules): minification
+            // plus resource shrinking. Rules live in proguard-rules.pro next to
+            // this file; shared/android libraries contribute consumer rules
+            // (:core-bindings, :renderer-android).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
                 signingConfig = k
