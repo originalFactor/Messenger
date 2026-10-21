@@ -96,7 +96,6 @@ import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.action_edit
 import cc.ptoe.messenger.generated.resources.action_more
 import cc.ptoe.messenger.generated.resources.agents_close_menu
-import cc.ptoe.messenger.generated.resources.agents_builtin_badge
 import cc.ptoe.messenger.generated.resources.agents_default_badge
 import cc.ptoe.messenger.generated.resources.agents_delete_batch_confirm
 import cc.ptoe.messenger.generated.resources.agents_delete_confirm
@@ -402,14 +401,6 @@ private fun AgentListItem(
                         text = stringResource(Res.string.agents_default_badge),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                if (isBuiltin) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = stringResource(Res.string.agents_builtin_badge),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary
                     )
                 }
                 if (isTitleAgent) {
