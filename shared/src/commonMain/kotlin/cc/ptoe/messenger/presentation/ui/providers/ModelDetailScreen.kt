@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -48,7 +49,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -58,12 +61,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.domain.model.ModelModality
+import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.LoadingIndicator
 import cc.ptoe.messenger.presentation.ui.components.SectionHeader
 import cc.ptoe.messenger.presentation.viewmodel.ModelDetailViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
+import cc.ptoe.messenger.generated.resources.action_cancel
+import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.action_save
 import cc.ptoe.messenger.generated.resources.error_load_failed
 import cc.ptoe.messenger.generated.resources.modality_audio
@@ -73,7 +79,12 @@ import cc.ptoe.messenger.generated.resources.modality_video
 import cc.ptoe.messenger.generated.resources.providers_model_capabilities
 import cc.ptoe.messenger.generated.resources.providers_model_context_window_hint
 import cc.ptoe.messenger.generated.resources.providers_model_context_window_label
+import cc.ptoe.messenger.generated.resources.providers_delete_model_confirm
+import cc.ptoe.messenger.generated.resources.providers_delete_model_title
+import cc.ptoe.messenger.generated.resources.providers_model_delete_action
 import cc.ptoe.messenger.generated.resources.providers_model_detail_title
+import cc.ptoe.messenger.generated.resources.providers_model_enabled_desc
+import cc.ptoe.messenger.generated.resources.providers_model_enabled_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_input_modalities
 import cc.ptoe.messenger.generated.resources.providers_model_output_modalities
@@ -91,6 +102,7 @@ fun ModelDetailScreen(
     modelId: String,
     onBackClick: () -> Unit,
     onSaved: () -> Unit = onBackClick,
+    onDeleted: () -> Unit = onBackClick,
     viewModel: ModelDetailViewModel = viewModel(
         factory = ModelDetailViewModel.provideFactory(
             modelRepository = AppContainerHolder.instance.modelRepository,
@@ -102,6 +114,7 @@ fun ModelDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val strSaved = stringResource(Res.string.providers_model_saved)
     val strLoadFailed = stringResource(Res.string.error_load_failed)
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     // 双栏布局下切换模型时按 id 重新加载，避免依赖 ViewModel 重建
     LaunchedEffect(modelId) {
@@ -113,6 +126,28 @@ fun ModelDetailScreen(
             snackbarHostState.showSnackbar(strSaved)
             onSaved()
         }
+    }
+
+    // 删除后立即离开编辑页；提示留给上一级列表（本页的 Snackbar 会随页面一起消失）。
+    LaunchedEffect(uiState.isDeleted) {
+        if (uiState.isDeleted) onDeleted()
+    }
+
+    if (showDeleteDialog) {
+        ConfirmationDialog(
+            title = stringResource(Res.string.providers_delete_model_title),
+            text = stringResource(
+                Res.string.providers_delete_model_confirm,
+                uiState.model?.displayName.orEmpty()
+            ),
+            confirmButtonText = stringResource(Res.string.action_delete),
+            dismissButtonText = stringResource(Res.string.action_cancel),
+            onConfirm = {
+                showDeleteDialog = false
+                viewModel.delete()
+            },
+            onDismiss = { showDeleteDialog = false }
+        )
     }
 
     Scaffold(
@@ -183,6 +218,11 @@ fun ModelDetailScreen(
                     )
                 }
 
+                ModelEnabledSwitchRow(
+                    checked = uiState.isEnabled,
+                    onCheckedChange = { viewModel.onEnabledChange(it) }
+                )
+
                 SectionHeader(title = stringResource(Res.string.providers_model_context_window_label))
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -243,8 +283,76 @@ fun ModelDetailScreen(
                     checked = uiState.supportsTemperature,
                     onCheckedChange = { viewModel.onTemperatureChange(it) }
                 )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                ModelDeleteButton(
+                    enabled = uiState.model != null,
+                    onClick = { showDeleteDialog = true }
+                )
             }
         }
+    }
+}
+
+/**
+ * 启用/禁用开关。列表行不再放开关，启停统一在模型编辑页完成。
+ */
+@Composable
+internal fun ModelEnabledSwitchRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(Res.string.providers_model_enabled_label),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = stringResource(Res.string.providers_model_enabled_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
+}
+
+/**
+ * 删除入口。删除是破坏性操作，按钮用 error 色并先弹确认框。
+ */
+@Composable
+internal fun ModelDeleteButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        enabled = enabled
+    ) {
+        Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = stringResource(Res.string.providers_model_delete_action),
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 

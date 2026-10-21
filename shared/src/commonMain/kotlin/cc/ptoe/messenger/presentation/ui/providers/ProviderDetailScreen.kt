@@ -59,7 +59,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
@@ -120,6 +119,7 @@ import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
 import cc.ptoe.messenger.generated.resources.providers_model_context_window
+import cc.ptoe.messenger.generated.resources.providers_model_disabled
 import cc.ptoe.messenger.generated.resources.providers_model_rates
 import cc.ptoe.messenger.generated.resources.providers_model_rates_cache
 import cc.ptoe.messenger.generated.resources.providers_model_rates_free
@@ -605,19 +605,8 @@ internal fun ModelListItem(
                 inputRate = model.inputRate,
                 outputRate = model.outputRate,
                 cacheReadRate = model.cacheReadRate,
+                isEnabled = model.isEnabled,
                 modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Switch(
-            checked = model.isEnabled,
-            onCheckedChange = onToggleEnabled
-        )
-        IconButton(onClick = onDeleteClick) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = stringResource(Res.string.action_delete),
-                tint = MaterialTheme.colorScheme.error
             )
         }
 
@@ -663,11 +652,12 @@ private fun ModelMetadataBadges(
     inputRate: Double?,
     outputRate: Double?,
     cacheReadRate: Double?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isEnabled: Boolean = true
 ) {
     val hasContext = formatContextWindow(contextWindow).isNotEmpty()
     val hasRate = inputRate != null && outputRate != null
-    if (!hasContext && !hasRate) return
+    if (!hasContext && !hasRate && isEnabled) return
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -678,6 +668,27 @@ private fun ModelMetadataBadges(
             inputRate = inputRate,
             outputRate = outputRate,
             cacheReadRate = cacheReadRate
+        )
+        if (!isEnabled) {
+            DisabledBadge()
+        }
+    }
+}
+
+/**
+ * 「已禁用」标签：行内不再有开关，列表里必须仍能看出模型当前不可用。
+ */
+@Composable
+private fun DisabledBadge() {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Text(
+            text = stringResource(Res.string.providers_model_disabled),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
         )
     }
 }

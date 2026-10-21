@@ -271,6 +271,10 @@
     <string name="providers_model_detail_title">模型详情</string>
     <string name="providers_model_context_window_label">上下文窗口（tokens）</string>
     <string name="providers_model_context_window_hint">未知/不限</string>
+    <string name="providers_model_enabled_label">启用</string>
+    <string name="providers_model_enabled_desc">禁用后该模型不会出现在模型选择器中</string>
+    <string name="providers_model_disabled">已禁用</string>
+    <string name="providers_model_delete_action">删除模型</string>
     <string name="providers_model_capabilities">模型能力</string>
     <string name="providers_model_input_modalities">输入模态</string>
     <string name="providers_model_output_modalities">输出模态</string>

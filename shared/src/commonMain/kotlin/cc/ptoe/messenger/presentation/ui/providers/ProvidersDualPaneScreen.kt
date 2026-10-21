@@ -107,7 +107,8 @@ fun ProvidersDualPaneScreen(
                 selectedModelId != null -> key(selectedModelId) {
                     ModelDetailScreen(
                         modelId = selectedModelId!!,
-                        onBackClick = { selectedModelId = null }
+                        onBackClick = { selectedModelId = null },
+                        onDeleted = { selectedModelId = null }
                     )
                 }
                 selectedProviderId != null -> key(selectedProviderId) {
