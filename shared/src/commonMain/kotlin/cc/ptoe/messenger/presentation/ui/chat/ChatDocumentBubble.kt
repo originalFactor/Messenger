@@ -46,6 +46,9 @@ import cc.ptoe.messenger.presentation.utils.DateTimeUtils
 /** Test hook: identifies the assistant bubble surface for layout assertions. */
 internal const val CHAT_BUBBLE_TEST_TAG = "chat_bubble"
 
+/** Test hook: identifies the assistant row's avatar for alignment assertions. */
+internal const val CHAT_AVATAR_TEST_TAG = "chat_avatar"
+
 @Composable
 fun ChatDocumentBubble(
     message: Message,
@@ -73,95 +76,104 @@ fun ChatDocumentBubble(
         bottomEnd = 18.dp
     )
 
-    Row(
+    // Same row insets as the Android renderer (8 dp at the avatar side, 64 dp
+    // opposite): without the trailing inset a long answer stretches the bubble
+    // all the way to the pane's edge.
+    //
+    // The timestamp sits BELOW the row, not inside the bubble's column. The row
+    // bottom-aligns the avatar against the bubble, so a timestamp inside the
+    // row's tallest child would push the avatar a whole line (16.6 dp at 175%
+    // scale) below the bubble's bottom edge and bury the tail corner. Android
+    // keeps its timestamp outside the content row for the same reason.
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            // Same row insets as the Android renderer (8 dp at the avatar side,
-            // 64 dp opposite): without the trailing inset a long answer
-            // stretches the bubble all the way to the pane's edge.
-            .padding(start = 8.dp, end = 64.dp),
-        verticalAlignment = Alignment.Bottom
+            .padding(start = 8.dp, end = 64.dp)
     ) {
-        if (isLastInGroup) {
-            AgentAvatar(
-                avatar = avatar,
-                size = 32.dp,
-                modifier = Modifier.padding(bottom = 2.dp)
-            )
-        } else {
-            Spacer(modifier = Modifier.width(32.dp))
-        }
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (isLastInGroup) {
+                AgentAvatar(
+                    avatar = avatar,
+                    size = 32.dp,
+                    modifier = Modifier.testTag(CHAT_AVATAR_TEST_TAG)
+                )
+            } else {
+                Spacer(modifier = Modifier.width(32.dp))
+            }
 
-        Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
-        Column(modifier = Modifier.weight(1f, fill = false)) {
-            Box(
-                modifier = Modifier
-                    // Size to the message, capped by the available width. The
-                    // document blocks fill this width, so without the intrinsic
-                    // pass a one-word reply would still span the whole pane.
-                    .width(IntrinsicSize.Max)
-                    .testTag(CHAT_BUBBLE_TEST_TAG)
-                    .clip(bubbleShape)
-                    .background(bubbleColor)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                if (blocks != null && blocks.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ChatDocumentView(blocks = blocks)
-                        val lastBlock = blocks.lastOrNull()
-                        val waitingForText = isGenerating && (lastBlock is ChatBlock.ToolCall && lastBlock.isFinalized)
-                        if (waitingForText) {
+            Box(modifier = Modifier.weight(1f, fill = false)) {
+                Box(
+                    modifier = Modifier
+                        // Size to the message, capped by the available width. The
+                        // document blocks fill this width, so without the intrinsic
+                        // pass a one-word reply would still span the whole pane.
+                        .width(IntrinsicSize.Max)
+                        .testTag(CHAT_BUBBLE_TEST_TAG)
+                        .clip(bubbleShape)
+                        .background(bubbleColor)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    if (blocks != null && blocks.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ChatDocumentView(blocks = blocks)
+                            val lastBlock = blocks.lastOrNull()
+                            val waitingForText = isGenerating && (lastBlock is ChatBlock.ToolCall && lastBlock.isFinalized)
+                            if (waitingForText) {
+                                Text(
+                                    text = "● ● ●",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else if (message.content.isNotBlank()) {
+                        // Streaming text changes on every token. Re-parsing the
+                        // WHOLE accumulated markdown per token is O(n²) plus a
+                        // cross-language call each time; the cache only re-parses
+                        // the stable line prefix when it changes.
+                        val parsed = remember(message.content) { markdownCache.blocksFor(message.content) }
+                        if (parsed.isNotEmpty()) {
+                            ChatDocumentView(blocks = parsed)
+                        } else {
                             Text(
-                                text = "● ● ●",
+                                text = message.content,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
-                    }
-                } else if (message.content.isNotBlank()) {
-                    // Streaming text changes on every token. Re-parsing the
-                    // WHOLE accumulated markdown per token is O(n²) plus a
-                    // cross-language call each time; the cache only re-parses
-                    // the stable line prefix when it changes.
-                    val parsed = remember(message.content) { markdownCache.blocksFor(message.content) }
-                    if (parsed.isNotEmpty()) {
-                        ChatDocumentView(blocks = parsed)
-                    } else {
+                    } else if (isGenerating) {
                         Text(
-                            text = message.content,
+                            text = "● ● ●",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                } else if (isGenerating) {
-                    Text(
-                        text = "● ● ●",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
+        }
 
-            if (isError) {
-                TextButton(
-                    onClick = { onRetryClick?.invoke() },
-                    modifier = Modifier.padding(top = 2.dp)
-                ) {
-                    Text(
-                        text = "Retry",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            } else if (isLastInGroup) {
+        // Both trailing labels start at the bubble's left edge: the avatar (32
+        // dp) plus its gap (8 dp) inside the padded row.
+        if (isError) {
+            TextButton(
+                onClick = { onRetryClick?.invoke() },
+                modifier = Modifier.padding(start = 40.dp, top = 2.dp)
+            ) {
                 Text(
-                    text = DateTimeUtils.formatMessageTime(message.timestamp),
+                    text = "Retry",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                    color = MaterialTheme.colorScheme.error
                 )
             }
+        } else if (isLastInGroup) {
+            Text(
+                text = DateTimeUtils.formatMessageTime(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = 44.dp, top = 2.dp)
+            )
         }
     }
 }

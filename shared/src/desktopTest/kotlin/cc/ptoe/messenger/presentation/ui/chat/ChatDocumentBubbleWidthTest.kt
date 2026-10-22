@@ -104,4 +104,38 @@ class ChatDocumentBubbleWidthTest {
             "Long replies must keep a right margin, got ${margin} at the bubble's right edge"
         )
     }
+
+    /**
+     * The avatar is bottom-aligned with the bubble so it sits beside the bubble's
+     * tail corner. The timestamp lives below the row: when it was inside the
+     * bubble's column the row's tallest child was bubble + timestamp, which
+     * pushed the avatar ~16.6 dp below the bubble's bottom edge (measured at
+     * 175% scale) and hid the tail.
+     */
+    @Test
+    fun avatarBottomAlignsWithTheBubble() = runComposeUiTest {
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(paneWidth)) {
+                    ChatDocumentBubble(
+                        message = message("hello"),
+                        blocks = null,
+                        avatar = null,
+                        isGenerating = false,
+                        isLastInGroup = true,
+                        onRetryClick = null
+                    )
+                }
+            }
+        }
+
+        val bubble = onNodeWithTag(CHAT_BUBBLE_TEST_TAG).getUnclippedBoundsInRoot()
+        val avatar = onNodeWithTag(CHAT_AVATAR_TEST_TAG).getUnclippedBoundsInRoot()
+        val delta = (avatar.bottom - bubble.bottom).value
+        assertTrue(
+            kotlin.math.abs(delta) <= 1f,
+            "Avatar must bottom-align with the bubble, got a ${delta}dp offset " +
+                "(avatar ${avatar.top}..${avatar.bottom}, bubble ${bubble.top}..${bubble.bottom})"
+        )
+    }
 }
