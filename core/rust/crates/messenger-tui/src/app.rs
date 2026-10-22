@@ -391,6 +391,7 @@ impl App {
                     conversation.title = title.clone();
                     conversation.updated_at = messenger_store::now_ms();
                     let _ = self.engine.store.upsert_conversation(&conversation);
+                    self.mark_cloud_change("conversation", &id, false);
                     self.reload_conversations();
                 }
                 self.note_info(format!("Renamed to “{title}”."));
@@ -413,6 +414,7 @@ impl App {
                 let name = provider.name.clone();
                 match self.engine.store.upsert_provider(&provider) {
                     Ok(()) => {
+                        self.mark_cloud_change("provider", &provider.id, false);
                         self.reload_providers();
                         self.note_info(format!("Saved provider {name}."));
                     }
@@ -460,6 +462,8 @@ impl App {
                 };
                 match self.engine.store.upsert_model(&model) {
                     Ok(()) => {
+                        // Models ride on the provider document.
+                        self.mark_cloud_change("provider", &provider_id, false);
                         self.reload_models();
                         self.note_info(format!("Saved model {display_name}."));
                     }
@@ -745,6 +749,50 @@ impl App {
         self.note(ChatNote::info(text));
     }
 
+    /// Queue a local row for cloud sync. The TUI writes straight to the store
+    /// (no repository hooks), so every mutation must mark itself; without the
+    /// pending entry `/sync` has nothing to push and the edit never leaves
+    /// the machine. Silently a no-op while signed out.
+    fn mark_cloud_change(&self, kind: &str, id: &str, deleted: bool) {
+        let sync = messenger_sync::SyncEngine::new(
+            &self.engine.store,
+            store_ops::session_from_kv(&self.engine.store),
+        );
+        if sync.current_user().is_none() {
+            return;
+        }
+        if let Err(error) = sync.request_local_change(kind, id, deleted) {
+            let _ = self
+                .engine
+                .tx
+                .send(UiMsg::ToolLog(format!("Sync queue failed for {kind} {id}: {error}")));
+        }
+    }
+
+    /// Push whatever [Self::mark_cloud_change] queued, off the UI thread.
+    /// Quiet on success (a status line would fight the transcript); failures
+    /// surface as a note so a stuck sync is visible.
+    fn push_pending_in_background(&self) {
+        let engine = Arc::clone(&self.engine);
+        let store = Arc::clone(&engine.store);
+        let signed_in = engine.store.kv_get(messenger_sync::KV_USER).ok().flatten().is_some();
+        if !signed_in {
+            return;
+        }
+        engine.spawner().spawn(async move {
+            let sync = messenger_sync::SyncEngine::new(&store, store_ops::session_from_kv(&store));
+            if let Err(error) = sync.push_pending_changes().await {
+                let message = if sync.current_user().is_none() {
+                    "Session expired — run /login.".to_string()
+                } else {
+                    format!("Sync failed: {error}")
+                };
+                let _ = engine.tx.send(UiMsg::CloudStatus(message));
+            }
+            let _ = engine.tx.send(UiMsg::SyncFinished);
+        });
+    }
+
     /// The project the open conversation belongs to, if any.
     pub fn chat_project(&self) -> Option<StoredProject> {
         let project_id = self
@@ -933,6 +981,9 @@ impl App {
                 self.record_turn_stats(&message_id);
                 self.reload_chat_messages();
                 self.reload_conversations();
+                // send_message queued the conversation; drain the queue so the
+                // reply reaches the account without a manual /sync.
+                self.push_pending_in_background();
             }
             AgentEvent::ToolCallStarted { name, .. } => {
                 self.chat.is_generating = true;
@@ -1262,6 +1313,8 @@ impl App {
             conversation.updated_at = messenger_store::now_ms();
             let _ = self.engine.store.upsert_conversation(&conversation);
         }
+        // The user row and the turn's reply both live in this conversation.
+        self.mark_cloud_change("conversation", &conversation_id, false);
 
         // The turn's labels ride along for the ledger: the engine drops the
         // resolved turn once it is spawned, and the header needs the names.
@@ -1382,6 +1435,7 @@ impl App {
             self.note(ChatNote::error(error.to_string()));
             return;
         }
+        self.mark_cloud_change("conversation", id, true);
         if self.chat.conversation_id.as_deref() == Some(id) {
             self.chat.conversation_id = None;
             self.chat.messages.clear();
@@ -1406,6 +1460,10 @@ impl App {
             self.note(ChatNote::error(error.to_string()));
             return;
         }
+        // The builtin title agent is local-only; the role is re-seeded below.
+        if id != messenger_sync::BUILTIN_TITLE_AGENT_ID {
+            self.mark_cloud_change("agent", id, true);
+        }
         // The role is single-holder: if the deleted row was the title holder
         // (or the builtin that holds it), seed a fresh builtin holder so title
         // generation keeps working. Idempotent for any other Agent.
@@ -1429,6 +1487,7 @@ impl App {
         }
         match self.engine.store.delete_provider(id) {
             Ok(()) => {
+                self.mark_cloud_change("provider", id, true);
                 self.note_info("Provider deleted.");
                 self.reload_providers();
             }
@@ -1744,6 +1803,10 @@ impl App {
                 );
                 if let Err(error) = sync.ensure_builtin_title_agent() {
                     self.note(ChatNote::error(error));
+                }
+                // The builtin title agent never syncs (see AGENTS.md).
+                if agent.id != messenger_sync::BUILTIN_TITLE_AGENT_ID {
+                    self.mark_cloud_change("agent", &agent.id, false);
                 }
                 self.reload_agents();
                 let shown = crate::agent_name::display_name(&agent);

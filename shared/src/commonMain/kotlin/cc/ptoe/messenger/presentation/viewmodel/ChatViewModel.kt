@@ -42,6 +42,7 @@ import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
+import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
@@ -101,6 +102,13 @@ class ChatViewModel(
      */
     private val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
     private val projectRepository: ProjectRepository? = null,
+    /**
+     * Cloud facade used to flag the conversation for sync when a turn ends.
+     * The Rust loop writes assistant/tool rows straight into the store, so
+     * the repositories' change hooks never see them; without this call a
+     * finished reply would never be uploaded.
+     */
+    private val cloud: CloudFacade? = null,
     private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
 ) : ViewModel() {
 
@@ -538,6 +546,9 @@ class ChatViewModel(
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
+                // The core wrote the assistant/tool rows itself, so mark the
+                // conversation dirty explicitly or the reply never uploads.
+                cloud?.requestLocalChange("conversation", conversationId)
             }
         }
     }
@@ -797,6 +808,24 @@ class ChatViewModel(
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
+                // The turn wrote assistant/tool rows straight into the core,
+                // so the list preview still shows the user's own message.
+                // Refresh it from the persisted rows.
+                val convId = _conversationId.value
+                if (convId != null) {
+                    viewModelScope.launch {
+                        val last = messageRepository.getByConversationId(convId).first().lastOrNull()
+                        if (last != null) {
+                            updateConversationLastMessage(
+                                convId,
+                                last.content.ifBlank {
+                                    if (last.hasImages) getString(Res.string.chat_picture) else ""
+                                },
+                                last.timestamp
+                            )
+                        }
+                    }
+                }
             }
             "TitleFailed" -> {
                 viewModelScope.launch {
@@ -835,6 +864,7 @@ class ChatViewModel(
             chatImageStore: ChatImageStore,
             builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
             projectRepository: ProjectRepository? = null,
+            cloud: CloudFacade? = null,
             coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -848,6 +878,7 @@ class ChatViewModel(
                     chatImageStore,
                     builtinTools,
                     projectRepository,
+                    cloud,
                     coreBridge
                 ) as T
             }

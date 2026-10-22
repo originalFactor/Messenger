@@ -46,6 +46,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlin.concurrent.Volatile
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -72,6 +73,7 @@ class RustCloudFacade(
     private val syncScope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     /** Mirrors the Room facade's gate; without it nothing is marked dirty. */
+    @Volatile
     private var localChangesEnabled = false
 
     private var scheduledSync: Job? = null
@@ -101,6 +103,11 @@ class RustCloudFacade(
             _serverUrl.value = core.cloudGetServerUrl()
         }
         readUserFromCore()
+        // A session restored from the core's kv means edits are syncable
+        // again. Without this the gate stayed closed for the whole process
+        // after a restart, so nothing was ever marked dirty and no change
+        // reached the cloud until the user signed in again.
+        localChangesEnabled = _user.value != null
         core.subscribe { kind, _ ->
             // The sync engine persists user/session through kv_set, which
             // arrives as an Other-kind store event; re-read on those.
@@ -233,13 +240,14 @@ class RustCloudFacade(
 
     override suspend fun sync(): CloudSyncResult = request {
         runCatching { refreshUser() }
-        decodeSync(core.cloudSync(replaceLocal = false))
+        decodeSync(core.cloudSync(replaceLocal = false)).also { localChangesEnabled = true }
     }
 
     override suspend fun upload(): CloudSyncResult = request {
         runCatching { refreshUser() }
         core.cloudPushSnapshot()
         decodeSync(core.cloudSyncWith(since = null, replaceLocal = false, expectedServerVersion = null))
+            .also { localChangesEnabled = true }
     }
 
     override suspend fun completeLogin(useLocalData: Boolean): CloudSyncResult = request {
@@ -252,7 +260,10 @@ class RustCloudFacade(
     }
 
     override suspend fun downloadAndRestore(): CloudSyncResult = request {
-        decodeSync(core.cloudSync(replaceLocal = true)).also { runCatching { refreshUser() } }
+        decodeSync(core.cloudSync(replaceLocal = true)).also {
+            runCatching { refreshUser() }
+            localChangesEnabled = true
+        }
     }
 
     /**
@@ -285,6 +296,8 @@ class RustCloudFacade(
             if (!localChangesEnabled) return@launch
             if (core.cloudCurrentUserJson() == null) return@launch
             runCatching { core.cloudMarkChange(type, id, deleted) }
+                .onSuccess { requestLocalSync() }
+                .onFailure { _syncError.value = it.message ?: "Cloud synchronization failed" }
         }
     }
 
