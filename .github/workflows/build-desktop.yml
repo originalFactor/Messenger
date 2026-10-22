@@ -35,7 +35,6 @@ jobs:
             artifact: desktop-windows-x86_64
             task: packageReleaseMsi
             upload: desktopApp/build/compose/binaries/main-release/msi/*.msi
-            shell: pwsh
             gradlew: .\gradlew.bat
             pack: false
             # Use the image's own WiX instead of the plugin's 34 MB download.
@@ -51,7 +50,6 @@ jobs:
             artifact: desktop-windows-arm64
             task: createReleaseDistributable
             upload: Messenger-*-windows-arm64.zip
-            shell: pwsh
             gradlew: .\gradlew.bat
             pack: true
             # An app image never invokes candle/light, but the Compose plugin
@@ -67,7 +65,6 @@ jobs:
             artifact: desktop-linux-x86_64
             task: packageReleaseDeb
             upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-            shell: bash
             gradlew: ./gradlew
             pack: false
             wix: none
@@ -75,7 +72,6 @@ jobs:
             artifact: desktop-linux-arm64
             task: packageReleaseDeb
             upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-            shell: bash
             gradlew: ./gradlew
             pack: false
             wix: none
@@ -165,8 +161,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $wix | Out-Null
           "WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # No `shell:` here on purpose: step `shell` is one of the keys that does
+      # NOT accept expressions (matrix.shell is a workflow-validation error), and
+      # the runner defaults already do the right thing — pwsh on Windows, bash on
+      # Linux — for the platform-specific wrapper in matrix.gradlew.
       - name: Build Desktop distribution
-        shell: ${{ matrix.shell }}
         run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }}
 
       # An app image is a directory, so it has to be packed before it can be
