@@ -6,6 +6,7 @@ Thin `org.jetbrains.kotlin.jvm` + `compose.multiplatform` + `kotlin.compose` she
 - ProGuard is ENABLED in release (`proguard { isEnabled = true; obfuscate = false; optimize = true }`), with rules in `desktopApp/proguard-rules.pro` plus JetBrains' `default-compose-desktop-rules.pro`. Obfuscation stays off: Compose Desktop/Skiko/JNA resolve classes by name. Kept surface: the UniFFI/JNA bridge, kotlinx.serialization lookup, Coil/Ktor service-loader targets, OkHttp's optional TLS providers. The `main` entry point is already kept by the plugin's generated root config.
 - Platform actuals live in `shared/src/desktopMain` (PowerShell/`/bin/sh` shell executor, FileDialog image picker, database builder) — see `shared/AGENTS.md`.
 - CI builds four artifacts: Windows x86_64 (MSI), Windows ARM64 (zipped app image — jpackage cannot emit an arm64 MSI, openjdk JDK-8361207), Linux x86_64 and Linux ARM64 (`.deb`).
+- Desktop CI runs with `ANDROID_HOME` pointed at an EMPTY directory (no Android package is needed to build the JVM app) and therefore passes `-Pmessenger.buildRuntimeNative=false`: `:runtime`'s `externalNativeBuild` block would otherwise make AGP resolve an NDK at configuration time and fail the build before any task runs. Anything that configures `:runtime` without an NDK installed needs that flag.
 
 ```bash
 ./gradlew-cli :desktopApp:run

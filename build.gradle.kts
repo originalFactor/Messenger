@@ -178,6 +178,19 @@ ext["ndkVersion"] = "30.0.16248370"
 ext["cmakeVersion"] = "4.1.2"
 
 /**
+ * Whether `:runtime` declares its CMake/NDK build. AGP resolves the NDK while
+ * CONFIGURING any module that has an `externalNativeBuild` block, so leaving it
+ * on unconditionally breaks every build that configures `:runtime` without the
+ * pinned NDK installed — most importantly `:desktopApp:*`, whose CI jobs point
+ * ANDROID_HOME at an empty directory on purpose. Default ON (Android builds need
+ * it); `-Pmessenger.buildRuntimeNative=false` turns it off for non-Android
+ * builds, and the desktop workflows set it.
+ */
+ext["buildRuntimeNative"] = providers.gradleProperty("messenger.buildRuntimeNative")
+    .map { it.toBoolean() }
+    .getOrElse(true)
+
+/**
  * Android ABIs packaged by the phone apps (`:androidApp` and its `:runtime`
  * companion) — ONE source of truth for three places that must agree:
  * `ndk.abiFilters` per build type in both modules, the cargo-ndk target list in

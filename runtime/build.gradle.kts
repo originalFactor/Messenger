@@ -282,10 +282,24 @@ android {
         disable += "ExpiredTargetSdkVersion"
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = rootProject.ext["cmakeVersion"] as String
+    // Declared only when the native build is actually going to run. AGP resolves
+    // the NDK while CONFIGURING a module that has an externalNativeBuild block,
+    // so declaring it unconditionally made `:desktopApp:*` (and every other
+    // non-Android task) fail on a host without the pinned NDK — the Desktop CI
+    // jobs deliberately point ANDROID_HOME at an empty directory, and the whole
+    // build died at "NDK not configured" before any task ran. Gradle still
+    // configures :runtime for those builds; it just no longer asks for a
+    // toolchain it will never use.
+    //
+    // `ext["buildRuntimeNative"]` defaults to true (Android builds need the PTY
+    // JNI); the Desktop workflows pass -Pmessenger.buildRuntimeNative=false
+    // because they never assemble this module and have no NDK installed.
+    if (rootProject.ext["buildRuntimeNative"] as Boolean) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = rootProject.ext["cmakeVersion"] as String
+            }
         }
     }
 

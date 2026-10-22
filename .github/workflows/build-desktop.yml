@@ -107,6 +107,13 @@ jobs:
       # needs a package: no Android task is in this graph. Pointing the env vars
       # at an empty directory is enough, and it avoids downloading the command
       # line tools on the ARM64 runners (where Google ships no native binaries).
+      #
+      # :runtime is the exception that used to break this: AGP resolves its NDK
+      # at CONFIGURATION time because of its `externalNativeBuild` block, so the
+      # whole build died with "NDK not configured" before any task ran. The
+      # build script now only declares that block when the native build is
+      # requested; this flag turns it off, which is correct here because no
+      # Android artifact is produced by this job.
       - name: Provide an Android SDK location for AGP configuration
         shell: bash
         run: |
@@ -166,7 +173,7 @@ jobs:
       # the runner defaults already do the right thing — pwsh on Windows, bash on
       # Linux — for the platform-specific wrapper in matrix.gradlew.
       - name: Build Desktop distribution
-        run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }}
+        run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }} -Pmessenger.buildRuntimeNative=false
 
       # An app image is a directory, so it has to be packed before it can be
       # uploaded or attached to a release.
