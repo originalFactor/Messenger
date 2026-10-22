@@ -20,6 +20,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,11 +36,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.utils.DateTimeUtils
+
+/** Test hook: identifies the assistant bubble surface for layout assertions. */
+internal const val CHAT_BUBBLE_TEST_TAG = "chat_bubble"
 
 @Composable
 fun ChatDocumentBubble(
@@ -69,7 +74,12 @@ fun ChatDocumentBubble(
     )
 
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            // Same row insets as the Android renderer (8 dp at the avatar side,
+            // 64 dp opposite): without the trailing inset a long answer
+            // stretches the bubble all the way to the pane's edge.
+            .padding(start = 8.dp, end = 64.dp),
         verticalAlignment = Alignment.Bottom
     ) {
         if (isLastInGroup) {
@@ -87,6 +97,11 @@ fun ChatDocumentBubble(
         Column(modifier = Modifier.weight(1f, fill = false)) {
             Box(
                 modifier = Modifier
+                    // Size to the message, capped by the available width. The
+                    // document blocks fill this width, so without the intrinsic
+                    // pass a one-word reply would still span the whole pane.
+                    .width(IntrinsicSize.Max)
+                    .testTag(CHAT_BUBBLE_TEST_TAG)
                     .clip(bubbleShape)
                     .background(bubbleColor)
                     .padding(horizontal = 14.dp, vertical = 10.dp)

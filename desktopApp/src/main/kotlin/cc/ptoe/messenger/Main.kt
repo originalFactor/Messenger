@@ -102,6 +102,9 @@ fun main() {
                 }
             }
             MessengerTheme(themeMode = themeMode) {
+                // The window is undecorated: tell AWT the monitor's work area
+                // so maximizing stops above the taskbar instead of covering it.
+                WorkAreaMaximizedBounds()
                 Column(modifier = Modifier.fillMaxSize()) {
                     DesktopTitleBar(
                         title = "Messenger",

@@ -71,6 +71,7 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/in
 ## Chat rendering
 
 - Android: `:renderer-android` native Views (`RecyclerView` + `MessageView` + `DocumentView`) consuming Rust `DiffBatch` streams; Desktop: `DesktopDocumentBubble` / `DesktopDocumentView` Compose blocks keyed by `block.id`. LaTeX via the RaTeX engine (no italic; serif); code highlighting via Rust syntect.
+- **Bubble width (Desktop/Web)**: `ChatDocumentBubble` (commonMain) sizes the bubble to its content with `Modifier.width(IntrinsicSize.Max)` and applies the Android row insets (`start = 8.dp`, `end = 64.dp`). The document blocks all `fillMaxWidth()`, so without the intrinsic pass every bubble spans the whole pane no matter how short the reply; without the trailing inset a long reply runs into the pane edge. Regression tests: `ChatDocumentBubbleWidthTest` (desktopTest).
 - `ChatViewModel` exposes `streamingContent` / `streamingMessageId` StateFlows (SSE `Content` appends; reset on completion).
 - An agent turn collapses into one `ChatListItem.ToolGroupItem` (tool rounds → results → final text, placeholder-row-first included); ERROR placeholders stay standalone; orphan TOOL rows render as standalone cards. Wear bypasses ChatViewModel and never runs tools.
 
