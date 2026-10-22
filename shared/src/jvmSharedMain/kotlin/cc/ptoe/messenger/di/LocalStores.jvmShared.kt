@@ -43,6 +43,7 @@ actual fun createLocalStores(appDirs: AppDirs): LocalStores {
         core = core,
         appPreferences = appPreferences,
         localDataMutex = Mutex(),
+        userAvatarDir = appDirs.filesDir.resolve("cloud_avatars").toString(),
     )
     return LocalStores(cloud = cloud, appPreferences = appPreferences, themePreferences = themePreferences)
 }

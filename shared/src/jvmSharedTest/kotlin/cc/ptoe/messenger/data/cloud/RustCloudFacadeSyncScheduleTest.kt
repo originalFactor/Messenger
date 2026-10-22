@@ -26,6 +26,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -101,10 +102,88 @@ class RustCloudFacadeSyncScheduleTest {
         assertEquals(0, core.pushCount.get())
     }
 
-    private fun newFacade(core: CoreBridge) = RustCloudFacade(
+    @Test
+    fun refreshCachesTheCloudAvatarOnce() = runBlocking<Unit> {
+        val core = RecordingCoreBridge(signedIn = true)
+        val cachedFile = java.nio.file.Files.createTempFile("avatar", ".png").toFile()
+        core.cacheAvatarResult = cachedFile.absolutePath
+        core.refreshUserReturns(cloudUserJson(id = "acct-1", avatarVersion = 7))
+        val preferences = newPreferences()
+        val facade = newFacade(core, preferences)
+
+        facade.refreshUser()
+        assertEquals(
+            listOf("user|acct-1|https://example.com/api/avatars/user|7"),
+            core.cachedAvatars,
+        )
+        assertEquals(cachedFile.absolutePath, AppPreferences(preferences).userAvatar.first())
+
+        // Same url + version: the local file is already current, so no download.
+        facade.refreshUser()
+        assertEquals(1, core.cachedAvatars.size)
+
+        cachedFile.delete()
+    }
+
+    @Test
+    fun avatarKeyIncludesTheAccount() = runBlocking<Unit> {
+        val core = RecordingCoreBridge(signedIn = true)
+        core.cacheAvatarResult = java.nio.file.Files.createTempFile("avatar", ".png").toFile().absolutePath
+        val preferences = newPreferences()
+        val facade = newFacade(core, preferences)
+
+        core.refreshUserReturns(cloudUserJson(id = "acct-1", avatarVersion = 7))
+        facade.refreshUser()
+        // A second account on the same device gets the SAME proxy URL; the
+        // cached file belongs to the first account, so it must be re-fetched.
+        core.refreshUserReturns(cloudUserJson(id = "acct-2", avatarVersion = 7))
+        facade.refreshUser()
+
+        assertEquals(2, core.cachedAvatars.size, "the sync key must carry the user id")
+
+        java.io.File(core.cacheAvatarResult).delete()
+    }
+
+    @Test
+    fun removedCloudAvatarClearsTheLocalFile() = runBlocking<Unit> {
+        val core = RecordingCoreBridge(signedIn = true)
+        val cachedFile = java.nio.file.Files.createTempFile("avatar", ".png").toFile()
+        core.cacheAvatarResult = cachedFile.absolutePath
+        core.refreshUserReturns(cloudUserJson(id = "acct-1", avatarVersion = 7))
+        val preferences = newPreferences()
+        val appPreferences = AppPreferences(preferences)
+        val facade = newFacade(core, preferences)
+
+        facade.refreshUser()
+        assertTrue(cachedFile.exists())
+
+        // The user center removed the avatar: the local copy must go too.
+        core.refreshUserReturns(cloudUserJson(id = "acct-1", avatarVersion = null))
+        facade.refreshUser()
+
+        assertFalse(cachedFile.exists(), "the cached avatar file must be deleted")
+        assertEquals(null, appPreferences.userAvatar.first())
+        assertEquals(null, appPreferences.userAvatarSyncKey.first())
+    }
+
+    private fun cloudUserJson(id: String, avatarVersion: Long?): String = buildString {
+        append("""{"id":"$id","email":"a@b.c","syncVersion":3""")
+        if (avatarVersion != null) {
+            append(""","avatarUrl":"https://example.com/api/avatars/user"""")
+            append(""","avatarVersion":$avatarVersion""")
+        }
+        append("}")
+    }
+
+    private fun newFacade(
+        core: CoreBridge,
+        preferences: DataStore<Preferences> = newPreferences(),
+    ) = RustCloudFacade(
         core = core,
-        appPreferences = AppPreferences(InMemoryPreferences),
+        appPreferences = AppPreferences(preferences),
     )
+
+    private fun newPreferences(): DataStore<Preferences> = InMemoryPreferences()
 
     private suspend fun waitFor(timeoutMs: Long = 5_000, condition: () -> Boolean) {
         try {
@@ -119,9 +198,18 @@ class RustCloudFacadeSyncScheduleTest {
     }
 
     /** Counts the calls the facade makes through the core boundary. */
-    private class RecordingCoreBridge(private val signedIn: Boolean) : CoreBridge {
+    private class RecordingCoreBridge(
+        private val signedIn: Boolean,
+        private var refreshUserJson: String? = null,
+    ) : CoreBridge {
         val markedChanges = CopyOnWriteArrayList<String>()
         val pushCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val cachedAvatars = CopyOnWriteArrayList<String>()
+        var cacheAvatarResult: String = ""
+
+        fun refreshUserReturns(json: String) {
+            refreshUserJson = json
+        }
 
         private val userJson =
             if (signedIn) """{"id":"acct-1","email":"a@b.c","syncVersion":3}""" else null
@@ -183,7 +271,7 @@ class RustCloudFacadeSyncScheduleTest {
         override suspend fun cloudLogin(email: String, password: String): String = "{}"
         override suspend fun cloudRegister(email: String, password: String): String = "{}"
         override suspend fun cloudLogout() {}
-        override suspend fun cloudRefreshUser(): String = userJson ?: "{}"
+        override suspend fun cloudRefreshUser(): String = refreshUserJson ?: userJson ?: "{}"
         override suspend fun cloudSync(replaceLocal: Boolean): String = "{}"
         override suspend fun cloudPreviewCard(code: String): String = "{}"
         override suspend fun cloudRedeemCard(code: String): String = "{}"
@@ -205,7 +293,10 @@ class RustCloudFacadeSyncScheduleTest {
             url: String,
             version: String?,
             destDir: String
-        ): String = ""
+        ): String {
+            cachedAvatars += "$scope|$accountId|$url|${version.orEmpty()}"
+            return cacheAvatarResult
+        }
         override suspend fun cloudPushSnapshot(): Long = 0
         override suspend fun cloudSyncWith(
             since: Long?,
@@ -241,7 +332,7 @@ class RustCloudFacadeSyncScheduleTest {
     }
 
     /** Minimal preferences sink; the facade keeps all cloud state in the core. */
-    private object InMemoryPreferences : DataStore<Preferences> {
+    private class InMemoryPreferences : DataStore<Preferences> {
         private val state = MutableStateFlow(emptyPreferences())
         override val data: Flow<Preferences> = state
         override suspend fun updateData(

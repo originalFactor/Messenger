@@ -37,6 +37,9 @@ pub struct CloudQuotaEntitlement {
 pub struct CloudUser {
     pub id: String,
     pub email: String,
+    /// Nickname set in the web user center; absent/null = fall back to email.
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
     pub role: Option<String>,
     #[serde(rename = "aiApiKey")]
     pub ai_api_key: Option<String>,
