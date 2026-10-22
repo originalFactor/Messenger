@@ -36,6 +36,8 @@ data class CloudQuotaEntitlement(
 data class CloudUser(
     val id: String = "",
     val email: String = "",
+    /** 用户中心设置的昵称；null = 未设置，界面回落到邮箱。旧服务端不含该键。 */
+    val displayName: String? = null,
     // SaaS 字段：旧服务端响应不含这些键，全部带默认值以保持兼容。
     val role: String? = null,
     val aiApiKey: String? = null,

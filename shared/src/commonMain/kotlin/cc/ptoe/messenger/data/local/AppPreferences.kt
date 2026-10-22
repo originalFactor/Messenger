@@ -32,6 +32,11 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         val DEFAULT_AGENT_INITIALIZED = booleanPreferencesKey("default_agent_initialized")
         val CURRENT_AGENT_ID = stringPreferencesKey("current_agent_id")
         val USER_AVATAR = stringPreferencesKey("user_avatar")
+        /**
+         * 本地头像文件对应的云端头像标识（`userId|avatarUrl#avatarVersion`）。
+         * 与服务端当前值不同 = 网页端换过/删过头像，需要重新同步。
+         */
+        val USER_AVATAR_SYNC_KEY = stringPreferencesKey("user_avatar_sync_key")
         val CLOUD_SERVER_URL = stringPreferencesKey("cloud_server_url")
         val CLOUD_SESSION = stringPreferencesKey("cloud_session")
         val CLOUD_SESSION_HOST = stringPreferencesKey("cloud_session_host")
@@ -93,6 +98,23 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
                 preferences[PreferencesKeys.USER_AVATAR] = avatar
             } else {
                 preferences.remove(PreferencesKeys.USER_AVATAR)
+            }
+        }
+    }
+
+    /**
+     * 本地文件对应的云端头像标识（`userId|avatarUrl#avatarVersion`）。用它
+     * 判断「网页端换过头像」：标识不同才重新下载，相同则保留本地文件。
+     */
+    val userAvatarSyncKey: Flow<String?> = dataStore.data
+        .map { preferences -> preferences[PreferencesKeys.USER_AVATAR_SYNC_KEY] }
+
+    suspend fun setUserAvatarSyncKey(key: String?) {
+        dataStore.edit { preferences ->
+            if (key.isNullOrBlank()) {
+                preferences.remove(PreferencesKeys.USER_AVATAR_SYNC_KEY)
+            } else {
+                preferences[PreferencesKeys.USER_AVATAR_SYNC_KEY] = key
             }
         }
     }

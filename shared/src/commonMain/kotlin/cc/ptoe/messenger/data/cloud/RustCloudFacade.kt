@@ -21,6 +21,7 @@ import cc.ptoe.messenger.core.StoredAgentDto
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.createPlatformHttpClient
+import cc.ptoe.messenger.data.util.deleteFile
 import cc.ptoe.messenger.data.util.ioDispatcher
 import cc.ptoe.messenger.data.util.logW
 import cc.ptoe.messenger.domain.model.Agent
@@ -66,6 +67,12 @@ class RustCloudFacade(
     val core: CoreBridge,
     private val appPreferences: AppPreferences,
     private val localDataMutex: Mutex = Mutex(),
+    /**
+     * Where the signed-in user's cloud avatar is cached. Native platforms pass
+     * `filesDir/cloud_avatars`; the browser has no filesystem and gets a
+     * `data:` URI back regardless, so it leaves this null.
+     */
+    private val userAvatarDir: String? = null,
 ) : CloudFacade {
 
     private val json: Json = NetworkClient.json
@@ -182,6 +189,7 @@ class RustCloudFacade(
             localChangesEnabled = true
             // A fresh session supersedes any earlier expiry notice.
             _sessionExpired.value = false
+            syncUserAvatar(user)
             CloudLoginOutcome(
                 user = user,
                 hasLocalData = core.cloudHasLocalData(),
@@ -197,6 +205,7 @@ class RustCloudFacade(
             localChangesEnabled = true
             // A fresh session supersedes any earlier expiry notice.
             _sessionExpired.value = false
+            syncUserAvatar(user)
             CloudLoginOutcome(
                 user = user,
                 hasLocalData = core.cloudHasLocalData(),
@@ -209,9 +218,61 @@ class RustCloudFacade(
         _user.value = user
         // Kotlin's refreshUser also refreshes the builtin provider's models
         // and the avatar cache; Rust's does the first only, and the avatar
-        // part is what `cacheRemoteAvatar` below covers.
+        // part is what `syncUserAvatar` below covers.
         runCatching { core.cloudSyncBuiltinModels(force = true) }
+        syncUserAvatar(user)
         user
+    }
+
+    /**
+     * Pull the account avatar the server holds into the local preference the UI
+     * renders. The web user center and the app share one blob, so an avatar set
+     * in the console must reach the app; conversely a device that never signed
+     * in keeps whatever it picked locally (there is no cloud copy to compare).
+     *
+     * The change detector is `avatarUrl#avatarVersion`, not the version alone:
+     * a re-uploaded avatar gets a fresh version but the same proxy URL, and a
+     * deletion clears both. Matching key ⇒ the cached file is already current.
+     *
+     * [keepLocalFile] is the device's own just-uploaded file: the server copy is
+     * byte-identical, so re-downloading it would only burn bandwidth.
+     */
+    private suspend fun syncUserAvatar(user: CloudUser, keepLocalFile: String? = null) {
+        val remoteUrl = user.avatarUrl?.takeIf { it.isNotBlank() }
+        // The proxy URL is the same for every account (`/api/avatars/user`), so
+        // the key must carry the user id: otherwise signing into a second account
+        // on this device would look like "already cached" and keep the wrong face.
+        val syncKey = remoteUrl?.let { "${user.id}|$it#${user.avatarVersion ?: 0}" }
+        val cachedKey = appPreferences.userAvatarSyncKey.first()
+        if (syncKey == null) {
+            if (cachedKey != null) {
+                appPreferences.userAvatar.first()?.let { deleteFile(it) }
+                appPreferences.setUserAvatar(null)
+                appPreferences.setUserAvatarSyncKey(null)
+            }
+            return
+        }
+        if (syncKey == cachedKey) return
+        if (keepLocalFile != null) {
+            appPreferences.setUserAvatar(keepLocalFile)
+            appPreferences.setUserAvatarSyncKey(syncKey)
+            return
+        }
+        runCatching {
+            val local = core.cloudCacheAvatar(
+                "user",
+                user.id,
+                user.id,
+                remoteUrl,
+                user.avatarVersion?.toString(),
+                userAvatarDir.orEmpty(),
+            )
+            if (local.isNotBlank()) {
+                appPreferences.userAvatar.first()?.takeIf { it != local }?.let { deleteFile(it) }
+                appPreferences.setUserAvatar(local)
+                appPreferences.setUserAvatarSyncKey(syncKey)
+            }
+        }.onFailure { logW(TAG, "Unable to cache the cloud avatar: ${it.message}") }
     }
 
     override suspend fun logout() {
@@ -394,6 +455,15 @@ class RustCloudFacade(
         } else {
             val (bytes, mime) = avatarBytes(source)
             core.cloudUploadUserAvatar(bytes, "user_avatar.$mime", mime)
+        }
+        // The upload response carries no avatarVersion, and the account snapshot
+        // is what `syncUserAvatar` compares against. Refresh it so this device's
+        // own upload is recorded (keeping the picked file) instead of being
+        // mistaken for a remote change on the next refresh.
+        runCatching {
+            val user = json.decodeFromString(CloudUser.serializer(), core.cloudRefreshUser())
+            _user.value = user
+            syncUserAvatar(user, keepLocalFile = source)
         }
         CloudAvatarResponse(url.ifBlank { null }, 0L)
     }

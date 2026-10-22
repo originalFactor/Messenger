@@ -402,9 +402,17 @@ fun CloudSettingsScreen(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = user!!.email,
+                                        // 网页用户中心设置的昵称优先；未设置时回落到邮箱。
+                                        text = user!!.displayName?.takeIf { it.isNotBlank() } ?: user!!.email,
                                         style = MaterialTheme.typography.titleMedium
                                     )
+                                    if (!user!!.displayName.isNullOrBlank()) {
+                                        Text(
+                                            text = user!!.email,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     Text(
                                         text = stringResource(Res.string.cloud_settings_connected),
                                         style = MaterialTheme.typography.bodyMedium,

@@ -289,7 +289,10 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_cloud),
-                    subtitle = cloudUser?.email ?: stringResource(Res.string.settings_cloud_not_logged_in),
+                    // 昵称是用户中心设置的显示名；未设置时回落到邮箱。
+                    subtitle = cloudUser?.displayName?.takeIf { it.isNotBlank() }
+                        ?: cloudUser?.email
+                        ?: stringResource(Res.string.settings_cloud_not_logged_in),
                     icon = Icons.Default.Cloud,
                     onClick = onCloudSettingsClick
                 )
