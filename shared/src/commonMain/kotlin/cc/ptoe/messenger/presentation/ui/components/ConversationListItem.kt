@@ -79,7 +79,12 @@ fun ConversationListItem(
     isHighlighted: Boolean = false,
     isMultiSelectMode: Boolean = false,
     isMultiSelected: Boolean = false,
-    enableContextMenu: Boolean = false
+    enableContextMenu: Boolean = false,
+    /**
+     * 是否展示行尾的溢出菜单。Recent Chats 只是快捷入口，会话级操作统一
+     * 留在文件夹页，因此那里传 false。
+     */
+    showActions: Boolean = true
 ) {
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
@@ -157,7 +162,7 @@ fun ConversationListItem(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        if (!isMultiSelectMode) {
+        if (showActions && !isMultiSelectMode) {
             IconButton(onClick = { expanded = true }) {
                 Icon(
                     imageVector = Icons.Default.MoreVert,

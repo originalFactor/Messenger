@@ -82,6 +82,7 @@ import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.ui.components.projectSection
+import cc.ptoe.messenger.presentation.ui.components.recentChatSection
 import cc.ptoe.messenger.presentation.ui.projects.ProjectEditorDialog
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.agentDisplayNames
@@ -92,11 +93,12 @@ import cc.ptoe.messenger.presentation.viewmodel.ProjectsViewModel
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 会话主页：只展示文件夹（项目 + “无项目”），不直接铺开会话行。
+ * 会话主页：文件夹（项目 + “无项目”）负责归类，Recent Chats 是最近
+ * 会话的快捷入口。
  *
  * 每个项目的会话进项目文件夹；不属于任何项目的普通对话统一收进
- * “无项目”文件夹。这样同一会话不会既出现在最近列表、又在底部再出现
- * 一次（此前的 Recent + 全部会话双重展示）。
+ * “无项目”文件夹。Recent Chats 只是跳转入口，不承担会话管理，因此同一
+ * 会话不会在主页出现两份可操作的行。
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -121,6 +123,8 @@ fun ConversationsScreen(
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
     val unprojectedCount by viewModel.unprojectedConversationCount.collectAsStateWithLifecycle()
+    val recentConversations by viewModel.recentConversations.collectAsStateWithLifecycle()
+    val agentAvatars = remember(allAgents) { allAgents.associate { it.id to it.avatar } }
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
     // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
     val agentNames = agentDisplayNames(allAgents)
@@ -264,6 +268,12 @@ fun ConversationsScreen(
                         enableContextMenu = enableContextMenu,
                         unprojectedConversationCount = unprojectedCount,
                         onUnprojectedClick = onUnprojectedClick
+                    )
+                    recentChatSection(
+                        conversations = recentConversations,
+                        avatars = agentAvatars,
+                        selectedConversationId = selectedConversationId,
+                        onClick = onConversationClick
                     )
                 }
             }
