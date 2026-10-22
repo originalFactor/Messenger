@@ -23,10 +23,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import javax.imageio.ImageIO
 import cc.ptoe.messenger.core.CoreBridgeRegistry
@@ -83,7 +81,10 @@ fun main() {
         val themeMode by AppContainerHolder.instance.themePreferences.themeMode
             .collectAsState(initial = ThemeMode.SYSTEM)
 
-        val windowState = rememberWindowState(width = 1280.dp, height = 800.dp)
+        // Clamp the default size to the monitor's work area: a fixed 1280x800
+        // overflows smaller/high-DPI screens, pushing the window buttons and
+        // the content past the screen edge.
+        val windowState = initialWindowState()
         Window(
             onCloseRequest = ::exitApplication,
             title = "Messenger",
