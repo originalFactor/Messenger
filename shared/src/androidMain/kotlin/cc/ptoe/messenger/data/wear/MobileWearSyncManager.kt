@@ -182,6 +182,9 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     }
                 }
             )
+            // The core wrote the assistant row itself; flag the conversation
+            // so the watch-originated reply is uploaded like a phone one.
+            app.cloud.requestLocalChange("conversation", conversationId)
             // Defensive: a loop that returned without a terminal event must
             // still release the watch (it waits for exactly one).
             sendDone()

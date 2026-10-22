@@ -125,7 +125,8 @@ fun ChatScreen(
             providerRepository = AppContainerHolder.instance.providerRepository,
             chatImageStore = AppContainerHolder.instance.chatImageStore,
             builtinTools = { workspace -> AppContainerHolder.instance.availableTools(workspace) },
-            projectRepository = AppContainerHolder.instance.projectRepository
+            projectRepository = AppContainerHolder.instance.projectRepository,
+            cloud = AppContainerHolder.instance.cloud
         )
     )
 ) {
