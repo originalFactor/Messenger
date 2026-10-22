@@ -42,8 +42,8 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.getString
 
 /**
- * 会话主页的 ViewModel：文件夹（项目 + “无项目”）负责归类，Recent Chats
- * 提供最近会话的快捷入口。
+ * 会话主页的 ViewModel：Recent Chats 提供最近会话的快捷入口，文件夹
+ * （项目 + “无项目”）负责归类。
  *
  * 会话级的操作（重命名、删除、多选、切换 Agent）都在文件夹二级页
  * （[ProjectConversationsViewModel]）里做，Recent Chats 只负责跳转。

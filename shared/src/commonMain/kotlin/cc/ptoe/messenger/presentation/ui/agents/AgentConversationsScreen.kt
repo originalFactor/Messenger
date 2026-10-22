@@ -59,9 +59,9 @@ import org.jetbrains.compose.resources.stringResource
 /**
  * 某个 Agent 的聊天列表：Agent 页点击 Agent 进入的子页。
  *
- * 与主页一致，这里只展示文件夹（该 Agent 的项目 + “无项目”）；点击文件夹
- * 进入二级页看该文件夹里该 Agent 的会话。双栏布局下托管在 Agents 双栏
- * 右栏（隐藏返回键）。
+ * 与主页一致：顶部 Recent Chats 是该 Agent 最近会话的快捷入口，下方是
+ * 文件夹（该 Agent 的项目 + “无项目”）；点击文件夹进入二级页看该文件夹
+ * 里该 Agent 的会话。双栏布局下托管在 Agents 双栏右栏（隐藏返回键）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -161,6 +161,11 @@ fun AgentConversationsScreen(
                         .padding(innerPadding)
                         .navigationBarsPadding()
                 ) {
+                    recentChatSection(
+                        conversations = recentConversations,
+                        avatars = agentAvatars,
+                        onClick = onConversationClick
+                    )
                     projectSection(
                         projects = projects,
                         conversationCounts = projectCounts,
@@ -168,11 +173,6 @@ fun AgentConversationsScreen(
                         enableContextMenu = enableContextMenu,
                         unprojectedConversationCount = unprojectedCount,
                         onUnprojectedClick = onUnprojectedClick
-                    )
-                    recentChatSection(
-                        conversations = recentConversations,
-                        avatars = agentAvatars,
-                        onClick = onConversationClick
                     )
                 }
             }
