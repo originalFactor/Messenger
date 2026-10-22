@@ -36,6 +36,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -48,6 +49,7 @@ import cc.ptoe.messenger.generated.resources.conversations_new
 import cc.ptoe.messenger.generated.resources.conversations_title
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.projectSection
+import cc.ptoe.messenger.presentation.ui.components.recentChatSection
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.displayName
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
@@ -87,6 +89,8 @@ fun AgentConversationsScreen(
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
     val unprojectedCount by viewModel.unprojectedConversationCount.collectAsStateWithLifecycle()
+    val recentConversations by viewModel.recentConversations.collectAsStateWithLifecycle()
+    val agentAvatars = remember(agent) { agent?.let { mapOf(it.id to it.avatar) } ?: emptyMap() }
 
     // 进入列表页时触发一次空会话清理（规则在 Rust core）。
     LaunchedEffect(Unit) {
@@ -164,6 +168,11 @@ fun AgentConversationsScreen(
                         enableContextMenu = enableContextMenu,
                         unprojectedConversationCount = unprojectedCount,
                         onUnprojectedClick = onUnprojectedClick
+                    )
+                    recentChatSection(
+                        conversations = recentConversations,
+                        avatars = agentAvatars,
+                        onClick = onConversationClick
                     )
                 }
             }

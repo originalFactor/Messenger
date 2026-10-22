@@ -44,8 +44,8 @@ import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 
 /**
- * Agent 聊天列表子页的 ViewModel：固定展示某个 Agent 名下的全部会话
- * （主页聊天列表不再做 Agent 筛选，本页是唯一的按 Agent 过滤入口）。
+ * Agent 聊天列表子页的 ViewModel：文件夹（该 Agent 的项目 + “无项目”）
+ * 负责归类，Recent Chats 提供该 Agent 最近会话的快捷入口。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentConversationsViewModel(
@@ -99,6 +99,18 @@ class AgentConversationsViewModel(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = 0
+        )
+
+    /**
+     * Recent Chats：该 Agent 最近 [ConversationsViewModel.RECENT_CONVERSATION_LIMIT]
+     * 个会话的快捷入口（无论是否属于项目）。会话仍归在各自文件夹里。
+     */
+    val recentConversations: StateFlow<List<Conversation>> = conversations
+        .map { all -> all.take(ConversationsViewModel.RECENT_CONVERSATION_LIMIT) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
         )
 
     fun createNewConversation(onCreated: (String) -> Unit = {}) {

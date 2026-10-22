@@ -42,11 +42,11 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.getString
 
 /**
- * 会话主页的 ViewModel：主页只展示文件夹（项目 + “无项目”），因此这里
- * 只负责文件夹数据与“新建对话”。
+ * 会话主页的 ViewModel：文件夹（项目 + “无项目”）负责归类，Recent Chats
+ * 提供最近会话的快捷入口。
  *
  * 会话级的操作（重命名、删除、多选、切换 Agent）都在文件夹二级页
- * （[ProjectConversationsViewModel]）里做。
+ * （[ProjectConversationsViewModel]）里做，Recent Chats 只负责跳转。
  */
 class ConversationsViewModel(
     private val conversationRepository: ConversationRepository,
@@ -107,6 +107,19 @@ class ConversationsViewModel(
             initialValue = 0
         )
 
+    /**
+     * Recent Chats：最近 [RECENT_CONVERSATION_LIMIT] 个会话（无论是否属于
+     * 项目）的快捷入口，让用户从聊天列表一键回到上一次的对话。会话本身
+     * 仍归在各自文件夹里，这里只是重复的入口，不是第二份列表。
+     */
+    val recentConversations: StateFlow<List<Conversation>> = conversations
+        .map { all -> all.take(RECENT_CONVERSATION_LIMIT) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
     fun createNewConversation(
         title: String? = null,
         agentId: String? = null,
@@ -158,6 +171,9 @@ class ConversationsViewModel(
     }
 
     companion object {
+        /** Recent Chats 区展示的会话条数。 */
+        const val RECENT_CONVERSATION_LIMIT = 10
+
         fun provideFactory(
             conversationRepository: ConversationRepository,
             currentAgentRepository: CurrentAgentRepository,
