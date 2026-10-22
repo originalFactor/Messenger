@@ -173,7 +173,10 @@ jobs:
       # the runner defaults already do the right thing — pwsh on Windows, bash on
       # Linux — for the platform-specific wrapper in matrix.gradlew.
       - name: Build Desktop distribution
-        run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }} -Pmessenger.buildRuntimeNative=false
+        # The -P argument MUST be quoted: PowerShell (the default shell on the
+        # Windows runners) drops the leading `-P` of an unquoted token and Gradle
+        # then reads it as a task name (".buildRuntimeNative=false").
+        run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }} "-Pmessenger.buildRuntimeNative=false"
 
       # An app image is a directory, so it has to be packed before it can be
       # uploaded or attached to a release.
