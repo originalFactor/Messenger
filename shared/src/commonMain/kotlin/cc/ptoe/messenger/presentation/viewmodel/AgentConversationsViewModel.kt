@@ -44,8 +44,8 @@ import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.randomUuid
 
 /**
- * Agent 聊天列表子页的 ViewModel：文件夹（该 Agent 的项目 + “无项目”）
- * 负责归类，Recent Chats 提供该 Agent 最近会话的快捷入口。
+ * Agent 聊天列表子页的 ViewModel：Recent Chats 提供该 Agent 最近会话的
+ * 快捷入口，文件夹（该 Agent 的项目 + “无项目”）负责归类。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentConversationsViewModel(

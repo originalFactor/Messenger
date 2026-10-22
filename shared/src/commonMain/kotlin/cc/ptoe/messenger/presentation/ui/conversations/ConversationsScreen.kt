@@ -93,8 +93,8 @@ import cc.ptoe.messenger.presentation.viewmodel.ProjectsViewModel
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 会话主页：文件夹（项目 + “无项目”）负责归类，Recent Chats 是最近
- * 会话的快捷入口。
+ * 会话主页：顶部 Recent Chats 是最近会话的快捷入口，下方文件夹
+ * （项目 + “无项目”）负责归类。
  *
  * 每个项目的会话进项目文件夹；不属于任何项目的普通对话统一收进
  * “无项目”文件夹。Recent Chats 只是跳转入口，不承担会话管理，因此同一
@@ -255,6 +255,12 @@ fun ConversationsScreen(
                         .navigationBarsPadding(),
                     contentPadding = PaddingValues(bottom = LocalBottomNavClearance.current)
                 ) {
+                    recentChatSection(
+                        conversations = recentConversations,
+                        avatars = agentAvatars,
+                        selectedConversationId = selectedConversationId,
+                        onClick = onConversationClick
+                    )
                     projectSection(
                         projects = projects,
                         conversationCounts = projectCounts,
@@ -268,12 +274,6 @@ fun ConversationsScreen(
                         enableContextMenu = enableContextMenu,
                         unprojectedConversationCount = unprojectedCount,
                         onUnprojectedClick = onUnprojectedClick
-                    )
-                    recentChatSection(
-                        conversations = recentConversations,
-                        avatars = agentAvatars,
-                        selectedConversationId = selectedConversationId,
-                        onClick = onConversationClick
                     )
                 }
             }
