@@ -32,18 +32,18 @@ jobs:
           # `cargo build` — no cross toolchain, no `--target`, no linker setup.
           # That is why the arm64 entries run on arm64 runners rather than
           # cross-compiling from x64.
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            exe: messenger-tui
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            exe: messenger-tui
+#          - os: ubuntu-latest
+#            target: x86_64-unknown-linux-gnu
+#            exe: messenger-tui
+#          - os: ubuntu-24.04-arm
+#            target: aarch64-unknown-linux-gnu
+#            exe: messenger-tui
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             exe: messenger-tui.exe
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            exe: messenger-tui.exe
+#          - os: windows-11-arm
+#            target: aarch64-pc-windows-msvc
+#            exe: messenger-tui.exe
 
     steps:
       - name: Checkout code

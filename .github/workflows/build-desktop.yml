@@ -46,35 +46,35 @@ jobs:
           # ships no WiX, so that path would fail for two independent reasons.
           # The distributable (app image + bundled arm64 runtime) is the
           # shippable artifact: unzip and run Messenger.exe.
-          - os: windows-11-arm
-            artifact: desktop-windows-arm64
-            task: createReleaseDistributable
-            upload: Messenger-*-windows-arm64.zip
-            gradlew: .\gradlew.bat
-            pack: true
-            # An app image never invokes candle/light, but the Compose plugin
-            # still requires the `wixToolsetDir` property on Windows. Pointing
-            # WIX_PATH at an empty directory satisfies it and skips the 34 MB
-            # WiX 3.11 download (whose bundled tools are x86 anyway).
-            wix: empty
+#          - os: windows-11-arm
+#            artifact: desktop-windows-arm64
+#            task: createReleaseDistributable
+#            upload: Messenger-*-windows-arm64.zip
+#            gradlew: .\gradlew.bat
+#            pack: true
+#            # An app image never invokes candle/light, but the Compose plugin
+#            # still requires the `wixToolsetDir` property on Windows. Pointing
+#            # WIX_PATH at an empty directory satisfies it and skips the 34 MB
+#            # WiX 3.11 download (whose bundled tools are x86 anyway).
+#            wix: empty
 
           # --- Linux x86_64 / ARM64: .deb ----------------------------------
           # jpackage's deb bundler needs dpkg + fakeroot, both preinstalled on
           # the Ubuntu images; nothing else is required.
-          - os: ubuntu-latest
-            artifact: desktop-linux-x86_64
-            task: packageReleaseDeb
-            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-            gradlew: ./gradlew
-            pack: false
-            wix: none
-          - os: ubuntu-24.04-arm
-            artifact: desktop-linux-arm64
-            task: packageReleaseDeb
-            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-            gradlew: ./gradlew
-            pack: false
-            wix: none
+#          - os: ubuntu-latest
+#            artifact: desktop-linux-x86_64
+#            task: packageReleaseDeb
+#            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
+#            gradlew: ./gradlew
+#            pack: false
+#            wix: none
+#          - os: ubuntu-24.04-arm
+#            artifact: desktop-linux-arm64
+#            task: packageReleaseDeb
+#            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
+#            gradlew: ./gradlew
+#            pack: false
+#            wix: none
 
     steps:
       - name: Checkout code
