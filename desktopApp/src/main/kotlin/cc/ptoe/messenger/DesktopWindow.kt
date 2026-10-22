@@ -18,9 +18,16 @@ package cc.ptoe.messenger
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowScope
+import androidx.compose.ui.window.WindowState
+import androidx.compose.ui.window.rememberWindowState
 import java.awt.Frame
 import java.awt.GraphicsDevice
+import java.awt.GraphicsEnvironment
 import java.awt.Insets
 import java.awt.Rectangle
 import java.awt.Toolkit
@@ -50,6 +57,43 @@ internal fun Frame.applyWorkAreaMaximizedBounds() {
     val configuration = graphicsConfiguration ?: return
     val insets = Toolkit.getDefaultToolkit().getScreenInsets(configuration)
     maximizedBounds = workAreaBounds(configuration.bounds, insets)
+}
+
+/**
+ * Initial window state clamped to the primary monitor's work area.
+ *
+ * A fixed 1280x800 default overflows any monitor whose work area is smaller:
+ * at 175% scale that default is 2240x1400 physical pixels on a 2160x1440
+ * screen, so the window opens wider and taller than the screen itself - the
+ * window buttons land off-screen and the content overflows past the edge.
+ *
+ * AWT reports screen bounds in the same user-space units Compose calls dp
+ * (both are physical pixels divided by the UI scale), so the work area can be
+ * used directly as a Dp bound. When the default does not fit it shrinks to 90%
+ * of the work area and is centred there, leaving a margin on every side; a
+ * window that merely matched the work area would look maximized at launch.
+ */
+@Composable
+internal fun initialWindowState(
+    defaultWidth: Dp = 1280.dp,
+    defaultHeight: Dp = 800.dp
+): WindowState {
+    val configuration = GraphicsEnvironment.getLocalGraphicsEnvironment()
+        .defaultScreenDevice.defaultConfiguration
+    val work = workAreaBounds(
+        configuration.bounds,
+        Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+    )
+    val fits = defaultWidth.value <= work.width && defaultHeight.value <= work.height
+    val width = if (fits) defaultWidth.value else work.width * 0.9f
+    val height = if (fits) defaultHeight.value else work.height * 0.9f
+    return rememberWindowState(
+        size = DpSize(width.dp, height.dp),
+        position = WindowPosition(
+            x = (work.x + (work.width - width) / 2).dp,
+            y = (work.y + (work.height - height) / 2).dp
+        )
+    )
 }
 
 /**
