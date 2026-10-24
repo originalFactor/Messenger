@@ -24,22 +24,30 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# Used only for the host cdylib that uniffi-bindgen reads (see
-# core/bindings/build.gradle.kts). That library must keep its symbol table:
-# uniffi finds the UNIFFI_META_* metadata symbols by walking the ELF `.symtab`,
-# which `strip = true` above removes — on Linux bindgen then exits 0 having
-# discovered nothing, yielding an empty bindings directory. PE and Mach-O are
-# unaffected (they read the export table and nlist respectively), which is why
-# only the Linux CI job failed. Nothing ships this artifact: the Android
-# jniLibs come from cargo-ndk targeting the Android triples and keep the
-# stripped release profile, and the host library's only consumer is bindgen.
+# `strip = "none"` is required, not cosmetic: uniffi discovers the
+# UNIFFI_META_* symbols by walking the ELF `.symtab`, which the release
+# profile's `strip = true` deletes — on Linux bindgen then exits 0 having found
+# nothing and emits an empty bindings directory. PE and Mach-O are unaffected
+# (they read the export table and nlist), which is why only Linux CI failed.
 #
-# Link-time optimization is deliberately OFF here. This artifact is never
-# shipped or executed by users — bindgen only reads its metadata symbols — yet
-# inheriting release's `lto = "thin"` + `codegen-units = 1` made a one-line
-# edit in a sibling crate cost ~57 s to rebuild (and a full rebuild ~2 min).
+# DESKTOP DOES SHIP THIS: :core-bindings-desktop has exactly one profile —
+# `bindgen` — and stages target/bindgen/<lib> into the jar as a JNA resource,
+# so the desktop app runs this unstripped, non-LTO, codegen-units=16 build.
+# Android's jniLibs come from cargo-ndk targeting the Android triples with the
+# stripped `release` profile, so Android is unaffected.
+#
+# Link-time optimization is deliberately OFF here. Inheriting release's
+# `lto = "thin"` + `codegen-units = 1` made a one-line edit in a sibling crate
+# cost ~57 s to rebuild (and a full rebuild ~2 min), which is punishing for the
+# inner loop because bindgen only reads metadata symbols.
 # Dropping LTO and widening codegen units keeps the symbol table intact and
 # cuts that to a plain optimized compile.
+#
+# Because the desktop release ships this profile, that inner-loop trade-off is
+# also a shipping-performance decision. Shipping a separate optimized desktop
+# library would need a second cargo build per desktop job (and a way to keep
+# the symbol table, or generate bindings from a bindgen-profile copy). Not done
+# yet; if desktop startup/throughput ever matters, this is the place to start.
 [profile.bindgen]
 inherits = "release"
 strip = "none"
