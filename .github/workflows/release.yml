@@ -66,23 +66,23 @@ jobs:
           name: desktop-windows-x86_64
           path: artifacts/desktop/windows-x86_64
 
-      - name: Download Desktop artifact (Windows ARM64)
-        uses: actions/download-artifact@v4
-        with:
-          name: desktop-windows-arm64
-          path: artifacts/desktop/windows-arm64
+#      - name: Download Desktop artifact (Windows ARM64)
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: desktop-windows-arm64
+#          path: artifacts/desktop/windows-arm64
 
-      - name: Download Desktop artifact (Linux x86_64)
-        uses: actions/download-artifact@v4
-        with:
-          name: desktop-linux-x86_64
-          path: artifacts/desktop/linux-x86_64
-
-      - name: Download Desktop artifact (Linux ARM64)
-        uses: actions/download-artifact@v4
-        with:
-          name: desktop-linux-arm64
-          path: artifacts/desktop/linux-arm64
+#      - name: Download Desktop artifact (Linux x86_64)
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: desktop-linux-x86_64
+#          path: artifacts/desktop/linux-x86_64
+#
+#      - name: Download Desktop artifact (Linux ARM64)
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: desktop-linux-arm64
+#          path: artifacts/desktop/linux-arm64
 
       # --- Web -----------------------------------------------------------
       - name: Download Web artifact
@@ -92,17 +92,17 @@ jobs:
           path: artifacts/web
 
       # --- TUI (Windows/Linux x x86_64/arm64) -----------------------------
-      - name: Download TUI Linux x86_64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tui-x86_64-unknown-linux-gnu
-          path: artifacts/tui/x86_64-unknown-linux-gnu
-
-      - name: Download TUI Linux ARM64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tui-aarch64-unknown-linux-gnu
-          path: artifacts/tui/aarch64-unknown-linux-gnu
+#      - name: Download TUI Linux x86_64 artifact
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: tui-x86_64-unknown-linux-gnu
+#          path: artifacts/tui/x86_64-unknown-linux-gnu
+#
+#      - name: Download TUI Linux ARM64 artifact
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: tui-aarch64-unknown-linux-gnu
+#          path: artifacts/tui/aarch64-unknown-linux-gnu
 
       - name: Download TUI Windows x86_64 artifact
         uses: actions/download-artifact@v4
@@ -110,11 +110,11 @@ jobs:
           name: tui-x86_64-pc-windows-msvc
           path: artifacts/tui/x86_64-pc-windows-msvc
 
-      - name: Download TUI Windows ARM64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tui-aarch64-pc-windows-msvc
-          path: artifacts/tui/aarch64-pc-windows-msvc
+#      - name: Download TUI Windows ARM64 artifact
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: tui-aarch64-pc-windows-msvc
+#          path: artifacts/tui/aarch64-pc-windows-msvc
 
       - name: Package Web distribution
         run: |
@@ -123,7 +123,7 @@ jobs:
       - name: Package TUI binaries
         run: |
           cd artifacts/tui
-          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+          for target in \ # x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
                         x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
             zip -j "../messenger-tui-${GITHUB_REF#refs/tags/}-${target}.zip" "${target}/"*
           done
