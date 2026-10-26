@@ -91,7 +91,7 @@ jobs:
           name: web-distribution
           path: artifacts/web
 
-      # --- TUI (Windows/Linux x x86_64/arm64) -----------------------------
+      # --- TUI (Windows x86_64; other targets currently disabled) ----------
 #      - name: Download TUI Linux x86_64 artifact
 #        uses: actions/download-artifact@v4
 #        with:
@@ -120,11 +120,19 @@ jobs:
         run: |
           cd artifacts/web && zip -r ../messenger-web-${GITHUB_REF#refs/tags/}.zip .
 
+      # Package exactly the targets that were downloaded: some build-tui.yml
+      # matrix entries are disabled, so their download steps (and folders) do
+      # not exist and a hardcoded target list would fail the release.
       - name: Package TUI binaries
         run: |
+          if [ ! -d artifacts/tui ]; then
+            echo "No TUI artifacts were downloaded; nothing to package."
+            exit 0
+          fi
           cd artifacts/tui
-          for target in \ # x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
-                        x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+          for dir in */; do
+            [ -d "$dir" ] || continue
+            target="${dir%/}"
             zip -j "../messenger-tui-${GITHUB_REF#refs/tags/}-${target}.zip" "${target}/"*
           done
 
