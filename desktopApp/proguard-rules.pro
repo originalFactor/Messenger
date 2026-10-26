@@ -82,6 +82,33 @@
 -dontwarn org.slf4j.**
 
 # ===========================================================================
+# Kotlin @JvmMultifileClass parts
+# ===========================================================================
+# ProGuard's `method/specialization/returntype` optimization rewrites the
+# return type of a method in one part of a multifile class but not the
+# `checkcast` in its body, producing bytecode that fails verification at
+# runtime — and ONLY at runtime, so the build stays green:
+#
+#   java.lang.VerifyError: Bad return type
+#     Location: okio/Okio__OkioKt.buffer$43c083be(Lokio/Sink;)Lokio/RealBufferedSink;
+#     Reason: Type 'okio/BufferedSink' is not assignable to 'okio/RealBufferedSink'
+#
+# Okio's `Okio.buffer()` is hit during the very first DataStore read, so the
+# packaged app aborts during startup and jpackage's launcher only reports the
+# generic "Failed to launch JVM" dialog.
+# https://github.com/Guardsquare/proguard/issues/533
+# https://youtrack.jetbrains.com/issue/CMP-10488
+#
+# JetBrains' default-compose-desktop-rules.pro carries a workaround for this,
+# but its pattern (`**Kt__*`) only matches parts whose FACADE ends in `Kt`
+# (`ParagraphKt__ParagraphFactoryKt`). A facade with a `@JvmName` has the shape
+# `Name__FileNameKt` (`Okio__OkioKt`) and slips through, so keep that shape too.
+# `allowshrinking`/`allowobfuscation` keep the footprint at zero for parts that
+# are not used; only the unsafe optimization is disabled.
+-keep,allowshrinking,allowobfuscation class **__*Kt { *; }
+-dontnote **__*Kt
+
+# ===========================================================================
 # Coroutines / Compose resources
 # ===========================================================================
 -keepclassmembers class kotlinx.coroutines.** {
