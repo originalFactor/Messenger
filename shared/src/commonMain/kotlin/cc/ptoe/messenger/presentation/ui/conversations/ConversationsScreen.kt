@@ -76,7 +76,9 @@ import cc.ptoe.messenger.generated.resources.projects_delete_confirm
 import cc.ptoe.messenger.generated.resources.projects_delete_title
 import cc.ptoe.messenger.generated.resources.projects_edit_title
 import cc.ptoe.messenger.generated.resources.projects_new
+import cc.ptoe.messenger.generated.resources.projects_pick_workspace
 import cc.ptoe.messenger.presentation.platform.BackHandler
+import cc.ptoe.messenger.presentation.platform.rememberFolderPicker
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
@@ -147,6 +149,13 @@ fun ConversationsScreen(
             conversationRepository = AppContainerHolder.instance.conversationRepository
         )
     )
+    // 平台目录选择器；Android/Web 返回 null（没有可用的绝对路径），
+    // 此时对话框保留手动输入，不显示一个点了没反应的按钮。
+    val folderPicker = rememberFolderPicker(
+        title = stringResource(Res.string.projects_pick_workspace)
+    ) { path ->
+        projectEditor = projectEditor?.let { projectsViewModel.workspaceChanged(it, path) }
+    }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val sizeClass = windowSizeClassFor(maxWidth)
@@ -308,8 +317,7 @@ fun ConversationsScreen(
                     state = editor,
                     onNameChange = { projectEditor = projectsViewModel.nameChanged(editor, it) },
                     onWorkspaceChange = { projectEditor = projectsViewModel.workspaceChanged(editor, it) },
-                    // 文件夹选择依赖平台实现；未接入的平台保持手动输入。
-                    onPickWorkspace = {},
+                    onPickWorkspace = folderPicker?.let { picker -> { picker.launch() } },
                     onConfirm = {
                         projectsViewModel.save(editor)
                         projectEditor = null
