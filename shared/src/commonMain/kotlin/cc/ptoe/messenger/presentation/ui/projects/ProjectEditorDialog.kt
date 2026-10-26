@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_confirm
@@ -37,12 +38,19 @@ import cc.ptoe.messenger.generated.resources.projects_workspace_label
 import cc.ptoe.messenger.presentation.viewmodel.ProjectEditorState
 import org.jetbrains.compose.resources.stringResource
 
+/** Test handle for the "choose folder" action; absent when the platform has no picker. */
+internal const val PROJECT_WORKSPACE_PICKER_TAG = "project-workspace-picker"
+
 /**
  * 项目创建/编辑对话框。
  *
  * 工作区文件夹可留空：留空时按 [ProjectEditorState.autoWorkspaceFolder]
  * （项目名称规范化后的目录名）自动创建，界面上把这个将要创建的目录名
  * 显示出来，避免用户以为工作区是空的。
+ *
+ * [onPickWorkspace] 为 `null` 表示当前平台没有可用的目录选择器（Android
+ * 的 SAF 返回的是本应用 UID 的 tree URI，runtime 伴随应用无法使用），
+ * 此时隐藏按钮，只保留手动输入。
  */
 @Composable
 fun ProjectEditorDialog(
@@ -50,7 +58,7 @@ fun ProjectEditorDialog(
     state: ProjectEditorState,
     onNameChange: (String) -> Unit,
     onWorkspaceChange: (String) -> Unit,
-    onPickWorkspace: () -> Unit,
+    onPickWorkspace: (() -> Unit)?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -77,9 +85,14 @@ fun ProjectEditorDialog(
                     onValueChange = onWorkspaceChange,
                     label = { Text(stringResource(Res.string.projects_workspace_hint)) },
                     singleLine = true,
-                    trailingIcon = {
-                        TextButton(onClick = onPickWorkspace) {
-                            Text(stringResource(Res.string.projects_pick_workspace))
+                    trailingIcon = onPickWorkspace?.let { pick ->
+                        {
+                            TextButton(
+                                onClick = pick,
+                                modifier = Modifier.testTag(PROJECT_WORKSPACE_PICKER_TAG)
+                            ) {
+                                Text(stringResource(Res.string.projects_pick_workspace))
+                            }
                         }
                     },
                     supportingText = {
