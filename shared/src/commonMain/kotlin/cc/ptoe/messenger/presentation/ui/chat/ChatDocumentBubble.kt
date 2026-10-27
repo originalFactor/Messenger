@@ -35,7 +35,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.Message
@@ -111,8 +110,10 @@ fun ChatDocumentBubble(
                         // pass a one-word reply would still span the whole pane.
                         .width(IntrinsicSize.Max)
                         .testTag(CHAT_BUBBLE_TEST_TAG)
-                        .clip(bubbleShape)
-                        .background(bubbleColor)
+                        // Draw the shape without clipping the entire (possibly very tall)
+                        // layer: on Desktop that clip can reject pointer hits far
+                        // down the bubble. Padding keeps content inside the corners.
+                        .background(bubbleColor, bubbleShape)
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     if (blocks != null && blocks.isNotEmpty()) {
