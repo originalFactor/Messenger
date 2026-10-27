@@ -17,8 +17,12 @@ package cc.ptoe.messenger.domain.tool
  * agent-tools feature until the companion is installed.
  */
 actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> =
-    if (workspaceRoot == null || ShellRuntimeRegistry.bridge?.isInstalled() != true) {
+    if (workspaceRoot == null || !builtinChatToolsSupported()) {
         emptyList()
     } else {
         listOf(TerminalTool(workspaceRoot = workspaceRoot)) + WorkspaceTool.allFor(workspaceRoot)
     }
+
+/** The companion runtime is what executes both the shell and the file tools. */
+actual fun builtinChatToolsSupported(): Boolean =
+    ShellRuntimeRegistry.bridge?.isInstalled() == true

@@ -19,3 +19,6 @@ package cc.ptoe.messenger.domain.tool
 actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> =
     if (workspaceRoot == null) emptyList()
     else listOf(TerminalTool(workspaceRoot = workspaceRoot)) + WorkspaceTool.allFor(workspaceRoot)
+
+/** Desktop always ships the shell + workspace tool implementations. */
+actual fun builtinChatToolsSupported(): Boolean = true

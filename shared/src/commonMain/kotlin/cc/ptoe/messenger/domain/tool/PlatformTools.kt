@@ -23,3 +23,15 @@ package cc.ptoe.messenger.domain.tool
  * the workspace-bound ones) rather than falling back to a default.
  */
 expect fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool>
+
+/**
+ * Whether this platform can register the built-in chat tools at all.
+ *
+ * [createBuiltinChatTools] is workspace-bound: `null` means "this
+ * conversation has no project workspace" and deliberately returns an empty
+ * list. UI that only asks whether the platform supports tools (the chat
+ * input's read-only/writable switch) must use this probe instead — passing
+ * `null` to the factory is ALWAYS empty and hides the switch on every
+ * platform.
+ */
+expect fun builtinChatToolsSupported(): Boolean

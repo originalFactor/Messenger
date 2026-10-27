@@ -75,5 +75,10 @@ actual fun openRuntimeTerminal(): Boolean {
 /**
  * 伴随 runtime 应用自己的工作区，仅用于枚举内置工具（会话的实际工作目录
  * 来自其所属项目）。
+ *
+ * 主应用无法命名伴随应用 data 目录下的真实路径，但 AIDL 把空 root 定义为
+ * “伴随应用自己的工作区”，所以用空串作为清单枚举的占位 root。返回 null
+ * 会让 `createBuiltinChatTools(null)` 走“无项目工作区”声明闸门，Agent
+ * 工具配置页就永远看不到内置工具。
  */
-actual fun defaultWorkspaceRoot(): String? = null
+actual fun defaultWorkspaceRoot(): String? = ""

@@ -120,10 +120,21 @@ impl IncrementalParser {
                 let id = *id;
                 let lang = language.clone();
                 if line.trim().starts_with("```") {
-                    // Close code block
+                    // Close code block. The cleaned text must be written back:
+                    // update_active_chunk already streamed the partial fence
+                    // line into the block, and finalize() alone would keep it.
                     let mut current_code = code.clone();
                     if current_code.ends_with('\n') {
                         current_code.pop();
+                    }
+                    let block = Block::CodeBlock {
+                        id,
+                        language: lang,
+                        code: current_code,
+                        status: BlockStatus::Finalized,
+                    };
+                    if let Some(diff) = doc.update(block) {
+                        diffs.push(diff);
                     }
                     if let Some(diff) = doc.finalize(id) {
                         diffs.push(diff);
@@ -184,7 +195,7 @@ impl IncrementalParser {
                     content.push_str(before);
                     let block = Block::Think {
                         id,
-                        content: content.clone(),
+                        content: content.trim_end_matches('\n').to_string(),
                         status: BlockStatus::Finalized,
                     };
                     if let Some(diff) = doc.update(block) {
@@ -245,10 +256,10 @@ impl IncrementalParser {
 
             ParserState::InQuote { id, text } => {
                 let id = *id;
-                if let Some(quote_content) = line.strip_prefix("> ") {
+                if let Some(quote_content) = strip_quote_marker(line) {
                     text.push_str(quote_content);
                     text.push('\n');
-                    let inlines = parse_inlines(&text.clone());
+                    let inlines = parse_inlines(text.trim_end_matches('\n'));
                     let block = Block::Quote {
                         id,
                         inlines,
@@ -325,7 +336,8 @@ impl IncrementalParser {
             ParserState::MaybeTable { header, paragraph } => {
                 let header = std::mem::take(header);
                 let saved = paragraph.take();
-                if is_table_delimiter(line) {
+                let columns = parse_table_row(&header).len();
+                if is_table_delimiter(line) && split_table_row(line).len() == columns {
                     let id = doc.next_id();
                     let head = parse_table_row(&header);
                     let block = Block::Table {
@@ -433,13 +445,7 @@ impl IncrementalParser {
                         diffs.push(diff);
                     }
                     self.state = ParserState::Idle;
-                } else if line.starts_with("```")
-                    || line.starts_with("$$")
-                    || line.starts_with("<think>")
-                    || line.starts_with("<tool_call>")
-                    || starts_with_heading(line)
-                    || line.starts_with("> ")
-                {
+                } else if starts_block(line) {
                     // New block type interrupted the paragraph
                     if let Some(diff) = doc.finalize(id) {
                         diffs.push(diff);
@@ -585,8 +591,9 @@ impl IncrementalParser {
                     return;
                 }
 
-                // Horizontal rule: --- or ***
-                if trimmed == "---" || trimmed == "***" {
+                // Horizontal rule: ---, *** or ___ (GFM; three or more of
+                // the same marker also count).
+                if is_divider(trimmed) {
                     let id = doc.next_id();
                     diffs.push(doc.append(Block::Divider { id }));
                     return;
@@ -605,13 +612,14 @@ impl IncrementalParser {
                     return;
                 }
 
-                // Blockquote: > text
-                if let Some(quote_content) = line.strip_prefix("> ") {
+                // Blockquote: "> text" (the space is optional in GFM, so
+                // `>quoted` opens a quote too).
+                if let Some(quote_content) = strip_quote_marker(line) {
                     let id = doc.next_id();
                     let text = format!("{quote_content}\n");
                     let block = Block::Quote {
                         id,
-                        inlines: parse_inlines(&text),
+                        inlines: parse_inlines(quote_content),
                         status: BlockStatus::Streaming,
                     };
                     diffs.push(doc.append(block));
@@ -797,7 +805,7 @@ impl IncrementalParser {
             ParserState::InThink { id, content } => {
                 let block = Block::Think {
                     id,
-                    content,
+                    content: content.trim_end_matches('\n').to_string(),
                     status: BlockStatus::Finalized,
                 };
                 if let Some(diff) = doc.update(block) {
@@ -828,7 +836,7 @@ impl IncrementalParser {
             ParserState::InQuote { id, text } => {
                 let block = Block::Quote {
                     id,
-                    inlines: parse_inlines(&text),
+                    inlines: parse_inlines(text.trim_end_matches('\n')),
                     status: BlockStatus::Finalized,
                 };
                 if let Some(diff) = doc.update(block) {
@@ -915,6 +923,12 @@ fn can_eager_open_paragraph(buffer: &str) -> bool {
     if is_partial_ordered_marker(buffer) {
         return false;
     }
+    // A partial line containing a pipe may still grow into a table row, so it
+    // waits for its newline like the other block starters (outer pipes are
+    // optional, so a leading `|` alone is not enough).
+    if buffer.contains('|') {
+        return false;
+    }
     const STARTERS: [&str; 17] = [
         "```", "$$", "<think>", "<tool_call>", "# ", "## ", "### ", "#### ", "##### ", "###### ",
         "> ", "---", "***", "|", "- ", "* ", "+ ",
@@ -957,15 +971,19 @@ fn split_task_marker(text: &str) -> (Option<bool>, &str) {
 /// Parse a list-item marker: bullet (`- ` / `* ` / `+ `) or ordinal
 /// (`12. ` / `3) `). Returns (indent level, ordered, ordinal, item text).
 /// Indent counts leading spaces in steps of two (tab = one level).
+///
+/// A bare marker with no text (`-` alone, or `-   `) is an empty list item:
+/// it still belongs to the list, which is why it is returned with empty text
+/// instead of falling through to a paragraph.
 fn parse_list_marker(line: &str) -> Option<(u8, bool, u32, &str)> {
     let stripped = line.trim_start_matches([' ', '\t']);
     let indent = ((line.len() - stripped.len()) / 2).min(4) as u8;
     for bullet in ["- ", "* ", "+ "] {
         if let Some(text) = stripped.strip_prefix(bullet) {
-            if text.trim().is_empty() {
-                return None;
-            }
             return Some((indent, false, 0, text));
+        }
+        if stripped == &bullet[..1] {
+            return Some((indent, false, 0, ""));
         }
     }
     let digits = stripped.chars().take_while(|c| c.is_ascii_digit()).count();
@@ -983,11 +1001,29 @@ fn parse_list_marker(line: &str) -> Option<(u8, bool, u32, &str)> {
     Some((indent, true, number, text))
 }
 
-/// A line shaped like a pipe-table row: starts with `|` and carries at least
-/// one more pipe. Plain sentences that merely CONTAIN a pipe never match.
+/// A line shaped like a pipe-table row: at least one unescaped pipe, with or
+/// without the outer pipes (`| a | b |`, `a | b`). A line that merely mentions
+/// a pipe is only ever HELD for one line of lookahead (see MaybeTable) and is
+/// restored to its paragraph unless a delimiter row with the same column count
+/// follows, so ordinary prose is not turned into a table.
 fn looks_like_table_row(line: &str) -> bool {
     let t = line.trim();
-    t.starts_with('|') && t.matches('|').count() >= 2
+    !t.is_empty() && unescaped_pipe_count(t) >= 1
+}
+
+fn unescaped_pipe_count(text: &str) -> usize {
+    let mut count = 0usize;
+    let mut escaped = false;
+    for c in text.chars() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '|' {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// GitHub-style delimiter row: pipes, dashes, colons and spaces only, with at
@@ -1000,13 +1036,36 @@ fn is_table_delimiter(line: &str) -> bool {
     t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
 }
 
-/// Split a pipe row into trimmed cells; outer pipes are optional. Cell text is
-/// flattened from inline markup (bold/italic/code/…) to its plain text.
+/// Split a pipe row into trimmed cells; outer pipes are optional and `\|` is
+/// a literal pipe inside a cell. Cell text is flattened from inline markup
+/// (bold/italic/code/…) to its plain text.
 fn parse_table_row(line: &str) -> Vec<String> {
+    split_table_row(line)
+        .into_iter()
+        .map(|cell| plain_cell(cell.trim()))
+        .collect()
+}
+
+/// Raw cell strings of a pipe row, with escaped pipes kept intact.
+fn split_table_row(line: &str) -> Vec<String> {
     let t = line.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
     let t = t.strip_suffix('|').unwrap_or(t);
-    t.split('|').map(|cell| plain_cell(cell.trim())).collect()
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'|') {
+            current.push('|');
+            chars.next();
+        } else if c == '|' {
+            cells.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+    }
+    cells.push(current);
+    cells
 }
 
 /// Concatenate the human-visible text of parsed inlines (drop markup markers).
@@ -1026,9 +1085,48 @@ fn plain_cell(text: &str) -> String {
     out
 }
 
-/// GFM: all six heading levels interrupt a paragraph, not just h1-h3.
-fn starts_with_heading(line: &str) -> bool {
-    parse_heading(line).is_some()
+/// Horizontal rule: three or more of `-`, `*` or `_`, optionally spaced.
+fn is_divider(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let mut marker: Option<char> = None;
+    let mut count = 0usize;
+    for c in t.chars() {
+        match c {
+            ' ' | '\t' => {}
+            '-' | '*' | '_' => {
+                if marker.is_some_and(|m| m != c) {
+                    return false;
+                }
+                marker = Some(c);
+                count += 1;
+            }
+            _ => return false,
+        }
+    }
+    count >= 3
+}
+
+/// Strip a blockquote marker (`>` with an optional following space) off a line.
+fn strip_quote_marker(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('>')?;
+    Some(rest.strip_prefix(' ').unwrap_or(rest))
+}
+
+/// Whether a line opens a non-paragraph block type, so it must interrupt an
+/// open paragraph instead of continuing it. Leading indentation is allowed:
+/// an indented fence/heading/quote still starts its block.
+fn starts_block(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("```")
+        || t.starts_with("$$")
+        || t.starts_with("<think>")
+        || t.starts_with("<tool_call>")
+        || parse_heading(t).is_some()
+        || strip_quote_marker(t).is_some()
+        || is_divider(t)
 }
 
 fn parse_heading(line: &str) -> Option<(u8, &str)> {
@@ -1082,6 +1180,39 @@ mod tests {
                 .filter(|block| matches!(block, Block::Heading { .. }))
                 .count();
             assert_eq!(headings, 1, "{marker} must start a heading block");
+        }
+    }
+
+    /// Closing a fence must not leave the closing line inside the code: the
+    /// partial fence line is streamed into the block by `update_active_chunk`
+    /// before `process_line` sees the newline that makes it a fence.
+    #[test]
+    fn closing_fence_is_not_part_of_the_code() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+        parser.feed("```rust\nfn main() {}\n`", &mut doc);
+        parser.feed("``\n", &mut doc);
+
+        let Block::CodeBlock { code, .. } = &doc.blocks()[0] else {
+            panic!("expected code block");
+        };
+        assert_eq!(code, "fn main() {}");
+    }
+
+    /// Think content is trimmed of the streaming accumulator's newline, both
+    /// when the closing tag arrives and when the stream just ends.
+    #[test]
+    fn think_content_has_no_trailing_newline() {
+        for input in ["<think>\nreasoning\n</think>\n", "<think>\nreasoning\n"] {
+            let mut doc = Document::new();
+            let mut parser = IncrementalParser::new();
+            parser.feed(input, &mut doc);
+            parser.flush(&mut doc);
+
+            let Block::Think { content, .. } = &doc.blocks()[0] else {
+                panic!("expected think for {input:?}");
+            };
+            assert_eq!(content, "reasoning", "input {input:?}");
         }
     }
 
@@ -1340,6 +1471,81 @@ mod tests {
         assert!(doc.blocks()[0].is_finalized());
         assert!(matches!(doc.blocks()[1], Block::Paragraph { .. }));
         assert!(doc.blocks()[1].is_finalized());
+    }
+
+    /// GFM treats `___` as a horizontal rule, and a rule interrupts an open
+    /// paragraph instead of continuing it as text.
+    #[test]
+    fn divider_variants_and_paragraph_interruption() {
+        for marker in ["---", "***", "___", "- - -", "*****"] {
+            let mut doc = Document::new();
+            let mut parser = IncrementalParser::new();
+            parser.feed("text above\n", &mut doc);
+            parser.feed(&format!("{marker}\n"), &mut doc);
+            parser.feed("text below\n", &mut doc);
+            parser.feed("\n", &mut doc);
+
+            assert_eq!(doc.blocks().len(), 3, "{marker} must split the paragraph");
+            assert!(matches!(doc.blocks()[0], Block::Paragraph { .. }));
+            assert!(
+                matches!(doc.blocks()[1], Block::Divider { .. }),
+                "{marker} must be a divider"
+            );
+            assert!(matches!(doc.blocks()[2], Block::Paragraph { .. }));
+        }
+    }
+
+    /// The space after `>` is optional: `>quoted` opens a quote, and its
+    /// inline text carries no trailing newline for renderers to print.
+    #[test]
+    fn quote_marker_without_space() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+        parser.feed(">first **bold**\n>second\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        let Block::Quote { inlines, .. } = &doc.blocks()[0] else {
+            panic!("expected quote");
+        };
+        assert_eq!(inline_text(inlines), "first bold\nsecond");
+        assert!(inlines
+            .iter()
+            .any(|i| matches!(i, Inline::Bold { text } if text == "bold")));
+    }
+
+    /// A table needs no outer pipes (`a | b`), and `\|` is a literal pipe
+    /// inside a cell rather than a column break.
+    #[test]
+    fn table_without_outer_pipes_and_escaped_pipe() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+        parser.feed("a | b\n--- | ---\n1 | x \\| y\n", &mut doc);
+        parser.feed("\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 1);
+        let Block::Table { head, rows, .. } = &doc.blocks()[0] else {
+            panic!("expected table");
+        };
+        assert_eq!(head, &vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(rows, &vec![vec!["1".to_string(), "x | y".to_string()]]);
+    }
+
+    /// An indented block starter still interrupts the paragraph it follows.
+    #[test]
+    fn indented_block_starter_interrupts_paragraph() {
+        let mut doc = Document::new();
+        let mut parser = IncrementalParser::new();
+        parser.feed("intro\n", &mut doc);
+        parser.feed("  ```rust\n", &mut doc);
+        parser.feed("code\n", &mut doc);
+        parser.feed("  ```\n", &mut doc);
+
+        assert_eq!(doc.blocks().len(), 2);
+        assert!(matches!(doc.blocks()[1], Block::CodeBlock { .. }));
+        if let Block::CodeBlock { language, .. } = &doc.blocks()[1] {
+            assert_eq!(language.as_deref(), Some("rust"));
+        }
     }
 
     #[test]
