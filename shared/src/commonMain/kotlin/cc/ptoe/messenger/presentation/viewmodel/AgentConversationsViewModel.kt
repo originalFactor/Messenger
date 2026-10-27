@@ -29,6 +29,7 @@ import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flatMapLatest
@@ -49,7 +50,7 @@ import cc.ptoe.messenger.data.util.randomUuid
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentConversationsViewModel(
-    private val agentId: String,
+    initialAgentId: String,
     private val agentRepository: AgentRepository,
     private val conversationRepository: ConversationRepository,
     private val modelRepository: ModelRepository,
@@ -57,19 +58,34 @@ class AgentConversationsViewModel(
     private val projectRepository: ProjectRepository
 ) : ViewModel() {
 
-    val agent: StateFlow<Agent?> = agentRepository.getById(agentId)
+    /**
+     * 当前展示的 Agent。双栏布局下右栏复用同一个 ViewModel（`viewModel()`
+     * 的默认 key 只按类名），所以不能把构造参数当成一辈子不变：切换 Agent
+     * 时由 [loadAgent] 改这里，列表跟着它走。
+     */
+    private val agentIdFlow = MutableStateFlow(initialAgentId)
+    private val agentId: String get() = agentIdFlow.value
+
+    val agent: StateFlow<Agent?> = agentIdFlow
+        .flatMapLatest { id -> agentRepository.getById(id) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = null
         )
 
-    val conversations: StateFlow<List<Conversation>> = conversationRepository.getByAgentId(agentId)
+    val conversations: StateFlow<List<Conversation>> = agentIdFlow
+        .flatMapLatest { id -> conversationRepository.getByAgentId(id) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    /** 切换右栏展示的 Agent；同一目标重复调用是 no-op。 */
+    fun loadAgent(agentId: String) {
+        if (agentIdFlow.value != agentId) agentIdFlow.value = agentId
+    }
 
     /**
      * 该 Agent 名下的项目（聊天列表的文件夹行）；从会话列表按 agentId 过滤，
