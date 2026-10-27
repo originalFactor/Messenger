@@ -36,19 +36,12 @@ internal class StreamingMarkdownCache {
     private var blocks: List<ChatBlock> = emptyList()
 
     /**
-     * The Rust core's markdown parser is the single source of truth (it is
-     * what Android renders); the Kotlin parser is only a fallback for a core
-     * that is not installed yet. Both run at line boundaries, so the
+     * The Rust core's markdown parser is the ONLY markdown parser — there is no
+     * Kotlin implementation behind it. It runs at line boundaries, so the
      * cross-language call is per completed line, not per token.
      */
-    private fun parsePrefix(markdown: String): List<ChatBlock> {
-        val bridgeJson = cc.ptoe.messenger.core.CoreBridgeRegistry.bridge
-            ?.parseMarkdownToBlocksJson(markdown)
-        if (!bridgeJson.isNullOrBlank() && bridgeJson != "[]") {
-            return ChatDocumentParser.parseBlocksJson(bridgeJson)
-        }
-        return ChatDocumentParser.parseMarkdown(markdown, baseId = 1L)
-    }
+    private fun parsePrefix(markdown: String): List<ChatBlock> =
+        ChatDocumentParser.parseMarkdown(markdown, baseId = 1L)
 
     fun blocksFor(markdown: String): List<ChatBlock> {
         val lines = markdown.lines()

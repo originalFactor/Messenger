@@ -45,6 +45,7 @@ import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
+import cc.ptoe.messenger.domain.tool.builtinChatToolsSupported
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -253,8 +254,11 @@ class ChatViewModel(
     /**
      * 平台是否具备内置工具能力（与本会话是否属于项目无关 —— 项目只决定
      * 工作区工具是否可用，聊天输入栏的 "+" 面板据此显示）。
+     *
+     * 必须用平台能力探针：`builtinTools(null)` 是"本会话没有项目工作区"
+     * 的查询，任何平台都会返回空列表，那样切换项在桌面/Android 上永不出现。
      */
-    val toolsAvailable: Boolean get() = builtinTools(null).isNotEmpty()
+    val toolsAvailable: Boolean get() = builtinChatToolsSupported()
 
     /**
      * 回合内的工作目录决策读新鲜数据库行，而不是 [project] 这个

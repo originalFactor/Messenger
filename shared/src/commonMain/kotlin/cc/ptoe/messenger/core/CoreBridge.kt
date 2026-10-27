@@ -168,7 +168,6 @@ interface CoreBridge {
 
     // Document engine session
     fun createDocumentSession(): DocumentSessionBridge? = null
-    fun parseMarkdownToBlocksJson(markdown: String): String = "[]"
 }
 
 interface DocumentSessionBridge {

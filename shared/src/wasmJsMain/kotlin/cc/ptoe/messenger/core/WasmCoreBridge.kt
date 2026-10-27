@@ -274,8 +274,6 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
         }
     }
 
-    override fun parseMarkdownToBlocksJson(markdown: String): String =
-        MessengerWasm.parse_markdown_to_blocks_json(markdown)
 }
 
 /**

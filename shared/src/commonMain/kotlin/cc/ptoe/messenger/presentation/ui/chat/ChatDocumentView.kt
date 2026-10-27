@@ -58,16 +58,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cc.ptoe.messenger.core.parseMarkdownToDocumentJson
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.tool_card_failed
@@ -267,8 +272,6 @@ object ChatDocumentParser {
         }
     }
 
-    private val inlineTokenRegex = Regex("""(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\$[^$]+\$)""")
-
     /** Inlines from the Rust core wire format: text-bearing types carry `text`,
      *  code carries `code`, math carries `formula`. */
     private fun parseInlinesJson(array: JsonArray?): List<ChatInline> =
@@ -296,296 +299,16 @@ object ChatDocumentParser {
             }
         }
 
-    fun parseInlines(text: String): List<ChatInline> {
-        if (text.isEmpty()) return emptyList()
-        val inlines = mutableListOf<ChatInline>()
-        var lastIndex = 0
-
-        for (match in inlineTokenRegex.findAll(text)) {
-            val range = match.range
-            if (range.first > lastIndex) {
-                inlines.add(ChatInline.Text(text.substring(lastIndex, range.first)))
-            }
-            val token = match.value
-            val inline = when {
-                token.startsWith("`") && token.endsWith("`") ->
-                    ChatInline.Code(token.removeSurrounding("`"))
-                (token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__")) ->
-                    ChatInline.Bold(token.substring(2, token.length - 2))
-                (token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_")) ->
-                    ChatInline.Italic(token.substring(1, token.length - 1))
-                token.startsWith("$") && token.endsWith("$") ->
-                    ChatInline.Math(token.removeSurrounding("$"))
-                else -> ChatInline.Text(token)
-            }
-            inlines.add(inline)
-            lastIndex = range.last + 1
-        }
-        if (lastIndex < text.length) {
-            inlines.add(ChatInline.Text(text.substring(lastIndex)))
-        }
-        return inlines
-    }
-
+    // There is no Kotlin Markdown parser: the Rust core's incremental parser is
+    // the single source of truth (it is what Android renders through
+    // `DocumentSessionBridge`, and what the TUI renders). This entry point is the
+    // static-text path for the Compose renderers — it feeds the whole text to
+    // that same parser and maps the resulting blocks.
     fun parseMarkdown(markdown: String, baseId: Long = 1L): List<ChatBlock> {
         if (markdown.isBlank()) return emptyList()
-
-        val blocks = mutableListOf<ChatBlock>()
-        var currentId = baseId
-
-        val lines = markdown.lines()
-        var i = 0
-
-        while (i < lines.size) {
-            val line = lines[i]
-
-            // 1. Think block: <think> ... </think> or unclosed <think>
-            if (line.trimStart().startsWith("<think>")) {
-                val thinkBuilder = StringBuilder()
-                val firstLineContent = line.trimStart().removePrefix("<think>")
-                if (firstLineContent.contains("</think>")) {
-                    val content = firstLineContent.substringBefore("</think>")
-                    blocks.add(ChatBlock.Think(id = currentId++, content = content.trim(), isFinalized = true))
-                    i++
-                    continue
-                }
-                thinkBuilder.append(firstLineContent)
-                var closed = false
-                i++
-                while (i < lines.size) {
-                    val l = lines[i]
-                    if (l.contains("</think>")) {
-                        val before = l.substringBefore("</think>")
-                        if (before.isNotBlank()) thinkBuilder.append("\n").append(before)
-                        closed = true
-                        i++
-                        break
-                    } else {
-                        thinkBuilder.append("\n").append(l)
-                        i++
-                    }
-                }
-                blocks.add(
-                    ChatBlock.Think(
-                        id = currentId++,
-                        content = thinkBuilder.toString().trim(),
-                        isFinalized = closed
-                    )
-                )
-                continue
-            }
-
-            // 2. Fenced code block: ```[lang] ... ```
-            if (line.trimStart().startsWith("```")) {
-                val lang = line.trimStart().removePrefix("```").trim().ifBlank { null }
-                val codeBuilder = StringBuilder()
-                var closed = false
-                i++
-                while (i < lines.size) {
-                    val l = lines[i]
-                    if (l.trimStart().startsWith("```")) {
-                        closed = true
-                        i++
-                        break
-                    } else {
-                        if (codeBuilder.isNotEmpty()) codeBuilder.append("\n")
-                        codeBuilder.append(l)
-                        i++
-                    }
-                }
-                blocks.add(
-                    ChatBlock.Code(
-                        id = currentId++,
-                        language = lang,
-                        code = codeBuilder.toString(),
-                        isFinalized = closed
-                    )
-                )
-                continue
-            }
-
-            // 3. Display Math block: $$ ... $$
-            if (line.trimStart().startsWith("$$")) {
-                val mathBuilder = StringBuilder()
-                val first = line.trimStart().removePrefix("$$")
-                if (first.contains("$$") && first.endsWith("$$")) {
-                    val formula = first.removeSuffix("$$").trim()
-                    blocks.add(ChatBlock.Math(id = currentId++, formula = formula, isFinalized = true))
-                    i++
-                    continue
-                }
-                mathBuilder.append(first)
-                var closed = false
-                i++
-                while (i < lines.size) {
-                    val l = lines[i]
-                    if (l.contains("$$")) {
-                        val part = l.substringBefore("$$")
-                        if (part.isNotBlank()) mathBuilder.append("\n").append(part)
-                        closed = true
-                        i++
-                        break
-                    } else {
-                        if (mathBuilder.isNotEmpty()) mathBuilder.append("\n")
-                        mathBuilder.append(l)
-                        i++
-                    }
-                }
-                blocks.add(
-                    ChatBlock.Math(
-                        id = currentId++,
-                        formula = mathBuilder.toString().trim(),
-                        isFinalized = closed
-                    )
-                )
-                continue
-            }
-
-            // Blank lines
-            if (line.isBlank()) {
-                i++
-                continue
-            }
-
-            // 4. Horizontal rule / divider: ---, ***, ___
-            val trimmed = line.trim()
-            if (trimmed == "---" || trimmed == "***" || trimmed == "___") {
-                blocks.add(ChatBlock.Divider(id = currentId++))
-                i++
-                continue
-            }
-
-            // 5. Headings: #, ##, ###, ####
-            if (line.startsWith("#")) {
-                val level = line.takeWhile { it == '#' }.length
-                if (level in 1..6 && line.length > level && line[level] == ' ') {
-                    val text = line.substring(level + 1).trim()
-                    blocks.add(ChatBlock.Heading(id = currentId++, level = level, text = text, isFinalized = true))
-                    i++
-                    continue
-                }
-            }
-
-            // 6. Blockquote: > text (inline markup parsed like paragraphs)
-            if (line.trimStart().startsWith(">")) {
-                val quoteBuilder = StringBuilder()
-                while (i < lines.size && lines[i].trimStart().startsWith(">")) {
-                    val quoteLine = lines[i].trimStart().removePrefix(">").trimStart()
-                    if (quoteBuilder.isNotEmpty()) quoteBuilder.append("\n")
-                    quoteBuilder.append(quoteLine)
-                    i++
-                }
-                val quoteText = quoteBuilder.toString()
-                val quoteInlines = parseInlines(quoteText)
-                blocks.add(
-                    ChatBlock.Quote(
-                        id = currentId++,
-                        text = plainInlinesText(quoteInlines),
-                        inlines = quoteInlines,
-                        isFinalized = true
-                    )
-                )
-                continue
-            }
-
-            // 7. Table: | cell | cell |
-            if (line.trim().startsWith("|") && line.trim().endsWith("|") && i + 1 < lines.size && lines[i + 1].trim().startsWith("|") && lines[i + 1].contains("-")) {
-                val headerCells = line.trim().removeSurrounding("|", "|").split("|").map { it.trim() }
-                i += 2 // skip header and separator (|---|---|)
-                val rows = mutableListOf<List<String>>()
-                while (i < lines.size && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
-                    val rowCells = lines[i].trim().removeSurrounding("|", "|").split("|").map { it.trim() }
-                    rows.add(rowCells)
-                    i++
-                }
-                blocks.add(ChatBlock.Table(id = currentId++, head = headerCells, rows = rows, isFinalized = true))
-                continue
-            }
-
-            // 8. Lists: - item, * item, + item, or 1. item
-            val listMatch = matchListItem(line)
-            if (listMatch != null) {
-                val items = mutableListOf<ChatBlock.ListItem>()
-                while (i < lines.size) {
-                    val curMatch = matchListItem(lines[i]) ?: break
-                    items.add(curMatch)
-                    i++
-                }
-                blocks.add(ChatBlock.ListBlock(id = currentId++, items = items, isFinalized = true))
-                continue
-            }
-
-            // 9. Paragraph: accumulate consecutive non-empty lines
-            val paragraphBuilder = StringBuilder()
-            while (i < lines.size && lines[i].isNotBlank() &&
-                !lines[i].trimStart().startsWith("<think>") &&
-                !lines[i].trimStart().startsWith("```") &&
-                !lines[i].trimStart().startsWith("$$") &&
-                !lines[i].trimStart().startsWith("#") &&
-                !lines[i].trimStart().startsWith(">") &&
-                matchListItem(lines[i]) == null &&
-                !(lines[i].trim() == "---" || lines[i].trim() == "***" || lines[i].trim() == "___") &&
-                !(lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|"))) {
-                if (paragraphBuilder.isNotEmpty()) paragraphBuilder.append("\n")
-                paragraphBuilder.append(lines[i])
-                i++
-            }
-            val paraText = paragraphBuilder.toString().trim()
-            if (paraText.isNotEmpty()) {
-                val inlines = parseInlines(paraText)
-                blocks.add(
-                    ChatBlock.Paragraph(
-                        id = currentId++,
-                        text = paraText,
-                        inlines = inlines,
-                        isFinalized = true
-                    )
-                )
-            }
-        }
-
-        return blocks
-    }
-
-    private fun matchListItem(line: String): ChatBlock.ListItem? {
-        val indent = (line.takeWhile { it == ' ' || it == '\t' }.length / 2).coerceAtMost(4)
-        val trimmed = line.trimStart()
-        if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
-            val (task, text) = splitTaskMarker(trimmed.substring(2).trim())
-            return ChatBlock.ListItem(
-                indent = indent,
-                ordered = false,
-                number = 0,
-                task = task,
-                text = text
-            )
-        }
-        val digitPrefix = trimmed.takeWhile { it.isDigit() }
-        if (digitPrefix.isNotEmpty() && trimmed.length > digitPrefix.length + 1) {
-            val num = digitPrefix.toIntOrNull() ?: 0
-            val delim = trimmed[digitPrefix.length]
-            if ((delim == '.' || delim == ')') && trimmed[digitPrefix.length + 1] == ' ') {
-                val (task, text) = splitTaskMarker(trimmed.substring(digitPrefix.length + 2).trim())
-                return ChatBlock.ListItem(
-                    indent = indent,
-                    ordered = true,
-                    number = num,
-                    task = task,
-                    text = text
-                )
-            }
-        }
-        return null
-    }
-
-    /** GFM task-list marker: `[ ]` unchecked / `[x]`-`[X]` checked, followed by
-     *  whitespace (or ending the item). Anything else stays literal text. */
-    private fun splitTaskMarker(text: String): Pair<Boolean?, String> = when {
-        text.startsWith("[ ] ") -> false to text.removePrefix("[ ] ").trim()
-        text.startsWith("[x] ") || text.startsWith("[X] ") -> true to text.substring(4).trim()
-        text == "[ ]" -> false to ""
-        text == "[x]" || text == "[X]" -> true to ""
-        else -> null to text
+        val blocks = parseBlocksJson(parseMarkdownToDocumentJson(markdown))
+        if (baseId == 1L) return blocks
+        return blocks.mapIndexed { index, block -> block.withId(baseId + index) }
     }
 }
 
@@ -1076,52 +799,145 @@ private fun RenderList(block: ChatBlock.ListBlock) {
 @Composable
 private fun RenderTable(block: ChatBlock.Table) {
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+    val headerStyle = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+    val cellStyle = MaterialTheme.typography.bodySmall
+    val columnCount = maxOf(block.head.size, block.rows.maxOfOrNull { it.size } ?: 0)
+    if (columnCount == 0) return
+
+    val textMeasurer = rememberTextMeasurer()
+    val cellPadding = 10.dp
+    val cellPaddingPx = with(LocalDensity.current) { cellPadding.roundToPx() }
+
+    // Measure every cell up front, like the native TableView: each row used to
+    // size to its own text, so columns never lined up and the header fill
+    // stopped at the widest row instead of spanning the whole card.
+    val naturalWidths = remember(
+        block.head, block.rows, headerStyle, cellStyle, textMeasurer, cellPaddingPx
+    ) {
+        val natural = IntArray(columnCount)
+        fun record(cells: List<String>, style: TextStyle) {
+            cells.forEachIndexed { index, cell ->
+                if (index >= columnCount) return@forEachIndexed
+                val textWidth = textMeasurer.measure(
+                    text = cell,
+                    style = style,
+                    softWrap = false,
+                    maxLines = 1
+                ).size.width
+                natural[index] = maxOf(natural[index], textWidth + 2 * cellPaddingPx)
+            }
+        }
+        record(block.head, headerStyle)
+        block.rows.forEach { record(it, cellStyle) }
+        for (index in 0 until columnCount) if (natural[index] == 0) natural[index] = 1
+        natural
+    }
+
+    // The bubble is sized by INTRINSIC measurement, which cannot see the real
+    // pane width, so the first pass renders at natural width. `onSizeChanged`
+    // would report the CONTENT width inside the scroll container (unbounded),
+    // not the viewport, so read the scroll state's measured viewport instead;
+    // it is 0 until the first layout pass, which then stretches the columns.
+    val scrollState = rememberScrollState()
+    val fittedWidths = remember(naturalWidths, scrollState.viewportSize) {
+        fitTableColumns(naturalWidths, scrollState.viewportSize)
+    }
+    val tableWidthPx = fittedWidths.sum()
+    val density = LocalDensity.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, borderColor, RoundedCornerShape(8.dp))
-            .horizontalScroll(rememberScrollState())
+            .horizontalScroll(scrollState)
     ) {
-        if (block.head.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                block.head.forEach { cell ->
-                    Text(
-                        text = cell,
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                }
-            }
-        }
-        block.rows.forEachIndexed { index, row ->
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                row.forEach { cell ->
-                    Text(
-                        text = cell,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                }
-            }
-            if (index != block.rows.lastIndex) {
-                Box(
+        Column(modifier = Modifier.width(with(density) { tableWidthPx.toDp() })) {
+            if (block.head.isNotEmpty()) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(1.dp)
-                        .background(borderColor)
-                )
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    block.head.forEachIndexed { index, cell ->
+                        TableCell(cell, headerStyle, fittedWidths[index], cellPadding)
+                    }
+                }
+                if (block.rows.isNotEmpty()) TableRowDivider(borderColor)
+            }
+            block.rows.forEachIndexed { index, row ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (column in 0 until columnCount) {
+                        TableCell(
+                            text = row.getOrElse(column) { "" },
+                            style = cellStyle,
+                            widthPx = fittedWidths[column],
+                            horizontalPadding = cellPadding
+                        )
+                    }
+                }
+                if (index != block.rows.lastIndex) TableRowDivider(borderColor)
             }
         }
     }
+}
+
+@Composable
+private fun TableCell(text: String, style: TextStyle, widthPx: Int, horizontalPadding: Dp) {
+    val density = LocalDensity.current
+    Text(
+        text = text,
+        style = style,
+        modifier = Modifier
+            .width(with(density) { widthPx.toDp() })
+            .padding(horizontal = horizontalPadding)
+    )
+}
+
+/**
+ * Column widths in pixels for a table that has [availableWidthPx] to fill.
+ *
+ * Mirrors the native TableView: when the natural (single-line) table is
+ * narrower than the available width every column grows proportionally so the
+ * table spans the card exactly; when it is wider the natural widths are kept
+ * and the caller scrolls horizontally. Squeezing columns instead would break
+ * long tokens (`renderer-android`, "source") into vertical letter strips.
+ */
+internal fun fitTableColumns(
+    naturalWidthsPx: IntArray,
+    availableWidthPx: Int
+): IntArray {
+    if (naturalWidthsPx.isEmpty()) return IntArray(0)
+    val naturalTotal = naturalWidthsPx.sum()
+    if (availableWidthPx <= naturalTotal || naturalTotal == 0) return naturalWidthsPx.copyOf()
+
+    val grown = IntArray(naturalWidthsPx.size)
+    var assigned = 0
+    naturalWidthsPx.forEachIndexed { index, width ->
+        grown[index] = if (index == naturalWidthsPx.lastIndex) {
+            availableWidthPx - assigned
+        } else {
+            (width.toLong() * availableWidthPx / naturalTotal).toInt()
+        }
+        assigned += grown[index]
+    }
+    return grown
+}
+
+@Composable
+private fun TableRowDivider(color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(color)
+    )
 }

@@ -50,4 +50,22 @@ class WorkspaceBoundToolRegistryTest {
         assertTrue(TerminalTool.TOOL_NAME in names, "terminal must exist inside a project")
         assertEquals(workspaceTools, names.filter { it in workspaceTools })
     }
+
+    /**
+     * 回归：聊天输入栏的只读/可写切换曾用 `createBuiltinChatTools(null)`
+     * 判断"平台是否支持工具"。`null` 表示"该会话没有项目工作区"，任何
+     * 平台都会返回空列表，于是切换项在 Desktop/Android 上永远不显示。
+     * 平台能力必须独立于某个会话的 workspace。
+     */
+    @Test
+    fun thePlatformSupportsToolsWithoutAConversationWorkspace() {
+        assertTrue(
+            builtinChatToolsSupported(),
+            "the + panel's read-only/writable entry is gated on platform capability"
+        )
+        assertTrue(
+            createBuiltinChatTools(null).isEmpty(),
+            "the capability probe must not weaken the no-workspace declaration gate"
+        )
+    }
 }

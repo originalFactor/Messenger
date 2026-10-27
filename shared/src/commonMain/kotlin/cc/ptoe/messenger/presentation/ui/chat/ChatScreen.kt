@@ -142,6 +142,9 @@ fun ChatScreen(
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val isAttachingImage by viewModel.isAttachingImage.collectAsStateWithLifecycle()
     val agentWritable by viewModel.agentWritable.collectAsStateWithLifecycle()
+    // 平台能力是安装态属性（Android 是否装了伴随 runtime），按进入页面时
+    // 取值即可；避免每次重组都做一次 PackageManager 查询。
+    val platformSupportsTools = remember { viewModel.toolsAvailable }
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -294,7 +297,7 @@ fun ChatScreen(
                     },
                     onRemoveImage = { viewModel.removePendingImage(it) },
                     // Agent 只读/可写模式切换按平台是否注册工具决定展示
-                    agentWritable = if (viewModel.toolsAvailable) {
+                    agentWritable = if (platformSupportsTools) {
                         agentWritable
                     } else {
                         null

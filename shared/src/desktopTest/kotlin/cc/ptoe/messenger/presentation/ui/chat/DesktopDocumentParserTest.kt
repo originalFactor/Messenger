@@ -131,7 +131,7 @@ class ChatDocumentParserTest {
         assertEquals(true, jsonList.items[1].task)
         assertEquals(null, jsonList.items[2].task)
 
-        // The built-in Kotlin markdown parser strips the same markers
+        // The Rust parser strips the same task markers
         val markdown = """
             - [ ] Todo item
             - [x] Done item
@@ -249,6 +249,10 @@ class ChatDocumentParserTest {
         assertEquals("Internal deliberation...", thinkClosed.content)
         assertTrue(thinkClosed.isFinalized)
 
+        // A static parse feeds the whole text and then finishes the stream, so
+        // even an unclosed <think> comes back finalized — the Rust parser's
+        // flush closes whatever block is active. (Live streaming keeps it
+        // `streaming` until the closing tag arrives.)
         val unclosedMarkdown = """
             <think>
             Still deliberating...
@@ -257,7 +261,7 @@ class ChatDocumentParserTest {
         assertEquals(1, streamingBlocks.size)
         val thinkStreaming = streamingBlocks[0] as ChatBlock.Think
         assertEquals("Still deliberating...", thinkStreaming.content)
-        assertEquals(false, thinkStreaming.isFinalized)
+        assertTrue(thinkStreaming.isFinalized)
     }
 
     @Test
@@ -309,6 +313,36 @@ class ChatDocumentParserTest {
         assertTrue(divider.isFinalized)
     }
 
+    /**
+     * Table cells carry plain text: the Rust parser's `plain_cell` flattens
+     * inline markup, so a cell like `` `shared` `` (the common case in a module
+     * table) must not render with literal backticks. Rows also need no trailing
+     * outer pipe, which GFM allows and models emit.
+     */
+    @Test
+    fun testParseMarkdownTableFlattensInlineMarkup() {
+        val markdown = """
+            | Module | Role | Size |
+            |---|---|---|
+            | `shared` | **KMP** library | 268 |
+            | `androidApp` | *Android* shell | 41
+        """.trimIndent()
+
+        val table = ChatDocumentParser.parseMarkdown(markdown).single() as ChatBlock.Table
+        assertEquals(listOf("Module", "Role", "Size"), table.head)
+        assertEquals(listOf("shared", "KMP library", "268"), table.rows[0])
+        assertEquals(listOf("androidApp", "Android shell", "41"), table.rows[1])
+    }
+
+    /** A pipe row with no delimiter row above it stays a paragraph. */
+    @Test
+    fun testParseMarkdownPipeLineWithoutDelimiterTerminates() {
+        val blocks = ChatDocumentParser.parseMarkdown("| just | words\nmore text")
+        assertEquals(1, blocks.size)
+        val paragraph = blocks[0] as ChatBlock.Paragraph
+        assertEquals("| just | words\nmore text", paragraph.text)
+    }
+
     @Test
     fun testParseQuoteInlines() {
         // Rust core wire format: quote content carries parsed inlines
@@ -332,7 +366,7 @@ class ChatDocumentParserTest {
         assertTrue(jsonQuote.inlines.any { it is ChatInline.Bold && it.text == "bold" })
         assertTrue(jsonQuote.inlines.any { it is ChatInline.Code && it.code == "code" })
 
-        // The built-in Kotlin parser strips the same markers
+        // The Rust parser strips the same inline markers
         val mdQuote = ChatDocumentParser.parseMarkdown("> Quote with **bold** and `code`.")[0] as ChatBlock.Quote
         assertEquals("Quote with bold and code.", mdQuote.text)
         assertTrue(mdQuote.inlines.any { it is ChatInline.Bold && it.text == "bold" })

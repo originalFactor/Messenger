@@ -23,3 +23,6 @@ package cc.ptoe.messenger.domain.tool
  * `tools` array.
  */
 actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> = emptyList()
+
+/** A browser has no shell or workspace filesystem, so no built-in tools. */
+actual fun builtinChatToolsSupported(): Boolean = false

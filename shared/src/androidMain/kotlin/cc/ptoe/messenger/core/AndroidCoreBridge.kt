@@ -206,6 +206,4 @@ class AndroidCoreBridge(
         }
     }
 
-    override fun parseMarkdownToBlocksJson(markdown: String): String =
-        cc.ptoe.messenger.core.parseMarkdownToBlocksJson(markdown)
 }

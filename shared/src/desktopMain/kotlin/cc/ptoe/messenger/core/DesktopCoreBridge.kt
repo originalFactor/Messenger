@@ -226,6 +226,4 @@ class DesktopCoreBridge(
         }
     }
 
-    override fun parseMarkdownToBlocksJson(markdown: String): String =
-        cc.ptoe.messenger.core.parseMarkdownToBlocksJson(markdown)
 }
