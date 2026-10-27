@@ -74,6 +74,15 @@ compose.desktop {
                 menuGroup = "Messenger"
                 iconFile.set(project.file("src/main/resources/icon.ico"))
             }
+            macOS {
+                // jpackage requires an ICNS icon for macOS bundles.
+                iconFile.set(project.file("src/main/resources/icon.icns"))
+                bundleID = "cc.ptoe.messenger"
+            }
+            linux {
+                // Deb packaging wants a single square PNG (512x512).
+                iconFile.set(project.file("src/main/resources/icon.png"))
+            }
         }
         // ProGuard runs on every release build (the Desktop counterpart of R8 in
         // the Android modules). Shrinking + optimization are on; obfuscation is

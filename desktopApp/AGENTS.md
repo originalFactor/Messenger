@@ -18,3 +18,5 @@ Thin `org.jetbrains.kotlin.jvm` + `compose.multiplatform` + `kotlin.compose` she
 ./gradlew-cli :desktopApp:packageReleaseDmg   # macOS
 ./gradlew-cli :desktopApp:packageReleaseDeb   # Linux
 ```
+
+- Desktop native distributions use platform-specific icons in `src/main/resources`: `icon.ico` for Windows, `icon.icns` for macOS, and `icon.png` for Linux; the running window uses `logo.png`. Keep these packaging assets in sync when changing the application icon.
