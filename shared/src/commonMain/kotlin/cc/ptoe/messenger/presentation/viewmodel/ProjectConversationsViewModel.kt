@@ -37,15 +37,23 @@ import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** 文件夹页的目标：项目（null = 无项目文件夹）与可选的 Agent 过滤。 */
+private data class FolderTarget(
+    val projectId: String?,
+    val agentId: String?
+)
 
 /** 文件夹二级页的多选状态。 */
 data class FolderUiState(
@@ -58,10 +66,17 @@ data class FolderUiState(
  *
  * [projectId] 非 null = 项目的会话列表；null = “无项目”文件夹（普通对话）。
  * [agentId] 非 null 时只展示该 Agent 的会话（从 Agent 聊天列表进入的情形）。
+ *
+ * 两个目标都可能变化：双栏布局下右栏在同一个插槽里换文件夹，而
+ * `viewModel()` 的默认 key 只按类名生成（Compose 的 `key(...)` 不参与），
+ * 所以这里不能把构造参数当成一辈子不变——列表流必须跟着 [loadFolder]
+ * 的目标走，否则点开第二个项目仍然显示第一个文件夹的会话，新建对话也会
+ * 写进旧文件夹（见 [createNewConversation]）。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProjectConversationsViewModel(
-    private val projectId: String?,
-    private val agentId: String?,
+    initialProjectId: String?,
+    initialAgentId: String?,
     private val projectRepository: ProjectRepository,
     private val conversationRepository: ConversationRepository,
     private val agentRepository: AgentRepository,
@@ -70,29 +85,50 @@ class ProjectConversationsViewModel(
     private val currentAgentRepository: CurrentAgentRepository
 ) : ViewModel() {
 
+    private val target = MutableStateFlow(FolderTarget(initialProjectId, initialAgentId))
+
+    /** 当前展示的文件夹目标；新建会话写入它的 projectId/agentId。 */
+    private val projectId: String? get() = target.value.projectId
+    private val agentId: String? get() = target.value.agentId
+
     private val _uiState = MutableStateFlow(FolderUiState())
     val uiState: StateFlow<FolderUiState> = _uiState.asStateFlow()
 
-    val project: StateFlow<Project?> =
-        (if (projectId == null) flowOf(null) else projectRepository.getById(projectId))
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5000),
-                initialValue = null
-            )
+    val project: StateFlow<Project?> = target
+        .map { it.projectId }
+        .flatMapLatest { id -> if (id == null) flowOf(null) else projectRepository.getById(id) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
 
-    val conversations: StateFlow<List<Conversation>> =
-        (if (projectId == null) {
-            conversationRepository.getAll().map { all -> all.filter { it.projectId == null } }
-        } else {
-            conversationRepository.getByProjectId(projectId)
-        })
-            .let { flow -> if (agentId == null) flow else flow.map { all -> all.filter { it.agentId == agentId } } }
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5000),
-                initialValue = emptyList()
-            )
+    val conversations: StateFlow<List<Conversation>> = target
+        .flatMapLatest { folder ->
+            val conversations = if (folder.projectId == null) {
+                conversationRepository.getAll().map { all -> all.filter { it.projectId == null } }
+            } else {
+                conversationRepository.getByProjectId(folder.projectId)
+            }
+            folder.agentId?.let { agentId -> conversations.map { all -> all.filter { it.agentId == agentId } } }
+                ?: conversations
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /**
+     * 切换右栏展示的文件夹。目标未变时是 no-op，避免返回选择页再进入时
+     * 重置多选状态。
+     */
+    fun loadFolder(projectId: String?, agentId: String?) {
+        val next = FolderTarget(projectId, agentId)
+        if (target.value == next) return
+        target.value = next
+        _uiState.value = FolderUiState()
+    }
 
     val allAgents: StateFlow<List<Agent>> = agentRepository.getAll()
         .stateIn(

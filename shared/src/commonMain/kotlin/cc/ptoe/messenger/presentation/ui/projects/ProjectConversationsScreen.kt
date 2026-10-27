@@ -113,7 +113,12 @@ fun ProjectConversationsScreen(
     // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
     val agentNames = agentDisplayNames(allAgents)
 
-    // 进入列表页时触发一次空会话清理（规则在 Rust core）。
+    // 同一个 ViewModel 会被双栏右栏复用（默认 key 只按类名），切换文件夹时
+    // 必须显式改目标，否则列表/新建会话都还停在第一个文件夹上。
+    LaunchedEffect(projectId, agentId) {
+        viewModel.loadFolder(projectId, agentId)
+    }
+
     LaunchedEffect(Unit) {
         viewModel.sweepEmptyConversations()
     }

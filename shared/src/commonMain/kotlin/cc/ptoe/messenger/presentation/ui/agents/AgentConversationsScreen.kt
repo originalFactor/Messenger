@@ -93,6 +93,11 @@ fun AgentConversationsScreen(
     val agentAvatars = remember(agent) { agent?.let { mapOf(it.id to it.avatar) } ?: emptyMap() }
 
     // 进入列表页时触发一次空会话清理（规则在 Rust core）。
+    // 双栏右栏复用同一个 ViewModel（默认 key 只按类名），切换 Agent 时重定向。
+    LaunchedEffect(agentId) {
+        viewModel.loadAgent(agentId)
+    }
+
     LaunchedEffect(Unit) {
         viewModel.sweepEmptyConversations()
     }
