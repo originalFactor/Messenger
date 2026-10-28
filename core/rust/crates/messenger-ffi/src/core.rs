@@ -415,6 +415,18 @@ impl CoreHandle {
         serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
     }
 
+    pub fn list_messages_before_json(&self, conversation_id: String, before_id: String, limit: u32) -> Result<String, CoreError> {
+        let rows = self.store.list_messages_before(&conversation_id, &before_id, limit)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
+    pub fn list_messages_from_json(&self, conversation_id: String, from_id: String) -> Result<String, CoreError> {
+        let rows = self.store.list_messages_from(&conversation_id, &from_id)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
     pub fn get_message_json(&self, id: String) -> Result<Option<String>, CoreError> {
         let row = self.store.get_message(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
         match row {

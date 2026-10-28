@@ -18,9 +18,24 @@ package cc.ptoe.messenger.domain.repository
 
 import cc.ptoe.messenger.domain.model.Message
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 interface MessageRepository {
     fun getByConversationId(conversationId: String): Flow<List<Message>>
+    fun observeChanges(conversationId: String): Flow<Unit> = getByConversationId(conversationId).map { Unit }
+    suspend fun getRecent(conversationId: String, limit: Int): List<Message> =
+        getByConversationId(conversationId).first().takeLast(limit)
+    suspend fun getBefore(conversationId: String, beforeId: String, limit: Int): List<Message> {
+        val rows = getByConversationId(conversationId).first()
+        val index = rows.indexOfFirst { it.id == beforeId }
+        return if (index < 0) emptyList() else rows.take(index).takeLast(limit)
+    }
+    suspend fun getFrom(conversationId: String, fromId: String): List<Message> {
+        val rows = getByConversationId(conversationId).first()
+        val index = rows.indexOfFirst { it.id == fromId }
+        return if (index < 0) emptyList() else rows.drop(index)
+    }
     suspend fun getByConversationIds(conversationIds: List<String>): List<Message>
     suspend fun insert(message: Message)
     suspend fun insertAll(messages: List<Message>)

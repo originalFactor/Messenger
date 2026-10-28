@@ -459,6 +459,41 @@ impl Store {
         })
     }
 
+    /// Read the chronological page immediately before an existing message.
+    pub fn list_messages_before(
+        &self, conversation_id: &str, before_id: &str, limit: u32,
+    ) -> Result<Vec<StoredMessage>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE conversationId = ?1 \
+                 AND (timestamp, rowid) < (SELECT timestamp, rowid FROM messages \
+                   WHERE conversationId = ?1 AND id = ?2) \
+                 ORDER BY timestamp DESC, rowid DESC LIMIT ?3"
+            ))?;
+            let mut rows: Vec<_> = stmt.query_map(rusqlite::params![conversation_id, before_id, limit], map_message)?
+                .collect::<Result<_, _>>()?;
+            rows.reverse();
+            Ok(rows)
+        })
+    }
+
+    /// Refresh the loaded window, including the anchor and all newer rows.
+    /// An absent anchor returns an empty list so the caller can recover after deletion.
+    pub fn list_messages_from(
+        &self, conversation_id: &str, from_id: &str,
+    ) -> Result<Vec<StoredMessage>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE conversationId = ?1 \
+                 AND (timestamp, rowid) >= (SELECT timestamp, rowid FROM messages \
+                   WHERE conversationId = ?1 AND id = ?2) \
+                 ORDER BY timestamp ASC, rowid ASC"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params![conversation_id, from_id], map_message)?;
+            rows.collect()
+        })
+    }
+
     pub fn get_message(&self, id: &str) -> Result<Option<StoredMessage>, rusqlite::Error> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare_cached(&format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1"))?;

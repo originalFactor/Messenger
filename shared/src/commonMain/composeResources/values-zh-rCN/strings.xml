@@ -454,6 +454,7 @@
     <string name="error_load_more_failed">加载更多 Agent 失败</string>
     <string name="error_load_agent_failed">加载 Agent 失败</string>
     <string name="error_read_image_failed">无法读取图片: %1$s</string>
+    <string name="error_history_load">????????</string>
     <string name="error_unknown">未知错误</string>
     <string name="error_agent_not_found_chat">Agent not found</string>
     <string name="error_api_no_valid_response">API 未返回有效响应，请检查 API 配置和参数</string>

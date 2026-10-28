@@ -47,6 +47,7 @@ import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
@@ -62,6 +63,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -131,6 +133,8 @@ fun ChatScreen(
     )
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
+    val isLoadingHistory by viewModel.isLoadingHistory.collectAsStateWithLifecycle()
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val agent by viewModel.agent.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
@@ -317,34 +321,41 @@ fun ChatScreen(
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            if (messages.isEmpty()) {
+            if (messages.isEmpty() && isLoadingHistory) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            } else if (messages.isEmpty()) {
                 EmptyChatState(
                     avatar = agent?.avatar,
                     agentName = agent?.displayName(),
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                ChatMessageList(
-                    chatItems = chatItems,
-                    isGenerating = isGenerating,
-                    streamingContent = streamingContent,
-                    streamingMessageId = streamingMessageId,
-                    streamingDiff = streamingDiff,
-                    agent = agent,
-                    userAvatar = userAvatar,
-                    enableContextMenu = enableContextMenu,
-                    copiedToastText = copiedToastText,
-                    onRetryClick = { messageId -> viewModel.retrySend(messageId) },
-                    onMessageLongClick = { message ->
-                        selectedMessageId = message.id
-                        selectedMessageRole = message.role
-                        showActionMenu = true
-                    },
-                    onCopyClick = { text -> viewModel.copyMessage(text) },
-                    onRegenerateClick = { messageId -> viewModel.regenerateMessage(messageId) },
-                    onDeleteClick = { messageId -> viewModel.deleteMessage(messageId) },
-                    modifier = Modifier.fillMaxSize()
-                )
+                key(conversationId) {
+                    ChatMessageList(
+                        chatItems = chatItems,
+                        isGenerating = isGenerating,
+                        streamingContent = streamingContent,
+                        streamingMessageId = streamingMessageId,
+                        streamingDiff = streamingDiff,
+                        agent = agent,
+                        userAvatar = userAvatar,
+                        enableContextMenu = enableContextMenu,
+                        copiedToastText = copiedToastText,
+                        onRetryClick = { messageId -> viewModel.retrySend(messageId) },
+                        onMessageLongClick = { message ->
+                            selectedMessageId = message.id
+                            selectedMessageRole = message.role
+                            showActionMenu = true
+                        },
+                        onCopyClick = { text -> viewModel.copyMessage(text) },
+                        onRegenerateClick = { messageId -> viewModel.regenerateMessage(messageId) },
+                        onDeleteClick = { messageId -> viewModel.deleteMessage(messageId) },
+                        hasOlderMessages = hasOlderMessages,
+                        isLoadingHistory = isLoadingHistory,
+                        onLoadOlderMessages = viewModel::loadOlderMessages,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }

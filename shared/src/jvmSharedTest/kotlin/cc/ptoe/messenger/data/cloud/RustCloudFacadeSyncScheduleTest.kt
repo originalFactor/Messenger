@@ -263,6 +263,9 @@ class RustCloudFacadeSyncScheduleTest {
         override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
             listMessagesByConversationJson(conversationId)
 
+        override fun listMessagesBeforeJson(conversationId: String, beforeId: String, limit: UInt): String = "[]"
+        override fun listMessagesFromJson(conversationId: String, fromId: String): String = "[]"
+
         override fun getMessageJson(id: String): String? = null
         override fun upsertMessageJson(json: String) {}
         override fun deleteMessage(id: String) {}

@@ -71,6 +71,11 @@ class AndroidCoreBridge(
     override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
         core.listRecentMessagesByConversationJson(conversationId, limit)
 
+    override fun listMessagesBeforeJson(conversationId: String, beforeId: String, limit: UInt): String =
+        core.listMessagesBeforeJson(conversationId, beforeId, limit)
+    override fun listMessagesFromJson(conversationId: String, fromId: String): String =
+        core.listMessagesFromJson(conversationId, fromId)
+
     override fun getMessageJson(id: String): String? = core.getMessageJson(id)
     override fun upsertMessageJson(json: String) = core.upsertMessageJson(json)
     override fun deleteMessage(id: String) = core.deleteMessage(id)
