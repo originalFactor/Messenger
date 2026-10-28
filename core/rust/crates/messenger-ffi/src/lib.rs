@@ -191,6 +191,10 @@ mod tests {
         core.upsert_message_json(msg_json).unwrap();
         let msgs = core.list_messages_by_conversation_json("c1".into()).unwrap();
         assert!(msgs.contains("msg1"));
+        let recent = core.list_recent_messages_by_conversation_json("c1".into(), 1).unwrap();
+        assert!(recent.contains("msg1"));
+        let empty = core.list_recent_messages_by_conversation_json("c1".into(), 0).unwrap();
+        assert_eq!(empty, "[]");
 
         // 5. KV
         core.kv_set("foo".into(), "bar".into()).unwrap();

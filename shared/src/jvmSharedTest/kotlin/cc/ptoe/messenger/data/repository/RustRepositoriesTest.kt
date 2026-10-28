@@ -175,6 +175,13 @@ class RustRepositoriesTest {
         // Message
         override fun listMessagesByConversationJson(conversationId: String): String =
             NetworkClient.json.encodeToString(messages.values.filter { it.conversationId == conversationId })
+        override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
+            NetworkClient.json.encodeToString(
+                messages.values.filter { it.conversationId == conversationId }
+                    .sortedBy { it.timestamp }
+                    .takeLast(limit.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt())
+            )
+
         override fun getMessageJson(id: String): String? = messages[id]?.let { NetworkClient.json.encodeToString(it) }
         override fun upsertMessageJson(json: String) {
             val dto = NetworkClient.json.decodeFromString<StoredMessageDto>(json)

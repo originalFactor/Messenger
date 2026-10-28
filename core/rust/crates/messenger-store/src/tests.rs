@@ -637,3 +637,28 @@ fn v3_database_gains_the_model_cache_read_rate_column() {
     let model = store.get_model("p1:m").unwrap().unwrap();
     assert_eq!(model.cache_read_rate, None);
 }
+
+#[test]
+fn recent_messages_are_limited_and_keep_timestamp_tie_order() {
+    let store = Store::open_memory().unwrap();
+    store.upsert_provider(&sample_provider("p1")).unwrap();
+    store.upsert_agent(&sample_agent("a1", true)).unwrap();
+    store.upsert_conversation(&sample_conversation("c1", None)).unwrap();
+    store.upsert_conversation(&sample_conversation("c2", None)).unwrap();
+    for (id, conversation, timestamp) in [
+        ("one", "c1", 10), ("other", "c2", 11), ("two", "c1", 20),
+        ("three", "c1", 20), ("four", "c1", 30),
+    ] {
+        store.upsert_message(&StoredMessage {
+            id: id.into(), conversation_id: conversation.into(), role: "user".into(),
+            content: id.into(), parts_json: None, timestamp, status: "sent".into(),
+            error_message: None,
+        }).unwrap();
+    }
+    let ids = |limit| store.list_recent_messages_by_conversation("c1", limit).unwrap()
+        .into_iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(ids(0), Vec::<String>::new());
+    assert_eq!(ids(2), ["three", "four"]);
+    assert_eq!(ids(3), ["two", "three", "four"]);
+    assert_eq!(ids(10), ["one", "two", "three", "four"]);
+}

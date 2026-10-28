@@ -94,6 +94,7 @@ external class WasmCoreJs {
     fun sweep_empty_conversations(excludeIdsJson: String): String
 
     fun list_messages_by_conversation_json(conversationId: String): String
+    fun list_recent_messages_by_conversation_json(conversationId: String, limit: Int): String
     fun get_message_json(id: String): String?
     fun upsert_message_json(json: String)
     fun delete_message(id: String)

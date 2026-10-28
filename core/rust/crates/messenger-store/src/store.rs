@@ -438,6 +438,27 @@ impl Store {
         })
     }
 
+    /// The newest `limit` messages in chronological order. Equal timestamps
+    /// are ordered by rowid, matching the insertion order used by the full list.
+    /// The compound index lets SQLite stop after `limit` rows instead of
+    /// materializing an entire conversation when opening a chat.
+    pub fn list_recent_messages_by_conversation(
+        &self,
+        conversation_id: &str,
+        limit: u32,
+    ) -> Result<Vec<StoredMessage>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE conversationId = ?1 \
+                 ORDER BY timestamp DESC, rowid DESC LIMIT ?2"
+            ))?;
+            let mut rows: Vec<_> = stmt.query_map(rusqlite::params![conversation_id, limit], map_message)?
+                .collect::<Result<_, _>>()?;
+            rows.reverse();
+            Ok(rows)
+        })
+    }
+
     pub fn get_message(&self, id: &str) -> Result<Option<StoredMessage>, rusqlite::Error> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare_cached(&format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1"))?;
