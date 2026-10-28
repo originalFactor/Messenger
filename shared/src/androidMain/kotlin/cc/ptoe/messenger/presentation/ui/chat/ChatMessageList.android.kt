@@ -90,6 +90,9 @@ internal actual fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    hasOlderMessages: Boolean,
+    isLoadingHistory: Boolean,
+    onLoadOlderMessages: () -> Unit,
     modifier: Modifier
 ) {
     val adapter = remember { ConversationAdapter() }

@@ -18,6 +18,7 @@ package cc.ptoe.messenger.presentation.viewmodel
 
 import cc.ptoe.messenger.presentation.platform.PickedImage
 import cc.ptoe.messenger.presentation.platform.copyTextToClipboard
+import cc.ptoe.messenger.presentation.platform.paginateChatHistory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
@@ -72,6 +73,7 @@ import cc.ptoe.messenger.generated.resources.error_context_summarize_failed
 import cc.ptoe.messenger.generated.resources.error_no_available_model
 import cc.ptoe.messenger.generated.resources.error_read_image_failed
 import cc.ptoe.messenger.generated.resources.error_unknown
+import cc.ptoe.messenger.generated.resources.error_history_load
 import cc.ptoe.messenger.generated.resources.tool_interrupted_result
 import cc.ptoe.messenger.generated.resources.tool_unknown_tool
 import org.jetbrains.compose.resources.getString
@@ -143,7 +145,18 @@ class ChatViewModel(
             initialValue = null
         )
 
-    val messages: StateFlow<List<Message>> = _conversationId
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val historyPager = ChatHistoryPager(messageRepository, viewModelScope, { error ->
+        viewModelScope.launch {
+            val label = getString(Res.string.error_history_load)
+            _errorMessage.value = error.message?.let { "$label: $it" } ?: label
+        }
+    })
+    val hasOlderMessages = historyPager.hasOlder
+    val isLoadingHistory = historyPager.isLoading
+
+    val messages: StateFlow<List<Message>> = if (paginateChatHistory) historyPager.messages else _conversationId
         .flatMapLatest { id ->
             if (id != null) {
                 messageRepository.getByConversationId(id)
@@ -159,9 +172,6 @@ class ChatViewModel(
 
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
-
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     private val _needsModelSetup = MutableStateFlow(false)
     val needsModelSetup: StateFlow<Boolean> = _needsModelSetup.asStateFlow()
@@ -348,7 +358,10 @@ class ChatViewModel(
         // single chat, not a global draft.
         _pendingImages.value = emptyList()
         _conversationId.value = conversationId
+        if (paginateChatHistory) historyPager.start(conversationId)
     }
+
+    fun loadOlderMessages() = historyPager.loadOlder()
 
     /**
      * Imports a picked image into a [MessageImage] and queues it as a

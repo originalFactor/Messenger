@@ -76,6 +76,8 @@ interface CoreBridge {
 
     fun listMessagesByConversationJson(conversationId: String): String
     fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String
+    fun listMessagesBeforeJson(conversationId: String, beforeId: String, limit: UInt): String
+    fun listMessagesFromJson(conversationId: String, fromId: String): String
     fun getMessageJson(id: String): String?
     fun upsertMessageJson(json: String)
     fun deleteMessage(id: String)

@@ -661,4 +661,12 @@ fn recent_messages_are_limited_and_keep_timestamp_tie_order() {
     assert_eq!(ids(2), ["three", "four"]);
     assert_eq!(ids(3), ["two", "three", "four"]);
     assert_eq!(ids(10), ["one", "two", "three", "four"]);
+    let before = store.list_messages_before("c1", "four", 2).unwrap();
+    assert_eq!(before.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["two", "three"]);
+    let before_tie = store.list_messages_before("c1", "three", 2).unwrap();
+    assert_eq!(before_tie.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+    let from = store.list_messages_from("c1", "three").unwrap();
+    assert_eq!(from.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["three", "four"]);
+    assert!(store.list_messages_before("c1", "other", 2).unwrap().is_empty());
+    assert!(store.list_messages_from("c1", "missing").unwrap().is_empty());
 }

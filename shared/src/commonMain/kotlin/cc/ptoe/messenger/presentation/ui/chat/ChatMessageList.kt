@@ -37,5 +37,8 @@ internal expect fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    hasOlderMessages: Boolean = false,
+    isLoadingHistory: Boolean = false,
+    onLoadOlderMessages: () -> Unit = {},
     modifier: Modifier = Modifier
 )

@@ -455,6 +455,7 @@
     <string name="error_load_more_failed">Failed to load more Agents</string>
     <string name="error_load_agent_failed">Failed to load Agent</string>
     <string name="error_read_image_failed">Failed to read image: %1$s</string>
+    <string name="error_history_load">Unable to load conversation history</string>
     <string name="error_unknown">Unknown error</string>
     <string name="error_agent_not_found_chat">Agent not found</string>
     <string name="error_api_no_valid_response">API did not return a valid response. Please check your API configuration and parameters.</string>

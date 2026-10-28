@@ -429,6 +429,14 @@ impl WasmCore {
         json(&self.store.list_recent_messages_by_conversation(&conversation_id, limit).map_err(js_error)?)
     }
 
+    pub fn list_messages_before_json(&self, conversation_id: String, before_id: String, limit: u32) -> Result<String, JsValue> {
+        json(&self.store.list_messages_before(&conversation_id, &before_id, limit).map_err(js_error)?)
+    }
+
+    pub fn list_messages_from_json(&self, conversation_id: String, from_id: String) -> Result<String, JsValue> {
+        json(&self.store.list_messages_from(&conversation_id, &from_id).map_err(js_error)?)
+    }
+
     pub fn get_message_json(&self, id: String) -> Result<Option<String>, JsValue> {
         optional(self.store.get_message(&id).map_err(js_error)?)
     }

@@ -28,8 +28,7 @@ import cc.ptoe.messenger.domain.repository.MessageRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
-
-import cc.ptoe.messenger.data.util.currentTimeMillis
+import kotlinx.coroutines.flow.update
 
 class RustMessageRepository(
     private val coreBridge: CoreBridge,
@@ -42,7 +41,7 @@ class RustMessageRepository(
     init {
         coreBridge.subscribe { kind, _ ->
             if (kind == "Message" || kind == "All" || kind == "Other") {
-                version.value = currentTimeMillis()
+                version.update { it + 1 }
             }
         }
     }
@@ -53,6 +52,20 @@ class RustMessageRepository(
             NetworkClient.json.decodeFromString<List<StoredMessageDto>>(json).map { it.toDomain() }
         }.getOrDefault(emptyList())
     }
+
+    override fun observeChanges(conversationId: String): Flow<Unit> = version.map { Unit }
+
+    override suspend fun getRecent(conversationId: String, limit: Int): List<Message> =
+        decodeMessages(coreBridge.listRecentMessagesByConversationJson(conversationId, limit.toUInt()))
+
+    override suspend fun getBefore(conversationId: String, beforeId: String, limit: Int): List<Message> =
+        decodeMessages(coreBridge.listMessagesBeforeJson(conversationId, beforeId, limit.toUInt()))
+
+    override suspend fun getFrom(conversationId: String, fromId: String): List<Message> =
+        decodeMessages(coreBridge.listMessagesFromJson(conversationId, fromId))
+
+    private fun decodeMessages(json: String): List<Message> =
+        NetworkClient.json.decodeFromString<List<StoredMessageDto>>(json).map { it.toDomain() }
 
     override suspend fun getByConversationIds(conversationIds: List<String>): List<Message> {
         return conversationIds.flatMap { id ->
@@ -66,7 +79,7 @@ class RustMessageRepository(
     override suspend fun insert(message: Message) {
         val dto = message.toDto()
         coreBridge.upsertMessageJson(NetworkClient.json.encodeToString(dto))
-        version.value = currentTimeMillis()
+        version.update { it + 1 }
         onChanged(message.conversationId)
     }
 
@@ -75,7 +88,7 @@ class RustMessageRepository(
             val dto = m.toDto()
             coreBridge.upsertMessageJson(NetworkClient.json.encodeToString(dto))
         }
-        version.value = currentTimeMillis()
+        version.update { it + 1 }
         messages.firstOrNull()?.let { onChanged(it.conversationId) }
     }
 
@@ -86,13 +99,13 @@ class RustMessageRepository(
     override suspend fun delete(id: String) {
         val convId = getConversationIdById(id)
         coreBridge.deleteMessage(id)
-        version.value = currentTimeMillis()
+        version.update { it + 1 }
         if (convId != null) onChanged(convId)
     }
 
     override suspend fun deleteByConversationId(conversationId: String) {
         coreBridge.deleteMessagesByConversation(conversationId)
-        version.value = currentTimeMillis()
+        version.update { it + 1 }
         onChanged(conversationId)
     }
 
