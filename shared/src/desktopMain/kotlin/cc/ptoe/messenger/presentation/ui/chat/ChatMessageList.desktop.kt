@@ -17,18 +17,22 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.Agent
@@ -61,42 +65,140 @@ internal actual fun ChatMessageList(
 ) {
     val listState = rememberLazyListState()
 
-    LazyColumn(
-        state = listState,
-        reverseLayout = true,
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Top,
-        contentPadding = PaddingValues(vertical = 8.dp)
-    ) {
-        items(
-            items = chatItems.asReversed(),
-            key = { item ->
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Top,
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(
+                items = chatItems.asReversed(),
+                key = { item ->
+                    when (item) {
+                        is ChatListItem.DateSeparator -> "date_${item.id}"
+                        is ChatListItem.MessageItem -> "msg_${item.message.id}"
+                        is ChatListItem.ToolGroupItem ->
+                            "tool_${item.rounds.firstOrNull()?.id ?: item.toolMessages.firstOrNull()?.id}"
+                    }
+                }
+            ) { item ->
                 when (item) {
-                    is ChatListItem.DateSeparator -> "date_${item.id}"
-                    is ChatListItem.MessageItem -> "msg_${item.message.id}"
-                    is ChatListItem.ToolGroupItem ->
-                        "tool_${item.rounds.firstOrNull()?.id ?: item.toolMessages.firstOrNull()?.id}"
-                }
-            }
-        ) { item ->
-            when (item) {
-                is ChatListItem.DateSeparator -> {
-                    DateSeparator(timestamp = item.timestamp)
-                }
-                is ChatListItem.ToolGroupItem -> {
-                    val anchor = item.finalMessage ?: item.rounds.lastOrNull()
-                    val contextMenuState = rememberContextMenuState()
-                    val groupInteractionSource = remember { MutableInteractionSource() }
-                    val groupModifier = if (anchor != null) {
-                        Modifier
+                    is ChatListItem.DateSeparator -> {
+                        DateSeparator(timestamp = item.timestamp)
+                    }
+                    is ChatListItem.ToolGroupItem -> {
+                        val anchor = item.finalMessage ?: item.rounds.lastOrNull()
+                        val contextMenuState = rememberContextMenuState()
+                        val groupInteractionSource = remember { MutableInteractionSource() }
+                        val groupModifier = if (anchor != null) {
+                            Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    interactionSource = groupInteractionSource,
+                                    indication = null,
+                                    onClick = {},
+                                    onLongClick = {
+                                        if (!enableContextMenu) {
+                                            onMessageLongClick(anchor)
+                                        }
+                                    }
+                                )
+                                .then(
+                                    if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
+                                    else Modifier
+                                )
+                        } else {
+                            Modifier
+                        }
+                        val isLiveStreaming = streamingMessageId != null && item.finalMessage?.id == streamingMessageId
+                        // One cache per list item, kept across recompositions so
+                        // the streaming final text is parsed incrementally.
+                        val blockCache = remember { StreamingMarkdownCache() }
+                        val blocks = remember(item.rounds, item.toolMessages, item.finalMessage?.content, streamingContent, isLiveStreaming) {
+                            buildDesktopToolGroupBlocks(
+                                rounds = item.rounds,
+                                toolMessages = item.toolMessages,
+                                finalMessage = item.finalMessage,
+                                streamingContent = if (isLiveStreaming) streamingContent else null,
+                                cache = blockCache
+                            )
+                        }
+                        val anchorMessage = anchor ?: Message(
+                            id = "tool_group_${item.toolMessages.firstOrNull()?.id ?: "0"}",
+                            conversationId = "",
+                            role = MessageRole.ASSISTANT,
+                            content = "",
+                            timestamp = item.toolMessages.firstOrNull()?.timestamp ?: 0L,
+                            status = MessageStatus.SENT
+                        )
+                        Box(modifier = groupModifier) {
+                            ChatDocumentBubble(
+                                message = anchorMessage,
+                                blocks = blocks,
+                                avatar = agent?.avatar,
+                                isGenerating = isGenerating && isLiveStreaming,
+                                isLastInGroup = item.isLastInGroup,
+                                onRetryClick = {
+                                    if (anchorMessage.status == MessageStatus.ERROR) {
+                                        onRetryClick(anchorMessage.id)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            if (enableContextMenu && anchor != null) {
+                                MessageContextMenu(
+                                    state = contextMenuState,
+                                    messageRole = anchor.role,
+                                    onCopyClick = {
+                                        val copyText = if (anchor.content.isNotBlank()) anchor.content else {
+                                            blocks.joinToString("\n\n") { block ->
+                                                when (block) {
+                                                    is ChatBlock.Paragraph -> block.text
+                                                    is ChatBlock.Heading -> block.text
+                                                    is ChatBlock.Code -> block.code
+                                                    is ChatBlock.Math -> block.formula
+                                                    is ChatBlock.Think -> block.content
+                                                    is ChatBlock.ToolCall -> block.output.orEmpty()
+                                                    is ChatBlock.Quote -> block.text
+                                                    is ChatBlock.Table -> block.rows.joinToString("\n") { it.joinToString(" | ") }
+                                                    is ChatBlock.ListBlock -> block.items.joinToString("\n") { it.text }
+                                                    is ChatBlock.Divider -> "---"
+                                                }
+                                            }
+                                        }
+                                        onCopyClick(copyText)
+                                        showPlatformToast(copiedToastText)
+                                    },
+                                    onRegenerateClick = {
+                                        onRegenerateClick(anchor.id)
+                                    },
+                                    onDeleteClick = {
+                                        onDeleteClick(anchor.id)
+                                    },
+                                    onDismiss = {}
+                                )
+                            }
+                        }
+                    }
+                    is ChatListItem.MessageItem -> {
+                        val message = item.message
+                        val contextMenuState = rememberContextMenuState()
+                        val bubbleInteractionSource = remember { MutableInteractionSource() }
+                        val bubbleModifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(
-                                interactionSource = groupInteractionSource,
+                                interactionSource = bubbleInteractionSource,
                                 indication = null,
-                                onClick = {},
+                                onClick = {
+                                    if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
+                                        onRetryClick(message.id)
+                                    }
+                                },
                                 onLongClick = {
                                     if (!enableContextMenu) {
-                                        onMessageLongClick(anchor)
+                                        onMessageLongClick(message)
                                     }
                                 }
                             )
@@ -104,157 +206,66 @@ internal actual fun ChatMessageList(
                                 if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
                                 else Modifier
                             )
-                    } else {
-                        Modifier
-                    }
-                    val isLiveStreaming = streamingMessageId != null && item.finalMessage?.id == streamingMessageId
-                    // One cache per list item, kept across recompositions so
-                    // the streaming final text is parsed incrementally.
-                    val blockCache = remember { StreamingMarkdownCache() }
-                    val blocks = remember(item.rounds, item.toolMessages, item.finalMessage?.content, streamingContent, isLiveStreaming) {
-                        buildDesktopToolGroupBlocks(
-                            rounds = item.rounds,
-                            toolMessages = item.toolMessages,
-                            finalMessage = item.finalMessage,
-                            streamingContent = if (isLiveStreaming) streamingContent else null,
-                            cache = blockCache
-                        )
-                    }
-                    val anchorMessage = anchor ?: Message(
-                        id = "tool_group_${item.toolMessages.firstOrNull()?.id ?: "0"}",
-                        conversationId = "",
-                        role = MessageRole.ASSISTANT,
-                        content = "",
-                        timestamp = item.toolMessages.firstOrNull()?.timestamp ?: 0L,
-                        status = MessageStatus.SENT
-                    )
-                    Box(modifier = groupModifier) {
-                        ChatDocumentBubble(
-                            message = anchorMessage,
-                            blocks = blocks,
-                            avatar = agent?.avatar,
-                            isGenerating = isGenerating && isLiveStreaming,
-                            isLastInGroup = item.isLastInGroup,
-                            onRetryClick = {
-                                if (anchorMessage.status == MessageStatus.ERROR) {
-                                    onRetryClick(anchorMessage.id)
+
+                        Box(modifier = bubbleModifier) {
+                            when (message.role) {
+                                MessageRole.USER -> {
+                                    UserMessageBubble(
+                                        message = message,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        isLastInGroup = item.isLastInGroup,
+                                        avatar = userAvatar
+                                    )
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        if (enableContextMenu && anchor != null) {
-                            MessageContextMenu(
-                                state = contextMenuState,
-                                messageRole = anchor.role,
-                                onCopyClick = {
-                                    val copyText = if (anchor.content.isNotBlank()) anchor.content else {
-                                        blocks.joinToString("\n\n") { block ->
-                                            when (block) {
-                                                is ChatBlock.Paragraph -> block.text
-                                                is ChatBlock.Heading -> block.text
-                                                is ChatBlock.Code -> block.code
-                                                is ChatBlock.Math -> block.formula
-                                                is ChatBlock.Think -> block.content
-                                                is ChatBlock.ToolCall -> block.output.orEmpty()
-                                                is ChatBlock.Quote -> block.text
-                                                is ChatBlock.Table -> block.rows.joinToString("\n") { it.joinToString(" | ") }
-                                                is ChatBlock.ListBlock -> block.items.joinToString("\n") { it.text }
-                                                is ChatBlock.Divider -> "---"
+                                MessageRole.ASSISTANT -> {
+                                    ChatDocumentBubble(
+                                        message = if (message.id == streamingMessageId && streamingContent != null) {
+                                            message.copy(content = streamingContent)
+                                        } else {
+                                            message
+                                        },
+                                        blocks = null,
+                                        avatar = agent?.avatar,
+                                        isGenerating = isGenerating && message.id == streamingMessageId,
+                                        isLastInGroup = item.isLastInGroup,
+                                        onRetryClick = {
+                                            if (message.status == MessageStatus.ERROR) {
+                                                onRetryClick(message.id)
                                             }
-                                        }
-                                    }
-                                    onCopyClick(copyText)
-                                    showPlatformToast(copiedToastText)
-                                },
-                                onRegenerateClick = {
-                                    onRegenerateClick(anchor.id)
-                                },
-                                onDeleteClick = {
-                                    onDeleteClick(anchor.id)
-                                },
-                                onDismiss = {}
-                            )
-                        }
-                    }
-                }
-                is ChatListItem.MessageItem -> {
-                    val message = item.message
-                    val contextMenuState = rememberContextMenuState()
-                    val bubbleInteractionSource = remember { MutableInteractionSource() }
-                    val bubbleModifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            interactionSource = bubbleInteractionSource,
-                            indication = null,
-                            onClick = {
-                                if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
-                                    onRetryClick(message.id)
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
                                 }
-                            },
-                            onLongClick = {
-                                if (!enableContextMenu) {
-                                    onMessageLongClick(message)
-                                }
+                                MessageRole.SYSTEM, MessageRole.TOOL -> {}
                             }
-                        )
-                        .then(
-                            if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                            else Modifier
-                        )
 
-                    Box(modifier = bubbleModifier) {
-                        when (message.role) {
-                            MessageRole.USER -> {
-                                UserMessageBubble(
-                                    message = message,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    isLastInGroup = item.isLastInGroup,
-                                    avatar = userAvatar
+                            if (enableContextMenu) {
+                                MessageContextMenu(
+                                    state = contextMenuState,
+                                    messageRole = message.role,
+                                    onCopyClick = {
+                                        onCopyClick(message.content)
+                                        showPlatformToast(copiedToastText)
+                                    },
+                                    onRegenerateClick = {
+                                        onRegenerateClick(message.id)
+                                    },
+                                    onDeleteClick = {
+                                        onDeleteClick(message.id)
+                                    },
+                                    onDismiss = {}
                                 )
                             }
-                            MessageRole.ASSISTANT -> {
-                                ChatDocumentBubble(
-                                    message = if (message.id == streamingMessageId && streamingContent != null) {
-                                        message.copy(content = streamingContent)
-                                    } else {
-                                        message
-                                    },
-                                    blocks = null,
-                                    avatar = agent?.avatar,
-                                    isGenerating = isGenerating && message.id == streamingMessageId,
-                                    isLastInGroup = item.isLastInGroup,
-                                    onRetryClick = {
-                                        if (message.status == MessageStatus.ERROR) {
-                                            onRetryClick(message.id)
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                            MessageRole.SYSTEM, MessageRole.TOOL -> {}
-                        }
-
-                        if (enableContextMenu) {
-                            MessageContextMenu(
-                                state = contextMenuState,
-                                messageRole = message.role,
-                                onCopyClick = {
-                                    onCopyClick(message.content)
-                                    showPlatformToast(copiedToastText)
-                                },
-                                onRegenerateClick = {
-                                    onRegenerateClick(message.id)
-                                },
-                                onDeleteClick = {
-                                    onDeleteClick(message.id)
-                                },
-                                onDismiss = {}
-                            )
                         }
                     }
                 }
             }
         }
+        VerticalScrollbar(
+            adapter = rememberScrollbarAdapter(listState),
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            reverseLayout = true
+        )
     }
 }
 

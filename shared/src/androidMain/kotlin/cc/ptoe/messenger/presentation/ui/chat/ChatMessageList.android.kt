@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import android.graphics.Bitmap
+import android.graphics.drawable.GradientDrawable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
@@ -288,12 +289,21 @@ internal actual fun ChatMessageList(
                 }
                 this.adapter = adapter
                 itemAnimator = null // Smooth streaming without layout jitter
+                isVerticalScrollBarEnabled = true
+                verticalScrollbarThumbDrawable = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 4 * resources.displayMetrics.density
+                    setColor(colorScheme.onSurfaceVariant.copy(alpha = 0.6f).toArgb())
+                }
                 clipToPadding = false
                 recyclerView = this
             }
         },
         update = { rv ->
             adapter.theme = rendererTheme
+            (rv.verticalScrollbarThumbDrawable as? GradientDrawable)?.setColor(
+                colorScheme.onSurfaceVariant.copy(alpha = 0.6f).toArgb()
+            )
         },
         modifier = modifier.fillMaxSize()
     )
