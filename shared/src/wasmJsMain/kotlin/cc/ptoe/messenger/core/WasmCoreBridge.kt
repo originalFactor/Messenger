@@ -98,6 +98,9 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
     override fun listMessagesByConversationJson(conversationId: String): String =
         core.list_messages_by_conversation_json(conversationId)
 
+    override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
+        core.list_recent_messages_by_conversation_json(conversationId, limit.toInt())
+
     override fun getMessageJson(id: String): String? = core.get_message_json(id)
     override fun upsertMessageJson(json: String) = core.upsert_message_json(json)
     override fun deleteMessage(id: String) = core.delete_message(id)

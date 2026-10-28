@@ -409,6 +409,12 @@ impl CoreHandle {
         serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
     }
 
+    pub fn list_recent_messages_by_conversation_json(&self, conversation_id: String, limit: u32) -> Result<String, CoreError> {
+        let rows = self.store.list_recent_messages_by_conversation(&conversation_id, limit)
+            .map_err(|e| CoreError::Generic { detail: e.to_string() })?;
+        serde_json::to_string(&rows).map_err(|e| CoreError::Generic { detail: e.to_string() })
+    }
+
     pub fn get_message_json(&self, id: String) -> Result<Option<String>, CoreError> {
         let row = self.store.get_message(&id).map_err(|e| CoreError::Generic { detail: e.to_string() })?;
         match row {

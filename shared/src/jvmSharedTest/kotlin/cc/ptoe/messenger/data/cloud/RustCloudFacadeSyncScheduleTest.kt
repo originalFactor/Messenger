@@ -260,6 +260,9 @@ class RustCloudFacadeSyncScheduleTest {
         override fun deleteConversation(id: String) {}
         override fun sweepEmptyConversations(excludeIdsJson: String): String = "[]"
         override fun listMessagesByConversationJson(conversationId: String): String = "[]"
+        override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
+            listMessagesByConversationJson(conversationId)
+
         override fun getMessageJson(id: String): String? = null
         override fun upsertMessageJson(json: String) {}
         override fun deleteMessage(id: String) {}

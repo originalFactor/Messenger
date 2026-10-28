@@ -160,6 +160,7 @@ pub const CREATE_TABLES: &[&str] = &[
         errorMessage TEXT
     )",
     "CREATE INDEX IF NOT EXISTS index_messages_conversationId ON messages(conversationId)",
+    "CREATE INDEX IF NOT EXISTS index_messages_conversation_timestamp ON messages(conversationId, timestamp)",
     "CREATE TABLE IF NOT EXISTS sync_meta (
         accountId TEXT PRIMARY KEY NOT NULL,
         cursor INTEGER NOT NULL DEFAULT 0,

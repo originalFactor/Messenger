@@ -50,3 +50,4 @@ Native Rust terminal client: `Rust Core → Document Model → Terminal Renderer
 
 - `cargo test --workspace` in `core/rust` is the verification (there is no `cargo test` step in CI). `build-tui.yml` only builds the binary and uploads it, on four host triples — `x86_64`/`aarch64` × Linux/Windows — each on a matching-architecture runner, so no cross toolchain is involved; Gradle has no TUI task.
 - Web builds need `rustup target add wasm32-unknown-unknown` + `cargo install wasm-bindgen-cli` at the `Cargo.lock` version (see `webApp/AGENTS.md`).
+- **Recent message queries**: `Store::list_recent_messages_by_conversation` returns at most the requested number of newest rows in chronological order, including deterministic insertion order for equal timestamps. `index_messages_conversation_timestamp` supports this bounded lookup. The JSON boundary is available via `CoreBridge.listRecentMessagesByConversationJson`; chat has not yet switched to incremental history loading.

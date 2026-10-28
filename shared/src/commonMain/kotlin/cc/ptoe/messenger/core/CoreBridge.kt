@@ -75,6 +75,7 @@ interface CoreBridge {
     fun sweepEmptyConversations(excludeIdsJson: String): String
 
     fun listMessagesByConversationJson(conversationId: String): String
+    fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String
     fun getMessageJson(id: String): String?
     fun upsertMessageJson(json: String)
     fun deleteMessage(id: String)
