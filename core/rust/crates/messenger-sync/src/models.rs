@@ -13,7 +13,7 @@ pub const BUILTIN_PROVIDER_NAME: &str = "Messenger Cloud AI";
 pub const BUILTIN_TITLE_AGENT_ID: &str = "builtin-title-agent";
 /// Seed name of the locally created default Agent. Rows are matched by
 /// identity, so the literal is only ever a display value: clients localize it
-/// at render time (`messenger-tui`'s `agent_name` module).
+/// at render time by the Kotlin presentation layer.
 pub const DEFAULT_AGENT_NAME: &str = "默认 Agent";
 /// Seed name of the builtin title agent (same display-only rule).
 pub const BUILTIN_TITLE_AGENT_NAME: &str = "标题生成";

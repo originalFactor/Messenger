@@ -474,7 +474,7 @@ async fn a_sync_repairs_a_missing_default_agent() {
     // Simulate the damaged state: cursor claims the account is applied, but the
     // default Agent is gone.
     store.set_sync_meta("acct-1", 40, "[]", "[]").unwrap();
-    store.delete_agent("acct-default").unwrap();
+    store.clear_agents_for_reinit().unwrap();
 
     engine.sync_internal(None, false, None).await.unwrap();
     let default = store.get_agent("a1").unwrap().unwrap();
@@ -512,7 +512,7 @@ async fn the_missing_default_repair_is_attempted_only_once() {
 
     let store = Store::open_memory().unwrap();
     let engine = signed_in_engine(&store, &server);
-    store.delete_agent("acct-default").unwrap();
+    store.clear_agents_for_reinit().unwrap();
     store.set_sync_meta("acct-1", 40, "[]", "[]").unwrap();
 
     engine.sync_internal(None, false, None).await.unwrap();

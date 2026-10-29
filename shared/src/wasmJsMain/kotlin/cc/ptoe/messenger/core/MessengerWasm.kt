@@ -39,7 +39,7 @@ external fun initMessengerWasm(): JsAny
  * Only scalars, `String`, arrays and functions cross this boundary — the two
  * wasm memories are separate, so every payload is a JSON string (the same
  * convention UniFFI uses, which is what keeps this bridge and
- * `AndroidCoreBridge` method-for-method parallel).
+ * `WasmCoreBridge` parallel).
  *
  * These declarations mirror the generated `messenger_wasm.d.ts` verbatim:
  * wasm-bindgen exports the Rust type as a class with snake_case methods and

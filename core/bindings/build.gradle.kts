@@ -63,8 +63,8 @@ val hostLibName = when {
 // `strip = "none"`. uniffi-bindgen locates the UNIFFI_META_* symbols by walking
 // the ELF `.symtab`, and the release profile's `strip = true` deletes it — on
 // Linux bindgen then exits 0 having found no components and writes an empty
-// bindings directory, which surfaced as `NO-SOURCE` on :core-bindings and two
-// "Unresolved reference" errors in :renderer-android. PE and Mach-O are immune
+// bindings directory, which surfaced as `NO-SOURCE` on :core-bindings and
+// missing lifecycle symbols. PE and Mach-O are immune
 // (they read the export table and nlist), so only the Linux CI job broke.
 // Cargo emits custom-profile output under target/<profile>/, which also keeps
 // the host library out of target/release/ where cargo-ndk's shared state lives.
@@ -143,10 +143,9 @@ val generateUniFFIBindings by tasks.registering(Exec::class) {
     )
     outputs.dir(generatedKotlinDir)
     // Fail fast instead of silently generating nothing. This task exiting 0
-    // with an empty output directory made :core-bindings:compileReleaseKotlin
-    // report NO-SOURCE and :renderer-android fail with two "Unresolved
-    // reference" errors that pointed nowhere near the real cause. Two distinct
-    // ways to end up here:
+    // with an empty output directory made the generated Kotlin source set
+    // empty and surfaced as unresolved lifecycle symbols far from the cause.
+    // Two distinct ways to end up here:
     //   1. the host cdylib is missing (cargoBuildHost was skipped as UP-TO-DATE
     //      against a stale output snapshot, or the crate-type produced a
     //      differently-named library);

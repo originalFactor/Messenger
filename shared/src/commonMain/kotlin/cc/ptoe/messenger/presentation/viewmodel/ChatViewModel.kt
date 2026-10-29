@@ -211,8 +211,6 @@ class ChatViewModel(
     private val _streamingDiff = MutableStateFlow<String?>(null)
     val streamingDiff: StateFlow<String?> = _streamingDiff.asStateFlow()
 
-    private var currentDocSession: cc.ptoe.messenger.core.DocumentSessionBridge? = null
-
     private var currentGenerationJob: Job? = null
 
     private val _enabledModels = MutableStateFlow<List<ChatModel>>(emptyList())
@@ -347,7 +345,6 @@ class ChatViewModel(
             coreBridge.cancelTurn()
             currentGenerationJob?.cancel()
             currentGenerationJob = null
-            currentDocSession = null
             _isGenerating.value = false
             _streamingContent.value = null
             _streamingMessageId.value = null
@@ -517,11 +514,17 @@ class ChatViewModel(
             workspaceNote = workspace?.let {
                 getString(Res.string.chat_workspace_note, it)
             }.orEmpty(),
+            tools = enabledTools.map {
+                cc.ptoe.messenger.core.ToolSpecBridge(
+                    name = it.name,
+                    description = it.description,
+                    parametersJson = it.parametersJson,
+                )
+            },
         )
 
         _isGenerating.value = true
         _streamingContent.value = ""
-        currentDocSession = bridge.createDocumentSession()
         _streamingDiff.value = null
 
         currentGenerationJob = viewModelScope.launch {
@@ -558,7 +561,6 @@ class ChatViewModel(
             } catch (e: Exception) {
                 setError(e.message ?: getString(Res.string.error_unknown))
             } finally {
-                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
@@ -802,25 +804,11 @@ class ChatViewModel(
             "TextDelta" -> {
                 val text = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 _streamingContent.value = (_streamingContent.value ?: "") + text
-                val diffBatch = currentDocSession?.feed(text)
-                if (!diffBatch.isNullOrBlank() && diffBatch != "{\"diffs\":[]}") {
-                    _streamingDiff.value = diffBatch
-                }
             }
             "RoundPersisted" -> {
                 _streamingContent.value = ""
-                val finishBatch = currentDocSession?.finish()
-                if (!finishBatch.isNullOrBlank() && finishBatch != "{\"diffs\":[]}") {
-                    _streamingDiff.value = finishBatch
-                }
-                currentDocSession = coreBridge.createDocumentSession()
             }
             "Finished", "Cancelled" -> {
-                val finishBatch = currentDocSession?.finish()
-                if (!finishBatch.isNullOrBlank() && finishBatch != "{\"diffs\":[]}") {
-                    _streamingDiff.value = finishBatch
-                }
-                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
@@ -854,8 +842,32 @@ class ChatViewModel(
                 val msg = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (msg.isNotBlank()) {
                     setError(msg)
+                    val convId = _conversationId.value
+                    val streamingId = _streamingMessageId.value
+                    if (convId != null && streamingId == null) {
+                        viewModelScope.launch {
+                            val latest = messageRepository.getByConversationId(convId).first()
+                            val alreadyPersisted = latest.any {
+                                it.role == MessageRole.ASSISTANT &&
+                                    it.status == MessageStatus.ERROR &&
+                                    it.errorMessage == msg
+                            }
+                            if (!alreadyPersisted) {
+                                messageRepository.insert(
+                                    Message(
+                                        id = randomUuid(),
+                                        conversationId = convId,
+                                        role = MessageRole.ASSISTANT,
+                                        content = msg,
+                                        timestamp = currentTimeMillis(),
+                                        status = MessageStatus.ERROR,
+                                        errorMessage = msg,
+                                    )
+                                )
+                            }
+                        }
+                    }
                 }
-                currentDocSession = null
                 _streamingContent.value = null
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
@@ -868,7 +880,6 @@ class ChatViewModel(
         super.onCleared()
         currentGenerationJob?.cancel()
         currentGenerationJob = null
-        currentDocSession = null
     }
 
     companion object {

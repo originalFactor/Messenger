@@ -69,7 +69,12 @@ pub trait TurnSink: Send + Sync {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ToolHost: Send + Sync {
-    async fn execute(&self, name: &str, arguments_json: &str) -> ToolExecutionResult;
+    async fn execute(
+        &self,
+        call_id: &str,
+        name: &str,
+        arguments_json: &str,
+    ) -> ToolExecutionResult;
 }
 
 /// Title-agent model binding resolved by the caller before the turn.
@@ -387,7 +392,9 @@ pub async fn run_chat_turn(
             store.upsert_message(&running).map_err(|e| e.to_string())?;
 
             let result = if request.tools.iter().any(|t| t.name == call.name) {
-                tool_host.execute(&call.name, &call.arguments).await
+                tool_host
+                    .execute(&call.call_id, &call.name, &call.arguments)
+                    .await
             } else {
                 // Unknown names return an error result for self-correction.
                 ToolExecutionResult {

@@ -128,16 +128,12 @@ internal actual fun ChatMessageList(
                                 Modifier
                             }
                             val isLiveStreaming = streamingMessageId != null && item.finalMessage?.id == streamingMessageId
-                            // One cache per list item, kept across recompositions so
-                            // the streaming final text is parsed incrementally.
-                            val blockCache = remember { StreamingMarkdownCache() }
                             val blocks = remember(item.rounds, item.toolMessages, item.finalMessage?.content, streamingContent, isLiveStreaming) {
                                 buildDesktopToolGroupBlocks(
                                     rounds = item.rounds,
                                     toolMessages = item.toolMessages,
                                     finalMessage = item.finalMessage,
                                     streamingContent = if (isLiveStreaming) streamingContent else null,
-                                    cache = blockCache
                                 )
                             }
                             val anchorMessage = anchor ?: Message(
@@ -170,6 +166,7 @@ internal actual fun ChatMessageList(
                                             val copyText = if (anchor.content.isNotBlank()) anchor.content else {
                                                 blocks.joinToString("\n\n") { block ->
                                                     when (block) {
+                                                        is ChatBlock.RawMarkdown -> block.markdown
                                                         is ChatBlock.Paragraph -> block.text
                                                         is ChatBlock.Heading -> block.text
                                                         is ChatBlock.Code -> block.code
@@ -299,7 +296,6 @@ private fun buildDesktopToolGroupBlocks(
     toolMessages: List<Message>,
     finalMessage: Message?,
     streamingContent: String?,
-    cache: StreamingMarkdownCache
 ): List<ChatBlock> {
     val blocks = mutableListOf<ChatBlock>()
     var blockIdCounter = 1L
@@ -325,8 +321,7 @@ private fun buildDesktopToolGroupBlocks(
     rounds.forEachIndexed { roundIndex, round ->
         val roundBaseId = (roundIndex + 1) * 100_000L
         if (round.content.isNotBlank()) {
-            val roundBlocks = ChatDocumentParser.parseMarkdown(round.content, baseId = roundBaseId)
-            blocks.addAll(roundBlocks)
+            blocks.add(ChatBlock.RawMarkdown(roundBaseId, round.content, isFinalized = true))
         }
         val calls = round.parts.filterIsInstance<ContentPart.ToolCall>()
         calls.forEachIndexed { callIndex, call ->
@@ -347,14 +342,13 @@ private fun buildDesktopToolGroupBlocks(
 
     val finalText = streamingContent ?: finalMessage?.content
     if (!finalText.isNullOrBlank()) {
-        // `streamingContent` grows on every token: parse only the completed
-        // line prefix (see StreamingMarkdownCache) instead of the whole text.
-        val finalBlocks = if (streamingContent != null) {
-            cache.blocksFor(streamingContent)
-        } else {
-            ChatDocumentParser.parseMarkdown(finalText, baseId = 10_000_000L)
-        }
-        blocks.addAll(finalBlocks)
+        blocks.add(
+            ChatBlock.RawMarkdown(
+                id = 10_000_000L,
+                markdown = finalText,
+                isFinalized = streamingContent == null,
+            )
+        )
     }
 
     return blocks

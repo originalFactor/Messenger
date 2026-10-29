@@ -181,7 +181,6 @@ kotlin {
             dependsOn(jvmSharedMain)
             dependencies {
                 implementation(project(":core-bindings"))
-                implementation(project(":renderer-android"))
                 implementation(libs.androidx.recyclerview)
                 implementation(compose.preview)
                 implementation(libs.androidx.activity.compose)
@@ -189,6 +188,7 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.android)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.okhttp)
+                implementation(libs.llm.typewriter)
 
                 implementation(libs.java.websocket)
 
@@ -208,6 +208,7 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
+                implementation(libs.llm.typewriter)
             }
         }
 

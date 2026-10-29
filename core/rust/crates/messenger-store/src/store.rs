@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::model::{
     StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
@@ -299,15 +299,48 @@ impl Store {
         })
     }
 
+    /// Upsert an agent while preserving the single-default invariant.
+    /// Selecting a new default demotes the previous one atomically; updating
+    /// the current default without selecting another cannot unset it.
     pub fn upsert_agent(&self, a: &StoredAgent) -> Result<(), rusqlite::Error> {
-        self.with_conn(|conn| upsert_agent_sql(conn, a))?;
-        self.emit(StoreEvent { kind: EntityKind::Agent, ids: vec![a.id.clone()] });
+        let ids = self.with_tx(|tx| tx.upsert_agent_maintaining_default_n(a))?;
+        self.emit(StoreEvent {
+            kind: EntityKind::Agent,
+            ids,
+        });
         Ok(())
     }
 
+    /// Explicit data-reset escape hatch. Normal mutations cannot delete the
+    /// default Agent; a full local-data reset is the only operation allowed to
+    /// remove the root row before the caller re-seeds it.
+    pub fn clear_agents_for_reinit(&self) -> Result<Vec<String>, rusqlite::Error> {
+        let ids = self.with_conn(|conn| {
+            let mut statement = conn.prepare_cached("SELECT id FROM agents")?;
+            let ids = statement
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            conn.execute("DELETE FROM agents", [])?;
+            Ok(ids)
+        })?;
+        if !ids.is_empty() {
+            self.emit(StoreEvent {
+                kind: EntityKind::Agent,
+                ids: ids.clone(),
+            });
+        }
+        Ok(ids)
+    }
+
+    /// The default agent is a required root row and cannot be deleted.
     pub fn delete_agent(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.with_conn(|conn| conn.execute("DELETE FROM agents WHERE id = ?1", [id]))?;
-        self.emit(StoreEvent { kind: EntityKind::Agent, ids: vec![id.to_string()] });
+        let deleted = self.with_tx(|tx| tx.delete_agent_if_not_default_n(id))?;
+        if deleted {
+            self.emit(StoreEvent {
+                kind: EntityKind::Agent,
+                ids: vec![id.to_string()],
+            });
+        }
         Ok(())
     }
 
@@ -656,13 +689,96 @@ impl StoreTx<'_, '_> {
         upsert_model_sql(self.tx, m)
     }
     pub fn upsert_agent_n(&self, a: &StoredAgent) -> Result<(), rusqlite::Error> {
+        if a.is_default {
+            self.tx.execute(
+                "UPDATE agents SET isDefault = 0 WHERE isDefault = 1 AND id <> ?1",
+                [a.id.as_str()],
+            )?;
+        }
         upsert_agent_sql(self.tx, a)
+    }
+
+    fn upsert_agent_maintaining_default_n(
+        &self,
+        agent: &StoredAgent,
+    ) -> Result<Vec<String>, rusqlite::Error> {
+        let mut statement = self.tx.prepare_cached(
+            "SELECT id FROM agents WHERE isDefault = 1 ORDER BY rowid",
+        )?;
+        let defaults: Vec<String> = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(statement);
+
+        if !agent.is_default && defaults.len() == 1 && defaults[0] == agent.id {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "exactly one default agent is required".into(),
+            ));
+        }
+        let previous_default = defaults.first().cloned();
+        let selected_default = if agent.is_default {
+            agent.id.clone()
+        } else {
+            previous_default.clone().unwrap_or_else(|| agent.id.clone())
+        };
+
+        self.tx.execute("UPDATE agents SET isDefault = 0", [])?;
+        let mut normalized = agent.clone();
+        normalized.is_default = normalized.id == selected_default;
+        upsert_agent_sql(self.tx, &normalized)?;
+        if selected_default != normalized.id {
+            self.tx.execute(
+                "UPDATE agents SET isDefault = 1 WHERE id = ?1",
+                [selected_default.as_str()],
+            )?;
+        }
+
+        let mut changed = vec![agent.id.clone()];
+        if previous_default.as_deref() != Some(selected_default.as_str()) {
+            changed.extend(defaults);
+        }
+        changed.sort();
+        changed.dedup();
+        Ok(changed)
+    }
+
+    fn delete_agent_if_not_default_n(&self, id: &str) -> Result<bool, rusqlite::Error> {
+        let is_default: Option<i64> = self
+            .tx
+            .query_row(
+                "SELECT isDefault FROM agents WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if is_default == Some(1) {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "default agent cannot be deleted".into(),
+            ));
+        }
+        Ok(self.tx.execute("DELETE FROM agents WHERE id = ?1", [id])? > 0)
     }
     pub fn upsert_conversation_n(&self, c: &StoredConversation) -> Result<(), rusqlite::Error> {
         upsert_conversation_sql(self.tx, c)
     }
     pub fn upsert_message_n(&self, m: &StoredMessage) -> Result<(), rusqlite::Error> {
         upsert_message_sql(self.tx, m)
+    }
+    pub fn update_conversation_last_message_n(
+        &self,
+        id: &str,
+        last_message: Option<&str>,
+        updated_at: i64,
+    ) -> Result<(), rusqlite::Error> {
+        self.tx.execute(
+            "UPDATE conversations SET lastMessage = ?2, updatedAt = ?3 WHERE id = ?1",
+            rusqlite::params![id, last_message, updated_at],
+        )?;
+        Ok(())
+    }
+    pub fn delete_message_n(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.tx.execute("DELETE FROM messages WHERE id = ?1", [id])?;
+        Ok(())
     }
     /// Delete one provider's models inside the transaction (replace-all
     /// semantics for a pulled provider).

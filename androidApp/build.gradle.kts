@@ -75,7 +75,7 @@ android {
             // Full R8 on every release build (all Android modules): minification
             // plus resource shrinking. Rules live in proguard-rules.pro next to
             // this file; shared/android libraries contribute consumer rules
-            // (:core-bindings, :renderer-android).
+            // (:core-bindings).
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -111,7 +111,6 @@ android {
 dependencies {
     implementation(project(":shared"))
     implementation(project(":core-bindings"))
-    implementation(project(":renderer-android"))
     implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
