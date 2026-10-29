@@ -200,7 +200,8 @@ fn change_events_fire_with_ids() {
     }
     store.upsert_provider(&sample_provider("p1")).unwrap();
     store.upsert_agent(&sample_agent("a1", true)).unwrap();
-    store.delete_agent("a1").unwrap();
+    store.upsert_agent(&sample_agent("a2", false)).unwrap();
+    store.delete_agent("a2").unwrap();
 
     let drained: Vec<_> = events.lock().unwrap().drain(..).collect();
     assert_eq!(
@@ -208,9 +209,39 @@ fn change_events_fire_with_ids() {
         vec![
             (EntityKind::Provider, vec!["p1".to_string()]),
             (EntityKind::Agent, vec!["a1".to_string()]),
-            (EntityKind::Agent, vec!["a1".to_string()]),
+            (EntityKind::Agent, vec!["a2".to_string()]),
+            (EntityKind::Agent, vec!["a2".to_string()]),
         ]
     );
+}
+
+#[test]
+fn default_agent_is_unique_and_protected() {
+    let store = Store::open_memory().unwrap();
+    store.upsert_agent(&sample_agent("a1", true)).unwrap();
+    store.upsert_agent(&sample_agent("a2", true)).unwrap();
+    assert_eq!(store.list_agents().unwrap().iter().filter(|a| a.is_default).count(), 1);
+    assert_eq!(store.get_default_agent().unwrap().unwrap().id, "a2");
+    assert!(store.delete_agent("a2").is_err());
+    let mut demote = sample_agent("a2", false);
+    assert!(store.upsert_agent(&demote).is_err());
+    demote.id = "a3".into();
+    demote.is_default = false;
+    assert!(store.upsert_agent(&demote).is_ok());
+}
+
+#[test]
+fn explicit_reset_can_remove_agents_before_reseeding() {
+    let store = Store::open_memory().unwrap();
+    store.upsert_agent(&sample_agent("a1", true)).unwrap();
+    store.upsert_agent(&sample_agent("a2", false)).unwrap();
+    let removed = store.clear_agents_for_reinit().unwrap();
+    assert_eq!(removed.len(), 2);
+    assert!(store.list_agents().unwrap().is_empty());
+
+    // Re-seeding after a reset establishes the invariant again.
+    store.upsert_agent(&sample_agent("a3", true)).unwrap();
+    assert_eq!(store.get_default_agent().unwrap().unwrap().id, "a3");
 }
 
 #[test]

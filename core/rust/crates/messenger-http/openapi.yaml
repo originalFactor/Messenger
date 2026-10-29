@@ -1,0 +1,715 @@
+openapi: 3.1.0
+info:
+  title: Messenger Rust Core API
+  version: 1.0.0
+  description: |
+    Loopback-only JSON/SSE API used by the Android and Desktop clients.
+    A fresh bearer token is generated for every server start. The server never
+    binds to a non-loopback address.
+servers:
+  - url: http://127.0.0.1:{port}/api/v1
+    variables:
+      port:
+        default: "0"
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        "200":
+          description: Process is accepting requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, api_version]
+                properties:
+                  status: { type: string, const: ok }
+                  api_version: { type: string, const: v1 }
+  /meta:
+    get:
+      operationId: meta
+      responses:
+        "200":
+          description: API and core versions plus implemented capabilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apiVersion, serverVersion, capabilities]
+                properties:
+                  apiVersion: { type: string, const: v1 }
+                  serverVersion: { type: string }
+                  capabilities:
+                    type: object
+                    additionalProperties: { type: boolean }
+  /events:
+    get:
+      operationId: coreEvents
+      responses:
+        "200":
+          description: |
+            Core change feed. Events are named `change` and carry
+            `{kind, ids}` JSON. `resync` means the client lagged and should
+            re-query every visible collection.
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /providers:
+    get:
+      operationId: listProviders
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ProviderPage" } }
+    put:
+      operationId: upsertProvider
+      requestBody: { $ref: "#/components/requestBodies/Provider" }
+      responses: { "200": { $ref: "#/components/responses/Provider" } }
+  /providers/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getProvider
+      responses: { "200": { $ref: "#/components/responses/Provider" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceProvider
+      requestBody: { $ref: "#/components/requestBodies/Provider" }
+      responses: { "200": { $ref: "#/components/responses/Provider" } }
+    delete:
+      operationId: deleteProvider
+      responses: { "204": { description: Deleted } }
+  /providers/{id}/models:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: listProviderModels
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ModelPage" } }
+  /models:
+    get:
+      operationId: listModels
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ModelPage" } }
+    put:
+      operationId: upsertModel
+      requestBody: { $ref: "#/components/requestBodies/Model" }
+      responses: { "200": { $ref: "#/components/responses/Model" } }
+  /models/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getModel
+      responses: { "200": { $ref: "#/components/responses/Model" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceModel
+      requestBody: { $ref: "#/components/requestBodies/Model" }
+      responses: { "200": { $ref: "#/components/responses/Model" } }
+    delete:
+      operationId: deleteModel
+      responses: { "204": { description: Deleted } }
+  /models/{id}/enabled:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    put:
+      operationId: setModelEnabled
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties: { enabled: { type: boolean } }
+      responses: { "204": { description: Updated } }
+  /models/discover:
+    post:
+      operationId: discoverProviderModels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseUrl, apiKey]
+              properties:
+                baseUrl: { type: string }
+                apiKey: { type: string }
+                apiFormat: { type: [string, "null"] }
+      responses: { "200": { description: Enriched model list, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /models/metadata/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: modelMetadata
+      responses: { "200": { description: Metadata object or null, content: { application/json: { schema: { type: [object, "null"] } } } } }
+  /agents:
+    get:
+      operationId: listAgents
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/AgentPage" } }
+    put:
+      operationId: upsertAgent
+      requestBody: { $ref: "#/components/requestBodies/Agent" }
+      responses: { "200": { $ref: "#/components/responses/Agent" } }
+  /agents/default:
+    get:
+      operationId: getDefaultAgent
+      responses: { "200": { $ref: "#/components/responses/Agent" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /agents/title:
+    get:
+      operationId: getTitleAgent
+      responses: { "200": { $ref: "#/components/responses/Agent" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /agents/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getAgent
+      responses: { "200": { $ref: "#/components/responses/Agent" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceAgent
+      requestBody: { $ref: "#/components/requestBodies/Agent" }
+      responses: { "200": { $ref: "#/components/responses/Agent" } }
+    delete:
+      operationId: deleteAgent
+      description: The row with `is_default=true` is protected by the core invariant.
+      responses: { "204": { description: Deleted }, "409": { $ref: "#/components/responses/GameConflict" } }
+  /agents/{id}/conversations:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: listAgentConversations
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ConversationPage" } }
+  /projects:
+    get:
+      operationId: listProjects
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ProjectPage" } }
+    put:
+      operationId: upsertProject
+      requestBody: { $ref: "#/components/requestBodies/Project" }
+      responses: { "200": { $ref: "#/components/responses/Project" } }
+  /projects/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getProject
+      responses: { "200": { $ref: "#/components/responses/Project" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceProject
+      requestBody: { $ref: "#/components/requestBodies/Project" }
+      responses: { "200": { $ref: "#/components/responses/Project" } }
+    delete:
+      operationId: deleteProject
+      responses: { "204": { description: Deleted } }
+  /projects/{id}/conversations:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: listProjectConversations
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ConversationPage" } }
+  /conversations:
+    get:
+      operationId: listConversations
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      responses: { "200": { $ref: "#/components/responses/ConversationPage" } }
+    put:
+      operationId: upsertConversation
+      requestBody: { $ref: "#/components/requestBodies/Conversation" }
+      responses: { "200": { $ref: "#/components/responses/Conversation" } }
+  /conversations/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getConversation
+      responses: { "200": { $ref: "#/components/responses/Conversation" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceConversation
+      requestBody: { $ref: "#/components/requestBodies/Conversation" }
+      responses: { "200": { $ref: "#/components/responses/Conversation" } }
+    delete:
+      operationId: deleteConversation
+      responses: { "204": { description: Deleted } }
+  /conversations/{id}/last-message:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    put:
+      operationId: updateConversationLastMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [updatedAt]
+              properties:
+                lastMessage: { type: [string, "null"] }
+                updatedAt: { type: integer, format: int64 }
+      responses: { "204": { description: Updated } }
+  /conversations/{id}/messages:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: listMessages
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: beforeId, in: query, schema: { type: string } }
+        - { name: fromId, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Message window in chronological order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Message" } }
+                  total: { type: integer }
+                  nextBeforeId: { type: [string, "null"] }
+    post:
+      operationId: chat
+      description: |
+        Starts a chat turn. `send` inserts a user message; `retry` and
+        `regenerate` reference an existing message; `continue` starts from the
+        already-persisted context. If no model is configured the request fails
+        with 409 `model_required` before any row changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200":
+          description: Chat event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "409": { $ref: "#/components/responses/GameConflict" }
+    delete:
+      operationId: deleteConversationMessages
+      responses: { "204": { description: Deleted } }
+  /conversations/{id}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      operationId: cancelTurn
+      responses: { "202": { description: Cancellation requested }, "404": { $ref: "#/components/responses/NotFound" } }
+  /turns/tools/{callId}/result:
+    parameters: [{ name: callId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: resolveToolCall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [output, isError]
+              properties:
+                output: { type: string }
+                isError: { type: boolean }
+      responses: { "202": { description: Result delivered }, "404": { $ref: "#/components/responses/NotFound" } }
+  /messages/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getMessage
+      responses: { "200": { $ref: "#/components/responses/Message" }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: replaceMessage
+      requestBody: { $ref: "#/components/requestBodies/Message" }
+      responses: { "200": { $ref: "#/components/responses/Message" } }
+    delete:
+      operationId: deleteMessage
+      responses: { "204": { description: Deleted } }
+  /kv/{key}:
+    parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: kvGet
+      responses: { "200": { description: JSON string or null } }
+    put:
+      operationId: kvSet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [value], properties: { value: { type: string } } }
+      responses: { "204": { description: Updated } }
+    delete:
+      operationId: kvDelete
+      responses: { "204": { description: Deleted } }
+  /changes:
+    post:
+      operationId: markCloudChange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, id, deleted]
+              properties:
+                kind: { type: string }
+                id: { type: string }
+                deleted: { type: boolean }
+      responses: { "204": { description: Queued } }
+  /migration/import:
+    post:
+      operationId: importLegacyRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [legacyDbDir]
+              properties:
+                legacyDbDir: { type: string }
+                nowMs: { type: integer, format: int64 }
+      responses: { "200": { description: "Import summary or `{imported:false}`" } }
+  /cloud/login:
+    post:
+      operationId: cloudLogin
+      requestBody: { $ref: "#/components/requestBodies/Credentials" }
+      responses: { "200": { description: Cloud user }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/register:
+    post:
+      operationId: cloudRegister
+      requestBody: { $ref: "#/components/requestBodies/Credentials" }
+      responses: { "200": { description: Cloud user }, "4XX": { $ref: "#/components/responses/CloudError" } }
+  /cloud/logout:
+    post:
+      operationId: cloudLogout
+      responses: { "204": { description: Signed out } }
+  /cloud/refresh:
+    post:
+      operationId: cloudRefresh
+      responses: { "200": { description: Refreshed user }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/me:
+    get:
+      operationId: cloudCurrentUser
+      responses: { "200": { description: Cloud user or null } }
+  /cloud/server-url:
+    get:
+      operationId: cloudGetServerUrl
+      responses: { "200": { description: JSON string } }
+    put:
+      operationId: cloudSetServerUrl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [url], properties: { url: { type: string } } }
+      responses: { "204": { description: Updated } }
+  /cloud/has-local-data:
+    get:
+      operationId: cloudHasLocalData
+      responses: { "200": { description: Boolean } }
+  /cloud/sync:
+    post:
+      operationId: cloudSync
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { replaceLocal: { type: boolean, default: false } } }
+      responses: { "200": { description: Sync result }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/sync-with:
+    post:
+      operationId: cloudSyncWith
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                since: { type: [integer, "null"], format: int64 }
+                replaceLocal: { type: boolean }
+                expectedServerVersion: { type: [integer, "null"], format: int64 }
+      responses: { "200": { description: Sync result }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/push-pending:
+    post:
+      operationId: cloudPushPending
+      responses: { "200": { description: Sync result } }
+  /cloud/push-snapshot:
+    post:
+      operationId: cloudPushSnapshot
+      responses: { "200": { description: Server version number } }
+  /cloud/replace-cloud-with-local:
+    post:
+      operationId: cloudReplaceCloudWithLocal
+      responses: { "200": { description: Sync result } }
+  /cloud/cards/preview:
+    post:
+      operationId: previewCard
+      requestBody: { $ref: "#/components/requestBodies/CardCode" }
+      responses: { "200": { description: Card preview } }
+  /cloud/cards/redeem:
+    post:
+      operationId: redeemCard
+      requestBody: { $ref: "#/components/requestBodies/CardCode" }
+      responses: { "200": { description: Redemption result } }
+  /cloud/builtin-models/sync:
+    post:
+      operationId: syncBuiltinModels
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { force: { type: boolean } } }
+      responses: { "200": { description: Number of synchronized models } }
+  /cloud/ensure-title-agent:
+    post:
+      operationId: ensureTitleAgent
+      responses: { "204": { description: Seeded } }
+  /cloud/change-password:
+    post:
+      operationId: changePassword
+      requestBody: { $ref: "#/components/requestBodies/PasswordChange" }
+      responses: { "204": { description: Updated }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/account:
+    delete:
+      operationId: deleteCloudAccount
+      requestBody: { $ref: "#/components/requestBodies/CurrentPassword" }
+      responses: { "204": { description: Deleted } }
+  /cloud/cache-avatar:
+    post:
+      operationId: cacheAvatar
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, accountId, id, url, destDir]
+              properties:
+                scope: { type: string }
+                accountId: { type: string }
+                id: { type: string }
+                url: { type: string }
+                version: { type: [string, "null"] }
+                destDir: { type: string }
+      responses: { "200": { description: Cached file path as JSON string } }
+  /cloud/avatars/user:
+    post:
+      operationId: uploadUserAvatar
+      requestBody: { $ref: "#/components/requestBodies/Avatar" }
+      responses: { "200": { description: Avatar URL as JSON string } }
+    delete:
+      operationId: deleteUserAvatar
+      responses: { "200": { description: Avatar URL as JSON string } }
+  /cloud/avatars/agents/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      operationId: uploadAgentAvatar
+      requestBody: { $ref: "#/components/requestBodies/Avatar" }
+      responses: { "200": { description: Avatar URL as JSON string } }
+    delete:
+      operationId: deleteAgentAvatar
+      responses: { "200": { description: Avatar URL as JSON string } }
+  /cloud/market:
+    get:
+      operationId: listMarketAgents
+      parameters:
+        - { name: query, in: query, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses: { "200": { description: Market page } }
+  /cloud/market/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getMarketAgent
+      responses: { "200": { description: Market agent } }
+    delete:
+      operationId: removeMarketAgent
+      responses: { "204": { description: Removed } }
+  /cloud/market/publish/{agentId}:
+    parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: publishMarketAgent
+      responses: { "200": { description: Published market agent } }
+  /cloud/market/import/{marketId}:
+    parameters: [{ name: marketId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: importMarketAgent
+      responses: { "200": { description: Imported agent } }
+  /cloud/market/import-avatar/{marketId}:
+    parameters: [{ name: marketId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: importMarketAgentWithAvatar
+      responses: { "200": { description: Imported agent } }
+  /cloud/market/update/{agentId}:
+    parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: pushMarketAgentUpdate
+      responses: { "200": { description: Updated market agent } }
+  /cloud/market/check/{agentId}:
+    parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: checkMarketAgentUpdate
+      responses: { "200": { description: Update availability } }
+  /cloud/market/apply/{agentId}:
+    parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: applyMarketAgentUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [market], properties: { market: { type: object } } }
+      responses: { "200": { description: Updated local agent } }
+  /cloud/market-links:
+    delete:
+      operationId: clearMarketLinks
+      responses: { "204": { description: Cleared } }
+  /local-data:
+    delete:
+      operationId: clearLocalData
+      description: Explicit reset path; re-seed the default Agent afterwards.
+      responses: { "204": { description: Cleared } }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Per-start token returned to the app shell by the native lifecycle bridge.
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+    Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+  schemas:
+    Provider:
+      type: object
+      additionalProperties: true
+      required: [id, name, base_url, api_key, api_format, created_at, updated_at]
+    Model:
+      type: object
+      additionalProperties: true
+      required: [id, provider_id, model_id, display_name, is_enabled, created_at]
+    Agent:
+      type: object
+      additionalProperties: true
+      required: [id, name, system_prompt, is_default, role, created_at, updated_at]
+    Project:
+      type: object
+      additionalProperties: true
+      required: [id, name, workspace, created_at, updated_at]
+    Conversation:
+      type: object
+      additionalProperties: true
+      required: [id, title, provider_id, agent_id, created_at, updated_at]
+    Message:
+      type: object
+      additionalProperties: true
+      required: [id, conversation_id, role, content, timestamp, status]
+    ChatRequest:
+      type: object
+      properties:
+        content: { type: string }
+        operation: { type: string, enum: [send, retry, regenerate, continue], default: send }
+        messageId: { type: string }
+        toolSpecs:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string }
+              description: { type: string }
+              parametersJson: { type: string }
+    Page:
+      type: object
+      required: [items, offset, limit, total]
+      properties:
+        items: { type: array, items: {} }
+        offset: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        nextOffset: { type: [integer, "null"] }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        detail: { type: [string, "null"] }
+  requestBodies:
+    Provider:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Provider" } } }
+    Model:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Model" } } }
+    Agent:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } }
+    Project:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } }
+    Conversation:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Conversation" } } }
+    Message:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } }
+    CardCode:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, required: [code], properties: { code: { type: string } } }
+    PasswordChange:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, required: [currentPassword, newPassword], properties: { currentPassword: { type: string }, newPassword: { type: string } } }
+    CurrentPassword:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, required: [currentPassword], properties: { currentPassword: { type: string } } }
+    Avatar:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [bytesBase64, filename, mime]
+            properties:
+              bytesBase64: { type: string, contentEncoding: base64 }
+              filename: { type: string }
+              mime: { type: string }
+  responses:
+    Provider:
+      description: Provider
+      content: { application/json: { schema: { $ref: "#/components/schemas/Provider" } } }
+    Model:
+      description: Model
+      content: { application/json: { schema: { $ref: "#/components/schemas/Model" } } }
+    Agent:
+      description: Agent
+      content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } }
+    Project:
+      description: Project
+      content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } }
+    Conversation:
+      description: Conversation
+      content: { application/json: { schema: { $ref: "#/components/schemas/Conversation" } } }
+    Message:
+      description: Message
+      content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+    ProviderPage:
+      description: Provider page
+      content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } }
+    ModelPage:
+      description: Model page
+      content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } }
+    AgentPage:
+      description: Agent page
+      content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } }
+    ProjectPage:
+      description: Project page
+      content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } }
+    ConversationPage:
+      description: Conversation page
+      content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    GameConflict:
+      description: Core rule rejected the operation with a stable code
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    CloudError:
+      description: Cloud failure; `session_expired` is terminal and the local session is cleared
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

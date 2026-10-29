@@ -125,7 +125,7 @@ jobs:
       # -p messenger-ffi` in core/rust and feeds the resulting host cdylib to
       # uniffi-bindgen, so EVERY :desktopApp task needs cargo on PATH. The
       # runner images do ship one, but pinning it here matches build-android /
-      # build-web / build-tui and stops a future image update from silently
+      # build-web and stops a future image update from silently
       # changing the Rust version under us. No `targets:` needed: the host
       # triple is the runner's own and nothing is cross-compiled.
       - name: Setup Rust toolchain

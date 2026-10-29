@@ -702,6 +702,14 @@ impl<'a> SyncEngine<'a> {
                 continue;
             }
             if remote.deleted {
+                // The default Agent is a required local root row. A remote
+                // tombstone cannot remove it; a later default upsert in this
+                // same delta may still promote a replacement.
+                if self.store.get_agent(&remote.id).map_err(|e| e.to_string())?
+                    .is_some_and(|agent| agent.is_default)
+                {
+                    continue;
+                }
                 // No title-holder veto: the role is re-seeded by
                 // `ensure_builtin_title_agent` right after this delta, so a
                 // tombstone for a holder that moved on another device applies
@@ -725,15 +733,6 @@ impl<'a> SyncEngine<'a> {
                     .map_err(|e| e.to_string())?
                     .and_then(|local| local.avatar)
                     .filter(|avatar| !avatar.starts_with("http://") && !avatar.starts_with("https://"));
-                if remote.is_default {
-                    for other in self.store.list_agents().map_err(|e| e.to_string())? {
-                        if other.is_default && other.id != remote.id {
-                            let mut demoted = other;
-                            demoted.is_default = false;
-                            self.store.upsert_agent(&demoted).map_err(|e| e.to_string())?;
-                        }
-                    }
-                }
                 if remote.role.as_deref() == Some(ROLE_TITLE) {
                     for other in self.store.list_agents().map_err(|e| e.to_string())? {
                         if other.role == ROLE_TITLE && other.id != remote.id {
@@ -869,9 +868,7 @@ impl<'a> SyncEngine<'a> {
                 .map_err(|e| CloudError::Network(e.to_string()))?;
             self.store.delete_conversation(&conversation.id).map_err(|e| CloudError::Network(e.to_string()))?;
         }
-        for agent in self.store.list_agents().map_err(|e| CloudError::Network(e.to_string()))? {
-            self.store.delete_agent(&agent.id).map_err(|e| CloudError::Network(e.to_string()))?;
-        }
+        self.store.clear_agents_for_reinit().map_err(|e| CloudError::Network(e.to_string()))?;
         for project in self.store.list_projects().map_err(|e| CloudError::Network(e.to_string()))? {
             self.store.delete_project(&project.id).map_err(|e| CloudError::Network(e.to_string()))?;
         }

@@ -27,9 +27,11 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import java.awt.Dimension
 import javax.imageio.ImageIO
+import kotlinx.coroutines.runBlocking
 import cc.ptoe.messenger.core.CoreBridgeRegistry
-import cc.ptoe.messenger.core.DesktopCoreBridge
 import cc.ptoe.messenger.core.CoreHandle
+import cc.ptoe.messenger.core.HttpServerHandle
+import cc.ptoe.messenger.core.RestCoreBridge
 import cc.ptoe.messenger.data.local.DesktopChatImageStore
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -41,6 +43,8 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import okio.Path.Companion.toPath
+
+private lateinit var coreHttpServer: HttpServerHandle
 
 fun main() {
     val home = System.getProperty("user.home").toPath()
@@ -58,7 +62,11 @@ fun main() {
         legacyDbDir = legacyDir.takeIf { it.isDirectory }?.absolutePath,
         nowMs = System.currentTimeMillis()
     )
-    CoreBridgeRegistry.bridge = DesktopCoreBridge(core)
+    coreHttpServer = runBlocking { core.startHttpServer(0u) }
+    CoreBridgeRegistry.bridge = RestCoreBridge(
+        localAddress = coreHttpServer.localAddr(),
+        token = coreHttpServer.token(),
+    )
 
     val container = AppContainer(
         appDirs = appDirs,
@@ -78,6 +86,10 @@ fun main() {
     }
 
     application {
+        val closeApplication = {
+            runBlocking { coreHttpServer.stop() }
+            exitApplication()
+        }
         val themeMode by AppContainerHolder.instance.themePreferences.themeMode
             .collectAsState(initial = ThemeMode.SYSTEM)
 
@@ -86,7 +98,7 @@ fun main() {
         // the content past the screen edge.
         val windowState = initialWindowState()
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = closeApplication,
             title = "Messenger",
             state = windowState,
             undecorated = true
@@ -109,7 +121,7 @@ fun main() {
                 Column(modifier = Modifier.fillMaxSize()) {
                     DesktopTitleBar(
                         title = "Messenger",
-                        onCloseRequest = ::exitApplication
+                        onCloseRequest = closeApplication
                     )
                     MainScaffold()
                 }

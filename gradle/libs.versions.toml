@@ -50,12 +50,11 @@ kotlinxDatetime = "0.7.1"
 sqliteBundled = "2.7.0"
 okio = "3.18.0"
 kotlinxBrowser = "0.5.0"
+llmTypewriter = "0.2.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version = "1.3.2" }
-# RaTeX-CMP: pure-Rust KaTeX-compatible LaTeX engine with Android natives (used by the native renderer)
-ratex = { group = "io.github.darriousliu", name = "ratex", version = "0.1.12-1" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "annotation" }
@@ -118,6 +117,7 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-datetime = { group = "org.jetbrains.kotlinx", name = "kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
 okio = { group = "com.squareup.okio", name = "okio", version.ref = "okio" }
+llm-typewriter = { module = "cc.ptoe:llm-typewriter", version.ref = "llmTypewriter" }
 
 androidx-transition = { group = "androidx.transition", name = "transition", version.ref = "transition" }
 

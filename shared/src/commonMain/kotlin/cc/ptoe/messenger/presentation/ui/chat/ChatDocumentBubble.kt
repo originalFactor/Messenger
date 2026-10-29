@@ -32,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -58,9 +57,6 @@ fun ChatDocumentBubble(
     onRetryClick: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
-    // Stable across recompositions: the cache memoizes the parsed block list
-    // for the completed-line prefix of a streaming message.
-    val markdownCache = remember { StreamingMarkdownCache() }
     val isError = message.status == MessageStatus.ERROR
     val bubbleColor = if (isError) {
         MaterialTheme.colorScheme.errorContainer
@@ -116,7 +112,13 @@ fun ChatDocumentBubble(
                         .background(bubbleColor, bubbleShape)
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    if (blocks != null && blocks.isNotEmpty()) {
+                    if (isError) {
+                        Text(
+                            text = message.errorMessage?.takeIf { it.isNotBlank() } ?: message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    } else if (blocks != null && blocks.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             ChatDocumentView(blocks = blocks)
                             val lastBlock = blocks.lastOrNull()
@@ -130,20 +132,11 @@ fun ChatDocumentBubble(
                             }
                         }
                     } else if (message.content.isNotBlank()) {
-                        // Streaming text changes on every token. Re-parsing the
-                        // WHOLE accumulated markdown per token is O(n²) plus a
-                        // cross-language call each time; the cache only re-parses
-                        // the stable line prefix when it changes.
-                        val parsed = remember(message.content) { markdownCache.blocksFor(message.content) }
-                        if (parsed.isNotEmpty()) {
-                            ChatDocumentView(blocks = parsed)
-                        } else {
-                            Text(
-                                text = message.content,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        ChatMarkdownText(
+                            markdown = message.content,
+                            isStreaming = isGenerating,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     } else if (isGenerating) {
                         Text(
                             text = "● ● ●",

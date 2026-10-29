@@ -72,7 +72,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cc.ptoe.messenger.core.parseMarkdownToDocumentJson
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.tool_card_failed
@@ -96,6 +95,13 @@ import org.jetbrains.compose.resources.stringResource
 sealed class ChatBlock {
     abstract val id: Long
     abstract val isFinalized: Boolean
+
+    /** Raw Markdown handed directly to the Kotlin streaming renderer. */
+    data class RawMarkdown(
+        override val id: Long,
+        val markdown: String,
+        override val isFinalized: Boolean,
+    ) : ChatBlock()
 
     data class Paragraph(
         override val id: Long,
@@ -299,20 +305,14 @@ object ChatDocumentParser {
             }
         }
 
-    // There is no Kotlin Markdown parser: the Rust core's incremental parser is
-    // the single source of truth (it is what Android renders through
-    // `DocumentSessionBridge`, and what the TUI renders). This entry point is the
-    // static-text path for the Compose renderers — it feeds the whole text to
-    // that same parser and maps the resulting blocks.
     fun parseMarkdown(markdown: String, baseId: Long = 1L): List<ChatBlock> {
         if (markdown.isBlank()) return emptyList()
-        val blocks = parseBlocksJson(parseMarkdownToDocumentJson(markdown))
-        if (baseId == 1L) return blocks
-        return blocks.mapIndexed { index, block -> block.withId(baseId + index) }
+        return parseMarkdownToBlocks(markdown, baseId)
     }
 }
 
 fun ChatBlock.withId(newId: Long): ChatBlock = when (this) {
+    is ChatBlock.RawMarkdown -> copy(id = newId)
     is ChatBlock.Paragraph -> copy(id = newId)
     is ChatBlock.Heading -> copy(id = newId)
     is ChatBlock.Code -> copy(id = newId)
@@ -344,6 +344,11 @@ fun ChatDocumentView(
         for (block in blocks) {
             key(block.id) {
                 when (block) {
+                    is ChatBlock.RawMarkdown -> ChatMarkdownText(
+                        markdown = block.markdown,
+                        isStreaming = !block.isFinalized,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     is ChatBlock.Paragraph -> RenderParagraph(block)
                     is ChatBlock.Heading -> RenderHeading(block)
                     is ChatBlock.Code -> RenderCodeBlock(block)
@@ -905,11 +910,11 @@ private fun TableCell(text: String, style: TextStyle, widthPx: Int, horizontalPa
 /**
  * Column widths in pixels for a table that has [availableWidthPx] to fill.
  *
- * Mirrors the native TableView: when the natural (single-line) table is
+ * Mirrors the table layout contract: when the natural (single-line) table is
  * narrower than the available width every column grows proportionally so the
  * table spans the card exactly; when it is wider the natural widths are kept
  * and the caller scrolls horizontally. Squeezing columns instead would break
- * long tokens (`renderer-android`, "source") into vertical letter strips.
+ * long tokens into vertical letter strips.
  */
 internal fun fitTableColumns(
     naturalWidthsPx: IntArray,

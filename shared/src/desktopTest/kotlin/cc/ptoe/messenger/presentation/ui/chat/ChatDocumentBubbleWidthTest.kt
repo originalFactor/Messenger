@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -138,4 +139,33 @@ class ChatDocumentBubbleWidthTest {
                 "(avatar ${avatar.top}..${avatar.bottom}, bubble ${bubble.top}..${bubble.bottom})"
         )
     }
+
+    @Test
+    fun errorShowsThePersistedErrorDetailsAndRetryAction() = runComposeUiTest {
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(paneWidth)) {
+                    ChatDocumentBubble(
+                        message = Message(
+                            id = "err",
+                            conversationId = "c1",
+                            role = MessageRole.ASSISTANT,
+                            content = "provider rejected the request",
+                            timestamp = 1L,
+                            status = MessageStatus.ERROR,
+                            errorMessage = "provider rejected the request",
+                        ),
+                        blocks = null,
+                        avatar = null,
+                        isGenerating = false,
+                        isLastInGroup = true,
+                        onRetryClick = {},
+                    )
+                }
+            }
+        }
+        onNodeWithText("provider rejected the request").assertExists()
+        onNodeWithText("Retry").assertExists()
+    }
+
 }

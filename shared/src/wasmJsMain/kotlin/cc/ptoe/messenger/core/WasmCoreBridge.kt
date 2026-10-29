@@ -29,9 +29,9 @@ import kotlinx.serialization.Serializable
 /**
  * [CoreBridge] over the `messenger-wasm` module.
  *
- * Every method is a JSON-string passthrough, matching `AndroidCoreBridge`
- * one-for-one; the wasm boundary is `wasm-bindgen` instead of UniFFI only
- * because UniFFI has no wasm generator (gobley emits stubs for wasmJs).
+ * Every method is a JSON-string passthrough over the browser boundary. Native
+ * clients use `RestCoreBridge`; the wasm binding remains independent because
+ * a browser cannot start a loopback Rust process.
  *
  * The two wasm memories are separate, so nothing but strings, numbers,
  * booleans, arrays and functions may cross. Async exports resolve a
@@ -273,14 +273,7 @@ class WasmCoreBridge(private val core: WasmCoreJs) : CoreBridge {
         promise.let { awaitJsUnit(it) }
     }
 
-    override fun createDocumentSession(): DocumentSessionBridge {
-        val document = MessengerWasm.new_wasm_document()
-        return object : DocumentSessionBridge {
-            override fun feed(text: String): String = document.feed(text)
-            override fun finish(): String = document.finish()
-            override fun getDocumentJson(): String = document.get_document_json()
-        }
-    }
+
 
 }
 

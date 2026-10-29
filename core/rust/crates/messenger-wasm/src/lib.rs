@@ -7,12 +7,11 @@
 
 //!
 //! UniFFI cannot target wasm (its generator has no wasm backend, and the KMP
-//! wrapper emits stubs for wasmJs), so this crate re-exports the same surface
-//! over `wasm-bindgen` instead. Its shape mirrors `messenger-ffi`'s
-//! `CoreHandle` method for method: JSON strings in, JSON strings out, plus
-//! `Promise`-returning async methods — which is exactly what `CoreBridge`
-//! expects on the Kotlin side, so `WasmCoreBridge` and `AndroidCoreBridge`
-//! stay mechanically parallel instead of diverging.
+//! wrapper emits stubs for wasmJs), so this crate exposes the browser surface
+//! over `wasm-bindgen`: JSON strings in, JSON strings out, plus
+//! `Promise`-returning async methods — exactly what `CoreBridge` expects on
+//! the Kotlin side through `WasmCoreBridge`. Native clients use the separate
+//! loopback REST/SSE boundary instead of mirroring this business surface.
 //!
 //! Deliberately absent (browser sandbox): MCP stdio processes, the legacy
 //! Room import, and terminal/workspace tool execution (the client registers
@@ -136,7 +135,12 @@ struct JsToolHost {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ToolHost for JsToolHost {
-    async fn execute(&self, name: &str, arguments_json: &str) -> ToolExecutionResult {
+    async fn execute(
+        &self,
+        _call_id: &str,
+        name: &str,
+        arguments_json: &str,
+    ) -> ToolExecutionResult {
         let result = self
             .execute
             .0
@@ -481,9 +485,7 @@ impl WasmCore {
                 .map_err(js_error)?;
             self.store.delete_conversation(&conversation.id).map_err(js_error)?;
         }
-        for agent in self.store.list_agents().map_err(js_error)? {
-            self.store.delete_agent(&agent.id).map_err(js_error)?;
-        }
+        self.store.clear_agents_for_reinit().map_err(js_error)?;
         for project in self.store.list_projects().map_err(js_error)? {
             self.store.delete_project(&project.id).map_err(js_error)?;
         }

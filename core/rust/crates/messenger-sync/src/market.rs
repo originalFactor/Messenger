@@ -227,7 +227,7 @@ mod tests {
         engine.save_user(&CloudUser { id: "u1".into(), ..Default::default() }).unwrap();
         store.kv_set("cloud_server_url", server.uri().as_str()).unwrap();
 
-        // Seed an agent
+        // Keep a required default row while testing a separately published agent.
         let agent = StoredAgent {
             id: "a1".into(),
             name: "My Assistant".into(),
@@ -256,6 +256,12 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         };
+        store.upsert_agent(&StoredAgent {
+            id: "default".into(),
+            name: "Default".into(),
+            is_default: true,
+            ..agent.clone()
+        }).unwrap();
         store.upsert_agent(&agent).unwrap();
 
         // Mock create market agent

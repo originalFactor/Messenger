@@ -124,9 +124,8 @@ interface CoreBridge {
     suspend fun cloudCacheAvatar(scope: String, accountId: String, id: String, url: String, version: String?, destDir: String): String
 
     // Cloud account settings, avatars, market mutations and the login flows.
-    // Each has a matching export on both boundaries (messenger-ffi and
-    // messenger-wasm), which is what keeps AndroidCoreBridge and
-    // WasmCoreBridge mechanically parallel.
+    // Android/Desktop use RestCoreBridge; WasmCoreBridge retains the browser
+    // boundary for this migration phase.
     suspend fun cloudPushSnapshot(): Long
     suspend fun cloudSyncWith(
         since: Long?,
@@ -169,15 +168,13 @@ interface CoreBridge {
         onEventJson: (String) -> Unit
     )
 
-    // Document engine session
-    fun createDocumentSession(): DocumentSessionBridge? = null
 }
 
-interface DocumentSessionBridge {
-    fun feed(text: String): String
-    fun finish(): String
-    fun getDocumentJson(): String
-}
+data class ToolSpecBridge(
+    val name: String,
+    val description: String,
+    val parametersJson: String,
+)
 
 data class TurnConfigBridge(
     val conversationId: String,
@@ -201,7 +198,9 @@ data class TurnConfigBridge(
     /** 会话是否属于某个可用工作区的项目；false 时不声明终端/工作区工具。 */
     val hasWorkspace: Boolean,
     /** 追加到 system prompt 的工作目录说明（本地化，无项目时为空）。 */
-    val workspaceNote: String
+    val workspaceNote: String,
+    /** Tool declarations, including MCP tools resolved by the platform. */
+    val tools: List<ToolSpecBridge> = emptyList(),
 )
 
 object CoreBridgeRegistry {

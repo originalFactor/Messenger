@@ -18,9 +18,10 @@ package cc.ptoe.messenger
 
 import android.app.Application
 import android.content.Intent
-import cc.ptoe.messenger.core.AndroidCoreBridge
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.CoreHandle
+import cc.ptoe.messenger.core.HttpServerHandle
+import cc.ptoe.messenger.core.RestCoreBridge
 import cc.ptoe.messenger.data.local.AndroidChatImageStore
 import cc.ptoe.messenger.data.wear.MobileHttpServer
 import cc.ptoe.messenger.di.AppContainer
@@ -32,9 +33,13 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import java.io.File
+import kotlinx.coroutines.runBlocking
 import okio.Path.Companion.toPath
 
 class MessengerApplication : Application() {
+
+    @Suppress("unused")
+    private lateinit var coreHttpServer: HttpServerHandle
 
     override fun onCreate() {
         super.onCreate()
@@ -52,7 +57,11 @@ class MessengerApplication : Application() {
             legacyDbDir = legacyDir?.takeIf { it.exists() }?.absolutePath,
             nowMs = System.currentTimeMillis()
         )
-        CoreBridgeRegistry.bridge = AndroidCoreBridge(core)
+        coreHttpServer = runBlocking { core.startHttpServer(0u) }
+        CoreBridgeRegistry.bridge = RestCoreBridge(
+            localAddress = coreHttpServer.localAddr(),
+            token = coreHttpServer.token(),
+        )
 
         val container = AppContainer(
             appDirs = AppDirs(

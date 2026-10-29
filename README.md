@@ -56,13 +56,12 @@
 
 Messenger is a Material-3-designed, cross-platform LLM chat application built with Kotlin Multiplatform and Jetpack Compose. It is fully open-source, free, and offline-capable, using a BYOK (Bring Your Own Key) model.
 
-The same agent core powers four surfaces: a Kotlin Multiplatform app for Android and desktop, a Wear OS companion, a browser client compiled to WebAssembly, and a native Rust terminal client. Chat with your favourite AI models wherever you are — with a clean, modern interface that feels great to use. A shared Kotlin Multiplatform core keeps Android and Desktop in lockstep, the Wear OS companion keeps chat simple by syncing your agents from mobile and using your phone as the configured AI backend, and the two Rust targets link the core crates directly.
+The same Rust agent core powers Android and desktop through a loopback REST/SSE API, a Wear OS companion through the authenticated phone bridge, and a browser client compiled to WebAssembly. Chat with your favourite AI models wherever you are — with a clean, modern interface that feels great to use. Kotlin owns UI state, rendering and platform pickers; the Rust core owns storage, chat turns, tools, models and cloud synchronization.
 
 Key highlights:
 
 - **Chat anywhere** — Works on your phone, tablet, Wear OS watch, desktop (JVM), and in your browser
 - **In your browser too** — the web client is the same Compose UI compiled to WebAssembly on the Rust core, served from the account server at `/app`; sign in and your agents, providers and conversations sync like everywhere else
-- **In your terminal too** — `messenger-tui` is a native Rust client that links the same agent core directly (no Kotlin, no bridge): the same agents, providers, MCP servers and cloud account, rendered for an ANSI terminal, with its own store and an optional one-shot import of the Desktop app's data
 - **Bring your own key** — Use API keys from your preferred AI providers, no middleman
 - **Custom AI agents** — Create and switch between different AI personas and assistants
 - **Built-in terminal tool** — Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
@@ -84,8 +83,6 @@ Key highlights:
 * [![SQLite][SQLite-badge]][SQLite-url]
 * [![OkHttp][OkHttp-badge]][OkHttp-url]
 * [![Rust][Rust-badge]][Rust-url]
-* [![Ratatui][Ratatui-badge]][Ratatui-url]
-* [![Crossterm][Crossterm-badge]][Crossterm-url]
 * [![Rust / Kotlin-Wasm][Wasm-badge]][Wasm-url]
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -99,7 +96,7 @@ To get a local copy up and running, follow these simple steps.
 * JDK 17
 * Android SDK (Compile SDK 37, Target SDK 36, Min SDK 30)
 * Gradle wrapper is included in the repository
-* Rust toolchain (only for the terminal client and the browser build — the Gradle builds do not need it)
+* Rust toolchain (Android/Desktop native core and the browser build)
   ```sh
   rustup target add wasm32-unknown-unknown                            # browser build
   cargo install wasm-bindgen-cli --version 0.2.129 --locked            # must match core/rust/Cargo.lock
@@ -127,14 +124,12 @@ To get a local copy up and running, follow these simple steps.
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
    Android release builds are minified (R8 + resource shrinking) and ship the `arm64-v8a` APK; the 32-bit `armeabi-v7a` and emulator `x86_64` ABIs are opt-in with `-Pmessenger.abis=armeabi-v7a` (or `ANDROID_ABIS=…`). Debug builds ship `x86_64` only (phone apps and watch app), so Android Studio Run installs on an AVD with no flags and never pays for the release ABI's Rust cross-compile; release stays `arm64-v8a` (phone) / `armeabi-v7a` (wear). Place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux); the release build runs ProGuard.
-   Android/Wear/Runtime, Desktop, Web and the terminal client all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
-5. Build the browser client and the terminal client (optional)
+   Android/Wear/Runtime, Desktop and Web all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
+5. Build the browser client (optional)
    ```sh
    ./gradlew :webApp:wasmJsBrowserDevelopmentRun   # browser dev server (COOP/COEP on)
    ./gradlew :webApp:wasmJsBrowserDistribution     # production bundle under webApp/build/dist
    ./gradlew :webApp:copyWebAppDistribution        # local: serve it from server/public/app/
-
-   cd core/rust && cargo build -p messenger-tui     # terminal client
    ```
    The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI uploads it as the `web-distribution` artifact on every successful run (`.github/workflows/ci.yml` → `build-all.yml` → `build-web.yml`), and the account server (`server/`) downloads it through nightly.link and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
 6. Cutting a release
@@ -160,26 +155,26 @@ To get a local copy up and running, follow these simple steps.
 4. Create custom agents for different tasks
 5. Enable **Tools** for an agent when terminal access is needed. On Android, terminal commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI — no separate Termux installation is required. Read-only mode (the default) exposes inspection commands only; switch an agent to writable mode to let it edit and create files in that workspace.
 6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
-7. (Optional) Sign in to a Messenger account to sync agents, providers and conversations across every client. Each client seeds its own local store and mirrors the account's data into it, so the same conversation is available on your phone, in your browser and in your terminal.
+7. (Optional) Sign in to a Messenger account to sync agents, providers and conversations across every client. Each client seeds its own local store and mirrors the account's data into it, so the same conversation is available on your phone, on your desktop and in your browser.
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.
 
 ### Browser (optional)
 
-The browser client is the same UI as the desktop app, compiled to WebAssembly and backed by the same Rust agent core (its SQLite store is persisted in the browser's origin-private file system). The production bundle is served by the account server at `/app` alongside the website and console — sign in there and your agents, providers and conversations sync like everywhere else. Because it runs in a browser sandbox it has no shell or filesystem access, so tools are disabled there (remote MCP servers over SSE still work); the terminal and desktop clients are the ones with tools.
+The browser client is the same UI as the desktop app, compiled to WebAssembly and backed by the same Rust agent core (its SQLite store is persisted in the browser's origin-private file system). The production bundle is served by the account server at `/app` alongside the website and console — sign in there and your agents, providers and conversations sync like everywhere else. Because it runs in a browser sandbox it has no shell or filesystem access, so tools are disabled there (remote MCP servers over SSE still work); the phone and desktop clients are the ones with tools.
 
-### Terminal client (optional)
+### Local Rust core
 
-`messenger-tui` is a native Rust terminal client built on the same agent core — it links the Rust crates directly, with no bridge. It keeps its own store at `~/.messenger/tui/store.db`, reads `settings.toml` next to it, and can import an existing Desktop database once:
+Android and Desktop start the Rust core on an ephemeral loopback port. Every
+non-health request carries a per-start bearer token, and all business calls use
+the versioned `/api/v1` HTTP API; chat turns and core change notifications use
+SSE. The OpenAPI contract lives at
+`core/rust/crates/messenger-http/openapi.yaml` and the SSE contract at
+`core/rust/crates/messenger-http/docs/SSE.md`.
 
-```sh
-cd core/rust
-cargo run -p messenger-tui                                    # start it
-cargo run -p messenger-tui -- --import-desktop               # also import the Desktop app's data (one-shot)
-cargo run -p messenger-tui -- --help                         # every flag
-```
-
-Inside, `F1`–`F6` switch between conversations, chat, agents, providers, MCP servers and settings; `?` lists every key binding. In the chat view all printable keys type into the message, so its commands are `Ctrl`-modified (`Ctrl+W` toggles read-only/writable tool mode, `Esc` cancels a running turn). Tools execute natively in your shell and in the workspace directory (`~/.messenger/agent-runtime/workspace`), and signing in from the Settings view syncs the same cloud account as the other apps. Math renders as its LaTeX source — a terminal cannot stack fractions.
+Markdown and LaTeX on Android/Desktop are rendered in Kotlin with
+[`llm-typewriter`](https://github.com/originalFactor/llm-typewriter). Web keeps
+its existing wasm-bindgen boundary for this migration phase.
 
 _For more details on architecture, conventions, and hard constraints, please refer to [AGENTS.md](AGENTS.md)_
 
@@ -226,7 +221,8 @@ originalFactor - Project Link: [https://github.com/originalFactor/Messenger](htt
 * [Jetpack Compose](https://developer.android.com/jetpack/compose)
 * [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/)
 * [Material 3](https://m3.material.io/)
-* [Ratatui](https://ratatui.rs/) / [Crossterm](https://github.com/crossterm-rs/crossterm) — terminal rendering and input for the Rust terminal client
+* [llm-typewriter](https://github.com/originalFactor/llm-typewriter) — streaming Markdown, code and LaTeX rendering on Android and Desktop
+* [Axum](https://github.com/tokio-rs/axum) — versioned loopback HTTP/SSE API
 * [syntect](https://github.com/trishume/syntect) — Sublime Text syntax engine behind code highlighting in all clients
 * [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) — Rust ↔ JavaScript boundary for the browser client
 
@@ -261,9 +257,5 @@ originalFactor - Project Link: [https://github.com/originalFactor/Messenger](htt
 [Rust-url]: https://www.rust-lang.org/
 [OkHttp-badge]: https://img.shields.io/badge/OkHttp-48B883?style=for-the-badge&logo=square&logoColor=white
 [OkHttp-url]: https://square.github.io/okhttp/
-[Ratatui-badge]: https://img.shields.io/badge/Ratatui-000000?style=for-the-badge&logo=rust&logoColor=white
-[Ratatui-url]: https://ratatui.rs/
-[Crossterm-badge]: https://img.shields.io/badge/Crossterm-000000?style=for-the-badge&logo=rust&logoColor=white
-[Crossterm-url]: https://github.com/crossterm-rs/crossterm
 [Wasm-badge]: https://img.shields.io/badge/Kotlin%2Fwasm-2BDE21?style=for-the-badge&logo=kotlin&logoColor=white
 [Wasm-url]: https://kotlinlang.org/docs/multiplatform.html

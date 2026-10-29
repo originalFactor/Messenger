@@ -40,7 +40,12 @@ struct StaticToolHost;
 
 #[async_trait::async_trait]
 impl ToolHost for StaticToolHost {
-    async fn execute(&self, name: &str, _arguments: &str) -> ToolExecutionResult {
+    async fn execute(
+        &self,
+        _call_id: &str,
+        name: &str,
+        _arguments: &str,
+    ) -> ToolExecutionResult {
         if name == "terminal" {
             ToolExecutionResult {
                 output: "file-a\nfile-b".into(),

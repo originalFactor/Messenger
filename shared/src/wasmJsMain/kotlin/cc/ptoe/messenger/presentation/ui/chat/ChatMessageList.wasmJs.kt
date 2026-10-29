@@ -165,6 +165,7 @@ internal actual fun ChatMessageList(
                                         val copyText = if (anchor.content.isNotBlank()) anchor.content else {
                                             blocks.joinToString("\n\n") { block ->
                                                 when (block) {
+                                                    is ChatBlock.RawMarkdown -> block.markdown
                                                     is ChatBlock.Paragraph -> block.text
                                                     is ChatBlock.Heading -> block.text
                                                     is ChatBlock.Code -> block.code

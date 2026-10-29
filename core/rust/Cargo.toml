@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/messenger-ffi",
+    "crates/messenger-http",
     "crates/messenger-llm",
     "crates/messenger-tools",
     "crates/messenger-store",
@@ -12,7 +13,6 @@ members = [
     "crates/messenger-markdown",
     "crates/messenger-highlight",
     "crates/messenger-wasm",
-    "crates/messenger-tui",
 ]
 
 [workspace.package]

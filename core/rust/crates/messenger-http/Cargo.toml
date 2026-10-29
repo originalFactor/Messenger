@@ -1,0 +1,28 @@
+[package]
+name = "messenger-http"
+version.workspace = true
+edition.workspace = true
+description = "Versioned loopback REST and SSE API for the Messenger Rust core"
+
+[dependencies]
+axum = "0.7"
+async-trait = "0.1"
+futures-core = "0.3"
+messenger-core = { path = "../messenger-core" }
+messenger-store = { path = "../messenger-store" }
+messenger-sync = { path = "../messenger-sync" }
+messenger-tools = { path = "../messenger-tools" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+subtle = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+http-body-util = "0.1"
+wiremock = "0.6"

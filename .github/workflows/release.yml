@@ -91,50 +91,9 @@ jobs:
           name: web-distribution
           path: artifacts/web
 
-      # --- TUI (Windows x86_64; other targets currently disabled) ----------
-#      - name: Download TUI Linux x86_64 artifact
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: tui-x86_64-unknown-linux-gnu
-#          path: artifacts/tui/x86_64-unknown-linux-gnu
-#
-#      - name: Download TUI Linux ARM64 artifact
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: tui-aarch64-unknown-linux-gnu
-#          path: artifacts/tui/aarch64-unknown-linux-gnu
-
-      - name: Download TUI Windows x86_64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tui-x86_64-pc-windows-msvc
-          path: artifacts/tui/x86_64-pc-windows-msvc
-
-#      - name: Download TUI Windows ARM64 artifact
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: tui-aarch64-pc-windows-msvc
-#          path: artifacts/tui/aarch64-pc-windows-msvc
-
       - name: Package Web distribution
         run: |
           cd artifacts/web && zip -r ../messenger-web-${GITHUB_REF#refs/tags/}.zip .
-
-      # Package exactly the targets that were downloaded: some build-tui.yml
-      # matrix entries are disabled, so their download steps (and folders) do
-      # not exist and a hardcoded target list would fail the release.
-      - name: Package TUI binaries
-        run: |
-          if [ ! -d artifacts/tui ]; then
-            echo "No TUI artifacts were downloaded; nothing to package."
-            exit 0
-          fi
-          cd artifacts/tui
-          for dir in */; do
-            [ -d "$dir" ] || continue
-            target="${dir%/}"
-            zip -j "../messenger-tui-${GITHUB_REF#refs/tags/}-${target}.zip" "${target}/"*
-          done
 
       - name: Get version from tag
         id: get_version
@@ -176,4 +135,3 @@ jobs:
             artifacts/desktop/linux-x86_64/*.deb
             artifacts/desktop/linux-arm64/*.deb
             artifacts/messenger-web-*.zip
-            artifacts/messenger-tui-*.zip
