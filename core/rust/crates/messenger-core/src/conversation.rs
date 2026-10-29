@@ -4,7 +4,7 @@
 //! Tapping "new chat" inserts a conversation row before any message exists,
 //! so backing out without sending leaves an empty row behind — one per tap.
 //! This module owns the rule for which of those may be deleted, so every
-//! platform (Android/Web through the FFI/wasm boundary, the TUI by linking
+//! platform (Android through the native API, the TUI by linking
 //! this crate) shares the exact same policy instead of re-implementing it in
 //! its UI layer.
 //!

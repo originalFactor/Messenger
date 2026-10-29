@@ -1,4 +1,4 @@
-# Copyright 2026 originalFactor
+﻿# Copyright 2026 originalFactor
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -93,7 +93,7 @@ jobs:
 
       # Must be 21: gradle/gradle-daemon-jvm.properties pins toolchainVersion=21.
       # The images do not preinstall a matching JDK on every architecture, so
-      # without this Gradle tries to download one through the Foojay resolver —
+      # without this Gradle tries to download one through the Foojay resolver 鈥?
       # and that file's hardcoded per-platform package IDs now answer
       # "Package id not found" (400), failing the build at configuration time.
       - name: Set up JDK 21
@@ -103,7 +103,7 @@ jobs:
           distribution: 'temurin'
 
       # Every Gradle invocation CONFIGURES the Android modules too, so AGP needs
-      # an SDK location even though nothing Android is built here — but it never
+      # an SDK location even though nothing Android is built here 鈥?but it never
       # needs a package: no Android task is in this graph. Pointing the env vars
       # at an empty directory is enough, and it avoids downloading the command
       # line tools on the ARM64 runners (where Google ships no native binaries).
@@ -125,7 +125,7 @@ jobs:
       # -p messenger-ffi` in core/rust and feeds the resulting host cdylib to
       # uniffi-bindgen, so EVERY :desktopApp task needs cargo on PATH. The
       # runner images do ship one, but pinning it here matches build-android /
-      # build-web and stops a future image update from silently
+      # the other build jobs and stops a future image update from silently
       # changing the Rust version under us. No `targets:` needed: the host
       # triple is the runner's own and nothing is cross-compiled.
       - name: Setup Rust toolchain
@@ -190,8 +190,8 @@ jobs:
 
       # No `shell:` here on purpose: step `shell` is one of the keys that does
       # NOT accept expressions (matrix.shell is a workflow-validation error), and
-      # the runner defaults already do the right thing — pwsh on Windows, bash on
-      # Linux — for the platform-specific wrapper in matrix.gradlew.
+      # the runner defaults already do the right thing 鈥?pwsh on Windows, bash on
+      # Linux 鈥?for the platform-specific wrapper in matrix.gradlew.
       - name: Build Desktop distribution
         # The -P argument MUST be quoted: PowerShell (the default shell on the
         # Windows runners) drops the leading `-P` of an unquoted token and Gradle
@@ -214,3 +214,4 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.upload }}
           if-no-files-found: error
+

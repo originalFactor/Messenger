@@ -15,5 +15,5 @@
  */
 package cc.ptoe.messenger.presentation.ui.chat
 
-/** Platform Markdown parser used only by the transitional wasm renderer. */
+/** Platform Markdown parser used by the Kotlin renderer. */
 internal expect fun parseMarkdownToBlocks(markdown: String, baseId: Long): List<ChatBlock>

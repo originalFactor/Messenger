@@ -50,7 +50,7 @@ fun loadDotEnv() {
 loadDotEnv()
 
 /**
- * 版本方案：Android(androidApp/wear/runtime) / Desktop / Web / TUI 使用同一套
+ * 版本方案：Android(androidApp/wear/runtime) / Desktop / TUI 使用同一套
  * 语义化版本名 + git commit 计数版本号。
  *
  * - versionName: 仓库根目录 `VERSION` 文件里的语义化版本（MAJOR.MINOR.PATCH），
@@ -279,38 +279,6 @@ ext["releaseRustTargets"] = (ext["releaseAbis"] as List<*>)
 ext["debugRustTargets"] = (ext["debugAbis"] as List<*>)
     .map { abiToRustTarget.getValue(it as String) }
 
-/**
- * Host C compiler for the wasm32 Rust build (`sqlite-wasm-rs` compiles C through
- * `cc`). Rust ships no C toolchain, and a Windows host has no `clang` on PATH
- * unless LLVM is installed separately, so the build borrows the LLVM already in
- * the pinned NDK — the same toolchain every other native build here uses.
- *
- * Windows only: Linux and macOS CI images ship clang, and leaving those alone
- * keeps their toolchain selection exactly as it was. An empty map means "let
- * cargo decide".
- */
-fun wasmHostToolchain(): Map<String, String> {
-    if (!org.gradle.internal.os.OperatingSystem.current().isWindows) return emptyMap()
-    val sdkDir = System.getenv("ANDROID_HOME")
-        ?: System.getenv("ANDROID_SDK_ROOT")
-        ?: rootDir.resolve("local.properties").takeIf { it.exists() }?.let { props ->
-            java.util.Properties().apply { props.inputStream().use { load(it) } }
-                .getProperty("sdk.dir")
-        }
-        ?: return emptyMap()
-    val prebuilt = File(sdkDir)
-        .resolve("ndk").resolve(ext["ndkVersion"] as String)
-        .resolve("toolchains/llvm/prebuilt")
-        .listFiles()?.firstOrNull { it.isDirectory }
-        ?: return emptyMap()
-    val clang = prebuilt.resolve("bin/clang.exe").takeIf { it.isFile } ?: return emptyMap()
-    val ar = prebuilt.resolve("bin/llvm-ar.exe").takeIf { it.isFile }
-    return buildMap {
-        put("CC_wasm32_unknown_unknown", clang.absolutePath)
-        if (ar != null) put("AR_wasm32_unknown_unknown", ar.absolutePath)
-    }
-}
-ext["wasmHostToolchain"] = wasmHostToolchain()
 ext["packageVersion"] = computeNativePackageVersion(verName, verCode)
 ext["keystoreFile"] = rootDir.resolve("keyring/messenger-release.jks")
 ext["keystorePassword"] = getEnv("KEYSTORE_PASSWORD") ?: ""

@@ -44,7 +44,7 @@ fun AgentAvatar(
     fallbackIcon: ImageVector = Icons.Default.SmartToy,
     allowRemote: Boolean = false
 ) {
-    // A String model, never an okio.Path: on web Coil's js/wasm component
+    // A String model, never an okio.Path: on Android/Desktop Coil
     // registry maps FileSystem-backed values (Path / file:// URIs) onto a
     // ThrowingFileSystem, so any such model would fail to load.
     val avatarSource = remember(avatar) {

@@ -124,7 +124,7 @@ interface CoreBridge {
     suspend fun cloudCacheAvatar(scope: String, accountId: String, id: String, url: String, version: String?, destDir: String): String
 
     // Cloud account settings, avatars, market mutations and the login flows.
-    // Android/Desktop use RestCoreBridge; WasmCoreBridge retains the browser
+    // Android/Desktop use RestCoreBridge; all native clients use RestCoreBridge
     // boundary for this migration phase.
     suspend fun cloudPushSnapshot(): Long
     suspend fun cloudSyncWith(
@@ -159,7 +159,7 @@ interface CoreBridge {
      * Runs one turn. [toolExecutor] is `suspend` because a tool may need to
      * perform I/O (remote MCP over HTTP). Platforms whose native callback is
      * synchronous (the UniFFI `PlatformToolHost` on Android/Desktop) bridge it
-     * with `runBlockingCall`; wasm returns a Promise instead, since the browser
+     * with `runBlockingCall`; native clients use the suspend bridge
      * event loop cannot block.
      */
     suspend fun runTurn(

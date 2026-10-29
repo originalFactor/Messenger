@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 
 class ChatDocumentParserTest {
     @Test
-    fun parsesStructuredWasmBlocks() {
+    fun parsesStructuredMessageBlocks() {
         val blocks = ChatDocumentParser.parseBlocksJson(
             """
             [

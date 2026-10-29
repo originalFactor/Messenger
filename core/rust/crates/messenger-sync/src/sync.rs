@@ -39,7 +39,7 @@ pub struct SyncEngine<'a> {
     pub(crate) store: &'a Store,
     pub(crate) client: CloudApiClient,
     /// Where `cache_avatar` writes (the platform's `cloud_avatars` dir).
-    /// `None` on targets without a filesystem (wasm).
+    /// `None` when no local avatar directory is configured.
     pub(crate) avatars_dir: Option<std::path::PathBuf>,
 }
 
@@ -201,7 +201,7 @@ impl<'a> SyncEngine<'a> {
         cookie: Option<String>,
     ) -> CloudResult<()> {
         self.save_user(user).map_err(CloudError::Network)?;
-        // Without this the session never reaches the store: the browser build
+        // Without this the session never reaches the store: the native client
         // works only because its cookie jar supplies it, and every other
         // target would silently have no auth for the next pull.
         if let Some(cookie) = cookie {

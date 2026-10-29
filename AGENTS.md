@@ -6,10 +6,9 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 
 | Module | What it is | Details |
 |---|---|---|
-| `shared` | KMP library: all shared Android/Desktop/Web logic (Clean Architecture data/domain/presentation) | `shared/AGENTS.md` |
+| `shared` | KMP library: shared Android/Desktop logic (Clean Architecture data/domain/presentation) | `shared/AGENTS.md` |
 | `androidApp` | Android application shell | `androidApp/AGENTS.md` |
 | `desktopApp` | Desktop (JVM) application shell | `desktopApp/AGENTS.md` |
-| `webApp` | Compose Multiplatform Kotlin/Wasm browser shell | `webApp/AGENTS.md` |
 | `wear` | Wear OS chat-only companion | `wear/AGENTS.md` |
 | `runtime` | Companion shell-runtime app (terminal UI + tool host) | `runtime/AGENTS.md` |
 | `core/rust`, `core/bindings` | Rust Agent Core (Cargo workspace), `/api/v1` REST/SSE server, minimal native lifecycle bridge | `core/rust/AGENTS.md` |
@@ -37,7 +36,7 @@ cd server && pnpm install && pnpm dev                  # server; checks: pnpm li
 
 The wrapper runs Gradle with `--daemon` but under its own daemon registry (`~/.gradle/cli-daemon`), so a CLI build never queues behind Android Studio's busy daemon — that collision is why this repo used to mandate `--no-daemon`, which cost ~4 s of JVM start plus a lost VFS/Kotlin-daemon warm-up on every invocation. Do not use bare `./gradlew` for local builds, and do not add `--no-daemon`: with the isolated registry a warm daemon is both safe and ~4 s faster per run. If a cache-lock stall is ever observed anyway (both daemons share `~/.gradle/caches`), fall back to `./gradlew --no-daemon` for that one run and note it here.
 
-Prerequisites: JDK 17, Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core, and `wasm32-unknown-unknown` + `wasm-bindgen-cli` (version pinned in `Cargo.lock`) for the Web path. `llm-typewriter` is resolved from Maven Central by Android/Desktop builds.
+Prerequisites: JDK 17, Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core. `llm-typewriter` is resolved from Maven Central by Android/Desktop builds.
 
 ## Hard Constraints
 
@@ -53,7 +52,7 @@ These MUST be followed at all times:
 8. **Wear scope**: `wear` stays chat-only — provider/model/agent/settings management stays on the phone. `wear` is NOT a KMP module.
 9. **AGENTS.md currency**: structural changes (new module/layer/entity/repository/feature, changed constraints or conventions, build or CI changes) must update the relevant AGENTS.md in the same commit.
 10. **Local Core API**: Android/Desktop business calls go through Rust's `/api/v1` REST/SSE service. It binds loopback only and requires the per-start bearer token; the native bridge exposes lifecycle only (`CoreHandle.open`, `startHttpServer`, `HttpServerHandle.stop`). Keep `core/rust/crates/messenger-http/openapi.yaml` and `docs/SSE.md` current with route/event changes.
-11. **Rendering ownership**: Android/Desktop Markdown, code highlighting and LaTeX are rendered in Kotlin with `cc.ptoe:llm-typewriter`; do not reintroduce native Document/Markdown/LaTeX rendering exits for those clients. Web keeps the wasm Markdown boundary during this migration phase.
+11. **Rendering ownership**: Android/Desktop Markdown, code highlighting and LaTeX are rendered in Kotlin with `cc.ptoe:llm-typewriter`; do not reintroduce native Document/Markdown/LaTeX rendering exits for those clients. There is no Rust Document/Markdown/LaTeX renderer; Android/Desktop use Kotlin `llm-typewriter`.
 
 ## Conventions
 
@@ -65,7 +64,7 @@ These MUST be followed at all times:
 - **Screens**: Material 3 `Scaffold` + `TopAppBar`; never add top-level padding in screens; avoid nested Scaffold double-inset issues.
 - **Code style**: idiomatic Kotlin; Material 3; `collectAsState()` for Flows in Compose; `rememberCoroutineScope()` for launching from composables; composable `Modifier` parameters default to `Modifier`; descriptive names.
 - **Git workflow**: main branch `main`; commit each completed task locally with a clear message (what + why); push only when explicitly requested.
-- **CI** (`.github/workflows/`): `ci.yml` (push/PR, path-filtered to code and build files) and `release.yml` (tag `v*`, verifies tag vs `VERSION`) both fan into `build-all.yml`, which calls the four reusable `build-*.yml` workflows in parallel. Build matrix: **android** — `:androidApp` + `:runtime` release APKs for `arm64-v8a` only; **wear** — `armeabi-v7a` only; **desktop** — Windows x86_64 (MSI) only; the Windows ARM64 app image and the Linux `.deb` entries are present but commented out; **web** — wasm distribution. Every matrix entry is `fail-fast: false` so one platform cannot hide another's result. Docs (`AGENTS.md`, `README.md`) and `server/**` do NOT trigger CI. The keystore is materialized from `KEYSTORE_BASE64` on push builds only.
+- **CI** (`.github/workflows/`): `ci.yml` (push/PR, path-filtered to code and build files) and `release.yml` (tag `v*`, verifies tag vs `VERSION`) both fan into `build-all.yml`, which calls the three reusable Android, Wear, and Desktop workflows in parallel. Build matrix: **android** — `:androidApp` + `:runtime` release APKs for `arm64-v8a` only; **wear** — `armeabi-v7a` only; **desktop** — Windows x86_64 (MSI) only; the Windows ARM64 app image and the Linux `.deb` entries are present but commented out. Every matrix entry is `fail-fast: false` so one platform cannot hide another's result. Docs (`AGENTS.md`, `README.md`) and `server/**` do NOT trigger CI. The keystore is materialized from `KEYSTORE_BASE64` on push builds only.
 - **R8 / ProGuard**: every release build is minified — `:androidApp`, `:wear`, `:runtime` run R8 with resource shrinking, and `:desktopApp` runs ProGuard (shrink + optimize, no obfuscation) inside `packageRelease*`. Keep each module's `proguard-rules.pro` tight whenever reflective/JNI/serialized/manifest entry points change, and do NOT run release builds for ordinary tasks (slow, high cost). The investigation procedure lives in `wear/AGENTS.md`.
 - **Android ABI matrix**: `:androidApp`/`:runtime` filter ABIs per build type with `ndk.abiFilters` — release ships `arm64-v8a` only (`ext["releaseAbis"]`, `-Pmessenger.abis` / `ANDROID_ABIS`), debug ships `x86_64` only (`ext["debugAbis"]`, `-Pmessenger.debugAbis` / `ANDROID_DEBUG_ABIS`) because Android Studio Run installs the debug variant on an x86_64 AVD and a Rust cross-compile costs minutes: the two build types share no ABI, so each compiles exactly one target. `splits.abi` is NOT used (splits are global and AGP rejects an `abiFilters` that contradicts them); `abiFilters` live on each build type, never in `defaultConfig`, because AGP UNIONS `defaultConfig`'s list into every build type. `:wear` mirrors this: `ext["wearReleaseAbis"]` = `armeabi-v7a` (Wear OS = 64-bit kernel / 32-bit userspace), `ext["wearDebugAbis"]` = `x86_64` (Wear OS AVDs).
 

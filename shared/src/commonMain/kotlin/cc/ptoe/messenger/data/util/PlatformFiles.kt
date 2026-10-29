@@ -18,8 +18,8 @@ package cc.ptoe.messenger.data.util
 
 /**
  * Platform file helpers used by shared code that must also compile for the
- * browser. Android/Desktop forward to [FileKit] (okio's `FileSystem.SYSTEM`);
- * the browser has no filesystem at all — see the wasmJs actual for the
+ * native clients. Android/Desktop forward to [FileKit] (okio's `FileSystem.SYSTEM`);
+ * native clients use the filesystem at all — see the platform actual for the
  * exact, deliberately narrow contract.
  */
 expect fun fileExists(path: String): Boolean

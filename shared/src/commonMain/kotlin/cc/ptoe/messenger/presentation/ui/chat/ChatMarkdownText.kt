@@ -19,8 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 /**
- * Markdown + LaTeX renderer for Android/Desktop. The browser keeps the existing
- * boundary for now because llm-typewriter does not publish a wasmJs variant.
+ * Markdown + LaTeX renderer for Android/Desktop. The native clients keeps the existing
+ * boundary for now because llm-typewriter does not publish a native renderer.
  */
 @Composable
 internal expect fun ChatMarkdownText(

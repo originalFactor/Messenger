@@ -1,4 +1,4 @@
-<!-- Improved compatibility of back to top link: See: https://github.com/othneildrew/Best-README-Template/pull/73 -->
+﻿<!-- Improved compatibility of back to top link: See: https://github.com/othneildrew/Best-README-Template/pull/73 -->
 <a id="readme-top"></a>
 
 [![Contributors][contributors-shield]][contributors-url]
@@ -18,7 +18,6 @@
   <p align="center">
     A beautifully designed, cross-platform AI chat app.
     <br />
-    Chat with your favourite AI models on your phone, tablet, desktop, Wear OS watch, browser, or terminal — Material 3 design, Bring Your Own Key, fully open-source and offline-capable.
   </p>
 </div>
 
@@ -41,7 +40,6 @@
     <li>
       <a href="#usage">Usage</a>
       <ul>
-        <li><a href="#browser-optional">Browser (optional)</a></li>
         <li><a href="#terminal-client-optional">Terminal client (optional)</a></li>
       </ul>
     </li>
@@ -56,20 +54,19 @@
 
 Messenger is a Material-3-designed, cross-platform LLM chat application built with Kotlin Multiplatform and Jetpack Compose. It is fully open-source, free, and offline-capable, using a BYOK (Bring Your Own Key) model.
 
-The same Rust agent core powers Android and desktop through a loopback REST/SSE API, a Wear OS companion through the authenticated phone bridge, and a browser client compiled to WebAssembly. Chat with your favourite AI models wherever you are — with a clean, modern interface that feels great to use. Kotlin owns UI state, rendering and platform pickers; the Rust core owns storage, chat turns, tools, models and cloud synchronization.
+The same Rust agent core powers Android and desktop through a loopback REST/SSE API and a Wear OS companion through the authenticated phone bridge. Kotlin owns UI state, rendering and platform pickers; the Rust core owns storage, chat turns, tools, models and cloud synchronization.
+
 
 Key highlights:
 
-- **Chat anywhere** — Works on your phone, tablet, Wear OS watch, desktop (JVM), and in your browser
-- **In your browser too** — the web client is the same Compose UI compiled to WebAssembly on the Rust core, served from the account server at `/app`; sign in and your agents, providers and conversations sync like everywhere else
-- **Bring your own key** — Use API keys from your preferred AI providers, no middleman
-- **Custom AI agents** — Create and switch between different AI personas and assistants
-- **Built-in terminal tool** — Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
-- **Multiple providers** — Connect to various OpenAI-compatible model providers in one app
-- **Streaming responses** — SSE streaming with progressive Markdown and inline / display LaTeX math rendering (powered by RaTeX)
-- **Modern design** — Clean Material 3 interface that's easy on the eyes, with adaptive layouts (bottom nav on phones, navigation rail + dual-pane on tablet/desktop)
-- **Open source & free** — Fully open-source, no subscriptions, no hidden costs
-- **Privacy first** — Your conversations stay on your device
+- **Bring your own key** 鈥?Use API keys from your preferred AI providers, no middleman
+- **Custom AI agents** 鈥?Create and switch between different AI personas and assistants
+- **Built-in terminal tool** 鈥?Agents can run model-requested commands through the consent-gated terminal tool. On Android, commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI; no separate Termux installation is required.
+- **Multiple providers** 鈥?Connect to various OpenAI-compatible model providers in one app
+- **Streaming responses** 鈥?SSE streaming with progressive Markdown and inline / display LaTeX math rendering (powered by RaTeX)
+- **Modern design** 鈥?Clean Material 3 interface that's easy on the eyes, with adaptive layouts (bottom nav on phones, navigation rail + dual-pane on tablet/desktop)
+- **Open source & free** 鈥?Fully open-source, no subscriptions, no hidden costs
+- **Privacy first** 鈥?Your conversations stay on your device
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -83,7 +80,6 @@ Key highlights:
 * [![SQLite][SQLite-badge]][SQLite-url]
 * [![OkHttp][OkHttp-badge]][OkHttp-url]
 * [![Rust][Rust-badge]][Rust-url]
-* [![Rust / Kotlin-Wasm][Wasm-badge]][Wasm-url]
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -96,11 +92,7 @@ To get a local copy up and running, follow these simple steps.
 * JDK 17
 * Android SDK (Compile SDK 37, Target SDK 36, Min SDK 30)
 * Gradle wrapper is included in the repository
-* Rust toolchain (Android/Desktop native core and the browser build)
-  ```sh
-  rustup target add wasm32-unknown-unknown                            # browser build
-  cargo install wasm-bindgen-cli --version 0.2.129 --locked            # must match core/rust/Cargo.lock
-  ```
+* Rust toolchain (Android/Desktop native core)
 
 ### Installation
 
@@ -123,23 +115,16 @@ To get a local copy up and running, follow these simple steps.
    ./gradlew :desktopApp:run               # Desktop (JVM)
    ```
    Android builds download the pinned Termux bootstrap archives during the build and verify their SHA-256 digests before packaging them.
-   Android release builds are minified (R8 + resource shrinking) and ship the `arm64-v8a` APK; the 32-bit `armeabi-v7a` and emulator `x86_64` ABIs are opt-in with `-Pmessenger.abis=armeabi-v7a` (or `ANDROID_ABIS=…`). Debug builds ship `x86_64` only (phone apps and watch app), so Android Studio Run installs on an AVD with no flags and never pays for the release ABI's Rust cross-compile; release stays `arm64-v8a` (phone) / `armeabi-v7a` (wear). Place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux); the release build runs ProGuard.
-   Android/Wear/Runtime, Desktop and Web all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
-5. Build the browser client (optional)
-   ```sh
-   ./gradlew :webApp:wasmJsBrowserDevelopmentRun   # browser dev server (COOP/COEP on)
-   ./gradlew :webApp:wasmJsBrowserDistribution     # production bundle under webApp/build/dist
-   ./gradlew :webApp:copyWebAppDistribution        # local: serve it from server/public/app/
-   ```
-   The browser build compiles the Rust core to WebAssembly and generates the bindings automatically (the pinned `wasm-bindgen` CLI from the Prerequisites is what it invokes). The compiled bundle is not committed: CI uploads it as the `web-distribution` artifact on every successful run (`.github/workflows/ci.yml` → `build-all.yml` → `build-web.yml`), and the account server (`server/`) downloads it through nightly.link and serves it at `/app` during `pnpm build`. To try it against your own server checkout, run `./gradlew :webApp:copyWebAppDistribution` so the bundle lands in `server/public/app/`, then start the server with `pnpm dev`.
-6. Cutting a release
+   Android release builds are minified (R8 + resource shrinking) and ship the `arm64-v8a` APK; the 32-bit `armeabi-v7a` and emulator `x86_64` ABIs are opt-in with `-Pmessenger.abis=armeabi-v7a` (or `ANDROID_ABIS=鈥). Debug builds ship `x86_64` only (phone apps and watch app), so Android Studio Run installs on an AVD with no flags and never pays for the release ABI's Rust cross-compile; release stays `arm64-v8a` (phone) / `armeabi-v7a` (wear). Place your keystore at `keyring/messenger-release.jks` and provide the environment variables `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. Native Desktop distributions are built with `./gradlew :desktopApp:packageReleaseDmg` (macOS), `:desktopApp:packageReleaseMsi` (Windows), or `:desktopApp:packageReleaseDeb` (Linux); the release build runs ProGuard.
+   Android/Wear/Runtime and Desktop all report the same version: the semantic version name in the repository-root `VERSION` file plus the git commit count as the version code (the Desktop MSI uses `MAJOR.MINOR.<commitCount>`, since native packages need a numeric, increasing product version). For a one-off local build both can be overridden with the `VERSION_NAME` / `VERSION_CODE` environment variables.
+5. Cutting a release
    ```sh
    ./release.ps1 -Bump patch     # 1.0.0 -> 1.0.1: bumps VERSION, commits it, tags v1.0.1, pushes
    ./release.ps1                 # tag and push the version already committed in VERSION
    ./release.ps1 -NoPush         # create the tag locally, inspect it, push later
    ```
    The push is what triggers the release build. The script refuses to tag when `VERSION` is uncommitted or differs from `HEAD` (a tag names a commit, so the mismatch would publish the wrong version), when the tree is dirty, or when the tag already exists locally or on origin; `-WhatIf` previews, and `-AllowDirty` tolerates unrelated local edits. `.github/workflows/release.yml` re-checks the tag against `VERSION` at the tagged commit and fails rather than publishing a mismatch.
-7. (Optional) Change the git remote URL to avoid accidental pushes to the base project
+6. (Optional) Change the git remote URL to avoid accidental pushes to the base project
    ```sh
    git remote set-url origin originalFactor/Messenger
    git remote -v # confirm the changes
@@ -149,19 +134,15 @@ To get a local copy up and running, follow these simple steps.
 
 ## Usage
 
-1. Install Messenger on your phone, tablet, desktop, Wear OS watch, or browser
+1. Install Messenger on your phone, tablet, desktop, or Wear OS watch
 2. Add your API key from your preferred AI provider
 3. Pick a model and start chatting
 4. Create custom agents for different tasks
-5. Enable **Tools** for an agent when terminal access is needed. On Android, terminal commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI — no separate Termux installation is required. Read-only mode (the default) exposes inspection commands only; switch an agent to writable mode to let it edit and create files in that workspace.
-6. (Optional) Install the Wear OS companion — it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
-7. (Optional) Sign in to a Messenger account to sync agents, providers and conversations across every client. Each client seeds its own local store and mirrors the account's data into it, so the same conversation is available on your phone, on your desktop and in your browser.
+5. Enable **Tools** for an agent when terminal access is needed. On Android, terminal commands execute inside an app-private workspace using the pinned runtime packaged for the device ABI 鈥?no separate Termux installation is required. Read-only mode (the default) exposes inspection commands only; switch an agent to writable mode to let it edit and create files in that workspace.
+6. (Optional) Install the Wear OS companion 鈥?it discovers your phone over the local network (NSD mDNS) and syncs your agents automatically over a WebSocket on TCP `18765`
+7. (Optional) Sign in to a Messenger account to sync agents, providers and conversations across every client. Each client seeds its own local store and mirrors the account's data into it, so the same conversation is available on your phone and desktop.
 
 Messenger speaks the OpenAI-compatible Chat Completions API, so any provider that exposes that interface works out of the box.
-
-### Browser (optional)
-
-The browser client is the same UI as the desktop app, compiled to WebAssembly and backed by the same Rust agent core (its SQLite store is persisted in the browser's origin-private file system). The production bundle is served by the account server at `/app` alongside the website and console — sign in there and your agents, providers and conversations sync like everywhere else. Because it runs in a browser sandbox it has no shell or filesystem access, so tools are disabled there (remote MCP servers over SSE still work); the phone and desktop clients are the ones with tools.
 
 ### Local Rust core
 
@@ -173,8 +154,9 @@ SSE. The OpenAPI contract lives at
 `core/rust/crates/messenger-http/docs/SSE.md`.
 
 Markdown and LaTeX on Android/Desktop are rendered in Kotlin with
-[`llm-typewriter`](https://github.com/originalFactor/llm-typewriter). Web keeps
-its existing wasm-bindgen boundary for this migration phase.
+[`llm-typewriter`](https://github.com/originalFactor/llm-typewriter). The Rust
+core owns agent execution, storage, tools, models and synchronization; it does
+not contain a Rust document renderer.
 
 _For more details on architecture, conventions, and hard constraints, please refer to [AGENTS.md](AGENTS.md)_
 
@@ -216,15 +198,13 @@ originalFactor - Project Link: [https://github.com/originalFactor/Messenger](htt
 
 ## Acknowledgments
 
-* [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP) — Pure-Rust KaTeX-compatible LaTeX engine shared across Android and JVM Desktop
-* [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — README template
+* [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP) 鈥?Pure-Rust KaTeX-compatible LaTeX engine shared across Android and JVM Desktop
+* [Best-README-Template](https://github.com/othneildrew/Best-README-Template) 鈥?README template
 * [Jetpack Compose](https://developer.android.com/jetpack/compose)
 * [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/)
 * [Material 3](https://m3.material.io/)
-* [llm-typewriter](https://github.com/originalFactor/llm-typewriter) — streaming Markdown, code and LaTeX rendering on Android and Desktop
-* [Axum](https://github.com/tokio-rs/axum) — versioned loopback HTTP/SSE API
-* [syntect](https://github.com/trishume/syntect) — Sublime Text syntax engine behind code highlighting in all clients
-* [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) — Rust ↔ JavaScript boundary for the browser client
+* [llm-typewriter](https://github.com/originalFactor/llm-typewriter) 鈥?streaming Markdown, code and LaTeX rendering on Android and Desktop
+* [Axum](https://github.com/tokio-rs/axum) 鈥?versioned loopback HTTP/SSE API
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -257,5 +237,4 @@ originalFactor - Project Link: [https://github.com/originalFactor/Messenger](htt
 [Rust-url]: https://www.rust-lang.org/
 [OkHttp-badge]: https://img.shields.io/badge/OkHttp-48B883?style=for-the-badge&logo=square&logoColor=white
 [OkHttp-url]: https://square.github.io/okhttp/
-[Wasm-badge]: https://img.shields.io/badge/Kotlin%2Fwasm-2BDE21?style=for-the-badge&logo=kotlin&logoColor=white
-[Wasm-url]: https://kotlinlang.org/docs/multiplatform.html
+

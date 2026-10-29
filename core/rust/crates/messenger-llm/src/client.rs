@@ -202,15 +202,9 @@ fn data_payload_of_line(line: &[u8]) -> Option<String> {
 /// Streaming response handle: yields each SSE `data:` payload in order,
 /// terminating after the `[DONE]` sentinel or stream end.
 /// SSE byte stream. Boxed because `Response::bytes_stream()` consumes the
-/// response and yields a different opaque type on each reqwest backend
-/// (native hyper vs. wasm fetch), so the concrete type cannot be named.
-/// Native futures must be `Send` (the agent turn runs on a multi-threaded
-/// tokio runtime); wasm values are not `Send` and must not carry the bound.
-#[cfg(not(target_arch = "wasm32"))]
+/// response and yields an opaque stream type.
 type ByteStream =
     Pin<Box<dyn futures_core::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
-#[cfg(target_arch = "wasm32")]
-type ByteStream = Pin<Box<dyn futures_core::Stream<Item = Result<bytes::Bytes, reqwest::Error>>>>;
 
 pub struct ChatStream {
     stream: ByteStream,
@@ -251,8 +245,7 @@ impl ChatStream {
         if self.done {
             return Ok(None);
         }
-        // `bytes_stream()` exists on both reqwest backends (native and
-        // wasm); `Response::chunk()` does not exist on wasm at all.
+        // Consume the native reqwest byte stream incrementally.
         loop {
             let chunk = self.stream.next().await;
             match chunk {
