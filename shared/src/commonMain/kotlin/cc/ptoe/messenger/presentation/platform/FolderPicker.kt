@@ -28,7 +28,7 @@ fun interface FolderPickerLauncher {
  *
  * Returns `null` when the platform cannot hand the app a filesystem path the
  * workspace tools can open (Android's Storage Access Framework returns content
- * URIs, and the browser has no filesystem). The editor then keeps its manual
+ * URIs, and native clients has no filesystem). The editor then keeps its manual
  * text field instead of showing a button that cannot do anything.
  */
 @Composable

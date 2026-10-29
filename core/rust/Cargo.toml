@@ -9,10 +9,6 @@ members = [
     "crates/messenger-core",
     "crates/messenger-mcp",
     "crates/messenger-sync",
-    "crates/messenger-document",
-    "crates/messenger-markdown",
-    "crates/messenger-highlight",
-    "crates/messenger-wasm",
 ]
 
 [workspace.package]

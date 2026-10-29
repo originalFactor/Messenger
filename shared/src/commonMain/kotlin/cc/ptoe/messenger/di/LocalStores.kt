@@ -25,7 +25,7 @@ import cc.ptoe.messenger.domain.repository.CloudFacade
  * [cc.ptoe.messenger.data.cloud.RustCloudFacade]) plus the two preferences
  * stores. Durable entity data lives in the Rust core on every platform; only
  * the preferences DataStore is platform-specific (a file on Android/Desktop,
- * OPFS in the browser).
+ * OPFS in native clients).
  */
 open class LocalStores(
     val cloud: CloudFacade,
@@ -36,7 +36,7 @@ open class LocalStores(
 /**
  * Builds this platform's stores. Called once from [AppContainer]'s
  * constructor — the per-target selection is what keeps `commonMain` free of
- * Room (`commonMain` has no Room artifact for wasmJs).
+ * Room (`commonMain` has no Room artifact for non-JVM).
  */
 expect fun createLocalStores(appDirs: AppDirs): LocalStores
 

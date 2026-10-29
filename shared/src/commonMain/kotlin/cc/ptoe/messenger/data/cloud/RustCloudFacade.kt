@@ -52,7 +52,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * [CloudFacade] over the Rust sync engine, for targets where Room does not
- * exist (the browser). It performs no networking itself — every call is a
+ * exist (native clients). It performs no networking itself — every call is a
  * [CoreBridge] method — which is why the same class is usable from any
  * platform that can host the core.
  *
@@ -69,7 +69,7 @@ class RustCloudFacade(
     private val localDataMutex: Mutex = Mutex(),
     /**
      * Where the signed-in user's cloud avatar is cached. Native platforms pass
-     * `filesDir/cloud_avatars`; the browser has no filesystem and gets a
+     * `filesDir/cloud_avatars`; native clients has no filesystem and gets a
      * `data:` URI back regardless, so it leaves this null.
      */
     private val userAvatarDir: String? = null,
@@ -607,7 +607,7 @@ expect fun platformOrigin(): String
 
 /**
  * File bytes for the avatar upload. Android/Desktop read the file; the
- * browser has no filesystem, and its avatars arrive as `data:` URIs (handled
+ * native clients has no filesystem, and its avatars arrive as `data:` URIs (handled
  * before this is reached).
  */
 internal expect suspend fun readBytesFromPath(path: String): ByteArray

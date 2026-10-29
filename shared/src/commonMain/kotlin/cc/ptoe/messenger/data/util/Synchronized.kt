@@ -19,7 +19,7 @@ package cc.ptoe.messenger.data.util
 /**
  * Non-suspend mutual exclusion on [lock], for the callbacks a platform
  * transport invokes from its own thread. Kotlin's `synchronized` builtin does
- * not exist on wasmJs, so shared code needs this seam; on the browser the
+ * not exist on JVM targets, so shared code needs this seam; on native clients the
  * actual is a plain pass-through, which is correct because there is exactly
  * one thread.
  */

@@ -62,12 +62,8 @@ pub trait TurnSink: Send + Sync {
 
 /// Platform tool executor (terminal/workspace/MCP are routed here).
 ///
-/// On wasm32 the browser's single thread means the future never crosses a
-/// thread boundary, and awaiting a JS `Promise` (which holds `Rc`) is not
-/// `Send`. Native targets keep the `Send` bound because the turn runs on a
-/// multi-threaded tokio runtime.
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+/// Tool execution runs on the native multi-threaded runtime.
+#[async_trait]
 pub trait ToolHost: Send + Sync {
     async fn execute(
         &self,
@@ -117,7 +113,7 @@ pub struct TurnRequest {
 }
 
 /// Wall-clock milliseconds; delegates to the store's platform clock, which is
-/// the browser's `Date.now()` on wasm (`SystemTime::now()` traps there).
+/// The native store supplies wall-clock timestamps.
 pub use messenger_store::now_ms;
 
 fn new_id() -> String {

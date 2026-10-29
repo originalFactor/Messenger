@@ -26,6 +26,6 @@ import okio.Path
  * Android/Desktop keep the on-disk path
  * `<filesDir>/datastore/messenger_preferences.preferences_pb` so installs
  * keep their settings across the KMP migration. Web stores the same
- * serialized preferences in the browser's origin-private file system.
+ * serialized preferences in native clients's origin-private file system.
  */
 expect fun createMessengerDataStore(filesDir: Path): DataStore<Preferences>

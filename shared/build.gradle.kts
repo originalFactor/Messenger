@@ -34,7 +34,7 @@ plugins {
 // commit count (rootProject.ext["versionCode"]) — see the root build script.
 //
 // Android reads both back from the installed package (PackageManager), but
-// Desktop and Web have no package registry to query, so the two values are
+// Android and Desktop have no package registry to query, so the two values are
 // baked into a generated Kotlin constant they compile against. Callers
 // therefore see the same version string on every platform.
 val appVersionName = rootProject.ext["versionName"] as String
@@ -113,23 +113,14 @@ kotlin {
 
     jvm("desktop")
 
-    // Compose Multiplatform web target. The browser bundle's entry point lives in
-    // :webApp (which calls `binaries.executable()`); this library target only needs
-    // to compile, so no executable binary is declared here.
-    wasmJs {
-        browser()
-        compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
-    }
 
     sourceSets {
-        // Shared by Android + Desktop but NOT wasmJs: Room, DataStore-with-okio-paths,
+        // Shared by Android + Desktop: Room, DataStore-with-okio-paths,
         // okio's FileSystem.SYSTEM and the Room-backed repositories all live here.
         val jvmSharedMain by creating { dependsOn(getByName("commonMain")) }
 
-        // Shared Android + Desktop tests. They are NOT in commonTest on
-        // purpose: they use org.junit + runBlocking, which do not exist on
-        // wasmJs, and a commonTest directory would force a wasmJs test
-        // compilation of them.
+        // Shared Android + Desktop tests. They are kept in a separate source
+        // set because they use org.junit + runBlocking.
         val jvmSharedTest by creating { dependsOn(getByName("commonTest")) }
 
         getByName("commonMain") {
@@ -140,7 +131,7 @@ kotlin {
             // every compilation including commonMain runs the generator first.
             // An explicit name-based `tasks.matching { … }.dependsOn(...)` rule
             // was tried first and silently matched nothing — the real compile
-            // tasks are `compileKotlinDesktop` / `compileKotlinWasmJs` /
+            // tasks are `compileKotlinDesktop` / `compileKotlinMetadata` /
             // `compileKotlinMetadata`, none of which end in "Kotlin", so CI
             // failed with "Unresolved reference: APP_VERSION_NAME" while a warm
             // local build passed on the stale generated file.
@@ -212,38 +203,10 @@ kotlin {
             }
         }
 
-        // Room + bundled SQLite: JVM/native only (no wasmJs artifact exists).
+        // Room + bundled SQLite is shared by the JVM-backed targets only.
         getByName("jvmSharedMain") {
             dependencies {
                 implementation(libs.androidx.sqlite.bundled)
-            }
-        }
-
-        getByName("wasmJsMain") {
-            dependencies {
-                implementation(compose.runtime)
-                implementation(compose.foundation)
-                implementation(compose.ui)
-                implementation(compose.materialIconsExtended)
-                implementation(compose.components.resources)
-                implementation(libs.jetbrains.compose.material3)
-
-                implementation(libs.ktor.client.core)
-                implementation(libs.ktor.client.js)
-                implementation(libs.ktor.client.content.negotiation)
-                implementation(libs.ktor.serialization.kotlinx.json)
-                implementation(libs.ktor.client.logging)
-                implementation(libs.kotlinx.serialization.json)
-                implementation(libs.kotlinx.datetime)
-                implementation(libs.okio)
-                implementation(libs.kotlinx.browser)
-
-                implementation(libs.coil3.compose)
-                implementation(libs.coil3.network.ktor3)
-
-                implementation(libs.jetbrains.navigation.compose)
-                implementation(libs.jetbrains.lifecycle.viewmodel.compose)
-                implementation(libs.jetbrains.lifecycle.runtime.compose)
             }
         }
 
@@ -260,17 +223,6 @@ kotlin {
             implementation(kotlin("test"))
         }
     }
-}
-
-// Compose 1.12 gates wasmJs tests behind a check that requires
-// `binaries.executable()` so the Skiko runtime can be bundled by webpack. It
-// fires here because wasmJsMain depends on Compose UI, but this module is a
-// LIBRARY with no wasmJs test sources at all — the shared tests live in
-// jvmSharedTest, which never compiles for wasm. Declaring an executable binary
-// on a library target would be wrong (the web entry point belongs to :webApp),
-// so the inapplicable check is disabled instead.
-tasks.matching { it.name == "checkComposeUiTestConfigurationForWasmJs" }.configureEach {
-    enabled = false
 }
 
 compose.resources {

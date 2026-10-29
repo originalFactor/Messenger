@@ -21,9 +21,9 @@ package cc.ptoe.messenger.data.util
  * loop invokes the tool executor synchronously, so the repository-level
  * suspend API has to be entered from a non-suspend frame.
  *
- * JVM targets use `kotlinx.coroutines.runBlocking`. wasmJs has no equivalent
+ * JVM targets use `kotlinx.coroutines.runBlocking`. non-JVM has no equivalent
  * (single-threaded, and `runBlocking` does not exist there) and also declares
- * no built-in tools, so the wasmJs actual reports the operation as
+ * no built-in tools, so the non-JVM actual reports the operation as
  * unsupported; the call site's existing `catch` turns that into an error
  * result for the model.
  */

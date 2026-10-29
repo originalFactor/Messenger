@@ -3,9 +3,8 @@
 //!
 //! These are the operations the Kotlin `CloudSyncRepository` performs beyond
 //! `SyncEngine`'s own surface (Kotlin previously used Ktor + Room directly).
-//! Both the UniFFI boundary (`messenger-ffi`) and the browser boundary
-//! (`messenger-wasm`) export exactly this set, so the two adapters stay
-//! method-for-method identical.
+//! The UniFFI boundary exposes the native lifecycle surface; business calls
+//! use the shared REST/SSE API.
 
 use messenger_store::model::{StoredAgent, StoredConversation};
 
@@ -372,8 +371,7 @@ impl<'a> SyncEngine<'a> {
         url: &str,
         version: Option<&str>,
     ) -> CloudResult<String> {
-        // Native caches into the configured directory; wasm returns a
-        // `data:` URI and ignores the directory entirely.
+        // Cache into the configured native avatar directory.
         let dir = self.avatars_dir.clone().unwrap_or_default();
         let manager = crate::avatar::AvatarManager::new(self.client(), dir);
         self.with_session(

@@ -11,9 +11,7 @@ pub mod market;
 pub mod model_discovery;
 pub mod models;
 pub mod models_sync;
-// Pull-side image rehydration writes files, so it is native-only; the
-// browser keeps image parts as their `data:` URIs.
-#[cfg(not(target_arch = "wasm32"))]
+// Pull-side image rehydration writes files for native clients.
 pub mod rehydrate;
 pub mod settings;
 #[cfg(test)]

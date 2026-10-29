@@ -11,7 +11,6 @@
 * macOS
 * Windows
 * Linux
-* Web
 * TUI
 
 核心要求：
@@ -37,35 +36,23 @@
 而不是以 Compose Multiplatform 作为整个项目的基础。
 
 ```text
-                         ┌─────────────────────────┐
-                         │       Rust Core         │
-                         │                         │
-                         │ Agent Runtime            │
-                         │ LLM Providers            │
-                         │ Streaming                │
-                         │ Tool / MCP               │
-                         │ Session                  │
-                         │ Markdown Parser          │
-                         │ LaTeX Parser             │
-                         │ Document Model            │
-                         │ Incremental Diff          │
-                         │ Cache                    │
-                         └────────────┬────────────┘
-                                      │
-                              Platform API / FFI
-                                      │
-          ┌───────────────┬───────────┼──────────────┬──────────────┐
-          │               │           │              │              │
-          ▼               ▼           ▼              ▼              ▼
-       Android           iOS       Desktop          Web            TUI
-          │               │           │              │              │
-      Native View      SwiftUI/    Native/       TS / Web      Rust TUI
-      / Canvas         UIKit       Compose MP      Renderer      Renderer
-          │
-       ┌──┴───┐
-       ▼      ▼
-    Phone   Wear OS
+                         +-------------------------+
+                         |       Rust Core         |
+                         | Agent / LLM / Streaming |
+                         | Tools / MCP / Session   |
+                         | Storage / Sync / Events |
+                         +------------+------------+
+                                      |
+                              REST/SSE + FFI
+                                      |
+          +---------------+----------+----------+---------------+
+          |               |                     |               |
+       Android          iOS                 Desktop           TUI
+          |               |                     |               |
+       Compose        SwiftUI/            Compose MP        Rust UI
+       + Wear         UIKit               / Native
 ```
+
 
 核心原则：
 
@@ -87,10 +74,7 @@ Rust Core 负责：
 * Conversation
 * Tool Calling
 * MCP
-* Markdown Parsing
-* LaTeX Parsing
-* Document Model
-* Incremental Document Update
+* Message/Event model
 * Cache
 * 数据序列化
 * 高性能文本处理
@@ -140,7 +124,6 @@ AgentEvent Stream
     ├── Android
     ├── iOS
     ├── Desktop
-    ├── Web
     └── TUI
 ```
 
@@ -148,271 +131,19 @@ AgentEvent Stream
 
 ---
 
-# 4. Document Engine
+# 4. Android / Desktop rendering
 
-这是整个项目中非常重要的一层。
+Android and Desktop use Kotlin UI with `cc.ptoe:llm-typewriter` for Markdown,
+code highlighting and LaTeX. Rust owns agent execution, streaming protocol,
+storage, tools, models and synchronization; it does not expose a document
+renderer to clients.
 
-不要让 UI 直接处理原始 Markdown。
-
-采用：
-
-```text
-LLM Tokens
-     │
-     ▼
-Incremental Parser
-     │
-     ▼
-Document Model
-     │
-     ▼
-Platform Renderer
-```
+Android uses Compose Material 3 with a lazy message list. Desktop may use
+Compose or a platform renderer after benchmark validation.
 
 ---
 
-## 4.1 Document Model
-
-例如：
-
-```rust
-enum Block {
-    Paragraph(InlineContent),
-    Heading(Heading),
-    CodeBlock(CodeBlock),
-    Math(MathBlock),
-    List(ListBlock),
-    Quote(QuoteBlock),
-    ToolCall(ToolCallBlock),
-}
-```
-
-每个 Block 应拥有稳定 ID。
-
-```text
-Block #1  immutable
-Block #2  immutable
-Block #3  streaming
-Block #4  not created
-```
-
-这样更新时只修改当前活跃 Block。
-
----
-
-# 5. Incremental Markdown
-
-禁止每个 token 都重新解析完整消息：
-
-```text
-token
- ↓
-parse entire document
- ↓
-re-render entire message
-```
-
-采用：
-
-```text
-token
- ↓
-incremental parser
- ↓
-identify affected block
- ↓
-update only affected block
-```
-
-例如：
-
-```text
-Block 1: Heading       immutable
-Block 2: Paragraph     immutable
-Block 3: Math          immutable
-Block 4: Paragraph     streaming
-```
-
-只有 Block 4 持续变化。
-
-Block 完成后转为稳定状态，并尽可能缓存其布局结果。
-
----
-
-# 6. Streaming UI
-
-LLM token 不应该直接映射成 UI 更新。
-
-错误方式：
-
-```text
-Token
- ↓
-State mutation
- ↓
-Recomposition / Layout
-```
-
-推荐：
-
-```text
-LLM tokens
-     ↓
-Rust batching
-     ↓
-20~50 ms update window
-     ↓
-Document diff
-     ↓
-UI update
-```
-
-具体刷新间隔根据 benchmark 调整。
-
-目标不是让 UI 每收到一个 token 都刷新，而是让用户感觉输出持续实时。
-
----
-
-# 7. LaTeX
-
-LaTeX 是性能重点。
-
-Streaming 状态下：
-
-```text
-$$
-\int_0^
-```
-
-不应该每个 token 都进行完整 typesetting。
-
-采用：
-
-```text
-Streaming Math
-      │
-      ├── cheap temporary rendering
-      │
-      ▼
-Closing delimiter received
-      │
-      ▼
-Final Math AST
-      │
-      ▼
-Layout
-      │
-      ▼
-Cache
-```
-
-最终公式：
-
-```text
-LaTeX source
-     ↓
-hash
-     ↓
-layout cache
-```
-
-已经完成的公式不得因为后续 token 而重复计算。
-
----
-
-# 8. Android
-
-Android 不以 Compose 作为聊天界面的默认 renderer。
-
-优先采用传统 Android View 系统。
-
-推荐结构：
-
-```text
-RecyclerView
-    │
-    └── MessageView
-          │
-          └── DocumentView
-                ├── Text
-                ├── Code
-                ├── Math
-                └── Tool
-```
-
-## 8.1 为什么
-
-聊天界面存在大量：
-
-* 高频文本更新
-* 长文本
-* Markdown
-* LaTeX
-* Tool Output
-* Streaming
-* 局部刷新
-
-传统 View 可以提供更直接的：
-
-* `invalidate()`
-* `requestLayout()`
-* `Canvas`
-* `StaticLayout`
-* `TextView`
-* `Drawable`
-
-控制。
-
-不需要为了一次 token 更新触发更高层级的 UI 状态传播。
-
----
-
-# 9. Android 文本渲染
-
-Markdown 可以转换为结构化 Span / Layout：
-
-```text
-Markdown AST
-     ↓
-Android representation
-     ↓
-TextView / StaticLayout
-```
-
-代码块使用独立 renderer。
-
-数学公式使用独立 Math renderer。
-
-不要把整个 AI 回复塞进一个巨大的 TextView，也不要为每一个 Markdown token 创建 View。
-
----
-
-# 10. Android DocumentView
-
-推荐最终采用：
-
-```text
-RecyclerView
-    │
-    └── MessageView
-          │
-          └── DocumentView
-                │
-                ├── paragraph layout
-                ├── code layout
-                ├── math layout
-                └── tool layout
-```
-
-即：
-
-> View 负责生命周期、滚动和可见区域；Document Renderer 负责内容绘制。
-
-这样可以避免过大的 View hierarchy。
-
----
-
-# 11. Wear OS
+# 6. Wear OS
 
 Wear OS 是特殊目标，不应简单视为缩小版 Android。
 
@@ -431,7 +162,7 @@ Wear OS 是特殊目标，不应简单视为缩小版 Android。
 Rust Core
     │
     ▼
-Compact Document/Event
+Compact Event/Message
     │
     ▼
 Android Native View / Canvas
@@ -459,7 +190,7 @@ Rust 适合：
 
 * Agent runtime
 * Parsing
-* Document processing
+* text processing
 * CPU-intensive processing
 * Crypto
 * Compression
@@ -510,7 +241,7 @@ SwiftUI / UIKit
 
 UI 可以根据实际 benchmark 选择 SwiftUI 或 UIKit。
 
-核心 Document Model 保持一致。
+核心 Message/Event model 保持一致。
 
 ---
 
@@ -540,36 +271,15 @@ Native / Skia / wgpu renderer
 
 ---
 
-# 15. Web
+# 15. TUI
 
-Web 不需要强制使用 Kotlin UI。
-
-优先考虑：
-
-```text
-Rust Core
-    ↓
-WASM / protocol
-    ↓
-TypeScript
-    ↓
-Web UI
-```
-
-如果 Compose Multiplatform Web 的实际性能和开发效率满足要求，可以使用 Compose MP。
-
-最终以 benchmark 而不是技术统一性决定。
-
----
-
-# 16. TUI
 
 TUI 使用独立 renderer。
 
 ```text
 Rust Core
     ↓
-Document Model
+Message/Event model
     ↓
 Terminal Renderer
     ↓
@@ -578,7 +288,7 @@ ANSI / VT
 
 TUI 不需要模拟 GUI。
 
-可以直接将 Document Model 映射成：
+可以直接将 Message/Event model 映射成：
 
 ```text
 Terminal Cell
@@ -598,7 +308,7 @@ Terminal Cell
 
 ```text
 AgentEvent
-Document Model
+Message/Event model
 Command
 Session
 State
@@ -628,8 +338,8 @@ Capability
 
 ### P0
 
-* 增量 Markdown Parser
-* 增量 Document Model
+* 增量 Kotlin renderer
+* 增量 Message/Event model
 * Streaming batching
 * Stable Block ID
 * Lazy rendering
@@ -711,9 +421,6 @@ project/
 │       ├── agent/
 │       ├── llm/
 │       ├── mcp/
-│       ├── markdown/
-│       ├── latex/
-│       ├── document/
 │       ├── session/
 │       └── ffi/
 │
@@ -729,7 +436,6 @@ project/
 │   ├── linux/
 │   └── macos/
 │
-├── web/
 │
 ├── tui/
 │
@@ -767,19 +473,15 @@ shared/
 
 ---
 
-## Phase 2 — Document Engine
+## Phase 2 ? Kotlin rendering and streaming UI
 
-实现：
+Implement and benchmark:
 
-* Incremental Markdown
-* Code block
-* LaTeX detection
-* Document Model
-* Incremental diff
-* Block ID
-* Cache
-
-这是整个项目最值得提前验证的部分。
+* Kotlin `llm-typewriter` Markdown / code / LaTeX rendering
+* REST/SSE streaming updates
+* Client-side batching where appropriate
+* Lazy conversation rendering
+* Long-message and tool-output performance tests
 
 ---
 
@@ -788,11 +490,11 @@ shared/
 优先：
 
 ```text
-RecyclerView
+Compose Material 3
 +
-Native View
+Lazy message list
 +
-Document Renderer
+Kotlin renderer
 ```
 
 先实现：
@@ -840,16 +542,6 @@ Document Renderer
 
 ---
 
-## Phase 7 — Web
-
-根据 Rust/WASM 与 Web UI 的实际需求决定：
-
-* TypeScript
-* Compose Multiplatform Web
-* Hybrid
-
----
-
 # 22. 最终技术决策
 
 | 部分             | 技术                                   |
@@ -857,15 +549,14 @@ Document Renderer
 | Agent Core     | **Rust**                             |
 | Streaming      | Rust                                 |
 | Tool / MCP     | Rust                                 |
-| Markdown       | Rust incremental parser              |
-| LaTeX          | Rust parser/layout                   |
-| Document Model | Rust                                 |
-| Android Phone  | **Android View 优先**                  |
-| Android Tablet | Android View 优先                      |
+| Markdown       | Kotlin renderer              |
+| LaTeX          | Kotlin renderer                   |
+| Message/Event model | Rust                                 |
+| Android Phone  | Compose Material 3                     |
+| Android Tablet | Compose Material 3                     |
 | Wear OS        | **Native View / Canvas**             |
 | iOS            | SwiftUI / UIKit                      |
 | Desktop        | Compose MP / Native，根据 benchmark     |
-| Web            | TypeScript / WASM，或 Compose MP       |
 | TUI            | **Rust native TUI**                  |
 | 跨平台协议          | Rust-defined API / FFI               |
 | 状态同步           | Event-driven                         |
@@ -887,13 +578,13 @@ Agent ≠ UI
 ### ② Token ≠ UI update
 
 ```text
-tokens → batch → document diff → render
+tokens → batch → UI update → render
 ```
 
 ### ③ 不重新渲染稳定内容
 
 ```text
-immutable blocks stay immutable
+stable message rows stay stable
 ```
 
 ### ④ 不为了跨平台而牺牲平台性能
@@ -936,7 +627,7 @@ Compose vs View vs Canvas vs Native
                          │ Streaming                 │
                          │ Markdown                  │
                          │ LaTeX                     │
-                         │ Document Model             │
+                         │ Message/Event model             │
                          │ Cache                     │
                          └─────────────┬─────────────┘
                                        │
@@ -945,9 +636,8 @@ Compose vs View vs Canvas vs Native
              ┌───────────────┬─────────┼──────────┬──────────────┐
              │               │         │          │              │
              ▼               ▼         ▼          ▼              ▼
-          Android          iOS      Desktop      Web            TUI
              │               │         │          │              │
-       Native View        Native    Compose/    TS/WASM        Rust
+       Native View        Native    Compose/    Desktop        Rust
              │                         Native
        ┌─────┴──────┐
        ▼            ▼
@@ -955,5 +645,56 @@ Compose vs View vs Canvas vs Native
 ```
 
 **核心思想：Rust 负责“思考和组织内容”，平台负责“以最适合自己的方式显示内容”。**
+```text
+                         +-------------------------+
+                         |       Rust Core         |
+                         | Agent / LLM / Streaming |
+                         | Tools / MCP / Session   |
+                         | Storage / Sync / Events |
+                         +------------+------------+
+                                      |
+                              REST/SSE + FFI
+                                      |
+          +---------------+----------+----------+---------------+
+          |               |                     |               |
+       Android          iOS                 Desktop           TUI
+          |               |                     |               |
+       Compose        SwiftUI/            Compose MP        Rust UI
+       + Wear         UIKit               / Native
+```
+text
+                         ┌─────────────────────────┐
+                         │       Rust Core         │
+                         │                         │
+                         │ Agent Runtime            │
+                         │ LLM Providers            │
+                         │ Streaming                │
+                         │ Tool / MCP               │
+                         │ Session                  │
+                         │ Kotlin renderer          │
+                         │ Kotlin renderer             │
+                         │ Message/Event model            │
+                         │ batched UI updates          │
+                         │ Cache                    │
+                         └────────────┬────────────┘
+                                      │
+                              Platform API / FFI
+                                      │
+          ┌───────────────┬───────────┼──────────────┬──────────────┐
+          │               │           │              │              │
+          ▼               ▼           ▼              ▼              ▼
+          │               │           │              │              │
+      Native View      SwiftUI/    Native/       Desktop      Rust TUI
+      / Canvas         UIKit       Compose MP      Renderer      Renderer
+          │
+       ┌──┴───┐
+       ▼      ▼
+    Phone   Wear OS
+```
 
-这样即使未来 Android 最终完全放弃 Compose，或者 Desktop 改成 GPU renderer，甚至 Web 改成完全独立的 TypeScript UI，Agent Core 和 Document Engine 都不需要重写。
+核心原则：
+
+> **共享 Agent，不共享所有 UI。**
+
+---
+

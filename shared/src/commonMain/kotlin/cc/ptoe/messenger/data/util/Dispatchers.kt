@@ -20,6 +20,6 @@ import kotlinx.coroutines.CoroutineDispatcher
 
 /**
  * Blocking-work dispatcher. `Dispatchers.IO` is JVM/native only — it does not
- * exist on wasmJs — so shared code must not name it directly.
+ * exist on non-JVM — so shared code must not name it directly.
  */
 internal expect val ioDispatcher: CoroutineDispatcher

@@ -84,17 +84,7 @@ jobs:
 #          name: desktop-linux-arm64
 #          path: artifacts/desktop/linux-arm64
 
-      # --- Web -----------------------------------------------------------
-      - name: Download Web artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: web-distribution
-          path: artifacts/web
-
-      - name: Package Web distribution
-        run: |
-          cd artifacts/web && zip -r ../messenger-web-${GITHUB_REF#refs/tags/}.zip .
-
+      # --- Release metadata ---------------------------------------------
       - name: Get version from tag
         id: get_version
         shell: bash
@@ -134,4 +124,3 @@ jobs:
             artifacts/desktop/windows-arm64/*.zip
             artifacts/desktop/linux-x86_64/*.deb
             artifacts/desktop/linux-arm64/*.deb
-            artifacts/messenger-web-*.zip

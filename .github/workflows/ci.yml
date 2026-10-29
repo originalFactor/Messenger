@@ -22,7 +22,6 @@ on:
       - shared/**
       - androidApp/**
       - desktopApp/**
-      - webApp/**
       - wear/**
       - runtime/**
       - core/**
@@ -46,7 +45,6 @@ on:
       - shared/**
       - androidApp/**
       - desktopApp/**
-      - webApp/**
       - wear/**
       - runtime/**
       - core/**
