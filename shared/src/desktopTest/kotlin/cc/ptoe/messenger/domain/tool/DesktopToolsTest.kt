@@ -84,6 +84,20 @@ class DesktopToolsTest {
     }
 
     @Test
+    fun missingWorkingDirectoryIsReportedInsteadOfUsingTheDefaultWorkspace(): Unit = runBlocking {
+        val missing = File(workspace(), "missing-${System.nanoTime()}").absolutePath
+        val result = executeShellCommand(
+            command = "echo should-not-run",
+            timeoutMs = 1_000,
+            workingDir = missing,
+            onOutput = null
+        )
+        assertTrue(result.exitCode == -1, "missing directory unexpectedly executed: ${result.output}")
+        assertTrue(result.output.contains("Working directory is unavailable"), result.output)
+    }
+
+
+    @Test
     fun terminalTimeoutTerminatesTheProcess() = runBlocking {
         val start = System.currentTimeMillis()
         val result = executeShellCommand(

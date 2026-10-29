@@ -77,6 +77,7 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_add
 import cc.ptoe.messenger.generated.resources.tools_mcp_args
 import cc.ptoe.messenger.generated.resources.tools_mcp_args_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_command
+import cc.ptoe.messenger.generated.resources.tools_mcp_config_error
 import cc.ptoe.messenger.generated.resources.tools_mcp_command_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete_confirm
@@ -104,6 +105,7 @@ fun ToolsSettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val mcpServers by mcpManager.servers.collectAsState()
+    val mcpConfigurationError by mcpManager.configurationError.collectAsState()
 
     var editingServer by remember { mutableStateOf<McpServerConfig?>(null) }
     var isAddingServer by remember { mutableStateOf(false) }
@@ -150,6 +152,16 @@ fun ToolsSettingsScreen(
                     .widthIn(max = 720.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)
             ) {
+                if (mcpConfigurationError) {
+                    item {
+                        Text(
+                            text = stringResource(Res.string.tools_mcp_config_error),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
                 if (mcpServers.isEmpty()) {
                     item {
                         Box(

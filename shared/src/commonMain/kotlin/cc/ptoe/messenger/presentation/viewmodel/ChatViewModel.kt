@@ -471,7 +471,7 @@ class ChatViewModel(
         // 会话快照读数据库行而不是 conversation.value：模式（writable）等业务
         // 决策不能依赖 WhileSubscribed 的 StateFlow（无订阅 5 秒即重置）。
         val conv = conversationRepository.getById(conversationId).first() ?: return
-        val result = getActiveModelAndProvider(conv, agent)
+        val result = getActiveModelAndProvider(agent)
         if (result == null) {
             setError(getString(Res.string.error_configure_model_first))
             return
@@ -642,7 +642,7 @@ class ChatViewModel(
                 return@launch
             }
 
-            val result = getActiveModelAndProvider(conv, currentAgent)
+            val result = getActiveModelAndProvider(currentAgent)
             if (result == null) {
                 setError(getString(Res.string.error_configure_model_first))
                 messageRepository.update(
@@ -755,25 +755,18 @@ class ChatViewModel(
     }
 
     private suspend fun getActiveModelAndProvider(
-        conversation: Conversation,
         agent: Agent
     ): Pair<Provider, ChatModel>? {
         val cachedEnabledModels = enabledModels.first()
 
         if (cachedEnabledModels.isEmpty()) return null
 
-        val defaultModel = agent.defaultModelId?.let { modelId ->
+        // A configured model is authoritative. Falling back to another model
+        // can silently send a conversation to the wrong provider/model after
+        // sync or catalog changes; callers surface null as a configuration error.
+        val model = agent.defaultModelId?.let { modelId ->
             cachedEnabledModels.find { it.id == modelId }
-        }
-
-        val model = defaultModel ?: run {
-            if (conversation.providerId.isNotBlank()) {
-                cachedEnabledModels.find { it.providerId == conversation.providerId }
-            } else {
-                null
-            }
-        } ?: cachedEnabledModels.first()
-
+        } ?: return null
         val provider = providerRepository.getById(model.providerId).first() ?: return null
 
         return provider to model
