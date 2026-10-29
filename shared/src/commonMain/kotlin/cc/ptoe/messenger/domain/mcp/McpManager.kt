@@ -47,7 +47,9 @@ class McpManager(
 
     private val _servers = MutableStateFlow<List<McpServerConfig>>(emptyList())
     val servers: StateFlow<List<McpServerConfig>> = _servers.asStateFlow()
-
+    private val _configurationError = MutableStateFlow(false)
+    /** True when the persisted MCP configuration could not be decoded. */
+    val configurationError: StateFlow<Boolean> = _configurationError.asStateFlow()
     private val clients = mutableMapOf<String, McpClient>()
     private val _activeTools = MutableStateFlow<List<ChatTool>>(emptyList())
     val activeTools: StateFlow<List<ChatTool>> = _activeTools.asStateFlow()
@@ -61,18 +63,27 @@ class McpManager(
     suspend fun loadServers(): List<McpServerConfig> = mutex.withLock {
         val rawJson = appPreferences.mcpServersJson.first()
         val list = if (!rawJson.isNullOrBlank()) {
-            runCatching {
+            val decoded = runCatching {
                 json.decodeFromString(ListSerializer(McpServerConfig.serializer()), rawJson)
-            }.getOrDefault(emptyList())
+            }
+            decoded.getOrElse {
+                // Keep the last known-good in-memory configuration. Clearing
+                // it here would make a corrupted preference look like the
+                // user deleted every MCP server.
+                _configurationError.value = true
+                return@withLock _servers.value
+            }
         } else {
             emptyList()
         }
+        _configurationError.value = false
         _servers.value = list
         syncClientsLocked(list)
         list
     }
 
     suspend fun saveServers(newServers: List<McpServerConfig>) = mutex.withLock {
+        _configurationError.value = false
         _servers.value = newServers
         val rawJson = json.encodeToString(ListSerializer(McpServerConfig.serializer()), newServers)
         appPreferences.setMcpServersJson(rawJson)

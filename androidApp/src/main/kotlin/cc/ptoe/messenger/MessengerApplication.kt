@@ -44,9 +44,9 @@ class MessengerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidContextHolder.appContext = applicationContext
-        // Optional companion runtime app (targetSdk 28, shared UID) hosts the
-        // Termux bootstrap in its legacy SELinux domain; shell commands route
-        // there when installed and fall back to the system shell otherwise.
+        // Optional companion runtime app (targetSdk 28, its own UID) hosts the
+        // Termux bootstrap in its legacy SELinux domain. Agent shell/workspace
+        // tools have no system-shell fallback when the companion is absent.
         ShellRuntimeRegistry.bridge = RuntimeShellClient(applicationContext)
 
         // Initialize Rust Core SQLite store and import Room database on first run

@@ -47,6 +47,12 @@ actual suspend fun executeShellCommand(
     workingDir: String?,
     onOutput: ((String) -> Unit)?
 ): ShellResult {
+    if (workingDir != null && !java.io.File(workingDir).isDirectory) {
+        return ShellResult(
+            output = "Working directory is unavailable: $workingDir",
+            exitCode = -1
+        )
+    }
     val process = try {
         startProcess(command, workingDir)
     } catch (e: Exception) {
@@ -98,9 +104,9 @@ private fun startProcess(command: String, workingDir: String?): Process {
     }
     // Default to the agent workspace, mirroring the Android runtime: the
     // workspace tools create files relative to it, so a terminal command must
-    // start there too or `cat <path-just-created>` cannot see them. A caller
-    // supplied directory only wins when it actually exists.
-    val directory = workingDir?.let { java.io.File(it) }?.takeIf { it.isDirectory } ?: agentWorkspace
+    // start there too or `cat <path-just-created>` cannot see them. Explicit
+    // working directories are validated by executeShellCommand above.
+    val directory = workingDir?.let { java.io.File(it) } ?: agentWorkspace
     builder.directory(directory)
     return builder.redirectErrorStream(true).start()
 }

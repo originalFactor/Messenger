@@ -31,7 +31,8 @@ data class ShellResult(
  * is destroyed when the timeout fires or the caller's coroutine is cancelled.
  *
  * [workingDir] overrides the process working directory (Android: the
- * companion runtime's workspace); a missing directory falls back to it.
+ * companion runtime's workspace); an explicitly supplied missing directory
+ * returns an error rather than silently using another workspace.
  * [onOutput] receives incremental merged output chunks as they arrive, in
  * addition to the final [ShellResult.output] (null = collect only).
  */

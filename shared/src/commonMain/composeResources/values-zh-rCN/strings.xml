@@ -324,6 +324,7 @@
     <string name="settings_tools_desc">添加、启用或移除 MCP 服务器</string>
     <string name="tools_settings_title">MCP 服务器</string>
     <string name="tools_mcp_empty">尚未添加任何 MCP 服务器</string>
+    <string name="tools_mcp_config_error">MCP 配置无法读取，请检查本地设置后重新保存。</string>
     <string name="tools_mcp_add">添加 MCP 服务器</string>
     <string name="tools_mcp_edit">编辑 MCP 服务器</string>
     <string name="tools_mcp_delete">删除 MCP 服务器</string>

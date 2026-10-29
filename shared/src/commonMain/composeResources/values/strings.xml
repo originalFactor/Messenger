@@ -325,6 +325,7 @@
     <string name="settings_tools_desc">Add, enable, or remove MCP servers</string>
     <string name="tools_settings_title">MCP Servers</string>
     <string name="tools_mcp_empty">No MCP servers added</string>
+    <string name="tools_mcp_config_error">MCP configuration could not be loaded. Check the local settings and save them again.</string>
     <string name="tools_mcp_add">Add MCP Server</string>
     <string name="tools_mcp_edit">Edit MCP Server</string>
     <string name="tools_mcp_delete">Delete MCP Server</string>

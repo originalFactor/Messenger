@@ -276,9 +276,12 @@ class MobileWearChatHandler(private val app: AppContainer) {
     private suspend fun resolveModelAndProvider(agent: Agent): Pair<Provider, ChatModel>? {
         val enabledModels = app.modelRepository.getAll().first().filter { it.isEnabled }
         if (enabledModels.isEmpty()) return null
+        // Do not silently substitute a different model when the configured
+        // model was removed or disabled. The caller reports this as a setup
+        // error, matching the phone chat flow.
         val model = agent.defaultModelId?.let { modelId ->
             enabledModels.firstOrNull { it.id == modelId }
-        } ?: enabledModels.firstOrNull() ?: return null
+        } ?: return null
         val provider = app.providerRepository.getById(model.providerId).first() ?: return null
         return provider to model
     }
