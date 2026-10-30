@@ -38,6 +38,7 @@ pub fn project_document_to_row(doc: &CloudProjectDocument) -> StoredProject {
         id: doc.id.clone(),
         name: doc.name.clone(),
         workspace: doc.workspace.clone(),
+        device_id: doc.device_id.clone(),
         created_at: doc.created_at,
         updated_at: doc.updated_at,
     }
@@ -180,6 +181,7 @@ pub fn project_row_to_request(row: &StoredProject) -> CloudProjectRequest {
         id: row.id.clone(),
         name: row.name.clone(),
         workspace: row.workspace.clone(),
+        device_id: row.device_id.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
     }

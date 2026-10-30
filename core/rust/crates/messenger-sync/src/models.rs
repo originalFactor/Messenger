@@ -155,6 +155,10 @@ pub struct CloudProjectDocument {
     pub id: String,
     pub name: String,
     pub workspace: String,
+    /// Owning device. Absent when the server predates the field (or strips
+    /// it); the pull path then keeps whatever the local row already says.
+    #[serde(rename = "deviceId")]
+    pub device_id: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
@@ -562,6 +566,8 @@ pub struct CloudProjectRequest {
     pub id: String,
     pub name: String,
     pub workspace: String,
+    #[serde(rename = "deviceId", skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "updatedAt")]

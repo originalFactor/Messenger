@@ -9,6 +9,7 @@ axum = "0.7"
 async-trait = "0.1"
 futures-core = "0.3"
 messenger-core = { path = "../messenger-core" }
+messenger-remote = { path = "../messenger-remote" }
 messenger-store = { path = "../messenger-store" }
 messenger-sync = { path = "../messenger-sync" }
 messenger-tools = { path = "../messenger-tools" }

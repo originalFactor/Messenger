@@ -8,6 +8,7 @@ members = [
     "crates/messenger-store",
     "crates/messenger-core",
     "crates/messenger-mcp",
+    "crates/messenger-remote",
     "crates/messenger-sync",
 ]
 

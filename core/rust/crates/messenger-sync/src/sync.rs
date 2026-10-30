@@ -794,9 +794,17 @@ impl<'a> SyncEngine<'a> {
             if remote.deleted {
                 self.store.delete_project(&remote.id).map_err(|e| e.to_string())?;
             } else {
-                self.store
-                    .upsert_project(&project_document_to_row(remote))
-                    .map_err(|e| e.to_string())?;
+                let mut row = project_document_to_row(remote);
+                // A server that does not carry `deviceId` must not erase the
+                // owner this device already knows.
+                if row.device_id.is_none() {
+                    row.device_id = self
+                        .store
+                        .get_project(&remote.id)
+                        .map_err(|e| e.to_string())?
+                        .and_then(|existing| existing.device_id);
+                }
+                self.store.upsert_project(&row).map_err(|e| e.to_string())?;
             }
         }
 

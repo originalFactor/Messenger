@@ -2,7 +2,7 @@
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -50,6 +50,24 @@ pub fn has_model_cache_read_rate_column(conn: &rusqlite::Connection) -> rusqlite
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         if row.get::<_, String>(1)? == "cacheReadRate" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// v4 → v5: `projects.deviceId` is the device that owns the project's
+/// workspace (NULL = legacy row, treated as owned by the local device). Remote
+/// devices route workspace tool calls to that device and treat the project as
+/// unavailable while it is offline.
+pub const ADD_PROJECT_DEVICE_ID_COLUMN: &str = "ALTER TABLE projects ADD COLUMN deviceId TEXT";
+
+/// Whether `projects` already carries the v5 `deviceId` column.
+pub fn has_project_device_id_column(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "deviceId" {
             return Ok(true);
         }
     }
@@ -122,6 +140,7 @@ pub const CREATE_TABLES: &[&str] = &[
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL,
         workspace TEXT NOT NULL,
+        deviceId TEXT,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
     )",

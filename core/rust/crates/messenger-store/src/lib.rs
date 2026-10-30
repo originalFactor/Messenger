@@ -10,7 +10,7 @@ pub mod store;
 
 pub use import::{import_legacy, ImportSummary};
 pub use model::{StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider};
-pub use store::{EntityKind, Store, StoreEvent};
+pub use store::{EntityKind, Store, StoreEvent, KV_DEVICE_ID};
 
 /// Wall-clock milliseconds since the Unix epoch.
 pub fn now_ms() -> i64 {

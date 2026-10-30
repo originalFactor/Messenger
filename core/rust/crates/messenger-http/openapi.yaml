@@ -54,10 +54,32 @@ paths:
           description: |
             Core change feed. Events are named `change` and carry
             `{kind, ids}` JSON. `resync` means the client lagged and should
-            re-query every visible collection.
+            re-query every visible collection. `remoteTool` /
+            `remoteToolCancelled` are addressed to the platform client that
+            executes tools: another device asked this one to run a workspace
+            tool of a project it owns (see `docs/REMOTE.md`).
           content:
             text/event-stream:
               schema: { type: string }
+  /remote/status:
+    get:
+      operationId: remoteStatus
+      description: |
+        This device's id and relay presence. `connected` is false while the
+        device is signed out or cannot reach the cloud relay; remote-owned
+        projects are then unavailable.
+      responses:
+        "200":
+          description: Remote relay status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deviceId, connected, onlineDevices]
+                properties:
+                  deviceId: { type: string }
+                  connected: { type: boolean }
+                  onlineDevices: { type: array, items: { type: string } }
   /providers:
     get:
       operationId: listProviders
@@ -264,7 +286,11 @@ paths:
         Starts a chat turn. `send` inserts a user message; `retry` and
         `regenerate` reference an existing message; `continue` starts from the
         already-persisted context. If no model is configured the request fails
-        with 409 `model_required` before any row changes.
+        with 409 `model_required` before any row changes. A conversation of a
+        project owned by another device needs that device online: otherwise
+        the request fails with 409 `project_unavailable` (also before any row
+        changes). While it is online the project's workspace tools execute on
+        the owner and never produce `ToolCallRequested` locally.
       requestBody:
         required: true
         content:
@@ -581,6 +607,35 @@ components:
       type: object
       additionalProperties: true
       required: [id, name, workspace, created_at, updated_at]
+      properties:
+        device_id:
+          type: [string, "null"]
+          description: |
+            Device that owns `workspace`. Omitted/null on write = keep the
+            recorded owner, else this device. Workspace tools of the project's
+            conversations execute on this device; while it is offline the
+            project is unavailable.
+    ProjectView:
+      description: A project as returned by the API, with its availability.
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          required: [owner, available]
+          properties:
+            owner:
+              oneOf:
+                - type: object
+                  required: [kind]
+                  properties: { kind: { const: local } }
+                - type: object
+                  required: [kind, deviceId, online]
+                  properties:
+                    kind: { const: remote }
+                    deviceId: { type: string }
+                    online: { type: boolean }
+            available:
+              type: boolean
+              description: False exactly while a remote owner is offline.
     Conversation:
       type: object
       additionalProperties: true
@@ -681,8 +736,8 @@ components:
       description: Agent
       content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } }
     Project:
-      description: Project
-      content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } }
+      description: Project with its owner and availability
+      content: { application/json: { schema: { $ref: "#/components/schemas/ProjectView" } } }
     Conversation:
       description: Conversation
       content: { application/json: { schema: { $ref: "#/components/schemas/Conversation" } } }

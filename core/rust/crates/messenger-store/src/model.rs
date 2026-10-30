@@ -127,6 +127,11 @@ pub struct StoredProject {
     pub name: String,
     /// Absolute workspace directory the project's tools operate in.
     pub workspace: String,
+    /// Device that owns `workspace`. Workspace tools of this project always
+    /// execute there; while that device is offline the project is
+    /// unavailable. `None` = legacy row, treated as owned by the local device.
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
