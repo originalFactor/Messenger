@@ -13,7 +13,7 @@
 # limitations under the License.
 
 [versions]
-agp = "9.4.1"
+agp = "9.5.0"
 coreKtx = "1.19.0"
 jna = "5.17.0"
 junit = "4.13.2"

@@ -85,7 +85,7 @@ impl<'a> SyncEngine<'a> {
                     Some(context) => context,
                     // The proxy omits the column, so the models.dev catalogue
                     // fills the gap before the previous row's value falls back.
-                    None => models_dev_context_window(&self.store, &dto.id)
+                    None => models_dev_context_window(self.store, &dto.id)
                         .await
                         .or_else(|| prev.map(|p| p.context_window))
                         .unwrap_or(0),

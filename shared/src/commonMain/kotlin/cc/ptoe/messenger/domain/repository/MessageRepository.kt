@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.map
 
 interface MessageRepository {
     fun getByConversationId(conversationId: String): Flow<List<Message>>
-    fun observeChanges(conversationId: String): Flow<Unit> = getByConversationId(conversationId).map { Unit }
+    fun observeChanges(conversationId: String): Flow<Unit> = getByConversationId(conversationId).map { }
     suspend fun getRecent(conversationId: String, limit: Int): List<Message> =
         getByConversationId(conversationId).first().takeLast(limit)
     suspend fun getBefore(conversationId: String, beforeId: String, limit: Int): List<Message> {

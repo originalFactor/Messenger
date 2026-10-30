@@ -183,13 +183,16 @@ class ApiFormatCodecTest {
         )
         for (decoded in listOf(messages, interactions, responses)) {
             val message = decoded.choices.first().message
+            val toolCall = requireNotNull(message.toolCalls).single()
+            val toolFunction = requireNotNull(toolCall.function)
+            val usage = requireNotNull(decoded.usage)
             assertEquals("hello", message.content.jsonPrimitive.content)
             assertEquals("think", message.reasoningContent)
-            assertEquals("c9", message.toolCalls!!.single().id)
-            assertEquals("glob", message.toolCalls!!.single().function!!.name)
+            assertEquals("c9", toolCall.id)
+            assertEquals("glob", toolFunction.name)
             assertEquals("tool_calls", decoded.choices.first().finishReason)
-            assertEquals(10, decoded.usage!!.promptTokens)
-            assertEquals(4, decoded.usage!!.completionTokens)
+            assertEquals(10, usage.promptTokens)
+            assertEquals(4, usage.completionTokens)
         }
     }
 

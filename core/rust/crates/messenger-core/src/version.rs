@@ -98,7 +98,7 @@ mod tests {
         // The build script reads `git rev-list --count HEAD`; a checked-out
         // build must therefore carry a positive code. Zero only appears in an
         // exported tree, which a test build never is.
-        assert!(CODE > 0, "expected a git commit count, got {CODE}");
+        const { assert!(CODE > 0, "expected a git commit count"); }
     }
 
     #[test]

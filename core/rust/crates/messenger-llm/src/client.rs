@@ -285,7 +285,7 @@ mod tests {
     fn line_buffer_handles_multibyte_split_across_feeds() {
         let mut buffer = SseLineBuffer::default();
         // "data: 你好\n" split mid-character (你好 = 6 bytes).
-        let full = format!("data: 你好\n\ndata: [DONE]\n\n").into_bytes();
+        let full = "data: 你好\n\ndata: [DONE]\n\n".to_string().into_bytes();
         let (a, b) = full.split_at(9); // splits inside 你 (3 bytes: e4 bd a0)
         let mut payloads = buffer.feed(a);
         payloads.extend(buffer.feed(b));

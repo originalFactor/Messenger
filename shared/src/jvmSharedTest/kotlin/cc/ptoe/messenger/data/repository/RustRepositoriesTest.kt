@@ -519,7 +519,7 @@ class RustRepositoriesTest {
         assertTrue(projectRepo.getAll().first().isEmpty())
         val orphan = conversationRepo.getById("c1").first()
         assertNotNull(orphan)
-        assertNull(orphan!!.projectId, "the conversation survives as a plain chat")
+        assertNull(orphan.projectId, "the conversation survives as a plain chat")
     }
 
     /** The workspace folder name is derived from the project name. */

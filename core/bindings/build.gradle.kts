@@ -45,8 +45,8 @@ val rustJniLibsReleaseDir = objects.directoryProperty().apply {
 // configuration cache rejects task actions that read rootProject.ext directly.
 val abiToRustTargetMap: Map<String, String> =
     (rootProject.ext["abiToRustTarget"] as Map<*, *>).entries.associate { it.key as String to it.value as String }
-val debugAbiList: List<String> = rootProject.ext["debugAbis"] as List<String>
-val releaseAbiList: List<String> = rootProject.ext["releaseAbis"] as List<String>
+val debugAbiList: List<String> = (rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
+val releaseAbiList: List<String> = (rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
 
 // Plain values captured at configuration time for the CI diagnostics below: the
 // configuration cache rejects task actions that close over `project` or other
@@ -100,7 +100,7 @@ val ndkHome: String? by lazy {
     file(sdkDir).resolve("ndk").resolve(rootProject.ext["ndkVersion"] as String).absolutePath
 }
 
-val cargoBuildHost by tasks.registering(Exec::class) {
+val cargoBuildHost = tasks.register<Exec>("cargoBuildHost") {
     workingDir(rustWorkspaceDir)
     // --profile bindgen: build the cdylib with its symbol table intact, which is
     // what uniffi-bindgen needs to find the metadata symbols (release's
@@ -124,7 +124,7 @@ val cargoBuildHost by tasks.registering(Exec::class) {
     rustInputs.execute(this)
 }
 
-val generateUniFFIBindings by tasks.registering(Exec::class) {
+val generateUniFFIBindings = tasks.register<Exec>("generateUniFFIBindings") {
     dependsOn(cargoBuildHost)
     workingDir(rustWorkspaceDir)
     // Invoke the bindgen binary that cargoBuildHost already built instead of
@@ -254,6 +254,14 @@ android {
             java.srcDirs(generatedKotlinDir.get().asFile)
             kotlin.srcDirs(generatedKotlinDir.get().asFile)
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        // The source set is generated exclusively by UniFFI; suppress warnings
+        // emitted by the generator rather than hiding handwritten Kotlin issues.
+        freeCompilerArgs.add("-nowarn")
     }
 }
 

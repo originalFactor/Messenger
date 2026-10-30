@@ -36,6 +36,7 @@ actual fun platformDynamicColorScheme(darkTheme: Boolean): ColorScheme? {
     return if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
 }
 
+@Suppress("DEPRECATION")
 @Composable
 actual fun PlatformThemeSideEffects(
     darkTheme: Boolean,

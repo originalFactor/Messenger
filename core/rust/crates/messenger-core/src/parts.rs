@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use messenger_llm::domain::{ContentPart, MessageImage};
 
 /// Mirror of [`ContentPart`] used purely for (de)serialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StoredContentPart {
     #[serde(rename = "type")]
@@ -25,22 +25,6 @@ struct StoredContentPart {
     output: Option<String>,
     #[serde(rename = "isError")]
     is_error: bool,
-}
-
-impl Default for StoredContentPart {
-    fn default() -> Self {
-        Self {
-            kind: String::new(),
-            text: None,
-            data_uri: None,
-            local_path: None,
-            call_id: None,
-            name: None,
-            arguments: None,
-            output: None,
-            is_error: false,
-        }
-    }
 }
 
 fn to_stored(part: &ContentPart) -> StoredContentPart {

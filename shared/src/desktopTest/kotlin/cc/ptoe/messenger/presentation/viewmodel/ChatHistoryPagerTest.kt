@@ -43,7 +43,7 @@ class ChatHistoryPagerTest {
             fullReads++
             error("The pager must never subscribe to the entire history")
         }
-        override fun observeChanges(conversationId: String): Flow<Unit> = version.map { Unit }
+        override fun observeChanges(conversationId: String): Flow<Unit> = version.map { }
         private fun conversation(id: String) = rows.filter { it.conversationId == id }.sortedBy { it.timestamp }
         override suspend fun getRecent(conversationId: String, limit: Int) = conversation(conversationId).takeLast(limit)
         override suspend fun getBefore(conversationId: String, beforeId: String, limit: Int): List<Message> {

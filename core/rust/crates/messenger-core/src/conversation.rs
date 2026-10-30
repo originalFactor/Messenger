@@ -213,10 +213,6 @@ mod tests {
         // consulting the messages table — that is why the predicate takes a
         // closure instead of a bool.
         let lookups = Cell::new(0);
-        let mut count_lookup = || {
-            lookups.set(lookups.get() + 1);
-            false
-        };
 
         let fresh = conversation("fresh", "新对话", NOW - 1, None);
         let renamed = conversation("renamed", "旅行计划", OLD, None);
@@ -225,7 +221,10 @@ mod tests {
                 row,
                 NOW,
                 DEFAULT_GRACE_PERIOD_MS,
-                &mut count_lookup
+                || {
+                    lookups.set(lookups.get() + 1);
+                    false
+                }
             ));
         }
         assert_eq!(lookups.get(), 0, "neither row reached the message lookup");
@@ -236,7 +235,10 @@ mod tests {
             &candidate,
             NOW,
             DEFAULT_GRACE_PERIOD_MS,
-            &mut count_lookup
+            || {
+                lookups.set(lookups.get() + 1);
+                false
+            }
         ));
         assert_eq!(lookups.get(), 1);
     }

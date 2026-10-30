@@ -988,7 +988,7 @@ fn upsert_conversation_checked(store: &Store, value: &StoredConversation) -> Res
             "conversation references a missing agent".into(),
         ));
     }
-    store.upsert_conversation(&value).map_err(ApiError::store)
+    store.upsert_conversation(value).map_err(ApiError::store)
 }
 async fn delete_conversation(
     State(state): State<ApiState>,
@@ -2036,16 +2036,16 @@ async fn send_message(
     let task_request = request.clone();
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
-        let result = run_turn(
-            task_state.clone(),
-            task_conversation,
-            task_agent,
-            task_model,
-            task_provider,
-            task_request,
-            task_cancel,
-            tx.clone(),
-        )
+        let result = run_turn(TurnTask {
+            state: task_state.clone(),
+            conversation: task_conversation,
+            agent: task_agent,
+            model: task_model,
+            provider: task_provider,
+            request: task_request,
+            cancel: task_cancel,
+            tx: tx.clone(),
+        })
         .await;
         if let Err(error) = result {
             let detail = match &error {
@@ -2126,7 +2126,7 @@ async fn cancel_turn(
     }
 }
 
-async fn run_turn(
+struct TurnTask {
     state: ApiState,
     conversation: StoredConversation,
     agent: StoredAgent,
@@ -2135,7 +2135,19 @@ async fn run_turn(
     request: ChatRequest,
     cancel: CancellationToken,
     tx: mpsc::UnboundedSender<String>,
-) -> Result<(), ApiError> {
+}
+
+async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
+    let TurnTask {
+        state,
+        conversation,
+        agent,
+        model,
+        provider,
+        request,
+        cancel,
+        tx,
+    } = task;
     let tools = configured_tools(
         &agent,
         conversation.writable,
