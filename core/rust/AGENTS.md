@@ -27,7 +27,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - A project's `deviceId` names the device that owns its workspace. Its conversations' workspace tools (terminal/glob/grep/read/edit/create) execute on that device; only tool calls cross devices, the turn itself stays on the initiator.
 - A remote-owned project is *unavailable* while its owner (or this device) is not connected to the relay: `POST /conversations/{id}/messages` returns 409 `project_unavailable` before any row changes. Project responses carry `owner` + `available`.
 - The owner's `messenger-remote` hub validates inbound calls (owned project, built-in workspace tool, writable conversation for `edit`/`create`) and hands them to the local platform client through the `/events` feed (`remoteTool`/`remoteToolCancelled`); the client posts results to `/turns/tools/{callId}/result`.
-- The cloud server (`server/`) must implement the `/api/remote/*` relay and persist `deviceId` on project documents; until it does, the hub idles and remote-owned projects stay unavailable.
+- The cloud server (`server/`, `lib/remote-hub.ts` + `/api/remote/*`) is the relay and persists `deviceId` on project documents. Its online set is in-process memory, so the server must run as a single instance; signed out or unreachable relay = hub idles/backs off and remote-owned projects stay unavailable.
 
 ## Versioning
 
