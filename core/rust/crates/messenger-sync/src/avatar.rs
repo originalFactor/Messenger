@@ -5,9 +5,9 @@
 //! - HTTP 304 re-use of local files without re-downloading
 //! - Uploading and deleting avatars for users and agents via multipart forms
 
-use std::path::{Path, PathBuf};
-use std::fs;
 use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::api::{CloudApiClient, CloudError, CloudResult};
 use crate::models::CloudAvatarResponse;
@@ -15,9 +15,17 @@ use crate::models::CloudAvatarResponse;
 pub const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
 pub const ETAG_SIDECAR_SUFFIX: &str = ".etag";
 
+struct AvatarCacheKey<'a> {
+    scope: &'a str,
+    account_id: &'a str,
+    id: &'a str,
+    identity: &'a str,
+    url_key: &'a str,
+    request_url: &'a str,
+}
 pub struct AvatarManager<'a> {
     client: &'a CloudApiClient,
-        avatars_dir: PathBuf,
+    avatars_dir: PathBuf,
 }
 
 impl<'a> AvatarManager<'a> {
@@ -28,10 +36,9 @@ impl<'a> AvatarManager<'a> {
         }
     }
 
-
     /// Cache a remote avatar locally using conditional GET with ETag.
     /// Returns the local absolute file path on success.
-        pub async fn cache_remote_avatar(
+    pub async fn cache_remote_avatar(
         &self,
         scope: &str,
         account_id: &str,
@@ -66,23 +73,40 @@ impl<'a> AvatarManager<'a> {
                     .client
                     .download_avatar_conditional(&request_url, None)
                     .await?
-                    .ok_or_else(|| CloudError::Network("Avatar download returned 304 with no local file".into()))?;
-                self.save_avatar_and_cleanup(scope, account_id, id, &identity, &url_key, &request_url, full)
+                    .ok_or_else(|| {
+                        CloudError::Network(
+                            "Avatar download returned 304 with no local file".into(),
+                        )
+                    })?;
+                self.save_avatar_and_cleanup(
+                    AvatarCacheKey {
+                        scope,
+                        account_id,
+                        id,
+                        identity: &identity,
+                        url_key: &url_key,
+                        request_url: &request_url,
+                    },
+                    full,
+                )
             }
-            Some(data) => {
-                self.save_avatar_and_cleanup(scope, account_id, id, &identity, &url_key, &request_url, data)
-            }
+            Some(data) => self.save_avatar_and_cleanup(
+                AvatarCacheKey {
+                    scope,
+                    account_id,
+                    id,
+                    identity: &identity,
+                    url_key: &url_key,
+                    request_url: &request_url,
+                },
+                data,
+            ),
         }
     }
 
-        fn save_avatar_and_cleanup(
+    fn save_avatar_and_cleanup(
         &self,
-        scope: &str,
-        account_id: &str,
-        id: &str,
-        identity: &str,
-        url_key: &str,
-        request_url: &str,
+        key: AvatarCacheKey<'_>,
         (bytes, etag, content_type): (Vec<u8>, Option<String>, Option<String>),
     ) -> CloudResult<String> {
         if bytes.len() > MAX_AVATAR_BYTES {
@@ -92,19 +116,19 @@ impl<'a> AvatarManager<'a> {
             return Err(CloudError::Network("Avatar response was empty".into()));
         }
 
-        let extension = avatar_extension(content_type.as_deref(), request_url);
-        let filename = format!("{identity}-{url_key}.{extension}");
+        let extension = avatar_extension(content_type.as_deref(), key.request_url);
+        let filename = format!("{}-{}.{}", key.identity, key.url_key, extension);
         let target = self.avatars_dir.join(&filename);
 
         fs::write(&target, &bytes).map_err(|e| CloudError::Network(e.to_string()))?;
         write_etag_sidecar(&target, etag.as_deref());
 
-        self.delete_cached_avatars_except(scope, account_id, id, &target);
+        self.delete_cached_avatars_except(key.scope, key.account_id, key.id, &target);
 
         Ok(target.to_string_lossy().to_string())
     }
 
-        fn find_existing_avatar(&self, prefix: &str) -> Option<PathBuf> {
+    fn find_existing_avatar(&self, prefix: &str) -> Option<PathBuf> {
         let entries = fs::read_dir(&self.avatars_dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
@@ -121,7 +145,7 @@ impl<'a> AvatarManager<'a> {
         None
     }
 
-        pub fn delete_cached_avatars(&self, scope: &str, account_id: &str, id: &str) {
+    pub fn delete_cached_avatars(&self, scope: &str, account_id: &str, id: &str) {
         let identity = digest(&format!("{scope}|{account_id}|{id}"));
         let prefix = format!("{identity}-");
         if let Ok(entries) = fs::read_dir(&self.avatars_dir) {
@@ -136,7 +160,7 @@ impl<'a> AvatarManager<'a> {
         }
     }
 
-        fn delete_cached_avatars_except(&self, scope: &str, account_id: &str, id: &str, keep: &Path) {
+    fn delete_cached_avatars_except(&self, scope: &str, account_id: &str, id: &str, keep: &Path) {
         let identity = digest(&format!("{scope}|{account_id}|{id}"));
         let prefix = format!("{identity}-");
         if let Ok(entries) = fs::read_dir(&self.avatars_dir) {
@@ -155,8 +179,13 @@ impl<'a> AvatarManager<'a> {
 
     // -- uploads --
 
-        pub async fn upload_user_avatar(&self, endpoint: &str, local_path: &str) -> CloudResult<CloudAvatarResponse> {
-        let bytes = fs::read(local_path).map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
+    pub async fn upload_user_avatar(
+        &self,
+        endpoint: &str,
+        local_path: &str,
+    ) -> CloudResult<CloudAvatarResponse> {
+        let bytes = fs::read(local_path)
+            .map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
         if bytes.len() > MAX_AVATAR_BYTES {
             return Err(CloudError::Network("Avatar must not exceed 5 MiB".into()));
         }
@@ -165,15 +194,22 @@ impl<'a> AvatarManager<'a> {
             .and_then(|n| n.to_str())
             .unwrap_or("avatar.jpg");
         let mime = mime_for_path(local_path);
-        self.client.upload_avatar(endpoint, filename, bytes, mime).await
+        self.client
+            .upload_avatar(endpoint, filename, bytes, mime)
+            .await
     }
 
-        pub async fn delete_user_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
+    pub async fn delete_user_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
         self.client.delete_avatar(endpoint).await
     }
 
-        pub async fn upload_agent_avatar(&self, endpoint: &str, local_path: &str) -> CloudResult<CloudAvatarResponse> {
-        let bytes = fs::read(local_path).map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
+    pub async fn upload_agent_avatar(
+        &self,
+        endpoint: &str,
+        local_path: &str,
+    ) -> CloudResult<CloudAvatarResponse> {
+        let bytes = fs::read(local_path)
+            .map_err(|e| CloudError::Network(format!("Avatar file not found: {e}")))?;
         if bytes.len() > MAX_AVATAR_BYTES {
             return Err(CloudError::Network("Avatar must not exceed 5 MiB".into()));
         }
@@ -182,13 +218,14 @@ impl<'a> AvatarManager<'a> {
             .and_then(|n| n.to_str())
             .unwrap_or("avatar.jpg");
         let mime = mime_for_path(local_path);
-        self.client.upload_avatar(endpoint, filename, bytes, mime).await
+        self.client
+            .upload_avatar(endpoint, filename, bytes, mime)
+            .await
     }
 
-        pub async fn delete_agent_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
+    pub async fn delete_agent_avatar(&self, endpoint: &str) -> CloudResult<CloudAvatarResponse> {
         self.client.delete_avatar(endpoint).await
     }
-
 }
 
 pub fn etag_sidecar_for(avatar_path: &Path) -> PathBuf {
@@ -203,7 +240,10 @@ pub fn etag_sidecar_for(avatar_path: &Path) -> PathBuf {
 pub fn read_etag_sidecar(avatar_path: &Path) -> Option<String> {
     let sidecar = etag_sidecar_for(avatar_path);
     if sidecar.exists() {
-        fs::read_to_string(sidecar).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        fs::read_to_string(sidecar)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     } else {
         None
     }
@@ -258,16 +298,25 @@ fn digest(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     let output = hasher.finalize();
-    output.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    output
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 /// The API may build absolute URLs from its internal origin; replace with configured base.
 pub fn resolve_avatar_url(url: &str, base_url: &str) -> String {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return format!("{}/{}", base_url.trim_end_matches('/'), url.trim_start_matches('/'));
+        return format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            url.trim_start_matches('/')
+        );
     }
     // If it's already an absolute URL, check if host needs substitution
-    if let (Ok(parsed_url), Ok(parsed_base)) = (reqwest::Url::parse(url), reqwest::Url::parse(base_url)) {
+    if let (Ok(parsed_url), Ok(parsed_base)) =
+        (reqwest::Url::parse(url), reqwest::Url::parse(base_url))
+    {
         let mut new_url = parsed_url.clone();
         if let Some(host) = parsed_base.host_str() {
             let _ = new_url.set_host(Some(host));
@@ -286,7 +335,10 @@ mod tests {
 
     #[test]
     fn extension_detection() {
-        assert_eq!(avatar_extension(Some("image/png; charset=utf-8"), "http://x/a"), "png");
+        assert_eq!(
+            avatar_extension(Some("image/png; charset=utf-8"), "http://x/a"),
+            "png"
+        );
         assert_eq!(avatar_extension(Some("image/jpeg"), "http://x/a"), "jpg");
         assert_eq!(avatar_extension(None, "http://x/photo.webp?v=1"), "webp");
         assert_eq!(avatar_extension(None, "http://x/noext"), "img");
@@ -299,7 +351,10 @@ mod tests {
             "https://messenger.ptoe.cc/avatars/1.jpg"
         );
         assert_eq!(
-            resolve_avatar_url("http://localhost:3000/avatars/1.jpg", "https://messenger.ptoe.cc"),
+            resolve_avatar_url(
+                "http://localhost:3000/avatars/1.jpg",
+                "https://messenger.ptoe.cc"
+            ),
             "https://messenger.ptoe.cc/avatars/1.jpg"
         );
     }

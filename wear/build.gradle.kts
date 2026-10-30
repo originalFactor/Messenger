@@ -21,8 +21,8 @@ plugins {
 
 // Shared wear ABI matrix (root build script): release ships armeabi-v7a, debug
 // adds x86_64 so the watch app installs on a Wear OS AVD.
-val wearReleaseAbis = rootProject.ext["wearReleaseAbis"] as List<String>
-val wearDebugAbis = rootProject.ext["wearDebugAbis"] as List<String>
+val wearReleaseAbis = (rootProject.ext["wearReleaseAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
+val wearDebugAbis = (rootProject.ext["wearDebugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
 
 android {
     namespace = "cc.ptoe.messenger"

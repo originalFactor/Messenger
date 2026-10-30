@@ -242,7 +242,7 @@ android {
             ndk {
                 // clear() first: buildType abiFilters are ADDED to defaultConfig's.
                 abiFilters.clear()
-                abiFilters.addAll(rootProject.ext["debugAbis"] as List<String>)
+                abiFilters.addAll((rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>())
             }
             val k = signingConfigs["messenger"]
             if (k.storePassword?.isNotBlank() == true && k.storeFile?.exists() == true) {
@@ -252,7 +252,7 @@ android {
         release {
             // ABI filtering per build type (AGP unions defaultConfig's list into
             // every build type, so it must not be set there).
-            ndk { abiFilters.addAll(rootProject.ext["releaseAbis"] as List<String>) }
+            ndk { abiFilters.addAll((rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterIsInstance<String>()) }
             // Full R8 on every release build, like the other Android modules.
             // The reflection-sensitive surface here is the AIDL stub/Parcelable
             // surface (ToolResult.CREATOR) plus the vendored Termux classes that
@@ -320,9 +320,9 @@ androidComponents {
         // Debug packages arm64-v8a + x86_64, release only arm64-v8a, so the set of
         // bootstrap archives to download is a per-variant decision.
         val variantAbis = if (variant.buildType == "debug") {
-            rootProject.ext["debugAbis"] as List<String>
+            (rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
         } else {
-            rootProject.ext["releaseAbis"] as List<String>
+            (rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
         }
         val task = tasks.register<DownloadBootstrapTask>("download${variant.name.replaceFirstChar { it.uppercase() }}Bootstrap") {
             releaseTag.set(bootstrapRelease)

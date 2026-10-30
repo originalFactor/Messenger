@@ -80,7 +80,7 @@ abstract class GenerateAppVersion : DefaultTask() {
     }
 }
 
-val generateAppVersion by tasks.registering(GenerateAppVersion::class) {
+val generateAppVersion = tasks.register<GenerateAppVersion>("generateAppVersion") {
     versionName.set(appVersionName)
     versionCode.set(appVersionCode)
     // The package directory is the source root; the .kt file inside it is the
@@ -117,11 +117,11 @@ kotlin {
     sourceSets {
         // Shared by Android + Desktop: Room, DataStore-with-okio-paths,
         // okio's FileSystem.SYSTEM and the Room-backed repositories all live here.
-        val jvmSharedMain by creating { dependsOn(getByName("commonMain")) }
+        val jvmSharedMain = create("jvmSharedMain") { dependsOn(getByName("commonMain")) }
 
         // Shared Android + Desktop tests. They are kept in a separate source
         // set because they use org.junit + runBlocking.
-        val jvmSharedTest by creating { dependsOn(getByName("commonTest")) }
+        val jvmSharedTest = create("jvmSharedTest") { dependsOn(getByName("commonTest")) }
 
         getByName("commonMain") {
             // Generated APP_VERSION_NAME / APP_VERSION_CODE (see above).
@@ -159,9 +159,16 @@ kotlin {
                 implementation(libs.ktor.serialization.kotlinx.json)
                 implementation(libs.ktor.client.logging)
                 implementation(libs.kotlinx.serialization.json)
-
-                implementation(libs.coil3.compose)
-                implementation(libs.coil3.network.ktor3)
+                implementation(libs.coil3.compose.get().let { "${it.group}:${it.name}:${it.version}" }) {
+                    // Compose Multiplatform supplies the runtime-compatible Skiko version.
+                    // Coil pins an older Skiko artifact, so exclude that edge on Desktop.
+                    exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
+                    exclude(group = "org.jetbrains.skiko", module = "skiko")
+                }
+                implementation(libs.coil3.network.ktor3.get().let { "${it.group}:${it.name}:${it.version}" }) {
+                    exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
+                    exclude(group = "org.jetbrains.skiko", module = "skiko")
+                }
 
                 implementation(libs.kotlinx.datetime)
                 implementation(libs.okio)
@@ -179,7 +186,10 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.android)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.okhttp)
-                implementation(libs.llm.typewriter)
+                implementation(libs.llm.typewriter.get().let { "${it.group}:${it.name}:${it.version}" }) {
+                    exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
+                    exclude(group = "org.jetbrains.skiko", module = "skiko")
+                }
 
                 implementation(libs.java.websocket)
 
@@ -199,7 +209,10 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
-                implementation(libs.llm.typewriter)
+                implementation(libs.llm.typewriter.get().let { "${it.group}:${it.name}:${it.version}" }) {
+                    exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
+                    exclude(group = "org.jetbrains.skiko", module = "skiko")
+                }
             }
         }
 

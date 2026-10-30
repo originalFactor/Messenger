@@ -47,7 +47,7 @@ val rustInputs = Action<Exec> {
     inputs.dir(rustWorkspaceDir.dir("crates"))
 }
 
-val cargoBuildHost by tasks.registering(Exec::class) {
+val cargoBuildHost = tasks.register<Exec>("cargoBuildHost") {
     workingDir(rustWorkspaceDir)
     commandLine(
         "cargo", "build", "--profile", hostProfile, "-p", "messenger-ffi",
@@ -58,7 +58,7 @@ val cargoBuildHost by tasks.registering(Exec::class) {
     rustInputs.execute(this)
 }
 
-val generateUniFFIBindings by tasks.registering(Exec::class) {
+val generateUniFFIBindings = tasks.register<Exec>("generateUniFFIBindings") {
     dependsOn(cargoBuildHost)
     workingDir(rustWorkspaceDir)
     commandLine(
@@ -107,7 +107,7 @@ val jnaResourcePrefix = run {
     }
     "$os-$arch"
 }
-val stageHostNative by tasks.registering(Copy::class) {
+val stageHostNative = tasks.register<Copy>("stageHostNative") {
     dependsOn(cargoBuildHost)
     from(rustWorkspaceDir.file("$hostProfileDir/$hostLibName"))
     into(hostNativeDir.map { it.dir(jnaResourcePrefix) })
@@ -127,6 +127,8 @@ kotlin {
         }
     }
     compilerOptions {
+        // This module compiles only generated UniFFI bindings; suppress warnings emitted by the generator.
+        freeCompilerArgs.add("-nowarn")
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     }
 }

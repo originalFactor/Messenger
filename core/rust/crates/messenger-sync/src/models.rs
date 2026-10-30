@@ -585,6 +585,39 @@ pub struct CloudProviderRequest {
     pub updated_at: i64,
 }
 
+impl Default for CloudAgentRequest {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            avatar_url: None,
+            system_prompt: String::new(),
+            description: String::new(),
+            default_model_id: None,
+            temperature: 0.0,
+            top_p: 0.0,
+            max_tokens: None,
+            reasoning_effort: None,
+            is_default: false,
+            follow_default_system_prompt: false,
+            follow_default_model: false,
+            follow_default_temperature: false,
+            follow_default_top_p: false,
+            follow_default_max_tokens: false,
+            follow_default_reasoning_effort: false,
+            market_agent_id: None,
+            market_agent_version: None,
+            market_agent_role: None,
+            role: ROLE_CHAT.to_string(),
+            tools_enabled: false,
+            tools_follow_default: false,
+            tools_config: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,66 +660,5 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert!(json.get("description").is_some());
         assert_eq!(json["isDefault"], true);
-    }
-}
-
-impl Default for CloudAgentRequest {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            avatar_url: None,
-            system_prompt: String::new(),
-            description: String::new(),
-            default_model_id: None,
-            temperature: 0.0,
-            top_p: 0.0,
-            max_tokens: None,
-            reasoning_effort: None,
-            is_default: false,
-            follow_default_system_prompt: false,
-            follow_default_model: false,
-            follow_default_temperature: false,
-            follow_default_top_p: false,
-            follow_default_max_tokens: false,
-            follow_default_reasoning_effort: false,
-            market_agent_id: None,
-            market_agent_version: None,
-            market_agent_role: None,
-            role: ROLE_CHAT.to_string(),
-            tools_enabled: false,
-            tools_follow_default: false,
-            tools_config: Default::default(),
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-}
-
-impl Default for CloudConversationRequest {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            title: String::new(),
-            agent_id: String::new(),
-            provider_id: String::new(),
-            project_id: None,
-            override_model_id: None,
-            override_temperature: None,
-            override_top_p: None,
-            override_max_tokens: None,
-            override_reasoning_effort: None,
-            override_tools_enabled: None,
-            override_tools_config: None,
-            writable: false,
-            reasoning_format: None,
-            context_summary: None,
-            context_summary_until: 0,
-            context_tokens: 0,
-            context_tokens_at: 0,
-            messages: Vec::new(),
-            created_at: 0,
-            updated_at: 0,
-        }
     }
 }

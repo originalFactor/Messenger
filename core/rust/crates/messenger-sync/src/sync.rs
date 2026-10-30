@@ -185,7 +185,7 @@ impl<'a> SyncEngine<'a> {
         let user = self
             .with_session(self.client.me(&self.endpoint("api/auth/me")))
             .await?;
-        self.save_user(&user).map_err(|e| CloudError::Network(e))?;
+        self.save_user(&user).map_err(CloudError::Network)?;
         Ok(user)
     }
 

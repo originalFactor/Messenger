@@ -18,7 +18,6 @@ package cc.ptoe.messenger.domain.tool
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -79,7 +78,7 @@ class TerminalTool(
             return try {
                 val element = Json.parseToJsonElement(argumentsJson)
                 val command = (element as? JsonObject)?.get("command")?.jsonPrimitive
-                (command as? JsonPrimitive)?.takeIf { it.isString }?.content
+                command?.takeIf { it.isString }?.content
             } catch (_: Exception) {
                 null
             }

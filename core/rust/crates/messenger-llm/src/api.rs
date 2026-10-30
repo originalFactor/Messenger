@@ -198,9 +198,7 @@ impl ChatEventStream {
                 }
                 return Some(event);
             }
-            let Some(stream) = self.inner.as_mut() else {
-                return None;
-            };
+            let stream = self.inner.as_mut()?;
             match stream.next_payload().await {
                 Ok(Some(payload)) => {
                     self.pending.extend(self.parser.feed(&payload));

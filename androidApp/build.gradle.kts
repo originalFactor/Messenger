@@ -24,8 +24,8 @@ plugins {
 
 // Shared ABI matrix (root build script): release ships arm64-v8a, debug adds
 // x86_64 so Android Studio Run works on an AVD.
-val releaseAbis = rootProject.ext["releaseAbis"] as List<String>
-val debugAbis = rootProject.ext["debugAbis"] as List<String>
+val releaseAbis = (rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
+val debugAbis = (rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
 
 android {
     namespace = "cc.ptoe.messenger"

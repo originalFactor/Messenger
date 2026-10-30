@@ -269,9 +269,9 @@ impl McpTransport for SseTransport {
                         // SSE default event type is "message" when omitted.
                         event_name = "message".to_string();
                         data_lines.clear();
-                    } else if let Some(value) = sse_field(&line, "event:") {
+                    } else if let Some(value) = sse_field(line, "event:") {
                         event_name = value.trim().to_string();
-                    } else if let Some(value) = sse_field(&line, "data:") {
+                    } else if let Some(value) = sse_field(line, "data:") {
                         data_lines.push(value.to_string());
                     }
                 }

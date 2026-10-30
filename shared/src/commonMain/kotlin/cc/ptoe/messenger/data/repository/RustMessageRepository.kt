@@ -53,7 +53,7 @@ class RustMessageRepository(
         }.getOrDefault(emptyList())
     }
 
-    override fun observeChanges(conversationId: String): Flow<Unit> = version.map { Unit }
+    override fun observeChanges(conversationId: String): Flow<Unit> = version.map { }
 
     override suspend fun getRecent(conversationId: String, limit: Int): List<Message> =
         decodeMessages(coreBridge.listRecentMessagesByConversationJson(conversationId, limit.toUInt()))

@@ -397,6 +397,7 @@ private fun RenderHeading(block: ChatBlock.Heading) {
     )
 }
 
+@Suppress("DEPRECATION")
 @Composable
 private fun RenderCodeBlock(block: ChatBlock.Code) {
     val clipboardManager = LocalClipboardManager.current
