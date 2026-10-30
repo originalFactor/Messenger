@@ -34,6 +34,7 @@ account, but the project's workspace-bound tools (`terminal`, `glob`, `grep`,
 All calls use the existing cloud session cookie. A `401` is terminal and drops
 the local session like any other authenticated call. The relay only forwards;
 it never interprets payloads, and scopes everything to the session's account.
+Server implementation: `server/lib/remote-hub.ts`, `server/app/api/remote/*`; the in-memory online set requires a single server instance.
 
 `GET /api/remote/events?deviceId=<id>` — SSE, one connection per device.
 Registers the device as online while connected (disconnect = offline). Events:
