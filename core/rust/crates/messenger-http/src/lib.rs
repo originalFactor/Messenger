@@ -24,6 +24,9 @@ use messenger_core::{
     agent::{run_chat_turn, AgentEvent, TitleConfig, ToolHost, TurnRequest, TurnSink},
     ApiFormat,
 };
+use messenger_remote::{
+    InboundToolCall, LocalToolExecutor, OutgoingToolCall, ProjectOwner, RemoteHub, RemoteStatus,
+};
 use messenger_store::{
     model::{
         StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
@@ -60,7 +63,9 @@ pub struct ApiState {
     active_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
     agent_mutations: Arc<Mutex<()>>,
     pending_tools: Arc<Mutex<HashMap<String, oneshot::Sender<ToolExecutionResult>>>>,
-    events: broadcast::Sender<ChangeEvent>,
+    events: broadcast::Sender<CoreEvent>,
+    /// Cross-device routing: this device's id, who is online, and the relay.
+    remote: Arc<RemoteHub>,
     listener_id: usize,
 }
 
@@ -69,8 +74,10 @@ impl ApiState {
         let (events, _) = broadcast::channel(256);
         let sender = events.clone();
         let listener_id = store.subscribe(Box::new(move |event| {
-            let _ = sender.send(ChangeEvent::from_store(event));
+            let _ = sender.send(CoreEvent::Change(ChangeEvent::from_store(event)));
         }));
+        let remote = RemoteHub::new(Arc::clone(&store))
+            .expect("the device id is persisted in the local store");
         Self {
             store,
             token: token.into(),
@@ -78,6 +85,7 @@ impl ApiState {
             agent_mutations: Arc::new(Mutex::new(())),
             pending_tools: Arc::new(Mutex::new(HashMap::new())),
             events,
+            remote: Arc::new(remote),
             listener_id,
         }
     }
@@ -114,6 +122,73 @@ impl ChangeEvent {
     }
 }
 
+/// Everything the `/events` feed carries.
+#[derive(Debug, Clone)]
+enum CoreEvent {
+    Change(ChangeEvent),
+    /// Another device asked this one to run a workspace tool of a project it
+    /// owns; the platform client executes it and posts the result to
+    /// `/turns/tools/{callId}/result`, exactly like a local `ToolCallRequested`.
+    RemoteTool(RemoteToolEvent),
+    RemoteToolCancelled(RemoteToolCancelledEvent),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteToolEvent {
+    call_id: String,
+    project_id: String,
+    conversation_id: String,
+    workspace: String,
+    name: String,
+    arguments_json: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteToolCancelledEvent {
+    call_id: String,
+}
+
+/// Runs relayed tool calls by handing them to the local platform client over
+/// the `/events` feed and waiting for its result through the same pending
+/// table a local `ToolCallRequested` uses.
+struct LocalClientExecutor {
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<ToolExecutionResult>>>>,
+    events: broadcast::Sender<CoreEvent>,
+}
+
+#[async_trait]
+impl LocalToolExecutor for LocalClientExecutor {
+    async fn execute(&self, call: &InboundToolCall, cancel: CancellationToken) -> ToolExecutionResult {
+        let error = |message: &str| ToolExecutionResult { output: message.into(), is_error: true };
+        // Namespaced so a relayed id can never collide with a local call id.
+        let key = format!("remote:{}", call.call_id);
+        let (sender, receiver) = oneshot::channel();
+        self.pending.lock().await.insert(key.clone(), sender);
+        let requested = CoreEvent::RemoteTool(RemoteToolEvent {
+            call_id: key.clone(),
+            project_id: call.project_id.clone(),
+            conversation_id: call.conversation_id.clone(),
+            workspace: call.workspace.clone(),
+            name: call.name.clone(),
+            arguments_json: call.arguments_json.clone(),
+        });
+        if self.events.send(requested).is_err() {
+            self.pending.lock().await.remove(&key);
+            return error("no client on the owning device is attached to run the tool");
+        }
+        tokio::select! {
+            result = receiver => result.unwrap_or_else(|_| error("tool execution was cancelled")),
+            _ = cancel.cancelled() => {
+                self.pending.lock().await.remove(&key);
+                let _ = self.events.send(CoreEvent::RemoteToolCancelled(RemoteToolCancelledEvent { call_id: key }));
+                error("tool execution was cancelled")
+            }
+        }
+    }
+}
+
 /// A running API server. Call `stop` to request graceful shutdown.
 pub struct ServerHandle {
     pub local_addr: SocketAddr,
@@ -136,8 +211,15 @@ impl ServerHandle {
         let local_addr = listener.local_addr()?;
         let token = format!("messenger-{}", Uuid::new_v4());
         let state = ApiState::new(store, Arc::<str>::from(token.clone()));
-        let router = router(state);
         let shutdown = CancellationToken::new();
+        tokio::spawn(Arc::clone(&state.remote).run(
+            Arc::new(LocalClientExecutor {
+                pending: Arc::clone(&state.pending_tools),
+                events: state.events.clone(),
+            }),
+            shutdown.clone(),
+        ));
+        let router = router(state);
         let shutdown_for_task = shutdown.clone();
         let task = tokio::spawn(async move {
             axum::serve(listener, router)
@@ -178,6 +260,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/health", get(health))
         .route("/meta", get(meta))
         .route("/events", get(core_events))
+        .route("/remote/status", get(remote_status))
         .route("/providers", get(list_providers).put(upsert_provider_body))
         .route(
             "/providers/:id",
@@ -355,10 +438,18 @@ async fn core_events(
     State(state): State<ApiState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = BroadcastStream::new(state.events.subscribe()).filter_map(|item| match item {
-        Ok(event) => Some(Ok(Event::default()
+        Ok(CoreEvent::Change(event)) => Some(Ok(Event::default()
             .event("change")
             .json_data(event)
             .expect("ChangeEvent serializes"))),
+        Ok(CoreEvent::RemoteTool(event)) => Some(Ok(Event::default()
+            .event("remoteTool")
+            .json_data(event)
+            .expect("RemoteToolEvent serializes"))),
+        Ok(CoreEvent::RemoteToolCancelled(event)) => Some(Ok(Event::default()
+            .event("remoteToolCancelled")
+            .json_data(event)
+            .expect("RemoteToolCancelledEvent serializes"))),
         Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(skipped)) => {
             let event = ChangeEvent {
                 kind: "Resync".into(),
@@ -406,6 +497,7 @@ struct Capabilities {
     cancellation: bool,
     platform_tools: bool,
     cloud_sync: bool,
+    remote_projects: bool,
 }
 
 async fn meta() -> Json<MetaResponse> {
@@ -418,6 +510,7 @@ async fn meta() -> Json<MetaResponse> {
             cancellation: true,
             platform_tools: false,
             cloud_sync: false,
+            remote_projects: true,
         },
     })
 }
@@ -840,48 +933,83 @@ async fn delete_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A project plus where it lives: `owner` says whether this device or another
+/// one holds the workspace, `available` is false exactly while a remote owner
+/// is offline (its conversations then refuse new turns).
+#[derive(Debug, Serialize)]
+struct ProjectView {
+    #[serde(flatten)]
+    project: StoredProject,
+    owner: ProjectOwner,
+    available: bool,
+}
+
+impl ProjectView {
+    fn new(state: &ApiState, project: StoredProject) -> Self {
+        let owner = state.remote.owner_of(&project);
+        Self { available: owner.is_available(), owner, project }
+    }
+}
+
+async fn remote_status(State(state): State<ApiState>) -> Json<RemoteStatus> {
+    Json(state.remote.status())
+}
+
 async fn list_projects(
     State(state): State<ApiState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<Page<StoredProject>>, ApiError> {
+) -> Result<Json<Page<ProjectView>>, ApiError> {
+    let projects = state.store.list_projects().map_err(ApiError::store)?;
     Ok(Json(page(
-        state.store.list_projects().map_err(ApiError::store)?,
+        projects.into_iter().map(|p| ProjectView::new(&state, p)).collect(),
         query,
     )))
 }
 async fn get_project(
     State(state): State<ApiState>,
     Path(id): Path<String>,
-) -> Result<Json<StoredProject>, ApiError> {
-    get_one(
+) -> Result<Json<ProjectView>, ApiError> {
+    let project = get_one(
         state.store.get_project(&id).map_err(ApiError::store)?,
         "project",
-    )
+    )?;
+    Ok(Json(ProjectView::new(&state, project.0)))
 }
 async fn upsert_project_body(
     State(state): State<ApiState>,
     Json(value): Json<StoredProject>,
-) -> Result<Json<StoredProject>, ApiError> {
-    upsert_project_inner(&state.store, value)
+) -> Result<Json<ProjectView>, ApiError> {
+    upsert_project_inner(&state, value)
 }
 async fn upsert_project(
     State(state): State<ApiState>,
     Path(id): Path<String>,
     Json(value): Json<StoredProject>,
-) -> Result<Json<StoredProject>, ApiError> {
+) -> Result<Json<ProjectView>, ApiError> {
     if id != value.id {
         return Err(ApiError::BadRequest(
             "path id does not match payload id".into(),
         ));
     }
-    upsert_project_inner(&state.store, value)
+    upsert_project_inner(&state, value)
 }
+/// A project written through the local API without an owner belongs to this
+/// device: it keeps the owner already recorded, else becomes ours. A client
+/// that names an owner explicitly (re-pointing a project) is taken at its word.
 fn upsert_project_inner(
-    store: &Store,
-    value: StoredProject,
-) -> Result<Json<StoredProject>, ApiError> {
-    store.upsert_project(&value).map_err(ApiError::store)?;
-    Ok(Json(value))
+    state: &ApiState,
+    mut value: StoredProject,
+) -> Result<Json<ProjectView>, ApiError> {
+    if value.device_id.is_none() {
+        value.device_id = state
+            .store
+            .get_project(&value.id)
+            .map_err(ApiError::store)?
+            .and_then(|existing| existing.device_id)
+            .or_else(|| Some(state.remote.device_id().to_string()));
+    }
+    state.store.upsert_project(&value).map_err(ApiError::store)?;
+    Ok(Json(ProjectView::new(state, value)))
 }
 async fn delete_project(
     State(state): State<ApiState>,
@@ -1873,6 +2001,7 @@ async fn send_message(
         }
         _ => {}
     }
+    let route = resolve_tool_route(&state, &conversation)?;
     let model = state
         .store
         .get_model(&model_id)
@@ -2037,6 +2166,7 @@ async fn send_message(
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
         let result = run_turn(TurnTask {
+            route,
             state: task_state.clone(),
             conversation: task_conversation,
             agent: task_agent,
@@ -2126,7 +2256,40 @@ async fn cancel_turn(
     }
 }
 
+/// Where a turn's workspace tools execute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolRoute {
+    /// On this device, through the attached platform client.
+    Local,
+    /// On the device that owns the conversation's project.
+    Remote { device_id: String, project_id: String },
+}
+
+/// A conversation of a project owned by another device can only be driven
+/// while that device is online; its workspace tools run there. An offline
+/// owner makes the project unavailable: no message is inserted, no turn
+/// starts (the same abort-before-mutation rule as `model_required`).
+fn resolve_tool_route(state: &ApiState, conversation: &StoredConversation) -> Result<ToolRoute, ApiError> {
+    let Some(project_id) = conversation.project_id.as_deref() else {
+        return Ok(ToolRoute::Local);
+    };
+    let Some(project) = state.store.get_project(project_id).map_err(ApiError::store)? else {
+        return Ok(ToolRoute::Local);
+    };
+    match state.remote.owner_of(&project) {
+        ProjectOwner::Local => Ok(ToolRoute::Local),
+        ProjectOwner::Remote { device_id, online: true } => {
+            Ok(ToolRoute::Remote { device_id, project_id: project.id })
+        }
+        ProjectOwner::Remote { online: false, .. } => Err(ApiError::Conflict {
+            code: "project_unavailable".into(),
+            message: "the device that owns this project is offline".into(),
+        }),
+    }
+}
+
 struct TurnTask {
+    route: ToolRoute,
     state: ApiState,
     conversation: StoredConversation,
     agent: StoredAgent,
@@ -2139,6 +2302,7 @@ struct TurnTask {
 
 async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
     let TurnTask {
+        route,
         state,
         conversation,
         agent,
@@ -2189,9 +2353,15 @@ async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
         title,
     };
     let sink = ChannelSink { tx: tx.clone() };
-    let host = RemoteToolHost {
-        pending: Arc::clone(&state.pending_tools),
-        events: tx,
+    let host = RoutedToolHost {
+        local: RemoteToolHost {
+            pending: Arc::clone(&state.pending_tools),
+            events: tx,
+            cancel: cancel.clone(),
+        },
+        route,
+        hub: Arc::clone(&state.remote),
+        conversation_id: turn.conversation_id.clone(),
         cancel: cancel.clone(),
     };
     let _ = request;
@@ -2233,6 +2403,51 @@ fn configured_tools(
         });
     }
     apply_writable_mode(tools, writable)
+}
+
+/// Sends workspace-bound tools of a remotely owned project to its owner and
+/// everything else (client-provided tools included) to the local client.
+struct RoutedToolHost {
+    local: RemoteToolHost,
+    route: ToolRoute,
+    hub: Arc<RemoteHub>,
+    conversation_id: String,
+    cancel: CancellationToken,
+}
+
+#[async_trait]
+impl ToolHost for RoutedToolHost {
+    async fn execute(
+        &self,
+        call_id: &str,
+        name: &str,
+        arguments_json: &str,
+    ) -> ToolExecutionResult {
+        let ToolRoute::Remote { device_id, project_id } = &self.route else {
+            return self.local.execute(call_id, name, arguments_json).await;
+        };
+        let is_workspace_tool = messenger_tools::builtin_registry()
+            .iter()
+            .any(|tool| tool.name == name && tool.workspace_required);
+        if !is_workspace_tool {
+            return self.local.execute(call_id, name, arguments_json).await;
+        }
+        // The model's call id is only unique within its turn; the relay needs
+        // one that cannot collide across conversations or devices.
+        self.hub
+            .call_tool(
+                OutgoingToolCall {
+                    target_device_id: device_id.clone(),
+                    call_id: Uuid::new_v4().to_string(),
+                    project_id: project_id.clone(),
+                    conversation_id: self.conversation_id.clone(),
+                    name: name.to_string(),
+                    arguments_json: arguments_json.to_string(),
+                },
+                &self.cancel,
+            )
+            .await
+    }
 }
 
 struct RemoteToolHost {
@@ -2941,5 +3156,244 @@ mod tests {
             let error: ErrorBody = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(error.code, "model_required");
         }
+    }
+
+    // ---- remote projects ----
+
+    fn remote_project(id: &str, device_id: &str) -> StoredProject {
+        StoredProject {
+            id: id.into(),
+            name: "Remote".into(),
+            workspace: "/owner/ws".into(),
+            device_id: Some(device_id.into()),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn attach_project(state: &ApiState, project: &StoredProject, writable: bool) {
+        state.store.upsert_project(project).unwrap();
+        let mut conversation = state.store.get_conversation("c1").unwrap().unwrap();
+        conversation.project_id = Some(project.id.clone());
+        conversation.writable = writable;
+        state.store.upsert_conversation(&conversation).unwrap();
+    }
+
+    async fn json_of(response: axum::response::Response) -> serde_json::Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn projects_without_an_owner_are_stamped_with_this_device() {
+        let state = test_state();
+        let body = r#"{"id":"p1","name":"P","workspace":"/w","created_at":1,"updated_at":1}"#;
+        let response = router(state.clone())
+            .oneshot(request(axum::http::Method::PUT, "/api/v1/projects", Some(body)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = json_of(response).await;
+        assert_eq!(json["device_id"], state.remote.device_id());
+        assert_eq!(json["owner"]["kind"], "local");
+        assert_eq!(json["available"], true);
+        // Re-saving without an owner keeps the recorded one.
+        let again = r#"{"id":"p1","name":"Renamed","workspace":"/w","created_at":1,"updated_at":2}"#;
+        router(state.clone())
+            .oneshot(request(axum::http::Method::PUT, "/api/v1/projects/p1", Some(again)))
+            .await
+            .unwrap();
+        assert_eq!(
+            state.store.get_project("p1").unwrap().unwrap().device_id.as_deref(),
+            Some(state.remote.device_id())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remote_owned_project_reports_availability_from_presence() {
+        let state = test_state();
+        state.store.upsert_project(&remote_project("p1", "laptop")).unwrap();
+        let get = |state: ApiState| async move {
+            json_of(
+                router(state)
+                    .oneshot(request(axum::http::Method::GET, "/api/v1/projects/p1", None))
+                    .await
+                    .unwrap(),
+            )
+            .await
+        };
+        let offline = get(state.clone()).await;
+        assert_eq!(offline["available"], false);
+        assert_eq!(offline["owner"], serde_json::json!({"kind":"remote","deviceId":"laptop","online":false}));
+        state.remote.force_presence_for_tests(&["laptop"]);
+        let online = get(state.clone()).await;
+        assert_eq!(online["available"], true);
+        assert_eq!(online["owner"]["online"], true);
+    }
+
+    #[tokio::test]
+    async fn an_offline_owner_makes_the_project_unavailable_before_any_mutation() {
+        let state = test_state();
+        seed_text_chat(&state, "http://localhost:1");
+        attach_project(&state, &remote_project("p1", "laptop"), false);
+        for body in [r#"{"content":"hello"}"#, r#"{"operation":"retry","messageId":"missing"}"#] {
+            let response = router(state.clone())
+                .oneshot(request(axum::http::Method::POST, "/api/v1/conversations/c1/messages", Some(body)))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(json_of(response).await["code"], "project_unavailable");
+            assert!(state.store.list_messages_by_conversation("c1").unwrap().is_empty());
+        }
+    }
+
+    /// Answers the relay's tool-call POST by delivering a result back through
+    /// the initiating hub, like the cloud would.
+    struct EchoRelay {
+        hub: Arc<RemoteHub>,
+        executor: Arc<dyn LocalToolExecutor>,
+    }
+    impl wiremock::Respond for EchoRelay {
+        fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+            let call: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let result = serde_json::json!({
+                "callId": call["callId"],
+                "targetDeviceId": call["fromDeviceId"],
+                "output": format!("owner ran {} in {}", call["name"], call["projectId"]),
+                "isError": false,
+            });
+            self.hub.handle_frame("toolResult", &result.to_string(), &self.executor);
+            wiremock::ResponseTemplate::new(202)
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_tools_of_a_remote_project_run_on_its_owner() {
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"x\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .up_to_n_times(1)
+            .mount(&provider)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .mount(&provider)
+            .await;
+        let relay = wiremock::MockServer::start().await;
+        let state = test_state();
+        seed_text_chat(&state, &provider.uri());
+        let mut model = state.store.get_model("m1").unwrap().unwrap();
+        model.supports_tool_calling = true;
+        state.store.upsert_model(&model).unwrap();
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+        agent.tools_enabled = true;
+        state.store.upsert_agent(&agent).unwrap();
+        attach_project(&state, &remote_project("p1", "laptop"), false);
+        state.store.kv_set(KV_SESSION, "messenger_session=abc").unwrap();
+        state.store.kv_set(KV_SESSION_HOST, "127.0.0.1").unwrap();
+        state.store.kv_set(messenger_sync::KV_SERVER_URL, &relay.uri()).unwrap();
+        state.remote.force_presence_for_tests(&["laptop"]);
+        let executor: Arc<dyn LocalToolExecutor> = Arc::new(LocalClientExecutor {
+            pending: Arc::clone(&state.pending_tools),
+            events: state.events.clone(),
+        });
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/remote/tool-call"))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                "targetDeviceId": "laptop", "projectId": "p1", "conversationId": "c1", "name": "grep"
+            })))
+            .respond_with(EchoRelay { hub: Arc::clone(&state.remote), executor })
+            .expect(1)
+            .mount(&relay)
+            .await;
+
+        let response = router(state.clone())
+            .oneshot(request(
+                axum::http::Method::POST,
+                "/api/v1/conversations/c1/messages",
+                Some(r#"{"content":"find x"}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(!text.contains("ToolCallRequested"), "the local client must not be asked: {text}");
+        assert!(text.contains("owner ran"), "the owner's result reaches the turn: {text}");
+        assert!(text.contains("\"type\":\"Finished\""));
+    }
+
+    #[tokio::test]
+    async fn a_relayed_inbound_call_reaches_the_local_client_and_its_result_goes_back() {
+        let relay = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/remote/tool-result"))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                "callId": "relay-1", "targetDeviceId": "phone", "output": "src/main.rs", "isError": false
+            })))
+            .respond_with(wiremock::ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&relay)
+            .await;
+        let state = test_state();
+        seed_text_chat(&state, "http://localhost:1");
+        let device_id = state.remote.device_id().to_string();
+        attach_project(&state, &remote_project("p1", &device_id), false);
+        state.store.kv_set(KV_SESSION, "messenger_session=abc").unwrap();
+        state.store.kv_set(KV_SESSION_HOST, "127.0.0.1").unwrap();
+        state.store.kv_set(messenger_sync::KV_SERVER_URL, &relay.uri()).unwrap();
+        let mut events = state.events.subscribe();
+        let executor: Arc<dyn LocalToolExecutor> = Arc::new(LocalClientExecutor {
+            pending: Arc::clone(&state.pending_tools),
+            events: state.events.clone(),
+        });
+
+        let call = serde_json::json!({
+            "callId": "relay-1", "fromDeviceId": "phone", "targetDeviceId": device_id,
+            "projectId": "p1", "conversationId": "c1", "name": "glob", "argumentsJson": "{}",
+        });
+        state.remote.handle_frame("toolCall", &call.to_string(), &executor);
+
+        let event = loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), events.recv()).await.unwrap().unwrap() {
+                CoreEvent::RemoteTool(event) => break event,
+                _ => continue,
+            }
+        };
+        assert_eq!(event.call_id, "remote:relay-1");
+        assert_eq!(event.workspace, "/owner/ws");
+        assert_eq!(event.name, "glob");
+
+        let response = router(state.clone())
+            .oneshot(request(
+                axum::http::Method::POST,
+                "/api/v1/turns/tools/remote:relay-1/result",
+                Some(r#"{"output":"src/main.rs","isError":false}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        // The mock's `expect(1)` verifies the result was relayed back on drop.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+
+    #[tokio::test]
+    async fn remote_status_reports_the_device_and_peers() {
+        let state = test_state();
+        state.remote.force_presence_for_tests(&[state.remote.device_id(), "laptop"]);
+        let json = json_of(
+            router(state.clone())
+                .oneshot(request(axum::http::Method::GET, "/api/v1/remote/status", None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(json["deviceId"], state.remote.device_id());
+        assert_eq!(json["connected"], true);
+        assert_eq!(json["onlineDevices"], serde_json::json!(["laptop"]));
     }
 }

@@ -79,7 +79,7 @@ fn delta_body() -> serde_json::Value {
         ],
         "projects": [
             {"_id": "proj1", "name": "Messenger", "workspace": "/w/messenger",
-             "createdAt": 1, "updatedAt": 2, "version": 16}
+             "deviceId": "dev-a", "createdAt": 1, "updatedAt": 2, "version": 16}
         ],
         "latestVersion": 20
     })
@@ -216,6 +216,7 @@ async fn pull_applies_delta_with_guards() {
     // applying projects before conversations is what makes the FK hold.
     let project = store.get_project("proj1").unwrap().unwrap();
     assert_eq!(project.workspace, "/w/messenger");
+    assert_eq!(project.device_id.as_deref(), Some("dev-a"));
     assert_eq!(
         store.get_conversation("c1").unwrap().unwrap().project_id.as_deref(),
         Some("proj1")
@@ -748,4 +749,47 @@ async fn a_full_pull_acks_no_cursor() {
 
     engine.sync_internal(Some(0), false, None).await.unwrap();
     server.verify().await;
+}
+
+/// A server that predates (or strips) `deviceId` must not erase the owner the
+/// local row already records.
+#[tokio::test]
+async fn pull_keeps_the_local_project_owner_when_the_server_omits_device_id() {
+    let server = wiremock::MockServer::start().await;
+    for (collection, documents) in [
+        ("agents", serde_json::json!([])),
+        ("conversations", serde_json::json!([])),
+        ("providers", serde_json::json!([])),
+        (
+            "projects",
+            serde_json::json!([{"_id": "proj1", "name": "Renamed", "workspace": "/w/messenger",
+                "createdAt": 1, "updatedAt": 9, "version": 16}]),
+        ),
+    ] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/sync"))
+            .and(wiremock::matchers::query_param("collection", collection))
+            .respond_with(page_response(documents, 20))
+            .mount(&server)
+            .await;
+    }
+    let store = Store::open_memory().unwrap();
+    seed_title_holder(&store);
+    let engine = signed_in_engine(&store, &server);
+    store
+        .upsert_project(&messenger_store::model::StoredProject {
+            id: "proj1".into(),
+            name: "Messenger".into(),
+            workspace: "/w/messenger".into(),
+            device_id: Some("dev-a".into()),
+            created_at: 1,
+            updated_at: 2,
+        })
+        .unwrap();
+
+    engine.sync_internal(None, false, None).await.unwrap();
+
+    let project = store.get_project("proj1").unwrap().unwrap();
+    assert_eq!(project.name, "Renamed");
+    assert_eq!(project.device_id.as_deref(), Some("dev-a"));
 }

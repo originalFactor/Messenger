@@ -1,0 +1,21 @@
+[package]
+name = "messenger-remote"
+version.workspace = true
+edition.workspace = true
+description = "Cross-device remote workspace tool routing for the Messenger Rust core"
+
+[dependencies]
+async-trait = "0.1"
+messenger-store = { path = "../messenger-store" }
+messenger-sync = { path = "../messenger-sync" }
+messenger-tools = { path = "../messenger-tools" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

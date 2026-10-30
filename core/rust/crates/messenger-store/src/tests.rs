@@ -59,6 +59,7 @@ fn sample_project(id: &str) -> StoredProject {
         id: id.to_string(),
         name: "Messenger".into(),
         workspace: "/home/me/src/Messenger".into(),
+        device_id: None,
         created_at: 1_000,
         updated_at: 1_000,
     }
@@ -254,6 +255,7 @@ fn project_crud_and_conversation_membership() {
         id: "proj1".into(),
         name: "Messenger".into(),
         workspace: "/home/me/src/Messenger".into(),
+        device_id: None,
         created_at: 1_000,
         updated_at: 1_000,
     };
@@ -700,4 +702,51 @@ fn recent_messages_are_limited_and_keep_timestamp_tie_order() {
     assert_eq!(from.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["three", "four"]);
     assert!(store.list_messages_before("c1", "other", 2).unwrap().is_empty());
     assert!(store.list_messages_from("c1", "missing").unwrap().is_empty());
+}
+
+#[test]
+fn device_id_is_generated_once_and_stable() {
+    let store = Store::open_memory().unwrap();
+    let first = store.device_id().unwrap();
+    assert!(!first.is_empty());
+    assert_eq!(first, store.device_id().unwrap());
+}
+
+#[test]
+fn device_id_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("messenger.db");
+    let first = Store::open(&path).unwrap().device_id().unwrap();
+    assert_eq!(first, Store::open(&path).unwrap().device_id().unwrap());
+}
+
+#[test]
+fn project_device_id_round_trips() {
+    let store = Store::open_memory().unwrap();
+    let mut project = sample_project("proj1");
+    project.device_id = Some("device-a".into());
+    store.upsert_project(&project).unwrap();
+    assert_eq!(store.get_project("proj1").unwrap().unwrap().device_id.as_deref(), Some("device-a"));
+    project.device_id = None;
+    store.upsert_project(&project).unwrap();
+    assert_eq!(store.get_project("proj1").unwrap().unwrap().device_id, None);
+}
+
+/// A v4 database (no `projects.deviceId`) is migrated in place and keeps its rows.
+#[test]
+fn v4_projects_table_gains_the_device_id_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, workspace TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL);
+             INSERT INTO projects VALUES ('old', 'Old', '/w', 1, 2);",
+        )
+        .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let project = store.get_project("old").unwrap().unwrap();
+    assert_eq!(project.device_id, None);
+    assert_eq!(project.workspace, "/w");
 }

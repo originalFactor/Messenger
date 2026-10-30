@@ -75,6 +75,9 @@ impl Store {
         if !crate::schema::has_model_cache_read_rate_column(&conn)? {
             conn.execute_batch(crate::schema::ADD_MODEL_CACHE_READ_RATE_COLUMN)?;
         }
+        if !crate::schema::has_project_device_id_column(&conn)? {
+            conn.execute_batch(crate::schema::ADD_PROJECT_DEVICE_ID_COLUMN)?;
+        }
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
@@ -551,6 +554,21 @@ impl Store {
         Ok(())
     }
 
+    /// This installation's stable device id, generated on first use and kept
+    /// in `kv`. It is local identity, not synced state: the cloud's `kv`
+    /// bookkeeping never copies it, and clearing a session leaves it alone,
+    /// so a project keeps naming the same owner across sign-outs. Written
+    /// without a store event — nothing observes it changing.
+    pub fn device_id(&self) -> Result<String, rusqlite::Error> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO kv (key, value) VALUES (?1, ?2)",
+                [KV_DEVICE_ID, uuid::Uuid::new_v4().to_string().as_str()],
+            )?;
+            conn.query_row("SELECT value FROM kv WHERE key = ?1", [KV_DEVICE_ID], |r| r.get(0))
+        })
+    }
+
     pub fn kv_delete(&self, key: &str) -> Result<(), rusqlite::Error> {
         self.with_conn(|conn| conn.execute("DELETE FROM kv WHERE key = ?1", [key]))?;
         self.emit(StoreEvent { kind: EntityKind::Other, ids: vec![key.to_string()] });
@@ -758,9 +776,12 @@ impl StoreTx<'_, '_> {
 // column lists & helpers
 // ---------------------------------------------------------------------------
 
-const PROJECT_COLUMNS: &str = "id, name, workspace, createdAt, updatedAt";
-const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5";
-const PROJECT_UPDATES: &str = "name=?2, workspace=?3, updatedAt=?5";
+/// `kv` key holding [`Store::device_id`].
+pub const KV_DEVICE_ID: &str = "device_id";
+
+const PROJECT_COLUMNS: &str = "id, name, workspace, deviceId, createdAt, updatedAt";
+const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6";
+const PROJECT_UPDATES: &str = "name=?2, workspace=?3, deviceId=?4, updatedAt=?6";
 
 const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt";
 
@@ -782,8 +803,9 @@ fn map_project(row: &rusqlite::Row<'_>) -> Result<StoredProject, rusqlite::Error
         id: row.get(0)?,
         name: row.get(1)?,
         workspace: row.get(2)?,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
+        device_id: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 
@@ -793,7 +815,7 @@ fn upsert_project_sql(conn: &Connection, p: &StoredProject) -> Result<(), rusqli
             "INSERT INTO projects ({PROJECT_COLUMNS}) VALUES ({PROJECT_PLACEHOLDERS})
              ON CONFLICT(id) DO UPDATE SET {PROJECT_UPDATES}"
         ),
-        rusqlite::params![p.id, p.name, p.workspace, p.created_at, p.updated_at],
+        rusqlite::params![p.id, p.name, p.workspace, p.device_id, p.created_at, p.updated_at],
     )?;
     Ok(())
 }
