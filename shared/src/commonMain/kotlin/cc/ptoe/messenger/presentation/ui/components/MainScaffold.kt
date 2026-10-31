@@ -19,20 +19,19 @@ package cc.ptoe.messenger.presentation.ui.components
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -45,18 +44,6 @@ import cc.ptoe.messenger.presentation.navigation.BottomLevelRoutes
 import cc.ptoe.messenger.presentation.navigation.NavGraph
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
-
-/**
- * Bottom clearance (dp) top-level screens must keep free at the bottom of their
- * own `Scaffold` so the floating bottom-navigation pill never overlaps the FAB
- * or the last list row.
- *
- * `MainScaffold` provides 92 dp (80 dp bar + 12 dp gap) in the Compact layout,
- * where the pill exists. The rail layout (Medium / Expanded: tablet, desktop)
- * has no bottom pill, so the default is 0 dp and the FAB falls back to the
- * standard 16 dp Scaffold inset instead of floating halfway up the pane.
- */
-val LocalBottomNavClearance = compositionLocalOf { 0.dp }
 
 @Composable
 fun MainScaffold(
@@ -89,7 +76,7 @@ fun MainScaffold(
 
         when (sizeClass) {
             WindowSizeClass.Compact -> {
-                // Mobile phone: bottom NavigationBar (existing behavior).
+                // Mobile phone: fixed bottom NavigationBar.
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -98,11 +85,9 @@ fun MainScaffold(
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     bottomBar = {
                         if (showTopLevelNav) {
-                            // Floating pill: no opaque wrapper background — content
-                            // scrolls beneath the bar and stays visible around it.
                             Box(
                                 modifier = Modifier
-                                    .padding(horizontal = 12.dp)
+                                    .fillMaxWidth()
                                     .navigationBarsPadding()
                             ) {
                                 BottomNavBar(
@@ -113,18 +98,18 @@ fun MainScaffold(
                             }
                         }
                     }
-                ) { _ ->
-                    // No bottom padding here: content extends beneath the floating
-                    // bar; top-level screens add their own bar-clearance padding so
-                    // the last list item can scroll clear of the pill.
-                    CompositionLocalProvider(LocalBottomNavClearance provides 92.dp) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            NavGraph(
-                                navController = navController,
-                                sizeClass = sizeClass,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                            .consumeWindowInsets(innerPadding)
+                    ) {
+                        NavGraph(
+                            navController = navController,
+                            sizeClass = sizeClass,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
             }
@@ -135,15 +120,11 @@ fun MainScaffold(
                     if (showTopLevelNav) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            shape = MaterialTheme.shapes.large,
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .padding(12.dp)
+                            modifier = Modifier.fillMaxHeight()
                         ) {
                             NavigationRailBar(
                                 currentRoute = currentDestination.route,
-                                onItemClick = onItemClick,
-                                modifier = Modifier.padding(vertical = 8.dp)
+                                onItemClick = onItemClick
                             )
                         }
                         VerticalDivider(
