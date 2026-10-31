@@ -19,7 +19,6 @@ package cc.ptoe.messenger.presentation.ui.conversations
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -81,7 +80,6 @@ import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.platform.rememberFolderPicker
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
-import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
 import cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog
 import cc.ptoe.messenger.presentation.ui.components.projectSection
 import cc.ptoe.messenger.presentation.ui.components.recentChatSection
@@ -176,11 +174,6 @@ fun ConversationsScreen(
             },
             floatingActionButton = {
                 // 单个 FAB 展开为 M3 Expressive FAB menu：新建对话 / 新建项目。
-                //
-                // Keep the FAB above the floating bottom navigation pill
-                // (80 dp bar + 12 dp gap) on Compact layouts; 0 dp on the
-                // rail layout (desktop / large windows), which has no pill.
-                //
                 // FloatingActionButtonMenu 自带 16dp 横向内边距和 16dp 底部
                 // 内边距，而 Scaffold 的 FAB 槽位也留了 16dp；用等量反向偏移
                 // 抵消，让 FAB 与菜单都回到常规的 16dp 屏幕边距。
@@ -225,7 +218,6 @@ fun ConversationsScreen(
                     },
                     modifier = Modifier
                         .navigationBarsPadding()
-                        .padding(bottom = LocalBottomNavClearance.current)
                         .offset(x = fabMenuOffsetX, y = 16.dp)
                 ) {
                     FloatingActionButtonMenuItem(
@@ -262,7 +254,6 @@ fun ConversationsScreen(
                         .fillMaxSize()
                         .padding(innerPadding)
                         .navigationBarsPadding(),
-                    contentPadding = PaddingValues(bottom = LocalBottomNavClearance.current)
                 ) {
                     recentChatSection(
                         conversations = recentConversations,

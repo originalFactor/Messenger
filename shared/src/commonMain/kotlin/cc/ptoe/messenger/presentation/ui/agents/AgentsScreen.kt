@@ -79,7 +79,6 @@ import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
 import cc.ptoe.messenger.presentation.ui.components.CursorDropdownMenu
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
-import cc.ptoe.messenger.presentation.ui.components.LocalBottomNavClearance
 import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
@@ -167,16 +166,8 @@ fun AgentsScreen(
             },
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
-                    // Keep the FAB above the floating bottom navigation pill
-                    // (80 dp bar + 12 dp gap) on Compact layouts. The rail
-                    // layout (desktop / large windows) has no bottom pill, so
-                    // the clearance is 0 dp and the FAB uses the Scaffold's
-                    // standard inset.
-                    val bottomNavClearance = LocalBottomNavClearance.current
                     Box(
-                        modifier = Modifier
-                            .navigationBarsPadding()
-                            .padding(bottom = bottomNavClearance)
+                        modifier = Modifier.navigationBarsPadding()
                     ) {
                         Column(horizontalAlignment = Alignment.End) {
                         if (cloudUser != null && fabExpanded) {
@@ -244,9 +235,6 @@ fun AgentsScreen(
                             .fillMaxWidth()
                             .widthIn(max = 720.dp)
                             .navigationBarsPadding(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                            bottom = LocalBottomNavClearance.current
-                        )
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
                         // 「必须有且恰好一个标题生成器」只约束角色归属，不约束这一行
