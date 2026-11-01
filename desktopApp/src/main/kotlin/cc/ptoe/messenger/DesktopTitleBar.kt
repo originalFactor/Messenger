@@ -137,7 +137,13 @@ fun WindowScope.DesktopTitleBar(
                     }
                 }
             }
-            .padding(horizontal = 12.dp),
+            // Start padding only: the caption buttons must run flush to the
+            // window's right edge. An end padding here left a ~12 dp strip of
+            // bare title bar past the close button, and since an undecorated
+            // window's 8 dp resize band is laid over the content, that strip
+            // showed the resize cursor with nothing to click — it read as the
+            // UI overflowing the window.
+            .padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
