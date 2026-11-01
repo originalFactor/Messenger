@@ -20,6 +20,8 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
 - Tool policy stays in Rust; Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`.
 - Dropping the chat SSE cancels the turn token, wakes a pending tool host and finalizes partial rows.
+- **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.
+- **`ApiState` is `Clone`, so its cleanup cannot be in `Drop`**: axum clones the state per request, and the first dropped clone used to `unsubscribe` the store listener, silently killing the change feed for every later subscriber. The registration lives in `StoreFeed`, held through an `Arc`, so it ends with the last clone.
 - Contracts: `crates/messenger-http/openapi.yaml` and `crates/messenger-http/docs/SSE.md`.
 
 ## Remote projects

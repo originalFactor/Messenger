@@ -16,6 +16,10 @@ All streams use `text/event-stream`. Chat events are named `message`; the
 - `remoteToolCancelled`: `{ callId }` — the initiator gave up; stop the running
   tool. A late result for this id is answered with 404 and dropped.
 
+The feed is endless and shared by every request: it stays subscribed to store
+changes for the server's whole lifetime. It ends only when the server stops
+(`ServerHandle::stop`), which closes it so the graceful shutdown can finish.
+
 ## Chat (`POST /api/v1/conversations/{id}/messages`)
 
 Event types:

@@ -5,7 +5,15 @@
 //! the same event stream without a platform FFI. The server generates a fresh
 //! bearer token for every process and refuses non-loopback listeners.
 
-use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    future::Future,
+    net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -66,11 +74,47 @@ pub struct ApiState {
     events: broadcast::Sender<CoreEvent>,
     /// Cross-device routing: this device's id, who is online, and the relay.
     remote: Arc<RemoteHub>,
+    /// Fires when the server starts shutting down.
+    ///
+    /// Long-lived SSE responses (`/events`) never finish on their own, and
+    /// axum's graceful shutdown waits for every in-flight response before it
+    /// resolves. Without closing those streams the server task never completes
+    /// and `ServerHandle::stop` hangs forever — which is exactly what froze the
+    /// desktop app on window close while its `/events` subscription was open.
+    shutdown: CancellationToken,
+    store_feed: Arc<StoreFeed>,
+}
+
+/// Owns the store-callback registration shared by every [`ApiState`] clone.
+///
+/// `ApiState` is `Clone` (axum clones it per request), so the unsubscribe
+/// cannot live in its `Drop`: the first request's dropped copy would detach the
+/// store listener and every later `/events` subscriber would sit in silence.
+/// Keeping it in an `Arc` makes the registration end with the last clone.
+struct StoreFeed {
+    store: Arc<Store>,
     listener_id: usize,
+}
+
+impl Drop for StoreFeed {
+    fn drop(&mut self) {
+        self.store.unsubscribe(self.listener_id);
+    }
 }
 
 impl ApiState {
     pub fn new(store: Arc<Store>, token: impl Into<Arc<str>>) -> Self {
+        Self::with_shutdown(store, token, CancellationToken::new())
+    }
+
+    /// Builds a state whose long-lived streams close when `shutdown` fires.
+    /// `ServerHandle::start` passes its own graceful-shutdown token here so a
+    /// stop also ends the open `/events` subscriptions.
+    fn with_shutdown(
+        store: Arc<Store>,
+        token: impl Into<Arc<str>>,
+        shutdown: CancellationToken,
+    ) -> Self {
         let (events, _) = broadcast::channel(256);
         let sender = events.clone();
         let listener_id = store.subscribe(Box::new(move |event| {
@@ -79,6 +123,10 @@ impl ApiState {
         let remote = RemoteHub::new(Arc::clone(&store))
             .expect("the device id is persisted in the local store");
         Self {
+            store_feed: Arc::new(StoreFeed {
+                store: Arc::clone(&store),
+                listener_id,
+            }),
             store,
             token: token.into(),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
@@ -86,14 +134,8 @@ impl ApiState {
             pending_tools: Arc::new(Mutex::new(HashMap::new())),
             events,
             remote: Arc::new(remote),
-            listener_id,
+            shutdown,
         }
-    }
-}
-
-impl Drop for ApiState {
-    fn drop(&mut self) {
-        self.store.unsubscribe(self.listener_id);
     }
 }
 
@@ -210,8 +252,12 @@ impl ServerHandle {
         let listener = TcpListener::bind(bind_addr).await?;
         let local_addr = listener.local_addr()?;
         let token = format!("messenger-{}", Uuid::new_v4());
-        let state = ApiState::new(store, Arc::<str>::from(token.clone()));
         let shutdown = CancellationToken::new();
+        let state = ApiState::with_shutdown(
+            store,
+            Arc::<str>::from(token.clone()),
+            shutdown.clone(),
+        );
         tokio::spawn(Arc::clone(&state.remote).run(
             Arc::new(LocalClientExecutor {
                 pending: Arc::clone(&state.pending_tools),
@@ -461,7 +507,37 @@ async fn core_events(
                 .expect("ChangeEvent serializes")))
         }
     });
+    // The feed is deliberately endless, so it has to be cut off by the
+    // server's shutdown signal; otherwise a graceful stop waits on it forever.
+    let stream = ShutdownStream::new(stream, &state.shutdown);
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Ends an endless SSE stream when the [CancellationToken] fires.
+struct ShutdownStream<S> {
+    inner: Pin<Box<S>>,
+    shutdown: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<S> ShutdownStream<S> {
+    fn new(inner: S, shutdown: &CancellationToken) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            shutdown: Box::pin(shutdown.clone().cancelled_owned()),
+        }
+    }
+}
+
+impl<S: Stream> Stream for ShutdownStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+        if this.shutdown.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        this.inner.as_mut().poll_next(cx)
+    }
 }
 
 fn token_matches(candidate: &str, expected: &str) -> bool {
@@ -2699,6 +2775,69 @@ mod tests {
         handle.stop().await.unwrap();
     }
 
+    /// The desktop app keeps one `/events` feed open for its whole lifetime,
+    /// so it has to see store changes long after the subscription was set up —
+    /// including after other requests were served in between.
+    #[tokio::test]
+    async fn events_feed_delivers_store_changes() {
+        let server = ServerHandle::start_local(Arc::new(Store::open_memory().unwrap()))
+            .await
+            .unwrap();
+        let base = format!("http://{}{}", server.local_addr, API_PREFIX);
+        let client = reqwest::Client::new();
+        let mut feed = client
+            .get(format!("{base}/events"))
+            .bearer_auth(&server.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(feed.status(), StatusCode::OK);
+        // Give the handler a moment to subscribe to the broadcast channel.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // A plain request in between must not detach the store listener: its
+        // `ApiState` clone is dropped as soon as it is served.
+        client
+            .get(format!("{base}/meta"))
+            .bearer_auth(&server.token)
+            .send()
+            .await
+            .unwrap();
+        let response = client
+            .put(format!("{base}/agents"))
+            .bearer_auth(&server.token)
+            .json(&test_agent())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut seen = String::new();
+        while !seen.contains("Agent") {
+            let chunk = tokio::time::timeout_at(deadline, feed.chunk())
+                .await
+                .expect("the change event must arrive on the feed")
+                .unwrap();
+            seen.push_str(&String::from_utf8_lossy(&chunk.expect("the feed must stay open")));
+        }
+        server.stop().await.unwrap();
+    }
+
+    fn test_agent() -> serde_json::Value {
+        serde_json::json!({
+            "id": "a1", "name": "Agent", "avatar": null, "system_prompt": "help",
+            "description": "", "default_model_id": null, "temperature": null,
+            "top_p": null, "max_tokens": null, "reasoning_effort": null,
+            "is_default": true, "follow_default_system_prompt": false,
+            "follow_default_model": false, "follow_default_temperature": false,
+            "follow_default_top_p": false, "follow_default_max_tokens": false,
+            "follow_default_reasoning_effort": false, "market_agent_id": null,
+            "market_agent_version": null, "market_agent_role": null, "role": "chat",
+            "tools_enabled": false, "tools_follow_default": false, "tools_config": "",
+            "created_at": 1, "updated_at": 1
+        })
+    }
+
     #[tokio::test]
     async fn dropping_sse_stream_cancels_turn_token() {
         let cancel = CancellationToken::new();
@@ -2706,6 +2845,35 @@ mod tests {
         let stream = CancelOnDropStream::new(receiver, cancel.clone());
         drop(stream);
         assert!(cancel.is_cancelled());
+    }
+
+    /// An attached `/events` feed must not keep `stop` from returning: the
+    /// desktop app closes its window while that subscription is still open,
+    /// and a stop that waits on it blocks the UI thread forever.
+    #[tokio::test]
+    async fn stop_closes_an_attached_events_feed() {
+        let server = ServerHandle::start_local(Arc::new(Store::open_memory().unwrap()))
+            .await
+            .unwrap();
+        let base = format!("http://{}{}", server.local_addr, API_PREFIX);
+        let feed = reqwest::Client::new()
+            .get(format!("{base}/events"))
+            .bearer_auth(&server.token)
+            .send()
+            .await
+            .expect("the feed must accept the subscription");
+        assert_eq!(feed.status(), StatusCode::OK);
+        let (feed_end, stopped) = tokio::join!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), feed.bytes()),
+            tokio::time::timeout(std::time::Duration::from_secs(2), server.stop())
+        );
+        assert!(
+            feed_end.is_ok(),
+            "the feed must end when the server stops"
+        );
+        stopped
+            .expect("stop must not wait for the endless /events stream")
+            .unwrap();
     }
 
     fn seed_text_chat(state: &ApiState, base_url: &str) {
