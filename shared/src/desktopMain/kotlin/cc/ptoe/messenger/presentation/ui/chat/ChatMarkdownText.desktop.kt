@@ -36,12 +36,25 @@ internal actual fun ChatMarkdownText(
     isStreaming: Boolean,
     modifier: Modifier,
 ) {
-    val state = remember { StreamingTypewriterState() }
-    val renderer = rememberMarkdownTypewriterRenderer(state)
     if (!isStreaming) {
-        renderer.Render(markdown, modifier)
+        // The markdown renderer paints the state's token buffer and ignores the
+        // `text` argument its TypewriterRenderer receives, so a settled message
+        // must arrive with a buffer that already holds it. Handing the renderer
+        // a fresh, never-seeded state (the old behaviour) painted nothing, which
+        // is why every finished reply showed as an empty pill.
+        val staticState = remember(markdown) {
+            StreamingTypewriterState().apply {
+                appendToken(markdown)
+                completeSource()
+                skipToEnd()
+            }
+        }
+        rememberMarkdownTypewriterRenderer(staticState).Render(markdown, modifier)
         return
     }
+
+    val state = remember { StreamingTypewriterState() }
+    val renderer = rememberMarkdownTypewriterRenderer(state)
 
     val tokens = remember { Channel<String>(Channel.UNLIMITED) }
     val flow = remember(tokens) { tokens.receiveAsFlow() }
