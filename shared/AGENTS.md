@@ -70,6 +70,7 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/in
 
 - Android and Desktop render Markdown/code/LaTeX with `cc.ptoe:llm-typewriter` through the `ChatMarkdownText` expect/actual. Android uses a Compose `LazyColumn`; Desktop uses `ChatDocumentBubble`. Raw assistant Markdown travels as `ChatBlock.RawMarkdown` so tool cards and text retain turn order. Do not reintroduce `:renderer-android`, native DocumentHandle, or a native LaTeX engine.
 - `ChatViewModel` exposes `streamingContent` / `streamingMessageId` StateFlows. `RestCoreBridge.runTurn` consumes chat SSE, forwards events, executes requested tools and emits `stream_ended` if no terminal event arrives.
+- `RestCoreBridge.subscribe` starts the `/events` SSE feed lazily on the first listener and keeps it open for the process lifetime (reconnecting after a 1 s backoff). It is deliberately never cancelled from Kotlin — the core closes it when the server stops. `HttpServerHandle.stop` is a suspending graceful stop, so it must never be awaited on a UI thread (see `desktopApp/AGENTS.md`).
 - An agent turn collapses into one `ChatListItem.ToolGroupItem` (tool rounds → results → final text, placeholder-row-first included); ERROR placeholders stay standalone; orphan TOOL rows render as standalone cards. Wear bypasses ChatViewModel and never runs tools.
 
 ## Design language (Material 3 Expressive)

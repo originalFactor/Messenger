@@ -25,7 +25,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -334,5 +337,53 @@ class RestCoreBridgeIntegrationTest {
         } finally {
             server.stop()
         }
+    }
+
+    /**
+     * The desktop shell stops the server on window close while the app still
+     * holds its `/events` subscription. An endless SSE response used to keep
+     * the graceful shutdown waiting forever, so the window became unresponsive.
+     */
+    @Test
+    fun stoppingTheServerReturnsWhileTheEventFeedIsAttached() = runBlocking {
+        val dir = Files.createTempDirectory("messenger-rest-stop")
+        val core = CoreHandle.open(
+            storePath = dir.resolve("store.db").toString(),
+            legacyDbDir = null,
+            nowMs = 1L,
+        )
+        val server = core.startHttpServer(0u)
+        val bridge = RestCoreBridge(server.localAddr(), server.token())
+        val changes = AtomicInteger()
+        bridge.subscribe { _, _ -> changes.incrementAndGet() }
+        awaitFeedDelivery(bridge, changes)
+
+        // Without closing the feed, this waits on the SSE response forever.
+        withTimeout(10_000) { server.stop() }
+    }
+
+    /**
+     * Drives the feed until it reports a change. `RestCoreBridge` attaches its
+     * SSE subscription lazily, so a burst of Agent writes guarantees at least
+     * one delivery without guessing a sleep.
+     */
+    private suspend fun awaitFeedDelivery(bridge: RestCoreBridge, changes: AtomicInteger) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (System.nanoTime() < deadline) {
+            bridge.upsertAgentJson(
+                """{"id":"a1","name":"Agent","avatar":null,"system_prompt":"help",
+                    "description":"","default_model_id":null,"temperature":null,"top_p":null,
+                    "max_tokens":null,"reasoning_effort":null,"is_default":true,
+                    "follow_default_system_prompt":false,"follow_default_model":false,
+                    "follow_default_temperature":false,"follow_default_top_p":false,
+                    "follow_default_max_tokens":false,"follow_default_reasoning_effort":false,
+                    "market_agent_id":null,"market_agent_version":null,"market_agent_role":null,
+                    "role":"chat","tools_enabled":false,"tools_follow_default":false,
+                    "tools_config":"","created_at":1,"updated_at":1}"""
+            )
+            if (changes.get() > 0) return
+            delay(50)
+        }
+        fail("the /events feed never reported a store change")
     }
 }

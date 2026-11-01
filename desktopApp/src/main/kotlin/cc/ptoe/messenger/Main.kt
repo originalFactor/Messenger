@@ -28,6 +28,7 @@ import androidx.compose.ui.window.application
 import java.awt.Dimension
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.CoreHandle
 import cc.ptoe.messenger.core.HttpServerHandle
@@ -67,6 +68,17 @@ fun main() {
         localAddress = coreHttpServer.localAddr(),
         token = coreHttpServer.token(),
     )
+    // Stop the loopback server when the process ends (window close, Ctrl+C).
+    // The stop is graceful and waits for in-flight responses, so it never
+    // belongs on the UI thread; the timeout keeps the JVM from hanging if a
+    // response refuses to drain.
+    Runtime.getRuntime().addShutdownHook(
+        Thread {
+            runCatching {
+                runBlocking { withTimeout(5_000) { coreHttpServer.stop() } }
+            }
+        }
+    )
 
     val container = AppContainer(
         appDirs = appDirs,
@@ -86,10 +98,11 @@ fun main() {
     }
 
     application {
-        val closeApplication = {
-            runBlocking { coreHttpServer.stop() }
-            exitApplication()
-        }
+        // Closing must never block AWT's event thread: `stop` is a suspending
+        // call that waits for the server to drain, and a hung wait there left
+        // the window painted but dead to every click. The shutdown hook in
+        // `main` owns the actual server stop, so this only closes the UI.
+        val closeApplication = { exitApplication() }
         val themeMode by AppContainerHolder.instance.themePreferences.themeMode
             .collectAsState(initial = ThemeMode.SYSTEM)
 
