@@ -19,6 +19,8 @@ const commands = [
   {id: 'help', label: 'Keyboard shortcuts'},
   {id: 'quit', label: 'Exit Messenger', key: 'q'},
 ];
+const commandChoices = commands.map(({id, label}) => ({id, label: `/${id}`, hint: label}));
+const completionDismissed = -1;
 
 const fields = [
   {key: 'name', label: 'Provider name', example: 'OpenAI'},
@@ -36,6 +38,7 @@ export function App({api, version, initialAgent, initialModel}) {
   const panelInput = useEditor();
   const [panel, setPanel] = useState(null);
   const [selected, setSelected] = useState(0);
+  const [completionIndex, setCompletionIndex] = useState(null);
   const [leader, setLeader] = useState(false);
   const [scroll, setScroll] = useState(0);
 
@@ -48,7 +51,14 @@ export function App({api, version, initialAgent, initialModel}) {
   const inputLines = (panel ? panelInput : prompt).lines(Math.max(1, columns - 6), panel ? 2 : 4, {
     mask: field?.mask, active: !chat.busy && (!panel || Boolean(field) || Boolean(panel.items)),
   });
-  const viewport = Math.max(1, rows - inputLines.length - 6);
+  const canRender = columns >= 30 && rows >= 12;
+  const candidates = canRender && !panel && !chat.busy && completionIndex !== completionDismissed && /^\/[a-z]*$/.test(prompt.value)
+    ? commandChoices.filter((item) => item.label.startsWith(prompt.value))
+    : [];
+  const candidateIndex = completionIndex ?? (prompt.value === '/' ? null : 0);
+  const available = Math.max(1, rows - inputLines.length - 6);
+  const completionHeight = Math.min(candidates.length, 5, available - 1);
+  const viewport = available - completionHeight;
   const transcript = useMemo(() => chat.messages.flatMap((message) => messageLines(
     message.role, message.content, message.error_message, width)), [chat.messages, width]);
   const lines = [
@@ -164,8 +174,7 @@ export function App({api, version, initialAgent, initialModel}) {
     if (!content) return;
     const command = commands.find((item) => content === `/${item.id}`);
     if (command) {
-      prompt.replace();
-      return runCommand(command.id);
+      return submitCommand(command.id);
     }
     if (content === '/') {
       prompt.replace();
@@ -173,6 +182,12 @@ export function App({api, version, initialAgent, initialModel}) {
     }
     setScroll(0);
     return chat.perform(() => chat.turn({content}, () => prompt.replace()));
+  }
+
+  function submitCommand(id) {
+    prompt.replace();
+    setCompletionIndex(null);
+    return runCommand(id);
   }
 
   function showPalette() {
@@ -185,6 +200,7 @@ export function App({api, version, initialAgent, initialModel}) {
   usePaste(({bytes}) => {
     if (chat.busy || panel?.type === 'help') return;
     (panel ? panelInput : prompt).insert(decodePasteBytes(bytes), !panel);
+    if (!panel) setCompletionIndex(null);
     setSelected(0);
   });
 
@@ -194,6 +210,7 @@ export function App({api, version, initialAgent, initialModel}) {
       setLeader(false);
       if (chat.busy) void chat.cancel();
       else if (panel) showPanel(null);
+      else if (completionHeight) setCompletionIndex(completionDismissed);
       return;
     }
     if (!panel && (name === 'pageup' || name === 'pagedown')) {
@@ -235,12 +252,27 @@ export function App({api, version, initialAgent, initialModel}) {
       return;
     }
     if (panel) return;
-    if ((name === 'return' && key.shift) || (key.ctrl && name === 'o')) return prompt.insert('\n', true);
+    if ((name === 'return' && key.shift) || (key.ctrl && name === 'o')) {
+      setCompletionIndex(null);
+      return prompt.insert('\n', true);
+    }
+    if (completionHeight) {
+      if (name === 'up' || name === 'down') {
+        const direction = name === 'up' ? -1 : 1;
+        const current = candidateIndex ?? (direction === 1 ? -1 : 0);
+        return setCompletionIndex((current + direction + candidates.length) % candidates.length);
+      }
+      if (name === 'tab') {
+        prompt.replace(candidates[candidateIndex ?? 0].label);
+        return setCompletionIndex(completionDismissed);
+      }
+      if (name === 'return' && candidateIndex !== null) return submitCommand(candidates[candidateIndex].id);
+    }
     if (name === 'return') return submitPrompt();
-    prompt.edit(key);
+    if (prompt.edit(key)) setCompletionIndex(null);
   });
 
-  if (columns < 30 || rows < 12) {
+  if (!canRender) {
     return h(Line, {}, 'Resize terminal');
   }
 
@@ -263,6 +295,8 @@ export function App({api, version, initialAgent, initialModel}) {
             h(Line, {attributes: DIM}, chat.model
               ? 'Write a message below, or open the command palette.'
               : 'Use /connect to add a provider and model, or /models to choose one.'))),
+    completionHeight > 0 && h('box', {height: completionHeight, flexDirection: 'column', paddingX: 1},
+      h(ChoiceRows, {items: candidates, selection: candidateIndex, count: completionHeight})),
     h('box', {flexDirection: 'column', border: true, borderStyle: 'rounded', borderColor: accent, paddingX: 1},
       panel?.type === 'help'
         ? h(Line, {attributes: DIM}, 'Esc closes this panel')
@@ -275,7 +309,9 @@ export function App({api, version, initialAgent, initialModel}) {
       oneLine(`${chat.agent.name}  ·  ${chat.model?.display_name ?? 'No model'}`)),
     h(Line, {attributes: DIM}, leader
       ? 'Ctrl+X  n new  l sessions  m models  a agents  q quit'
-      : 'Ctrl+P commands  ·  Ctrl+O newline  ·  PgUp/PgDn history'));
+      : completionHeight
+        ? '↑/↓ select  ·  Tab complete  ·  Enter run  ·  Esc close'
+        : 'Ctrl+P commands  ·  Ctrl+O newline  ·  PgUp/PgDn history'));
 }
 
 function Line({fg, attributes, children}) {
@@ -303,25 +339,28 @@ function Panel({panel, field, options, selection, height}) {
   if (panel.type === 'help') {
     return [
       'Enter sends · Ctrl+O inserts a line break',
-      'Ctrl+P opens commands · / lists commands',
+      'Ctrl+P palette · / suggestions · ↑/↓ select · Tab fill',
       'Ctrl+X then N, L, M, A, Q opens new, sessions, models, agents, quit',
       'Page Up / Page Down scrolls history',
       'Esc cancels a turn · Ctrl+C exits',
     ].slice(0, height).map((label) => h(Line, {key: label}, label));
   }
-  const count = Math.max(1, height - 1);
-  const start = Math.max(0, Math.min(selection - Math.floor(count / 2), options.length - count));
   return [
     h(Line, {key: 'title', attributes: BOLD, fg: accent}, panel.title),
-    ...(options.length
-      ? options.slice(start, start + count).map((item, i) => h(Line, {
-        key: item.id, fg: start + i === selection ? accent : undefined,
-        attributes: start + i === selection ? BOLD : undefined,
-      }, `${start + i === selection ? '›' : ' '} ${oneLine(item.label)}`,
-      item.hint && h('span', {attributes: DIM}, `  ${oneLine(item.hint)}`)))
-      : [h(Line, {key: 'empty', attributes: DIM},
-        panel.items.length ? 'No matches.' : panel.empty)]),
+    options.length
+      ? h(ChoiceRows, {key: 'choices', items: options, selection, count: Math.max(1, height - 1)})
+      : h(Line, {key: 'empty', attributes: DIM}, panel.items.length ? 'No matches.' : panel.empty),
   ];
+}
+
+function ChoiceRows({items, selection, count}) {
+  const start = Math.max(0, Math.min((selection ?? 0) - Math.floor(count / 2), items.length - count));
+  return items.slice(start, start + count).map((item, i) => {
+    const selected = start + i === selection;
+    return h(Line, {key: item.id, fg: selected ? accent : undefined, attributes: selected ? BOLD : undefined},
+      `${selected ? '›' : ' '} ${oneLine(item.label)}`,
+      item.hint && h('span', {attributes: DIM}, `  ${oneLine(item.hint)}`));
+  });
 }
 
 function messageLines(role, content, error, width) {

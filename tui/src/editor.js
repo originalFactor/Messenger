@@ -48,10 +48,13 @@ export function useEditor() {
         if (key.name === 'backspace') return {value: value.slice(0, left) + value.slice(cursor), cursor: left};
         return {value: value.slice(0, cursor) + value.slice(right), cursor};
       });
+      return key.name === 'backspace' || key.name === 'delete';
     } else if (!key.ctrl && !key.meta && !key.option && !key.super && !key.hyper
         && /^[^\x00-\x1f\x7f-\x9f]+$/u.test(key.sequence)) {
       insert(key.sequence, false);
+      return true;
     }
+    return false;
   }
 
   function lines(width, maxRows, {mask = false, active = true} = {}) {
