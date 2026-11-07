@@ -22,3 +22,5 @@ Thin `org.jetbrains.kotlin.jvm` + `compose.multiplatform` + `kotlin.compose` she
 ```
 
 - Desktop native distributions use platform-specific icons in `src/main/resources`: `icon.ico` for Windows, `icon.icns` for macOS, and `icon.png` for Linux; the running window uses `logo.png`. Keep these packaging assets in sync when changing the application icon.
+
+- The Desktop shell writes an owner-only `acp-connection.json` beside the Core database. The ACP stdio adapter uses this descriptor to connect to the already-running Core. See `core/rust/crates/messenger-http/docs/ACP.md`.

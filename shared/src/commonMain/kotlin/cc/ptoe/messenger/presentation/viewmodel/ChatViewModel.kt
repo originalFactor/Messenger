@@ -342,7 +342,6 @@ class ChatViewModel(
         // StateFlows (whose message ids belong to the old conversation) and
         // `_isGenerating` would stay true, blocking sends in the new one.
         if (_conversationId.value != conversationId && _isGenerating.value) {
-            coreBridge.cancelTurn()
             currentGenerationJob?.cancel()
             currentGenerationJob = null
             _isGenerating.value = false
@@ -427,28 +426,10 @@ class ChatViewModel(
 
             val images = _pendingImages.value
             val parts = buildMultimodalParts(text, images)
-            val userMessageId = randomUuid()
-            val now = currentTimeMillis()
-
-            val userMessage = Message(
-                id = userMessageId,
-                conversationId = convId,
-                role = MessageRole.USER,
-                content = text,
-                parts = parts,
-                timestamp = now,
-                status = MessageStatus.SENDING
+            generateResponse(
+                convId, currentAgent, operation = "send", content = text,
+                partsJson = cc.ptoe.messenger.data.local.ContentPartCodec.encode(parts),
             )
-            messageRepository.insert(userMessage)
-
-            updateConversationLastMessage(convId, text.ifBlank { getString(Res.string.chat_picture) }, now)
-
-            messageRepository.update(userMessage.copy(status = MessageStatus.SENT))
-            // Drop the local preview now that the message is persisted
-            // — the bubble's image parts take over visually.
-            _pendingImages.value = emptyList()
-
-            generateResponse(convId, currentAgent)
         }
     }
 
@@ -466,7 +447,12 @@ class ChatViewModel(
 
     private suspend fun generateResponse(
         conversationId: String,
-        agent: Agent
+        agent: Agent,
+        operation: String,
+        content: String? = null,
+        partsJson: String? = null,
+        messageId: String? = null,
+        messageGroup: List<String>? = null,
     ) {
         // 会话快照读数据库行而不是 conversation.value：模式（writable）等业务
         // 决策不能依赖 WhileSubscribed 的 StateFlow（无订阅 5 秒即重置）。
@@ -494,6 +480,11 @@ class ChatViewModel(
         val toolsByName = enabledTools.associateBy { it.name }
         val config = TurnConfigBridge(
             conversationId = conversationId,
+            operation = operation,
+            content = content,
+            partsJson = partsJson,
+            messageId = messageId,
+            messageGroup = messageGroup,
             modelId = model.modelId,
             baseUrl = provider.baseUrl,
             apiKey = provider.apiKey,
@@ -552,11 +543,10 @@ class ChatViewModel(
                         }
                     },
                     onEventJson = { eventJson ->
-                        handleTurnEvent(eventJson)
+                        handleTurnEvent(eventJson, clearImagesOnStart = operation == "send")
                     }
                 )
             } catch (e: CancellationException) {
-                bridge.cancelTurn()
                 throw e
             } catch (e: Exception) {
                 setError(e.message ?: getString(Res.string.error_unknown))
@@ -573,57 +563,9 @@ class ChatViewModel(
     }
 
     fun stopGeneration() {
-        coreBridge.cancelTurn()
+        // Dropping this client's SSE cancels only the turn it started.
+        // Core finalizes the partial message and any interrupted tools.
         currentGenerationJob?.cancel()
-        currentGenerationJob = null
-        _isGenerating.value = false
-
-        viewModelScope.launch {
-            // 停止即时流式绘制：清空 streamingContent，气泡回退渲染持久化内容。
-            _streamingContent.value = null
-            _streamingMessageId.value = null
-
-            // Read from DB (not messages.value) so we observe the very latest
-            // content written during streaming, even if the StateFlow hasn't
-            // propagated yet. Any SENDING assistant message is promoted to SENT
-            // so the partial content is kept and enters future AI context; a
-            // SENDING tool row (cancelled mid-run) is finalized with an
-            // interrupted marker so the result card never stays "running".
-            val convId = _conversationId.value
-            if (convId != null) {
-                val pending = messageRepository.getByConversationId(convId).first()
-                    .filter {
-                        it.status == MessageStatus.SENDING &&
-                            (it.role == MessageRole.ASSISTANT || it.role == MessageRole.TOOL)
-                    }
-                pending.forEach { msg ->
-                    if (msg.role == MessageRole.TOOL) {
-                        val part = msg.parts.firstOrNull() as? ContentPart.ToolResult
-                        val interrupted = getString(Res.string.tool_interrupted_result)
-                        messageRepository.update(
-                            msg.copy(
-                                content = interrupted,
-                                parts = listOf(
-                                    ContentPart.ToolResult(
-                                        callId = part?.callId ?: "",
-                                        name = part?.name ?: "",
-                                        output = interrupted,
-                                        isError = true
-                                    )
-                                ),
-                                status = MessageStatus.SENT
-                            )
-                        )
-                    } else {
-                        // 占位行时间戳推进到当前时刻：停止时可能已有工具轮落行
-                        // （时间戳晚于占位行），不推进会把保留的部分文本排到卡片前。
-                        messageRepository.update(
-                            msg.copy(status = MessageStatus.SENT, timestamp = currentTimeMillis())
-                        )
-                    }
-                }
-            }
-        }
     }
 
     fun retrySend(messageId: String) {
@@ -642,22 +584,7 @@ class ChatViewModel(
                 return@launch
             }
 
-            val result = getActiveModelAndProvider(currentAgent)
-            if (result == null) {
-                setError(getString(Res.string.error_configure_model_first))
-                messageRepository.update(
-                    message.copy(
-                        status = MessageStatus.ERROR,
-                        errorMessage = getString(Res.string.error_no_available_model)
-                    )
-                )
-                return@launch
-            }
-
-            // 重试走与普通发送相同的核心回路：Rust 自己创建承载最终文本的
-            // 占位行，因此失败行必须删掉（它的 errorMessage 不属于历史）。
-            messageRepository.delete(messageId)
-            generateResponse(message.conversationId, currentAgent)
+            generateResponse(message.conversationId, currentAgent, operation = "retry", messageId = messageId)
         }
     }
 
@@ -694,11 +621,10 @@ class ChatViewModel(
                 listOf(messageId)
             }
 
-            for (id in idsToDelete) {
-                messageRepository.delete(id)
-            }
-
-            generateResponse(convId, currentAgent)
+            generateResponse(
+                convId, currentAgent, operation = "regenerate", messageId = messageId,
+                messageGroup = idsToDelete,
+            )
         }
     }
 
@@ -780,7 +706,7 @@ class ChatViewModel(
         conversationRepository.updateLastMessage(conversationId, lastMessage, timestamp)
     }
 
-    private fun handleTurnEvent(eventJson: String) {
+    private fun handleTurnEvent(eventJson: String, clearImagesOnStart: Boolean) {
         val root = try {
             NetworkClient.json.parseToJsonElement(eventJson).jsonObject
         } catch (_: Exception) {
@@ -788,6 +714,7 @@ class ChatViewModel(
         }
         val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
+            "TurnStarted" -> if (clearImagesOnStart) { _pendingImages.value = emptyList() }
             "StreamingStarted" -> {
                 // The Rust loop creates the placeholder row itself; this is
                 // the ONLY id that matches the row the renderer displays.
@@ -806,24 +733,6 @@ class ChatViewModel(
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
-                // The turn wrote assistant/tool rows straight into the core,
-                // so the list preview still shows the user's own message.
-                // Refresh it from the persisted rows.
-                val convId = _conversationId.value
-                if (convId != null) {
-                    viewModelScope.launch {
-                        val last = messageRepository.getByConversationId(convId).first().lastOrNull()
-                        if (last != null) {
-                            updateConversationLastMessage(
-                                convId,
-                                last.content.ifBlank {
-                                    if (last.hasImages) getString(Res.string.chat_picture) else ""
-                                },
-                                last.timestamp
-                            )
-                        }
-                    }
-                }
             }
             "TitleFailed" -> {
                 viewModelScope.launch {

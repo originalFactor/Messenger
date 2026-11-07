@@ -47,7 +47,8 @@ class MessengerApplication : Application() {
         // Optional companion runtime app (targetSdk 28, its own UID) hosts the
         // Termux bootstrap in its legacy SELinux domain. Agent shell/workspace
         // tools have no system-shell fallback when the companion is absent.
-        ShellRuntimeRegistry.bridge = RuntimeShellClient(applicationContext)
+        val runtime = RuntimeShellClient(applicationContext)
+        ShellRuntimeRegistry.bridge = runtime
 
         // Initialize Rust Core SQLite store and import Room database on first run
         val storeDir = File(filesDir, "messenger_core").apply { mkdirs() }
@@ -58,10 +59,13 @@ class MessengerApplication : Application() {
             nowMs = System.currentTimeMillis()
         )
         coreHttpServer = runBlocking { core.startHttpServer(0u) }
-        CoreBridgeRegistry.bridge = RestCoreBridge(
+        val restCore = RestCoreBridge(
             localAddress = coreHttpServer.localAddr(),
             token = coreHttpServer.token(),
         )
+
+        restCore.platformAcpProcess = runtime::runAcpProcess
+        CoreBridgeRegistry.bridge = restCore
 
         val container = AppContainer(
             appDirs = AppDirs(
@@ -70,6 +74,8 @@ class MessengerApplication : Application() {
             ),
             chatImageStore = AndroidChatImageStore(this)
         )
+        restCore.platformTools = container::availableTools
+        restCore.publishPlatformTools(container.mcpManager.activeTools)
         AppContainerHolder.initialize(container)
         container.initializeLocalAndCloudData()
         setupImageLoader(container)

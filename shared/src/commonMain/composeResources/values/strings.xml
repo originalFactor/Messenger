@@ -473,4 +473,23 @@
     <string name="tooltip_nav_agents">Agents</string>
     <string name="tooltip_nav_settings">Settings</string>
 
+    <string name="acp_settings">ACP and device control</string>
+    <string name="acp_enable_control">Enable remote control</string>
+    <string name="acp_control_description">When enabled, a browser signed in to the same account can use this device with the same permissions as local chat.</string>
+    <string name="acp_device_name">Device name</string>
+    <string name="acp_profiles">Local Agent profiles (JSON array)</string>
+    <string name="acp_profile_help">Each profile needs id, name and command. Optional fields are args, env and absolute cwd. Install and sign in to each agent on this device.</string>
+    <string name="acp_save">Save</string>
+    <string name="acp_close">Close</string>
+    <string name="acp_chat">ACP chat</string>
+    <string name="acp_stream_ended">The session ended before returning a result.</string>
+    <string name="acp_choose_agent">Choose Agent</string>
+    <string name="acp_no_workspace">No workspace</string>
+    <string name="acp_choose_session">Choose session</string>
+    <string name="acp_new_session">New session</string>
+    <string name="acp_older_messages">Load older messages</string>
+    <string name="acp_permission">Tool permission required</string>
+    <string name="acp_message">Message</string>
+    <string name="acp_stop">Stop generation</string>
+    <string name="acp_send">Send</string>
 </resources>

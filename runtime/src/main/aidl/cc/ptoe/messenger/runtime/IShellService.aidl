@@ -30,4 +30,8 @@ interface IShellService {
     boolean startMcpProcess(int sessionId, String command, String envJson, IMcpCallback callback);
     boolean sendMcpInput(int sessionId, String line);
     void stopMcpProcess(int sessionId);
+    // ACP Agent process with argv and an explicit Runtime workspace.
+    boolean startAcpProcess(int sessionId, String executable, in String[] arguments, String envJson, String cwd, IMcpCallback callback);
+    boolean sendAcpInput(int sessionId, String line);
+    void stopAcpProcess(int sessionId);
 }

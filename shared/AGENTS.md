@@ -84,3 +84,8 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/in
 
 - **New screen**: add route to `Screen.kt` → destination in `NavGraph.kt` → composable under `presentation/ui/<feature>/` → ViewModel in `presentation/viewmodel/` → (bottom-level routes) `BottomLevelRoutes.kt`.
 - **New API endpoint**: DTOs (`data/remote/dto/`) → `OpenAiClient` method → repository interface → `ApiRepositoryImpl` → handle `HttpException` via `extractHttpErrorMessage()`.
+
+## ACP and remotely started turns
+
+- **ACP and device control** settings and **ACP chat** use the local Core command API. The native bridge publishes available built-in and MCP tools and serves Core-requested tools over the event feed.
+- Send, retry, and regenerate pass the content or selected message group to Core before mutating the transcript. Dropping the initiating SSE cancels only its turn. The phone's Wear bridge uses the same admission path with tools disabled.

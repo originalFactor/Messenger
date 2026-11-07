@@ -33,7 +33,7 @@ fn executor() -> (Arc<RecordingExecutor>, Arc<dyn LocalToolExecutor>) {
 fn signed_in_store(server: &MockServer) -> Arc<Store> {
     let store = Arc::new(Store::open_memory().unwrap());
     store.kv_set(KV_SESSION, "messenger_session=abc").unwrap();
-    store.kv_set(KV_SESSION_HOST, "127.0.0.1").unwrap();
+    store.kv_set(KV_SESSION_HOST, &server.uri()).unwrap();
     store.kv_set(KV_SERVER_URL, &server.uri()).unwrap();
     store
 }

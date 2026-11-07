@@ -21,6 +21,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import cc.ptoe.messenger.core.AcpProcessChannel
+import cc.ptoe.messenger.runtime.IMcpCallback
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
 import cc.ptoe.messenger.domain.tool.ShellResult
 import cc.ptoe.messenger.domain.tool.ShellRuntimeBridge
@@ -236,6 +241,48 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     // ---------------------------------------------------------------------
     // MCP process management
     // ---------------------------------------------------------------------
+
+    suspend fun runAcpProcess(channel: AcpProcessChannel) = withContext(Dispatchers.IO) {
+        val service = service() ?: error("Messenger Runtime is unavailable.")
+        val id = requestIds.getAndIncrement()
+        val stdout = Channel<String>(32)
+        val callback = object : IMcpCallback.Stub() {
+            override fun onOutput(reqId: Int, line: String?) {
+                if (line != null && !stdout.trySend(line).isSuccess) {
+                    stdout.close(IllegalStateException("ACP stdout buffer exceeded"))
+                }
+            }
+            override fun onError(reqId: Int, error: String?) = Unit
+            override fun onClosed(reqId: Int, exitCode: Int) { stdout.close() }
+        }
+        val death = IBinder.DeathRecipient { stdout.close() }
+        val binder = service.asBinder()
+        binder.linkToDeath(death, 0)
+        try {
+            check(service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
+                channel.envJson, channel.cwd, callback)) {
+                "Messenger Runtime could not start the ACP agent."
+            }
+            coroutineScope {
+                val input = launch {
+                    try {
+                        channel.readInput { line -> check(service.sendAcpInput(id, line)) }
+                    } finally {
+                        stdout.close()
+                    }
+                }
+                try {
+                    for (line in stdout) channel.output(line)
+                } finally {
+                    input.cancel()
+                }
+            }
+        } finally {
+            binder.unlinkToDeath(death, 0)
+            runCatching { service.stopAcpProcess(id) }
+            stdout.cancel()
+        }
+    }
 
     override suspend fun startMcpProcess(
         sessionId: Int,

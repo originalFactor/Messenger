@@ -788,7 +788,9 @@ internal object TermuxRuntime {
         envJson: String?,
         onOutput: (String) -> Unit,
         onError: (String) -> Unit,
-        onClosed: (Int) -> Unit
+        onClosed: (Int) -> Unit,
+        arguments: List<String>? = null,
+        cwd: String? = null,
     ): McpProcessSession? {
         val runtime = try {
             withContext(Dispatchers.IO) { installMutex.withLock { ensureInstalled(context) } }
@@ -797,11 +799,17 @@ internal object TermuxRuntime {
         }
         return withContext(Dispatchers.IO) {
             try {
-                val workspace = runtime.workspace
-                val builder = ProcessBuilder(runtime.shell.absolutePath, "-c", command)
-                    .directory(workspace)
+                val workspace = if (cwd == null) runtime.workspace else {
+                    File(cwd).canonicalFile.takeIf { it.isDirectory && it.isAbsolute } ?: return@withContext null
+                }
+                val argv = if (arguments == null) listOf(runtime.shell.absolutePath, "-c", command) else {
+                    val executable = if ('/' in command) File(command) else File(runtime.shell.parentFile, command)
+                    if (!executable.isAbsolute || !executable.canExecute()) return@withContext null
+                    listOf(executable.absolutePath) + arguments
+                }
+                val builder = ProcessBuilder(argv).directory(workspace)
                 builder.environment().clear()
-                val env = shellEnvironment(runtime, workspace, workspace).toMutableMap()
+                val env = shellEnvironment(runtime, workspace, runtime.workspace).toMutableMap()
                 if (!envJson.isNullOrBlank()) {
                     runCatching {
                         val json = org.json.JSONObject(envJson)

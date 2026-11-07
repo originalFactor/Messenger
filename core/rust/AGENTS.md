@@ -39,3 +39,10 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 
 - `cargo test --workspace` is the workspace verification; `cargo test -p messenger-http` runs the API contract suite.
 - Native client builds use cargo-ndk for Android and host Cargo for Desktop. There is no Web/Wasm build.
+
+## ACP and device control
+
+- The stable ACP v1 Agent and Client adapters live in `messenger-http`. Desktop exposes the local bearer-protected ACP socket through the `messenger-core-server acp --connect` stdio adapter. The product-facing commands reuse Core turn admission and persisted conversation rows.
+- Device-owned Messenger turns and native chat share one per-conversation reservation. Send, retry, and regenerate check model and project availability before mutation. Third-party sessions keep a device-local transcript and resume by advertised ACP capability.
+- `messenger-remote` carries control requests over the existing account relay. Device opt-in is scoped to the cloud server and account. Disconnect or revocation cancels the owning control request.
+- Protocol and setup: `crates/messenger-http/docs/ACP.md`, `REMOTE.md`, `SSE.md`, and `openapi.yaml`.

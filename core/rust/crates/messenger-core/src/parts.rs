@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use messenger_llm::domain::{ContentPart, MessageImage};
+pub use messenger_llm::domain::ContentPart;
+use messenger_llm::domain::MessageImage;
 
 /// Mirror of [`ContentPart`] used purely for (de)serialization.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

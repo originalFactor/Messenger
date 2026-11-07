@@ -472,4 +472,23 @@
     <string name="tooltip_nav_agents">Agents</string>
     <string name="tooltip_nav_settings">设置</string>
 
+    <string name="acp_settings">ACP 与设备远控</string>
+    <string name="acp_enable_control">启用设备远控</string>
+    <string name="acp_control_description">启用后，登录同一账号的网页可使用此设备，并获得与本机聊天相同的权限。</string>
+    <string name="acp_device_name">设备名称</string>
+    <string name="acp_profiles">本地 Agent 配置（JSON 数组）</string>
+    <string name="acp_profile_help">每项配置需填写 id、name 和 command，可选填 args、env 和绝对路径 cwd。请在本机安装并登录 Agent。</string>
+    <string name="acp_save">保存</string>
+    <string name="acp_close">关闭</string>
+    <string name="acp_chat">ACP 聊天</string>
+    <string name="acp_stream_ended">会话在返回结果前结束。</string>
+    <string name="acp_choose_agent">选择 Agent</string>
+    <string name="acp_no_workspace">无工作区</string>
+    <string name="acp_choose_session">选择会话</string>
+    <string name="acp_new_session">新建会话</string>
+    <string name="acp_older_messages">加载更早的消息</string>
+    <string name="acp_permission">工具请求授权</string>
+    <string name="acp_message">消息</string>
+    <string name="acp_stop">停止生成</string>
+    <string name="acp_send">发送</string>
 </resources>

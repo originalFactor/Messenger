@@ -64,10 +64,14 @@ fun main() {
         nowMs = System.currentTimeMillis()
     )
     coreHttpServer = runBlocking { core.startHttpServer(0u) }
-    CoreBridgeRegistry.bridge = RestCoreBridge(
+    val acpDescriptor = coreDir.resolve("acp-connection.json").toPath()
+    runCatching { writeAcpDescriptor(acpDescriptor, coreHttpServer) }
+        .onFailure { System.err.println("Messenger ACP descriptor unavailable: ${it.message}") }
+    val restCore = RestCoreBridge(
         localAddress = coreHttpServer.localAddr(),
         token = coreHttpServer.token(),
     )
+    CoreBridgeRegistry.bridge = restCore
     // Stop the loopback server when the process ends (window close, Ctrl+C).
     // The stop is graceful and waits for in-flight responses, so it never
     // belongs on the UI thread; the timeout keeps the JVM from hanging if a
@@ -76,6 +80,7 @@ fun main() {
         Thread {
             runCatching {
                 runBlocking { withTimeout(5_000) { coreHttpServer.stop() } }
+                removeAcpDescriptor(acpDescriptor, coreHttpServer.token())
             }
         }
     )
@@ -84,6 +89,8 @@ fun main() {
         appDirs = appDirs,
         chatImageStore = DesktopChatImageStore(appDirs.filesDir)
     )
+    restCore.platformTools = container::availableTools
+    restCore.publishPlatformTools(container.mcpManager.activeTools)
     AppContainerHolder.initialize(container)
     container.initializeLocalAndCloudData()
 

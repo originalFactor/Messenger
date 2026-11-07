@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::control::{ControlConnection, ControlHost};
 use crate::protocol::{
     Presence, SseParser, ToolCall, ToolCancel, ToolResult, EVENT_PRESENCE, EVENT_TOOL_CALL,
     EVENT_TOOL_CANCEL, EVENT_TOOL_RESULT,
@@ -146,7 +147,8 @@ impl RemoteHub {
         Ok(Self {
             store,
             device_id,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+                .build().map_err(|error| error.to_string())?,
             timing: RelayTiming::default(),
             state: Mutex::new(State::default()),
         })
@@ -268,11 +270,20 @@ impl RemoteHub {
         executor: Arc<dyn LocalToolExecutor>,
         shutdown: CancellationToken,
     ) {
+        self.run_with_control(executor, None, shutdown).await;
+    }
+
+    pub async fn run_with_control(
+        self: Arc<Self>,
+        executor: Arc<dyn LocalToolExecutor>,
+        host: Option<Arc<dyn ControlHost>>,
+        shutdown: CancellationToken,
+    ) {
         let mut backoff = self.timing.reconnect_min;
         loop {
             let ended = tokio::select! {
                 _ = shutdown.cancelled() => Ended::Shutdown,
-                ended = self.connect_once(&executor) => ended,
+                ended = self.connect_once(&executor, host.clone()) => ended,
             };
             self.mark_disconnected();
             let wait = match ended {
@@ -294,14 +305,21 @@ impl RemoteHub {
         }
     }
 
-    async fn connect_once(self: &Arc<Self>, executor: &Arc<dyn LocalToolExecutor>) -> Ended {
+    async fn connect_once(
+        self: &Arc<Self>,
+        executor: &Arc<dyn LocalToolExecutor>,
+        host: Option<Arc<dyn ControlHost>>,
+    ) -> Ended {
         let Some(session) = self.session() else { return Ended::SignedOut };
-        let url = self.endpoint("api/remote/events");
-        let response = self
-            .http
-            .get(url)
-            .query(&[("deviceId", self.device_id.as_str())])
-            .header("Cookie", session.cookie.unwrap_or_default())
+        let cloud_host = session.host.unwrap_or_default();
+        let url = format!("{cloud_host}/api/remote/events");
+        let cookie = session.cookie.unwrap_or_default();
+        let mut request = self.http.get(url).query(&[("deviceId", self.device_id.as_str())]);
+        if host.is_some() {
+            request = request.query(&[("control", "host")]);
+        }
+        let response = request
+            .header("Cookie", &cookie)
             .header("Accept", "text/event-stream")
             .send()
             .await;
@@ -310,7 +328,7 @@ impl RemoteHub {
             Err(_) => return Ended::Closed(false),
         };
         if response.status().as_u16() == 401 {
-            self.drop_session();
+            self.drop_session_if_current(&cloud_host, &cookie);
             return Ended::SignedOut;
         }
         if !response.status().is_success() {
@@ -319,10 +337,32 @@ impl RemoteHub {
         self.state.lock().unwrap().connected = true;
         let mut parser = SseParser::default();
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let Ok(chunk) = chunk else { break };
-            for (event, data) in parser.feed(&chunk) {
-                self.handle_frame(&event, &data, executor);
+        let mut control = host.map(|host| ControlConnection::new(
+            host, self.http.clone(), format!("{cloud_host}/api/remote/control"), cookie.clone()
+        ));
+        let mut refresh = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = refresh.tick(), if control.is_some() => {
+                    if !self.session_matches(&cloud_host, &cookie) {
+                        break;
+                    }
+                    if let Some(control) = &mut control {
+                        control.refresh().await;
+                    }
+                }
+                chunk = stream.next() => {
+                    let Some(Ok(chunk)) = chunk else { break };
+                    for (event, data) in parser.feed(&chunk) {
+                        if event.starts_with("control") {
+                            if let Some(control) = &mut control {
+                                control.receive(&event, &data).await;
+                            }
+                        } else {
+                            self.handle_frame(&event, &data, executor);
+                        }
+                    }
+                }
             }
         }
         Ended::Closed(true)
@@ -469,25 +509,34 @@ impl RemoteHub {
 
     fn session(&self) -> Option<Session> {
         let read = |key: &str| self.store.kv_get(key).ok().flatten().filter(|v| !v.is_empty());
-        Some(Session { cookie: Some(read(KV_SESSION)?), host: Some(read(KV_SESSION_HOST)?) })
+        let host = read(KV_SESSION_HOST)?;
+        let configured = SyncEngine::new(&self.store, Session::default()).server_url();
+        if host.trim_end_matches('/') != configured.trim_end_matches('/') {
+            return None;
+        }
+        Some(Session { cookie: Some(read(KV_SESSION)?), host: Some(host.trim_end_matches('/').to_owned()) })
     }
 
-    fn endpoint(&self, path: &str) -> String {
-        SyncEngine::new(&self.store, Session::default()).endpoint(path)
+    fn session_matches(&self, host: &str, cookie: &str) -> bool {
+        self.session().is_some_and(|session|
+            session.host.as_deref() == Some(host) && session.cookie.as_deref() == Some(cookie))
     }
 
-    /// The relay answered 401: the cloud session is dead. Same consequence as
-    /// any other rejected authenticated call — forget it locally.
-    fn drop_session(&self) {
-        let _ = SyncEngine::new(&self.store, Session::default()).clear_session();
+    /// An old response must not revoke a newer login on the same device.
+    fn drop_session_if_current(&self, host: &str, cookie: &str) {
+        if self.session_matches(host, cookie) {
+            let _ = SyncEngine::new(&self.store, Session::default()).clear_session();
+        }
     }
 
     async fn post<T: Serialize>(&self, path: &str, body: &T) -> Result<(), RelayError> {
         let session = self.session().ok_or_else(|| RelayError::Other("not signed in".into()))?;
+        let host = session.host.unwrap_or_default();
+        let cookie = session.cookie.unwrap_or_default();
         let response = self
             .http
-            .post(self.endpoint(path))
-            .header("Cookie", session.cookie.unwrap_or_default())
+            .post(format!("{host}/{path}"))
+            .header("Cookie", &cookie)
             .timeout(Duration::from_secs(30))
             .json(body)
             .send()
@@ -499,7 +548,7 @@ impl RemoteHub {
         }
         match status.as_u16() {
             401 => {
-                self.drop_session();
+                self.drop_session_if_current(&host, &cookie);
                 Err(RelayError::Other("cloud session expired".into()))
             }
             404 | 409 | 410 => Err(RelayError::Offline),

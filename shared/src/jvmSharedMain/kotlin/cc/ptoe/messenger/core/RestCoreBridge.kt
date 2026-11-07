@@ -40,6 +40,9 @@ import java.net.URLEncoder
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -60,6 +63,15 @@ import kotlinx.serialization.json.put
  * HTTP/SSE API. No business operation crosses JNI; the native library only
  * supplies the server address and its per-start bearer token.
  */
+interface AcpProcessChannel {
+    val command: String
+    val arguments: List<String>
+    val envJson: String?
+    val cwd: String
+    suspend fun output(line: String)
+    suspend fun readInput(write: suspend (String) -> Unit)
+}
+
 class RestCoreBridge(
     localAddress: String,
     private val token: String,
@@ -78,28 +90,161 @@ class RestCoreBridge(
     private val subscriptionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
+    var platformTools: ((String?) -> List<cc.ptoe.messenger.domain.tool.ChatTool>)? = null
+    @Volatile
+    var platformAcpProcess: (suspend (AcpProcessChannel) -> Unit)? = null
+
+    @Volatile
     private var activeConversationId: String? = null
 
     override fun subscribe(listener: (kind: String, ids: List<String>) -> Unit) {
         listeners += listener
         if (subscriptionStarted.compareAndSet(false, true)) {
             subscriptionScope.launch {
+                val calls = mutableMapOf<String, Job>()
                 while (isActive) {
                     try {
                         streamSse("/events") { data ->
                             val root = NetworkClient.json.parseToJsonElement(data).jsonObject
+                            val processId = root["processId"]?.jsonPrimitive?.contentOrNull
+                            if (processId != null) {
+                                calls[processId] = launch { runPlatformProcess(processId, root) }
+                                return@streamSse
+                            }
+                            val callId = root["callId"]?.jsonPrimitive?.contentOrNull
+                            if (callId != null) {
+                                val name = root["name"]?.jsonPrimitive?.contentOrNull
+                                if (name == null) calls.remove(callId)?.cancel()
+                                else calls[callId] = launch { runPlatformTool(callId, name, root) }
+                                calls.entries.removeAll { it.value.isCompleted }
+                                return@streamSse
+                            }
                             val kind = root["kind"]?.jsonPrimitive?.contentOrNull ?: return@streamSse
                             val ids = root["ids"]?.jsonArray
                                 ?.map { it.jsonPrimitive.contentOrNull.orEmpty() }
                                 .orEmpty()
                             listeners.forEach { it(kind, ids) }
                         }
-                    } catch (_: Throwable) {
-                        delay(1_000)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Core may be stopping or restarting.
+                    } finally {
+                        calls.values.forEach { it.cancel() }
+                        calls.clear()
+                    }
+                    delay(1_000)
+                }
+            }
+        }
+    }
+
+    private suspend fun runPlatformProcess(id: String, payload: JsonObject) {
+        val route = "/control/processes/${path(id)}"
+        var error: String? = null
+        try {
+            val host = checkNotNull(platformAcpProcess) { "Messenger Runtime is unavailable." }
+            host(object : AcpProcessChannel {
+                private val profile = payload.getValue("profile").jsonObject
+                override val command = profile.getValue("command").jsonPrimitive.content
+                override val arguments = profile["args"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content }
+                override val envJson = profile["env"]?.toString()
+                override val cwd = payload.getValue("cwd").jsonPrimitive.content
+                override suspend fun output(line: String) {
+                    postNoContent("$route/output", buildJsonObject { put("line", line) }.toString())
+                }
+                override suspend fun readInput(write: suspend (String) -> Unit) {
+                    streamSse("$route/input") { data ->
+                        NetworkClient.json.parseToJsonElement(data).jsonObject["line"]?.jsonPrimitive
+                            ?.contentOrNull?.let { write(it) }
+                    }
+                }
+            })
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            error = failure.message
+        } finally {
+            withContext(NonCancellable) {
+                kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                    runCatching {
+                        postNoContent("$route/output", buildJsonObject {
+                            error?.let { put("error", it) }
+                        }.toString())
                     }
                 }
             }
         }
+    }
+
+    private suspend fun runPlatformTool(id: String, name: String, payload: JsonObject) {
+        val workspace = payload["workspace"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
+        val args = payload["argumentsJson"]?.jsonPrimitive?.contentOrNull ?: "{}"
+        val result = try {
+            platformTools?.invoke(workspace)?.firstOrNull { it.name == name }?.execute(args)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        runCatching {
+            postNoContent("/turns/tools/${path(id)}/result", buildJsonObject {
+                put("output", result?.output ?: "The requested platform tool is unavailable.")
+                put("isError", result?.isError ?: true)
+            }.toString())
+        }
+    }
+
+    fun publishPlatformTools(tools: kotlinx.coroutines.flow.StateFlow<List<cc.ptoe.messenger.domain.tool.ChatTool>>) {
+        subscriptionScope.launch {
+            var previous: String? = null
+            while (isActive) {
+                val payload = buildJsonObject {
+                    put("workspaceSupported", cc.ptoe.messenger.domain.tool.builtinChatToolsSupported())
+                    put("tools", kotlinx.serialization.json.JsonArray(tools.value.map { tool ->
+                        buildJsonObject {
+                            put("name", tool.name)
+                            put("description", tool.description)
+                            put("parametersJson", tool.parametersJson)
+                        }
+                    }))
+                }.toString()
+                if (payload != previous) {
+                    try {
+                        putNoContent("/control/platform-tools", payload)
+                        previous = payload
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // The next tick publishes again if the request failed.
+                    }
+                }
+                delay(1_000)
+            }
+        }
+    }
+
+    override suspend fun controlSettings(): JsonObject =
+        NetworkClient.json.parseToJsonElement(getText("/control/settings")).jsonObject
+
+    override suspend fun saveControlSettings(settings: JsonObject) {
+        putNoContent("/control/settings", settings.toString())
+    }
+
+    override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
+        streamSsePost("/control/commands/${path(requestId)}", command.toString()) {
+            onEvent(NetworkClient.json.parseToJsonElement(it).jsonObject)
+        }
+    }
+
+    override suspend fun controlCancel(requestId: String) {
+        postNoContent("/control/commands/${path(requestId)}/cancel")
+    }
+
+    override suspend fun controlPermission(requestId: String, optionId: String) {
+        postNoContent("/control/commands/${path(requestId)}/permission", buildJsonObject {
+            put("optionId", optionId)
+        }.toString())
     }
 
     override fun listProvidersJson(): String = blockingItems("/providers")
@@ -381,7 +526,16 @@ class RestCoreBridge(
             streamSsePost(
                 "/conversations/${path(config.conversationId)}/messages",
                 buildJsonObject {
-                    put("operation", "continue")
+                    put("operation", config.operation)
+                    if (config.disableTools) put("disableTools", true)
+                    config.content?.let { put("content", it) }
+                    config.partsJson?.let { put("partsJson", it) }
+                    config.messageId?.let { put("messageId", it) }
+                    config.messageGroup?.let { group ->
+                        put("messageGroup", kotlinx.serialization.json.JsonArray(group.map {
+                            kotlinx.serialization.json.JsonPrimitive(it)
+                        }))
+                    }
                     put(
                         "toolSpecs",
                         kotlinx.serialization.json.JsonArray(

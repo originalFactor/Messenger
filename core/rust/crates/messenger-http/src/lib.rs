@@ -60,6 +60,13 @@ use tokio_stream::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(not(target_os = "android"))]
+mod acp_agent;
+#[cfg(target_os = "android")]
+mod android_acp;
+mod control;
+mod external_acp;
+
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
 pub const API_PREFIX: &str = "/api/v1";
@@ -69,6 +76,12 @@ pub struct ApiState {
     pub store: Arc<Store>,
     pub token: Arc<str>,
     active_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    control_permissions: Arc<Mutex<HashMap<Uuid, control::CommandHandle>>>,
+    platform_catalog: Arc<Mutex<control::PlatformCatalog>>,
+    cloud_sync_gate: Arc<Mutex<()>>,
+    external: Arc<external_acp::ExternalSessions>,
+    #[cfg(target_os = "android")]
+    acp_processes: Arc<android_acp::Processes>,
     agent_mutations: Arc<Mutex<()>>,
     pending_tools: Arc<Mutex<HashMap<String, oneshot::Sender<ToolExecutionResult>>>>,
     events: broadcast::Sender<CoreEvent>,
@@ -82,7 +95,7 @@ pub struct ApiState {
     /// and `ServerHandle::stop` hangs forever — which is exactly what froze the
     /// desktop app on window close while its `/events` subscription was open.
     shutdown: CancellationToken,
-    store_feed: Arc<StoreFeed>,
+    _store_feed: Arc<StoreFeed>,
 }
 
 /// Owns the store-callback registration shared by every [`ApiState`] clone.
@@ -123,13 +136,19 @@ impl ApiState {
         let remote = RemoteHub::new(Arc::clone(&store))
             .expect("the device id is persisted in the local store");
         Self {
-            store_feed: Arc::new(StoreFeed {
+            _store_feed: Arc::new(StoreFeed {
                 store: Arc::clone(&store),
                 listener_id,
             }),
             store,
             token: token.into(),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
+            control_permissions: Default::default(),
+            platform_catalog: Default::default(),
+            cloud_sync_gate: Default::default(),
+            external: Default::default(),
+            #[cfg(target_os = "android")]
+            acp_processes: Default::default(),
             agent_mutations: Arc::new(Mutex::new(())),
             pending_tools: Arc::new(Mutex::new(HashMap::new())),
             events,
@@ -173,6 +192,8 @@ enum CoreEvent {
     /// `/turns/tools/{callId}/result`, exactly like a local `ToolCallRequested`.
     RemoteTool(RemoteToolEvent),
     RemoteToolCancelled(RemoteToolCancelledEvent),
+    #[cfg(target_os = "android")]
+    AcpProcess(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,31 +224,35 @@ struct LocalClientExecutor {
 #[async_trait]
 impl LocalToolExecutor for LocalClientExecutor {
     async fn execute(&self, call: &InboundToolCall, cancel: CancellationToken) -> ToolExecutionResult {
-        let error = |message: &str| ToolExecutionResult { output: message.into(), is_error: true };
-        // Namespaced so a relayed id can never collide with a local call id.
-        let key = format!("remote:{}", call.call_id);
-        let (sender, receiver) = oneshot::channel();
-        self.pending.lock().await.insert(key.clone(), sender);
-        let requested = CoreEvent::RemoteTool(RemoteToolEvent {
-            call_id: key.clone(),
+        self.execute_event(RemoteToolEvent {
+            call_id: format!("remote:{}", call.call_id),
             project_id: call.project_id.clone(),
             conversation_id: call.conversation_id.clone(),
             workspace: call.workspace.clone(),
             name: call.name.clone(),
             arguments_json: call.arguments_json.clone(),
-        });
-        if self.events.send(requested).is_err() {
+        }, cancel).await
+    }
+}
+
+impl LocalClientExecutor {
+    async fn execute_event(&self, event: RemoteToolEvent, cancel: CancellationToken) -> ToolExecutionResult {
+        let error = |message: &str| ToolExecutionResult { output: message.into(), is_error: true };
+        let key = event.call_id.clone();
+        let (sender, receiver) = oneshot::channel();
+        self.pending.lock().await.insert(key.clone(), sender);
+        if self.events.send(CoreEvent::RemoteTool(event)).is_err() {
             self.pending.lock().await.remove(&key);
             return error("no client on the owning device is attached to run the tool");
         }
         tokio::select! {
-            result = receiver => result.unwrap_or_else(|_| error("tool execution was cancelled")),
-            _ = cancel.cancelled() => {
-                self.pending.lock().await.remove(&key);
-                let _ = self.events.send(CoreEvent::RemoteToolCancelled(RemoteToolCancelledEvent { call_id: key }));
-                error("tool execution was cancelled")
-            }
+            result = receiver => return result.unwrap_or_else(|_| error("tool execution was cancelled")),
+            _ = cancel.cancelled() => {},
+            _ = tokio::time::sleep(std::time::Duration::from_secs(600)) => {},
         }
+        self.pending.lock().await.remove(&key);
+        let _ = self.events.send(CoreEvent::RemoteToolCancelled(RemoteToolCancelledEvent { call_id: key }));
+        error("tool execution was cancelled or timed out")
     }
 }
 
@@ -258,11 +283,12 @@ impl ServerHandle {
             Arc::<str>::from(token.clone()),
             shutdown.clone(),
         );
-        tokio::spawn(Arc::clone(&state.remote).run(
+        tokio::spawn(Arc::clone(&state.remote).run_with_control(
             Arc::new(LocalClientExecutor {
                 pending: Arc::clone(&state.pending_tools),
                 events: state.events.clone(),
             }),
+            Some(Arc::new(control::DeviceControl(state.clone()))),
             shutdown.clone(),
         ));
         let router = router(state);
@@ -302,11 +328,23 @@ impl Drop for ServerHandle {
 }
 
 pub fn router(state: ApiState) -> Router {
-    let protected = Router::new()
+    let protected = Router::new();
+    #[cfg(target_os = "android")]
+    let protected = protected
+        .route("/control/processes/:id/input", get(android_acp::input))
+        .route("/control/processes/:id/output", post(android_acp::output));
+    #[cfg(not(target_os = "android"))]
+    let protected = protected.route("/acp", get(acp_agent::upgrade));
+    let protected = protected
         .route("/health", get(health))
         .route("/meta", get(meta))
         .route("/events", get(core_events))
         .route("/remote/status", get(remote_status))
+        .route("/control/platform-tools", put(control::platform_tools))
+        .route("/control/settings", get(control::get_settings).put(control::set_settings))
+        .route("/control/commands/:id", post(control::commands))
+        .route("/control/commands/:id/permission", post(control::permission))
+        .route("/control/commands/:id/cancel", post(control::cancel_command))
         .route("/providers", get(list_providers).put(upsert_provider_body))
         .route(
             "/providers/:id",
@@ -484,6 +522,9 @@ async fn core_events(
     State(state): State<ApiState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = BroadcastStream::new(state.events.subscribe()).filter_map(|item| match item {
+        #[cfg(target_os = "android")]
+        Ok(CoreEvent::AcpProcess(event)) => Some(Ok(Event::default().event("acpProcess")
+            .json_data(event).expect("ACP process event serializes"))),
         Ok(CoreEvent::Change(event)) => Some(Ok(Event::default()
             .event("change")
             .json_data(event)
@@ -574,6 +615,9 @@ struct Capabilities {
     platform_tools: bool,
     cloud_sync: bool,
     remote_projects: bool,
+    acp_agent: bool,
+    acp_client: bool,
+    device_control: bool,
 }
 
 async fn meta() -> Json<MetaResponse> {
@@ -587,6 +631,9 @@ async fn meta() -> Json<MetaResponse> {
             platform_tools: false,
             cloud_sync: false,
             remote_projects: true,
+            acp_agent: !cfg!(target_os = "android"),
+            acp_client: true,
+            device_control: true,
         },
     })
 }
@@ -1534,6 +1581,7 @@ async fn cloud_sync(
     State(state): State<ApiState>,
     Json(body): Json<ReplaceLocalBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     let result = sync_engine(&state.store)?
         .sync_internal(None, body.replace_local, None)
         .await
@@ -1545,6 +1593,7 @@ async fn cloud_sync_with(
     State(state): State<ApiState>,
     Json(body): Json<SyncWithBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     let result = sync_engine(&state.store)?
         .sync_internal(body.since, body.replace_local, body.expected_server_version)
         .await
@@ -1555,6 +1604,7 @@ async fn cloud_sync_with(
 async fn cloud_push_pending(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     let result = sync_engine(&state.store)?
         .push_pending_changes()
         .await
@@ -1563,6 +1613,7 @@ async fn cloud_push_pending(
 }
 
 async fn cloud_push_snapshot(State(state): State<ApiState>) -> Result<Json<i64>, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     let version = sync_engine(&state.store)?
         .push_snapshot()
         .await
@@ -1573,6 +1624,7 @@ async fn cloud_push_snapshot(State(state): State<ApiState>) -> Result<Json<i64>,
 async fn cloud_replace_cloud_with_local(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     let result = sync_engine(&state.store)?
         .replace_cloud_with_local()
         .await
@@ -2005,6 +2057,10 @@ fn get_one<T>(value: Option<T>, kind: &'static str) -> Result<Json<T>, ApiError>
 pub struct ChatRequest {
     /// Required for `send`; retry/regenerate reuse the persisted message.
     pub content: Option<String>,
+    pub parts_json: Option<String>,
+    pub message_group: Option<Vec<String>>,
+    #[serde(default)]
+    pub disable_tools: bool,
     #[serde(default)]
     pub operation: ChatOperation,
     pub message_id: Option<String>,
@@ -2041,6 +2097,33 @@ async fn send_message(
     Path(conversation_id): Path<String>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let cancel = state.shutdown.child_token();
+    let rx = start_turn(state, conversation_id, request, cancel.clone(), false).await?;
+    Ok(Sse::new(CancelOnDropStream::new(rx, cancel)).keep_alive(KeepAlive::default()))
+}
+
+async fn start_turn(
+    state: ApiState,
+    conversation_id: String,
+    request: ChatRequest,
+    cancel: CancellationToken,
+    detached: bool,
+) -> Result<mpsc::UnboundedReceiver<String>, ApiError> {
+    // Keep validation, preparation and the initial write under the same
+    // reservation. A rejected caller must never change the transcript.
+    let mut active = state.active_turns.lock().await;
+    if active.contains_key(&conversation_id) {
+        return Err(ApiError::Conflict {
+            code: "turn_in_progress".into(),
+            message: "a chat turn is already active for this conversation".into(),
+        });
+    }
+    if cancel.is_cancelled() {
+        return Err(ApiError::Conflict {
+            code: "turn_cancelled".into(),
+            message: "the turn was cancelled".into(),
+        });
+    }
     let conversation = state
         .store
         .get_conversation(&conversation_id)
@@ -2051,6 +2134,7 @@ async fn send_message(
         .get_agent(&conversation.agent_id)
         .map_err(ApiError::store)?
         .ok_or_else(|| ApiError::not_found("agent"))?;
+    let agent = effective_agent(&state.store, agent, &conversation)?;
     let model_id = conversation
         .override_model_id
         .clone()
@@ -2066,7 +2150,8 @@ async fn send_message(
             if request
                 .content
                 .as_deref()
-                .is_none_or(|content| content.trim().is_empty()) =>
+                .is_none_or(|content| content.trim().is_empty())
+                && request.parts_json.as_deref().is_none_or(|parts| messenger_core::parts::decode_parts(Some(parts)).is_empty()) =>
         {
             return Err(ApiError::BadRequest("content is required for send".into()));
         }
@@ -2083,6 +2168,12 @@ async fn send_message(
         .get_model(&model_id)
         .map_err(ApiError::store)?
         .ok_or_else(|| ApiError::not_found("model"))?;
+    if !model.is_enabled {
+        return Err(ApiError::Conflict {
+            code: "model_disabled".into(),
+            message: "the configured model is disabled".into(),
+        });
+    }
     let provider = state
         .store
         .get_provider(&model.provider_id)
@@ -2090,18 +2181,15 @@ async fn send_message(
         .ok_or_else(|| ApiError::not_found("provider"))?;
     let (message_to_insert, messages_to_delete) = match request.operation {
         ChatOperation::Send => {
-            let content = request
-                .content
-                .as_deref()
-                .expect("send content validated")
-                .trim();
+            let content = request.content.as_deref().unwrap_or_default();
+            let content = if request.parts_json.is_some() { content } else { content.trim() };
             (
                 Some(StoredMessage {
                     id: Uuid::new_v4().to_string(),
                     conversation_id: conversation_id.clone(),
                     role: "user".into(),
                     content: content.into(),
-                    parts_json: None,
+                    parts_json: request.parts_json.clone(),
                     timestamp: now_ms(),
                     status: "sent".into(),
                     error_message: None,
@@ -2165,22 +2253,20 @@ async fn send_message(
                     ids.push(message.id.clone());
                 }
             }
+            if let Some(group) = request.message_group.as_ref() {
+                if !group.iter().any(|member| member == id)
+                    || group.iter().any(|member| !messages.iter().any(|message|
+                        message.id == *member && matches!(message.role.as_str(), "assistant" | "tool")))
+                {
+                    return Err(ApiError::BadRequest("invalid regeneration message group".into()));
+                }
+                ids.clone_from(group);
+            }
             (None, ids)
         }
     };
 
-    let cancel = CancellationToken::new();
-    {
-        let mut active = state.active_turns.lock().await;
-        if active.contains_key(&conversation_id) {
-            return Err(ApiError::Conflict {
-                code: "turn_in_progress".into(),
-                message: "a chat turn is already active for this conversation".into(),
-            });
-        }
-        active.insert(conversation_id.clone(), cancel.clone());
-    }
-
+    let user_message_id = message_to_insert.as_ref().map(|message| message.id.clone());
     let mutation = if let Some(message) = message_to_insert {
         let timestamp = message.timestamp;
         let last_message = message.content.clone();
@@ -2227,12 +2313,14 @@ async fn send_message(
     } else {
         Ok(())
     };
-    if let Err(error) = mutation {
-        state.active_turns.lock().await.remove(&conversation_id);
-        return Err(error);
-    }
+    mutation?;
+    active.insert(conversation_id.clone(), cancel.clone());
+    drop(active);
 
     let (tx, rx) = mpsc::unbounded_channel::<String>();
+    if let Some(message_id) = user_message_id {
+        let _ = tx.send(serde_json::json!({"type":"UserMessagePersisted","messageId":message_id}).to_string());
+    }
     let task_state = state.clone();
     let task_conversation = conversation.clone();
     let task_agent = agent.clone();
@@ -2249,38 +2337,47 @@ async fn send_message(
             model: task_model,
             provider: task_provider,
             request: task_request,
+            detached,
             cancel: task_cancel,
             tx: tx.clone(),
         })
         .await;
-        if let Err(error) = result {
-            let detail = match &error {
-                ApiError::Internal(detail) => detail.clone(),
-                other => format!("{other:?}"),
-            };
-            let failed = StoredMessage {
-                id: Uuid::new_v4().to_string(),
-                conversation_id: conversation_id.clone(),
-                role: "assistant".into(),
-                content: String::new(),
-                parts_json: None,
-                timestamp: now_ms(),
-                status: "error".into(),
-                error_message: Some(detail.clone()),
-            };
-            let _ = task_state.store.upsert_message(&failed);
-            let _ = tx.send(event_json(AgentEvent::Error {
-                code: "core_error".into(),
-                message: detail,
-            }));
+        let terminal = match result {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                let detail = match &error {
+                    ApiError::Internal(detail) => detail.clone(),
+                    other => format!("{other:?}"),
+                };
+                let failed = StoredMessage {
+                    id: Uuid::new_v4().to_string(),
+                    conversation_id: conversation_id.clone(),
+                    role: "assistant".into(),
+                    content: String::new(),
+                    parts_json: None,
+                    timestamp: now_ms(),
+                    status: "error".into(),
+                    error_message: Some(detail.clone()),
+                };
+                let _ = task_state.store.upsert_message(&failed);
+                event_json(AgentEvent::Error { code: "core_error".into(), message: detail })
+            }
+        };
+        if let Ok(messages) = task_state.store.list_messages_by_conversation(&conversation_id) {
+            if let Some(last) = messages.last() {
+                let preview = if last.role == "user" && last.content.is_empty() && last.parts_json.is_some() {
+                    "📷"
+                } else { &last.content };
+                let _ = task_state.store.update_conversation_last_message(&conversation_id, Some(preview), last.timestamp);
+            }
         }
-        task_state
-            .active_turns
-            .lock()
-            .await
-            .remove(&conversation_id);
+        task_state.active_turns.lock().await.remove(&conversation_id);
+        if detached {
+            control::queue_sync(&task_state, &conversation_id);
+        }
+        let _ = tx.send(terminal);
     });
-    Ok(Sse::new(CancelOnDropStream::new(rx, cancel)).keep_alive(KeepAlive::default()))
+    Ok(rx)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2372,11 +2469,12 @@ struct TurnTask {
     model: StoredModel,
     provider: StoredProvider,
     request: ChatRequest,
+    detached: bool,
     cancel: CancellationToken,
     tx: mpsc::UnboundedSender<String>,
 }
 
-async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
+async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     let TurnTask {
         route,
         state,
@@ -2385,15 +2483,21 @@ async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
         model,
         provider,
         request,
+        detached,
         cancel,
         tx,
     } = task;
-    let tools = configured_tools(
-        &agent,
-        conversation.writable,
-        conversation.project_id.is_some(),
-        &request.tool_specs,
-    );
+    let project = conversation.project_id.as_deref()
+        .map(|id| state.store.get_project(id))
+        .transpose().map_err(ApiError::store)?.flatten();
+    let tools = if request.disable_tools {
+        Vec::new()
+    } else if detached {
+        let catalog = state.platform_catalog.lock().await;
+        configured_tools(&agent, conversation.writable, project.is_some() && catalog.workspace_supported, &catalog.tools)
+    } else {
+        configured_tools(&agent, conversation.writable, project.is_some(), &request.tool_specs)
+    };
     let title = state
         .store
         .get_title_agent()
@@ -2428,7 +2532,7 @@ async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
             "Summarize the conversation while preserving decisions, facts, and open tasks.".into(),
         title,
     };
-    let sink = ChannelSink { tx: tx.clone() };
+    let sink = ChannelSink { tx: tx.clone(), terminal: Default::default() };
     let host = RoutedToolHost {
         local: RemoteToolHost {
             pending: Arc::clone(&state.pending_tools),
@@ -2436,14 +2540,47 @@ async fn run_turn(task: TurnTask) -> Result<(), ApiError> {
             cancel: cancel.clone(),
         },
         route,
+        platform: detached.then(|| (LocalClientExecutor {
+            pending: Arc::clone(&state.pending_tools),
+            events: state.events.clone(),
+        }, project)),
         hub: Arc::clone(&state.remote),
         conversation_id: turn.conversation_id.clone(),
         cancel: cancel.clone(),
     };
-    let _ = request;
     run_chat_turn(&state.store, &host, &sink, &turn, cancel)
         .await
-        .map_err(ApiError::Internal)
+        .map_err(ApiError::Internal)?;
+    sink.terminal.into_inner().unwrap().ok_or_else(|| ApiError::Internal(
+        "turn ended without a terminal event".into()))
+}
+
+fn effective_agent(
+    store: &Store,
+    mut agent: StoredAgent,
+    conversation: &StoredConversation,
+) -> Result<StoredAgent, ApiError> {
+    if !agent.is_default {
+        if let Some(default) = store.get_default_agent().map_err(ApiError::store)? {
+            if agent.follow_default_system_prompt { agent.system_prompt = default.system_prompt; }
+            if agent.follow_default_model { agent.default_model_id = default.default_model_id; }
+            if agent.follow_default_temperature { agent.temperature = default.temperature; }
+            if agent.follow_default_top_p { agent.top_p = default.top_p; }
+            if agent.follow_default_max_tokens { agent.max_tokens = default.max_tokens; }
+            if agent.follow_default_reasoning_effort { agent.reasoning_effort = default.reasoning_effort; }
+            if agent.tools_follow_default {
+                agent.tools_enabled = default.tools_enabled;
+                agent.tools_config = default.tools_config;
+            }
+        }
+    }
+    if let Some(enabled) = conversation.override_tools_enabled {
+        agent.tools_enabled = enabled;
+    }
+    if let Some(config) = &conversation.override_tools_config {
+        agent.tools_config = config.clone();
+    }
+    Ok(agent)
 }
 
 fn configured_tools(
@@ -2486,6 +2623,7 @@ fn configured_tools(
 struct RoutedToolHost {
     local: RemoteToolHost,
     route: ToolRoute,
+    platform: Option<(LocalClientExecutor, Option<StoredProject>)>,
     hub: Arc<RemoteHub>,
     conversation_id: String,
     cancel: CancellationToken,
@@ -2500,6 +2638,16 @@ impl ToolHost for RoutedToolHost {
         arguments_json: &str,
     ) -> ToolExecutionResult {
         let ToolRoute::Remote { device_id, project_id } = &self.route else {
+            if let Some((executor, project)) = &self.platform {
+                return executor.execute_event(RemoteToolEvent {
+                    call_id: format!("control:{}", Uuid::new_v4()),
+                    project_id: project.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
+                    conversation_id: self.conversation_id.clone(),
+                    workspace: project.as_ref().map(|p| p.workspace.clone()).unwrap_or_default(),
+                    name: name.to_string(),
+                    arguments_json: arguments_json.to_string(),
+                }, self.cancel.clone()).await;
+            }
             return self.local.execute(call_id, name, arguments_json).await;
         };
         let is_workspace_tool = messenger_tools::builtin_registry()
@@ -2577,10 +2725,16 @@ impl ToolHost for RemoteToolHost {
 
 struct ChannelSink {
     tx: mpsc::UnboundedSender<String>,
+    terminal: std::sync::Mutex<Option<String>>,
 }
 impl TurnSink for ChannelSink {
     fn on_event(&self, event: &AgentEvent) {
-        let _ = self.tx.send(event_json(event.clone()));
+        let frame = event_json(event.clone());
+        if matches!(event, AgentEvent::Finished { .. } | AgentEvent::Cancelled | AgentEvent::Error { .. }) {
+            *self.terminal.lock().unwrap() = Some(frame);
+        } else {
+            let _ = self.tx.send(frame);
+        }
     }
 }
 
@@ -2999,6 +3153,27 @@ mod tests {
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(messages[1].content, "Hello");
         assert_eq!(messages[1].status, "sent");
+    }
+
+    #[tokio::test]
+    async fn native_send_cannot_write_during_a_device_owned_turn() {
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(100))
+                .set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state();
+        seed_text_chat(&state, &provider.uri());
+        let mut turn = start_turn(state.clone(), "c1".into(), control::text_request("remote".into()),
+            state.shutdown.child_token(), true).await.unwrap();
+        let response = router(state.clone()).oneshot(request(axum::http::Method::POST,
+            "/api/v1/conversations/c1/messages", Some(r#"{"content":"concurrent native"}"#)))
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        while turn.recv().await.is_some() {}
+        let messages = state.store.list_messages_by_conversation("c1").unwrap();
+        assert_eq!(messages.iter().filter(|message| message.role == "user")
+            .map(|message| message.content.as_str()).collect::<Vec<_>>(), ["remote"]);
     }
 
     #[tokio::test]
@@ -3462,7 +3637,7 @@ mod tests {
         state.store.upsert_agent(&agent).unwrap();
         attach_project(&state, &remote_project("p1", "laptop"), false);
         state.store.kv_set(KV_SESSION, "messenger_session=abc").unwrap();
-        state.store.kv_set(KV_SESSION_HOST, "127.0.0.1").unwrap();
+        state.store.kv_set(KV_SESSION_HOST, &relay.uri()).unwrap();
         state.store.kv_set(messenger_sync::KV_SERVER_URL, &relay.uri()).unwrap();
         state.remote.force_presence_for_tests(&["laptop"]);
         let executor: Arc<dyn LocalToolExecutor> = Arc::new(LocalClientExecutor {
@@ -3512,7 +3687,7 @@ mod tests {
         let device_id = state.remote.device_id().to_string();
         attach_project(&state, &remote_project("p1", &device_id), false);
         state.store.kv_set(KV_SESSION, "messenger_session=abc").unwrap();
-        state.store.kv_set(KV_SESSION_HOST, "127.0.0.1").unwrap();
+        state.store.kv_set(KV_SESSION_HOST, &relay.uri()).unwrap();
         state.store.kv_set(messenger_sync::KV_SERVER_URL, &relay.uri()).unwrap();
         let mut events = state.events.subscribe();
         let executor: Arc<dyn LocalToolExecutor> = Arc::new(LocalClientExecutor {

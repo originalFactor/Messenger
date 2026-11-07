@@ -32,3 +32,6 @@ pub use protocol::{
 
 #[cfg(test)]
 mod tests;
+
+mod control;
+pub use control::ControlHost;

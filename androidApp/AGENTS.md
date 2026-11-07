@@ -14,3 +14,5 @@ Thin `com.android.application` shell over `shared` (AGP 9 built-in Kotlin + `kot
 ./gradlew-cli :androidApp:assembleRelease   # R8 on; one APK per ABI
 ./gradlew-cli :androidApp:lintDebug
 ```
+
+- For third-party ACP Agents, the main app bridges Core's local ACP process streams to `IShellService` in the Runtime companion. The main app does not launch Runtime-installed executables in its own UID.

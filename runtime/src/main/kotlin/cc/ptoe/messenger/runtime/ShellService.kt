@@ -42,6 +42,7 @@ class ShellService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val active = ConcurrentHashMap<Int, Job>()
+    private val acpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
     private val mcpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
 
     private val binder = object : IShellService.Stub() {
@@ -180,6 +181,51 @@ class ShellService : Service() {
             if (!isCallerAllowed()) return
             mcpSessions.remove(sessionId)?.close()
         }
+
+        override fun startAcpProcess(
+            sessionId: Int,
+            executable: String?,
+            arguments: Array<out String>?,
+            envJson: String?,
+            cwd: String?,
+            callback: IMcpCallback?,
+        ): Boolean {
+            if (!isCallerAllowed() || executable.isNullOrBlank() || arguments == null ||
+                cwd.isNullOrBlank() || callback == null || !java.io.File(cwd).isAbsolute) return false
+            val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+            acpSessions.remove(sessionId)?.close()
+            val session = runBlocking {
+                TermuxRuntime.startMcpProcess(
+                    context = applicationContext,
+                    command = executable,
+                    envJson = envJson,
+                    onOutput = { line ->
+                        if (line.length <= 192_000) callback.onOutput(sessionId, line)
+                        else acpSessions.remove(sessionId)?.close()
+                    },
+                    onError = {},
+                    onClosed = { code ->
+                        closed.set(true)
+                        acpSessions.remove(sessionId)
+                        runCatching { callback.onClosed(sessionId, code) }
+                    },
+                    arguments = arguments.toList(),
+                    cwd = cwd,
+                )
+            } ?: return false
+            acpSessions[sessionId] = session
+            if (closed.get()) acpSessions.remove(sessionId, session)
+            return true
+        }
+
+        override fun sendAcpInput(sessionId: Int, line: String?): Boolean {
+            if (!isCallerAllowed() || line == null || line.length > 192_000) return false
+            return acpSessions[sessionId]?.sendLine(line) ?: false
+        }
+
+        override fun stopAcpProcess(sessionId: Int) {
+            if (isCallerAllowed()) acpSessions.remove(sessionId)?.close()
+        }
     }
 
     /** Only holders of the signature permission (the main app) may call in. */
@@ -222,6 +268,8 @@ class ShellService : Service() {
             session.close()
         }
         mcpSessions.clear()
+        acpSessions.values.forEach { it.close() }
+        acpSessions.clear()
         scope.cancel()
         super.onDestroy()
     }

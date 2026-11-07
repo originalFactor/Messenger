@@ -52,3 +52,19 @@ For `ToolCallRequested`, the client executes the tool and posts the result to
 `POST /api/v1/turns/tools/{callId}/result` with
 `{ "output": string, "isError": boolean }`. Dropping the SSE connection cancels
 the turn and wakes any pending tool host with a cancellation result.
+
+## Device session commands (`POST /api/v1/control/commands/{requestId}`)
+
+Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode` or
+`Error`. Prompt commands stream the turn events above, ending in `Finished`,
+`Cancelled` or `Error`. The device sends `UserMessagePersisted {messageId}`
+when the Messenger user row is accepted. Third-party ACP turns can also send
+`ThoughtDelta {text}`, `ToolUpdate {update}` and
+`Permission {tool, options: [{id, name, kind}]}`. Only the client that
+started the turn can respond through its active command. For cloud control
+the relay carries the same payloads in `controlReply` frames.
+
+On Android, the local events feed can additionally emit
+`acpProcess {processId, profile, cwd}` to the signature-protected Runtime
+bridge in the main app. The process input feed emits `{line}` and ends when
+Core no longer needs the process. See [ACP.md](ACP.md) for the endpoint pair.

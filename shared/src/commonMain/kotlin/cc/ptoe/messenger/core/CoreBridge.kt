@@ -162,6 +162,18 @@ interface CoreBridge {
      * with `runBlockingCall`; native clients use the suspend bridge
      * event loop cannot block.
      */
+    suspend fun controlSettings(): kotlinx.serialization.json.JsonObject = error("Device control unavailable")
+    suspend fun saveControlSettings(settings: kotlinx.serialization.json.JsonObject) {
+        error("Device control unavailable")
+    }
+    suspend fun controlCommand(
+        requestId: String,
+        command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) { error("Device control unavailable") }
+    suspend fun controlCancel(requestId: String) { error("Device control unavailable") }
+    suspend fun controlPermission(requestId: String, optionId: String) { error("Device control unavailable") }
+
     suspend fun runTurn(
         config: TurnConfigBridge,
         toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
@@ -201,6 +213,12 @@ data class TurnConfigBridge(
     val workspaceNote: String,
     /** Tool declarations, including MCP tools resolved by the platform. */
     val tools: List<ToolSpecBridge> = emptyList(),
+    val operation: String = "continue",
+    val content: String? = null,
+    val partsJson: String? = null,
+    val messageId: String? = null,
+    val messageGroup: List<String>? = null,
+    val disableTools: Boolean = false,
 )
 
 object CoreBridgeRegistry {

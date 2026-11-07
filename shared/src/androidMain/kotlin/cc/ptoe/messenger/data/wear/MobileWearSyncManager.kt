@@ -22,9 +22,6 @@ import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.Conversation
-import cc.ptoe.messenger.domain.model.Message
-import cc.ptoe.messenger.domain.model.MessageRole
-import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Provider
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.contentOrNull
@@ -106,21 +103,13 @@ class MobileWearChatHandler(private val app: AppContainer) {
             val activeModel = resolveModelAndProvider(resolvedAgent)
                 ?: throw IllegalStateException("No enabled model is available for this agent.")
 
-            val now = System.currentTimeMillis()
-            val userMessage = Message(
-                id = UUID.randomUUID().toString(),
-                conversationId = conversationId,
-                role = MessageRole.USER,
-                content = text,
-                timestamp = now,
-                status = MessageStatus.SENT
-            )
-            app.messageRepository.insert(userMessage)
-
             val bridge = app.coreBridge
             val titleHolder = app.agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
             val config = TurnConfigBridge(
                 conversationId = conversationId,
+                operation = "send",
+                content = text,
+                disableTools = true,
                 modelId = activeModel.second.modelId,
                 baseUrl = activeModel.first.baseUrl,
                 apiKey = activeModel.first.apiKey,
@@ -143,13 +132,14 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 workspaceNote = ""
             )
 
+            var userMessageId: String? = null
             var currentContent = ""
             // The loop creates the placeholder row; bind to ITS id.
             var assistantMessageId: String? = null
 
             fun sendDone() = sendTerminal("chat_done") {
                 put("content", currentContent)
-                put("userMessageId", userMessage.id)
+                userMessageId?.let { put("userMessageId", it) }
                 assistantMessageId?.let { put("assistantMessageId", it) }
             }
 
@@ -164,6 +154,7 @@ class MobileWearChatHandler(private val app: AppContainer) {
                     }
                     val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
                     when (type) {
+                        "UserMessagePersisted" -> userMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull
                         "StreamingStarted" -> {
                             assistantMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull
                         }

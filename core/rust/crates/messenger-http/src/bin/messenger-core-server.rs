@@ -8,6 +8,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+mod acp_stdio;
+
 use messenger_http::ServerHandle;
 use messenger_store::{Store, StoredAgent};
 use tokio::sync::oneshot;
@@ -15,7 +17,24 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args_os().skip(1);
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "acp") {
+        args.next();
+        if args.next().is_none_or(|arg| arg != "--connect") {
+            return Err("usage: messenger-core-server acp --connect <descriptor>".into());
+        }
+        let descriptor = args.next().filter(|_| args.next().is_none())
+            .ok_or("usage: messenger-core-server acp --connect <descriptor>")?;
+        // Explicit exit also releases a blocked Tokio stdin reader when the
+        // Desktop connection closes before the editor closes its pipe.
+        match acp_stdio::connect(&PathBuf::from(descriptor)).await {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("messenger ACP: {error}");
+                std::process::exit(1)
+            }
+        }
+    }
     let path = args
         .next()
         .map(PathBuf::from)

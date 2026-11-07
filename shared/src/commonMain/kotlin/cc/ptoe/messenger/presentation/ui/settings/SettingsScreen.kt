@@ -114,6 +114,10 @@ import cc.ptoe.messenger.generated.resources.settings_tools_desc
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.generated.resources.acp_settings
+import cc.ptoe.messenger.generated.resources.acp_chat
+import cc.ptoe.messenger.presentation.ui.acp.AcpSettingsDialog
+import cc.ptoe.messenger.presentation.ui.acp.AcpChatDialog
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -136,6 +140,11 @@ fun SettingsScreen(
     val cloudSyncError by viewModel.cloudSyncError.collectAsStateWithLifecycle()
     val cloudSessionExpired by viewModel.cloudSessionExpired.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
+
+    var showAcpSettings by remember { mutableStateOf(false) }
+    var showAcpChat by remember { mutableStateOf(false) }
+    if (showAcpSettings) AcpSettingsDialog(onClose = { showAcpSettings = false })
+    if (showAcpChat) AcpChatDialog(onClose = { showAcpChat = false })
 
     var showThemeDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
@@ -304,6 +313,20 @@ fun SettingsScreen(
                     subtitle = stringResource(Res.string.settings_tools_desc),
                     icon = Icons.Default.Build,
                     onClick = onToolsClick
+                )
+            }
+            item {
+                ListItem(
+                    title = stringResource(Res.string.acp_settings),
+                    icon = Icons.Default.Build,
+                    onClick = { showAcpSettings = true },
+                )
+            }
+            item {
+                ListItem(
+                    title = stringResource(Res.string.acp_chat),
+                    icon = Icons.Default.Terminal,
+                    onClick = { showAcpChat = true },
                 )
             }
             item {

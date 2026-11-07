@@ -80,6 +80,117 @@ paths:
                   deviceId: { type: string }
                   connected: { type: boolean }
                   onlineDevices: { type: array, items: { type: string } }
+  /acp:
+    get:
+      operationId: connectAcp
+      description: Authenticated loopback WebSocket carrying ACP v1 JSON-RPC bytes for the stdio adapter.
+      responses:
+        "101": { description: WebSocket connected. }
+        "401": { description: Invalid loopback bearer. }
+  /control/settings:
+    get:
+      operationId: getDeviceControlSettings
+      responses:
+        "200":
+          description: Device-local settings and ACP profiles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceControlSettings" }
+    put:
+      operationId: setDeviceControlSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceControlSettings" }
+      responses:
+        "200": { description: Settings saved. }
+        "400": { description: Invalid profile or cloud sign-in required to enable control. }
+  /control/platform-tools:
+    put:
+      operationId: publishDeviceToolCatalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspaceSupported, tools]
+              properties:
+                workspaceSupported: { type: boolean }
+                tools: { type: array, items: { type: object } }
+      responses:
+        "204": { description: Platform tool availability updated. }
+  /control/commands/{requestId}:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    post:
+      operationId: runDeviceSessionCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceSessionCommand" }
+      responses:
+        "200":
+          description: Command result or prompt events documented in docs/SSE.md. Closing the stream cancels work.
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /control/commands/{requestId}/permission:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    post:
+      operationId: answerDeviceToolPermission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [optionId]
+              properties:
+                optionId: { type: string }
+      responses:
+        "204": { description: Permission choice sent to the active request. }
+        "404": { description: Request is no longer active. }
+  /control/commands/{requestId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    post:
+      operationId: cancelDeviceSessionCommand
+      responses:
+        "204": { description: Request cancelled. }
+        "404": { description: Request is no longer active. }
+  /control/processes/{requestId}/input:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    get:
+      operationId: readRuntimeAcpStdin
+      description: Android only. Attaches the Runtime bridge to the process input stream once.
+      responses:
+        "200":
+          description: Newline-delimited ACP lines as SSE JSON.
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /control/processes/{requestId}/output:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    post:
+      operationId: writeRuntimeAcpStdout
+      description: Android only. Send an empty object at EOF.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                line: { type: string }
+                error: { type: string, description: Optional Runtime startup error at EOF. }
+      responses:
+        "204": { description: Output accepted. }
   /providers:
     get:
       operationId: listProviders
@@ -587,6 +698,11 @@ components:
       scheme: bearer
       description: Per-start token returned to the app shell by the native lifecycle bridge.
   parameters:
+    ControlRequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     Id: { name: id, in: path, required: true, schema: { type: string } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
@@ -644,11 +760,42 @@ components:
       type: object
       additionalProperties: true
       required: [id, conversation_id, role, content, timestamp, status]
+    DeviceControlSettings:
+      type: object
+      properties:
+        enabled: { type: boolean, default: false }
+        name: { type: string }
+        agents:
+          type: array
+          items:
+            type: object
+            required: [id, name, command]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              command: { type: string }
+              args: { type: array, items: { type: string } }
+              env: { type: object, additionalProperties: { type: string } }
+              cwd: { type: [string, "null"] }
+    DeviceSessionCommand:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [catalog, create, history, setMode, prompt] }
+        agentId: { type: string }
+        projectId: { type: [string, "null"] }
+        sessionId: { type: string }
+        before: { type: [string, "null"] }
+        writable: { type: boolean }
+        text: { type: string }
     ChatRequest:
       type: object
       properties:
         content: { type: string }
         operation: { type: string, enum: [send, retry, regenerate, continue], default: send }
+        partsJson: { type: string, description: Persisted multimodal content for a send. }
+        messageGroup: { type: array, items: { type: string }, description: Validated assistant and tool rows for a native regenerate. }
+        disableTools: { type: boolean, default: false }
         messageId: { type: string }
         toolSpecs:
           type: array

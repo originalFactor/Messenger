@@ -58,17 +58,18 @@ pub struct ToolCancel {
 /// lines and frames split across chunk boundaries.
 #[derive(Debug, Default)]
 pub struct SseParser {
-    buffer: String,
+    buffer: Vec<u8>,
     event: Option<String>,
     data: Vec<String>,
 }
 
 impl SseParser {
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<(String, String)> {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
-        while let Some(newline) = self.buffer.find('\n') {
-            let mut line: String = self.buffer.drain(..=newline).collect();
+        while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let bytes: Vec<_> = self.buffer.drain(..=newline).collect();
+            let Ok(mut line) = String::from_utf8(bytes) else { continue };
             line.pop();
             if line.ends_with('\r') {
                 line.pop();
@@ -110,6 +111,15 @@ mod tests {
                 ("x".to_string(), "1".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn preserves_utf8_split_across_transport_chunks() {
+        let mut parser = SseParser::default();
+        let frame = "event: controlRequest\ndata: 中文\n\n".as_bytes();
+        let split = frame.iter().position(|byte| *byte > 127).unwrap() + 1;
+        assert!(parser.feed(&frame[..split]).is_empty());
+        assert_eq!(parser.feed(&frame[split..]), vec![("controlRequest".into(), "中文".into())]);
     }
 
     #[test]
