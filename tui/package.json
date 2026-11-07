@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=26.4.0"
   },
   "bin": {
     "messenger": "./src/main.js"
@@ -16,7 +16,8 @@
     "release": "node scripts/workflow.js release"
   },
   "dependencies": {
-    "ink": "^7.0.0",
+    "@opentui/core": "0.8.2",
+    "@opentui/react": "0.8.2",
     "react": "^19.2.0",
     "wrap-ansi": "^10.0.0"
   },

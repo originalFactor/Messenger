@@ -49,7 +49,7 @@
           |               |                     |               |
        Android          iOS                 Desktop           TUI
           |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Node.js / Ink
+       Compose        SwiftUI/            Compose MP        Node.js / OpenTUI
        + Wear         UIKit               / Native
 ```
 
@@ -274,7 +274,7 @@ Native / Skia / wgpu renderer
 # 15. TUI
 
 
-TUI 在 Node.js 中使用 Ink 渲染，通过 loopback REST/SSE 连接 Rust Core。
+TUI 在 Node.js 中使用 OpenTUI 渲染，通过 loopback REST/SSE 连接 Rust Core。
 
 ```text
 Rust Core
@@ -549,7 +549,7 @@ Node.js 客户端通过本地 Rust Core API 实现会话历史、模型配置、
 | Wear OS        | **Native View / Canvas**             |
 | iOS            | SwiftUI / UIKit                      |
 | Desktop        | Compose MP / Native，根据 benchmark     |
-| TUI            | **Node.js / Ink**                  |
+| TUI            | **Node.js / OpenTUI**                  |
 | 跨平台协议          | Rust-defined API / FFI               |
 | 状态同步           | Event-driven                         |
 | UI Streaming   | Batched updates                      |
@@ -651,7 +651,7 @@ Compose vs View vs Canvas vs Native
           |               |                     |               |
        Android          iOS                 Desktop           TUI
           |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Node.js / Ink
+       Compose        SwiftUI/            Compose MP        Node.js / OpenTUI
        + Wear         UIKit               / Native
 ```
 text

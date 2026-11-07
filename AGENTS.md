@@ -9,7 +9,7 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 | `shared` | KMP library: shared Android/Desktop logic (Clean Architecture data/domain/presentation) | `shared/AGENTS.md` |
 | `androidApp` | Android application shell | `androidApp/AGENTS.md` |
 | `desktopApp` | Desktop (JVM) application shell | `desktopApp/AGENTS.md` |
-| `tui` | Node.js terminal chat client for the local Rust Core | `tui/AGENTS.md` |
+| `tui` | Node.js/OpenTUI terminal chat client for the local Rust Core | `tui/AGENTS.md` |
 | `wear` | Wear OS chat-only companion | `wear/AGENTS.md` |
 | `runtime` | Companion shell-runtime app (terminal UI + tool host) | `runtime/AGENTS.md` |
 | `core/rust`, `core/bindings` | Rust Agent Core (Cargo workspace), `/api/v1` REST/SSE server, minimal native lifecycle bridge | `core/rust/AGENTS.md` |

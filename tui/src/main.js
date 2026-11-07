@@ -6,9 +6,7 @@ import {homedir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
-import {render} from 'ink';
 import {createElement} from 'react';
-import {App} from './app.js';
 import {errorText, modelFor} from './chat.js';
 import {startCore} from './core.js';
 import {terminalText} from './editor.js';
@@ -44,6 +42,12 @@ Open the command palette with Ctrl+P. Use /connect to add a provider.`);
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('Messenger TUI needs an interactive terminal.');
   }
+  if (!process.getBuiltinModule?.('node:ffi')) {
+    throw new Error('OpenTUI requires Node.js 26.4+ with --experimental-ffi.');
+  }
+  const [{createCliRenderer}, {createRoot}, {App}] = await Promise.all([
+    import('@opentui/core'), import('@opentui/react'), import('./app.js'),
+  ]);
 
   const database = resolve(values.db ?? join(homedir(), '.messenger', 'tui.db'));
   await mkdir(dirname(database), {recursive: true, mode: 0o700});
@@ -51,19 +55,25 @@ Open the command palette with Ctrl+P. Use /connect to add a provider.`);
   try {
     const [meta, agent] = await Promise.all([core.api.json('/meta'), core.api.json('/agents/default')]);
     const model = await modelFor(core.api, agent);
-    const app = render(createElement(App, {
-      api: core.api, version: meta.serverVersion, initialAgent: agent, initialModel: model,
-    }), {alternateScreen: true, incrementalRendering: true, maxFps: 30});
-    const unmount = () => app.unmount();
-    process.once('SIGTERM', unmount);
+    const renderer = await createCliRenderer({
+      screenMode: 'alternate-screen',
+      exitOnCtrlC: true,
+      useMouse: false,
+      consoleMode: 'disabled',
+      openConsoleOnError: false,
+      maxFps: 30,
+    });
     try {
+      createRoot(renderer).render(createElement(App, {
+        api: core.api, version: meta.serverVersion, initialAgent: agent, initialModel: model,
+      }));
       await Promise.race([
-        app.waitUntilExit(),
+        renderer.closed,
         core.stopped.then((message) => { throw new Error(message); }),
       ]);
     } finally {
-      process.removeListener('SIGTERM', unmount);
-      app.unmount();
+      renderer.destroy();
+      await renderer.closed;
     }
   } finally {
     await core.stop();

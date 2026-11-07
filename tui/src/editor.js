@@ -34,22 +34,23 @@ export function useEditor() {
     }));
   }
 
-  function edit(input, key) {
-    if (key.leftArrow || key.rightArrow || key.home || key.end || key.backspace || key.delete) {
+  function edit(key) {
+    if (['left', 'right', 'home', 'end', 'backspace', 'delete'].includes(key.name)) {
       setEditor(({value, cursor}) => {
         const segments = segmenter.segment(value);
         const left = segments.containing(cursor - 1)?.index ?? 0;
         const segment = segments.containing(cursor);
         const right = segment ? segment.index + segment.segment.length : value.length;
-        if (key.home) return {value, cursor: 0};
-        if (key.end) return {value, cursor: value.length};
-        if (key.leftArrow) return {value, cursor: left};
-        if (key.rightArrow) return {value, cursor: right};
-        if (key.backspace) return {value: value.slice(0, left) + value.slice(cursor), cursor: left};
+        if (key.name === 'home') return {value, cursor: 0};
+        if (key.name === 'end') return {value, cursor: value.length};
+        if (key.name === 'left') return {value, cursor: left};
+        if (key.name === 'right') return {value, cursor: right};
+        if (key.name === 'backspace') return {value: value.slice(0, left) + value.slice(cursor), cursor: left};
         return {value: value.slice(0, cursor) + value.slice(right), cursor};
       });
-    } else if (input && !key.ctrl && !key.meta && !key.super && !key.tab) {
-      insert(input, false);
+    } else if (!key.ctrl && !key.meta && !key.option && !key.super && !key.hyper
+        && /^[^\x00-\x1f\x7f-\x9f]+$/u.test(key.sequence)) {
+      insert(key.sequence, false);
     }
   }
 

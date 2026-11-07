@@ -160,15 +160,15 @@ not contain a Rust document renderer.
 
 ### Terminal client (optional)
 
-The Node.js TUI has an OpenCode-style command palette and keyboard navigation.
-It uses the same Rust Core API for model configuration, conversation history,
-and streaming chat.
+The Node.js TUI uses OpenTUI with React for its OpenCode-style command palette
+and keyboard navigation. It uses the same Rust Core API for model configuration,
+conversation history, and streaming chat.
 
-From the repository root, with Node.js 22+, pnpm 12, and a current stable Rust toolchain:
+From the repository root, with Node.js 26.4+, pnpm 12, and a current stable Rust toolchain:
 
 ```sh
 pnpm --prefix tui run dev          # install dependencies, build Core, and open the TUI
-pnpm --prefix tui test             # Rust API tests and a local mock-provider integration test
+pnpm --prefix tui test             # Rust API, mock-provider integration, and terminal render tests
 pnpm --prefix tui run build        # install dependencies and build the debug Core
 pnpm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
 ```
@@ -178,8 +178,10 @@ Pass TUI options after `--`, for example `pnpm --prefix tui run dev -- --db ./te
 The release command uses `tar` and writes a versioned archive for the current
 Rust host to `tui/dist/`. Pass `-- --out PATH` to choose another directory.
 Extract the archive and run `./messenger` on Linux/macOS or `.\messenger.cmd`
-on Windows. The extracted client requires Node.js 22+. Run the launcher
-with `--version` to check the packaged Core version.
+on Windows. The extracted client requires Node.js 26.4+. The launchers enable
+OpenTUI's Node.js FFI flag. Run the launcher with `--version` to check the
+packaged Core version. On musl-based Linux, set `OPENTUI_LIBC=musl` before
+running the workflow or launcher.
 
 Use `/connect` to add a provider and its first model. Enter sends a message,
 Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the

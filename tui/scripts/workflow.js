@@ -67,7 +67,7 @@ function checkSources() {
 
 function test(target, executable) {
   run('cargo', ['test', ...cargoArgs, '--target', target]);
-  run(process.execPath, ['--test'], {
+  run(process.execPath, ['--experimental-ffi', '--test'], {
     cwd: tui, env: {...process.env, MESSENGER_TUI_TEST_CORE: executable},
   });
 }
@@ -86,12 +86,12 @@ function stageBundle(bundle, executable) {
   chmodSync(bundledCore, 0o755);
 
   if (process.platform === 'win32') {
-    writeFileSync(join(bundle, 'messenger.cmd'), '@echo off\r\nnode "%~dp0src\\main.js" %*\r\n');
+    writeFileSync(join(bundle, 'messenger.cmd'), '@echo off\r\nnode --experimental-ffi "%~dp0src\\main.js" %*\r\n');
   } else {
     writeFileSync(join(bundle, 'messenger'), [
       '#!/bin/sh',
       'here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1',
-      'exec node "$here/src/main.js" "$@"',
+      'exec node --experimental-ffi "$here/src/main.js" "$@"',
       '',
     ].join('\n'), {mode: 0o755});
   }
@@ -115,6 +115,11 @@ function release(target, executable, output) {
     if (reportedVersion !== `Messenger ${version}`) {
       throw new Error(`Bundled TUI reported "${reportedVersion}".`);
     }
+    run(process.execPath, ['--experimental-ffi', '--input-type=module', '-e', [
+      "import {createTestRenderer} from '@opentui/core/testing';",
+      'const terminal = await createTestRenderer({width: 30, height: 12});',
+      'await terminal.dispose();',
+    ].join('\n')], {cwd: bundle});
 
     // Build the archive on the destination filesystem so a failed pack leaves
     // any previous release intact and the completed archive appears at once.
@@ -135,6 +140,10 @@ function main(command, args) {
   if (!pnpm || !process.env.npm_config_user_agent?.startsWith('pnpm/12.')) {
     throw new Error('Run the TUI workflow with pnpm 12, for example pnpm --prefix tui run dev.');
   }
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 26 || (major === 26 && minor < 4)) {
+    throw new Error('The OpenTUI workflow requires Node.js 26.4 or later.');
+  }
   if (!['dev', 'build', 'test', 'release'].includes(command)) throw new Error('Unknown TUI workflow.');
   let output = join(tui, 'dist');
   if (command === 'release') {
@@ -145,13 +154,15 @@ function main(command, args) {
   }
 
   const target = hostTarget();
-  if (command !== 'release') installDependencies(tui);
+  installDependencies(tui);
   if (command !== 'dev') checkSources();
   const executable = build(target, command === 'release');
   const app = join(tui, 'src', 'main.js');
   switch (command) {
     case 'dev':
-      run(process.execPath, [app, '--core', executable, ...args], {cwd: process.env.INIT_CWD ?? root});
+      run(process.execPath, ['--experimental-ffi', app, '--core', executable, ...args], {
+        cwd: process.env.INIT_CWD ?? root,
+      });
       break;
     case 'build':
       run(process.execPath, [app, '--core', executable, '--version']);

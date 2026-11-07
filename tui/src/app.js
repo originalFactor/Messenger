@@ -1,11 +1,13 @@
 import {randomUUID} from 'node:crypto';
-import {Box, Text, useApp, useInput, usePaste, useWindowSize} from 'ink';
+import {decodePasteBytes, TextAttributes} from '@opentui/core';
+import {useKeyboard, usePaste, useRenderer, useTerminalDimensions} from '@opentui/react';
 import {createElement as h, useMemo, useState} from 'react';
 import wrapAnsi from 'wrap-ansi';
 import {useChat} from './chat.js';
 import {oneLine, terminalText, useEditor} from './editor.js';
 
 const accent = 'cyan';
+const {BOLD, DIM, INVERSE} = TextAttributes;
 const commands = [
   {id: 'new', label: 'New session', key: 'n'},
   {id: 'sessions', label: 'Switch session', key: 'l'},
@@ -27,8 +29,8 @@ const fields = [
 ];
 
 export function App({api, version, initialAgent, initialModel}) {
-  const {exit} = useApp();
-  const {columns, rows} = useWindowSize();
+  const renderer = useRenderer();
+  const {width: columns, height: rows} = useTerminalDimensions();
   const chat = useChat(api, initialAgent, initialModel);
   const prompt = useEditor();
   const panelInput = useEditor();
@@ -43,10 +45,10 @@ export function App({api, version, initialAgent, initialModel}) {
     `${item.label} ${item.hint ?? ''}`.toLowerCase().includes(query));
   const selection = Math.min(selected, Math.max(0, options.length - 1));
   const field = panel?.type === 'connect' ? fields[panel.step] : null;
-  const inputLines = (panel ? panelInput : prompt).lines(width, panel ? 2 : 4, {
+  const inputLines = (panel ? panelInput : prompt).lines(Math.max(1, columns - 6), panel ? 2 : 4, {
     mask: field?.mask, active: !chat.busy && (!panel || Boolean(field) || Boolean(panel.items)),
   });
-  const viewport = Math.max(1, rows - inputLines.length - 7);
+  const viewport = Math.max(1, rows - inputLines.length - 6);
   const transcript = useMemo(() => chat.messages.flatMap((message) => messageLines(
     message.role, message.content, message.error_message, width)), [chat.messages, width]);
   const lines = [
@@ -119,7 +121,7 @@ export function App({api, version, initialAgent, initialModel}) {
       case 'help':
         return showPanel({type: 'help', title: 'Keyboard shortcuts'});
       case 'quit':
-        return exit();
+        return renderer.destroy();
     }
   }
 
@@ -180,65 +182,66 @@ export function App({api, version, initialAgent, initialModel}) {
     });
   }
 
-  usePaste((text) => {
+  usePaste(({bytes}) => {
     if (chat.busy || panel?.type === 'help') return;
-    (panel ? panelInput : prompt).insert(text, !panel);
+    (panel ? panelInput : prompt).insert(decodePasteBytes(bytes), !panel);
     setSelected(0);
   });
 
-  useInput((input, key) => {
-    if (key.escape) {
+  useKeyboard((key) => {
+    const {name} = key;
+    if (name === 'escape') {
       setLeader(false);
       if (chat.busy) void chat.cancel();
       else if (panel) showPanel(null);
       return;
     }
-    if (!panel && (key.pageUp || key.pageDown)) {
+    if (!panel && (name === 'pageup' || name === 'pagedown')) {
       const step = Math.max(1, viewport - 1);
-      if (key.pageUp && scroll >= maxScroll && chat.hasOlder) {
+      if (name === 'pageup' && scroll >= maxScroll && chat.hasOlder) {
         void chat.perform(async () => {
           await chat.olderMessages();
           setScroll(maxScroll + step);
         });
         return;
       }
-      setScroll(Math.min(maxScroll, Math.max(0, scroll + (key.pageUp ? step : -step))));
+      setScroll(Math.min(maxScroll, Math.max(0, scroll + (name === 'pageup' ? step : -step))));
       return;
     }
     if (chat.busy) return;
-    if (key.ctrl && input === 'p') return showPalette();
-    if (!panel && key.ctrl && input === 'x') return setLeader(true);
+    if (key.ctrl && name === 'p') return showPalette();
+    if (!panel && key.ctrl && name === 'x') return setLeader(true);
     if (leader) {
       setLeader(false);
-      const action = commands.find((item) => item.key === input);
+      const action = commands.find((item) => item.key === name);
       if (action) return runCommand(action.id);
     }
     if (field) {
-      if (key.return) return submitProvider();
-      return panelInput.edit(input, key);
+      if (name === 'return') return submitProvider();
+      return panelInput.edit(key);
     }
     if (panel?.items) {
-      if (key.upArrow) return setSelected(Math.max(0, selection - 1));
-      if (key.downArrow) return setSelected(Math.max(0, Math.min(options.length - 1, selection + 1)));
-      if (key.return && options[selection]) {
+      if (name === 'up') return setSelected(Math.max(0, selection - 1));
+      if (name === 'down') return setSelected(Math.max(0, Math.min(options.length - 1, selection + 1)));
+      if (name === 'return' && options[selection]) {
         const item = options[selection];
         showPanel(null);
         return panel.onSelect(item);
       }
-      if (!key.return && !key.upArrow && !key.downArrow) {
-        panelInput.edit(input, key);
-        if (input || key.backspace || key.delete) setSelected(0);
+      if (name !== 'return') {
+        panelInput.edit(key);
+        setSelected(0);
       }
       return;
     }
     if (panel) return;
-    if ((key.return && key.shift) || (key.ctrl && input === 'o')) return prompt.insert('\n', true);
-    if (key.return) return submitPrompt();
-    prompt.edit(input, key);
+    if ((name === 'return' && key.shift) || (key.ctrl && name === 'o')) return prompt.insert('\n', true);
+    if (name === 'return') return submitPrompt();
+    prompt.edit(key);
   });
 
   if (columns < 30 || rows < 12) {
-    return h(Text, {}, 'Resize terminal · Ctrl+C exits');
+    return h(Line, {}, 'Resize terminal');
   }
 
   const notice = chat.notice?.text ?? (panel ? 'Esc close' : chat.busy
@@ -246,41 +249,53 @@ export function App({api, version, initialAgent, initialModel}) {
   const statusColor = chat.notice?.error ? 'red' : undefined;
   const title = chat.session ? chat.session.title || 'Untitled' : 'New session';
 
-  return h(Box, {flexDirection: 'column', paddingX: 1, height: rows},
-    h(Text, {color: accent, bold: true, wrap: 'truncate-end'},
+  return h('box', {flexDirection: 'column', paddingX: 1, height: rows},
+    h(Line, {fg: accent, attributes: BOLD},
       `MESSENGER  ${version}   /   ${oneLine(title)}`),
-    h(Box, {height: viewport, flexDirection: 'column', overflow: 'hidden', paddingX: 1},
+    h('box', {height: viewport, flexDirection: 'column', overflow: 'hidden', paddingX: 1},
       panel
         ? h(Panel, {panel, field, options, selection, height: viewport})
         : lines.length
           ? lines.slice(Math.max(0, end - viewport), end).map(({text, color, bold}, i) =>
-            h(Text, {key: i, color, bold, wrap: 'truncate-end'}, text || ' '))
-          : h(Box, {flexDirection: 'column', justifyContent: 'center', flexGrow: 1},
-            h(Text, {bold: true, color: accent}, 'Start a conversation'),
-            h(Text, {dimColor: true, wrap: 'truncate-end'}, chat.model
+            h(Line, {key: i, fg: color, attributes: bold ? BOLD : undefined}, text || ' '))
+          : h('box', {flexDirection: 'column', justifyContent: 'center', flexGrow: 1},
+            h(Line, {attributes: BOLD, fg: accent}, 'Start a conversation'),
+            h(Line, {attributes: DIM}, chat.model
               ? 'Write a message below, or open the command palette.'
               : 'Use /connect to add a provider and model, or /models to choose one.'))),
-    h(Box, {flexDirection: 'column', borderStyle: 'round', borderColor: accent, paddingX: 1},
+    h('box', {flexDirection: 'column', border: true, borderStyle: 'rounded', borderColor: accent, paddingX: 1},
       panel?.type === 'help'
-        ? h(Text, {dimColor: true}, 'Esc closes this panel')
+        ? h(Line, {attributes: DIM}, 'Esc closes this panel')
         : (panel ? panelInput.value : prompt.value)
-          ? inputLines.map((line, i) => h(Text, {key: i, wrap: 'truncate-end'}, line || ' '))
-          : h(Text, {dimColor: true, wrap: 'truncate-end'},
+          ? inputLines.map((line, i) => h(Line, {key: i}, inputLine(line)))
+          : h(Line, {attributes: DIM},
             field?.example ?? (panel ? 'Filter…' : 'Write a message or type /'))),
-    h(Text, {color: statusColor, dimColor: !statusColor, wrap: 'truncate-end'}, oneLine(notice) || ' '),
-    h(Text, {color: accent, wrap: 'truncate-end'},
+    h(Line, {fg: statusColor, attributes: statusColor ? undefined : DIM}, oneLine(notice) || ' '),
+    h(Line, {fg: accent},
       oneLine(`${chat.agent.name}  ·  ${chat.model?.display_name ?? 'No model'}`)),
-    h(Text, {dimColor: true, wrap: 'truncate-end'}, leader
+    h(Line, {attributes: DIM}, leader
       ? 'Ctrl+X  n new  l sessions  m models  a agents  q quit'
       : 'Ctrl+P commands  ·  Ctrl+O newline  ·  PgUp/PgDn history'));
+}
+
+function Line({fg, attributes, children}) {
+  return h('text', {fg, attributes, height: 1, flexShrink: 0, wrapMode: 'none', truncate: true}, children);
+}
+
+function inputLine(line) {
+  // The editor uses a private SGR marker to locate the caret across wrapped
+  // lines. OpenTUI paints it as a styled span, keeping control bytes out of cells.
+  const [before, caret, after] = line.split(/\x1b\[(?:7|27)m/);
+  if (caret === undefined) return before || ' ';
+  return [before, h('span', {key: 'caret', attributes: INVERSE}, caret), after];
 }
 
 function Panel({panel, field, options, selection, height}) {
   if (field) {
     return [
-      h(Text, {key: 'title', bold: true, color: accent}, `Connect · ${panel.step + 1}/${fields.length}`),
-      h(Text, {key: 'field', bold: true}, field.label),
-      h(Text, {key: 'hint', dimColor: true, wrap: 'truncate-end'}, field.key === 'api_format'
+      h(Line, {key: 'title', attributes: BOLD, fg: accent}, `Connect · ${panel.step + 1}/${fields.length}`),
+      h(Line, {key: 'field', attributes: BOLD}, field.label),
+      h(Line, {key: 'hint', attributes: DIM}, field.key === 'api_format'
         ? 'chat / responses / messages / interactions'
         : 'Enter to continue · Esc to close'),
     ];
@@ -292,19 +307,19 @@ function Panel({panel, field, options, selection, height}) {
       'Ctrl+X then N, L, M, A, Q opens new, sessions, models, agents, quit',
       'Page Up / Page Down scrolls history',
       'Esc cancels a turn · Ctrl+C exits',
-    ].slice(0, height).map((label) => h(Text, {key: label, wrap: 'truncate-end'}, label));
+    ].slice(0, height).map((label) => h(Line, {key: label}, label));
   }
   const count = Math.max(1, height - 1);
   const start = Math.max(0, Math.min(selection - Math.floor(count / 2), options.length - count));
   return [
-    h(Text, {key: 'title', bold: true, color: accent}, panel.title),
+    h(Line, {key: 'title', attributes: BOLD, fg: accent}, panel.title),
     ...(options.length
-      ? options.slice(start, start + count).map((item, i) => h(Text, {
-        key: item.id, color: start + i === selection ? accent : undefined,
-        bold: start + i === selection, wrap: 'truncate-end',
+      ? options.slice(start, start + count).map((item, i) => h(Line, {
+        key: item.id, fg: start + i === selection ? accent : undefined,
+        attributes: start + i === selection ? BOLD : undefined,
       }, `${start + i === selection ? '›' : ' '} ${oneLine(item.label)}`,
-      item.hint && h(Text, {dimColor: true}, `  ${oneLine(item.hint)}`)))
-      : [h(Text, {key: 'empty', dimColor: true, wrap: 'truncate-end'},
+      item.hint && h('span', {attributes: DIM}, `  ${oneLine(item.hint)}`)))
+      : [h(Line, {key: 'empty', attributes: DIM},
         panel.items.length ? 'No matches.' : panel.empty)]),
   ];
 }
