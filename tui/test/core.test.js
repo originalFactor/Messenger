@@ -47,7 +47,7 @@ test('terminal client can configure, stream, retry, cancel and reopen a chat', {
   });
 
   const executable = process.env.MESSENGER_TUI_TEST_CORE;
-  assert.ok(executable, 'Run npm test to build the Core executable before testing.');
+  assert.ok(executable, 'Run pnpm test to build the Core executable before testing.');
   core = await startCore(executable, database);
   const {api} = core;
   assert.equal((await fetch(`${api.url}/meta`)).status, 401);

@@ -164,19 +164,16 @@ The Node.js TUI has an OpenCode-style command palette and keyboard navigation.
 It uses the same Rust Core API for model configuration, conversation history,
 and streaming chat.
 
-From the repository root, with Node.js 22+, npm, and a current stable Rust toolchain:
+From the repository root, with Node.js 22+, pnpm 12, and a current stable Rust toolchain:
 
 ```sh
-npm --prefix tui run dev          # install dependencies, build Core, and open the TUI
-npm --prefix tui test             # Rust API tests and a local mock-provider integration test
-npm --prefix tui run build        # install dependencies and build the debug Core
-npm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
+pnpm --prefix tui run dev          # install dependencies, build Core, and open the TUI
+pnpm --prefix tui test             # Rust API tests and a local mock-provider integration test
+pnpm --prefix tui run build        # install dependencies and build the debug Core
+pnpm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
 ```
 
-You can also run scripts with `pnpm --prefix tui run dev`. The workflow installs
-dependencies with npm using `tui/package-lock.json`.
-
-Pass TUI options after `--`, for example `npm --prefix tui run dev -- --db ./test-chat.db`.
+Pass TUI options after `--`, for example `pnpm --prefix tui run dev -- --db ./test-chat.db`.
 
 The release command uses `tar` and writes a versioned archive for the current
 Rust host to `tui/dist/`. Pass `-- --out PATH` to choose another directory.

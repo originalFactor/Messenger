@@ -333,7 +333,7 @@
     <string name="tools_mcp_name">Name</string>
     <string name="tools_mcp_type">Transport Type</string>
     <string name="tools_mcp_command">Command</string>
-    <string name="tools_mcp_command_hint">e.g. npx -y @modelcontextprotocol/server-everything</string>
+    <string name="tools_mcp_command_hint">e.g. pnpm dlx @modelcontextprotocol/server-everything</string>
     <string name="tools_mcp_args">Arguments</string>
     <string name="tools_mcp_args_hint">comma or space separated</string>
     <string name="tools_mcp_env">Environment variables</string>

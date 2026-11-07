@@ -1,11 +1,11 @@
 import {execFileSync, spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
-  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, renameSync, rmSync, writeFileSync,
+  chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename, dirname, join, resolve} from 'node:path';
+import {basename, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -14,7 +14,7 @@ const root = resolve(tui, '..');
 const core = 'messenger-core-server';
 const cargoArgs = ['--locked', '--manifest-path', 'core/rust/Cargo.toml', '-p', 'messenger-http'];
 const manifestPath = join(tui, 'package.json');
-const lockfile = join(tui, 'package-lock.json');
+const pnpm = process.env.npm_execpath;
 
 function run(program, args, options = {}) {
   const result = spawnSync(program, args, {cwd: root, stdio: 'inherit', ...options});
@@ -30,35 +30,10 @@ function capture(program, args) {
   }).trim();
 }
 
-function installDependencies(directory) {
-  // The script runner may be pnpm, including its native executable. Install
-  // through npm regardless of the runner because this workflow uses npm's lockfile.
-  const args = ['ci', '--prefix', directory, '--omit=dev', '--no-audit', '--no-fund'];
-  if (process.platform !== 'win32') {
-    run('npm', args);
-    return;
-  }
-  // Windows distributes npm as a .cmd shim. Run its JS entry without a shell
-  // so arguments such as the staging directory are passed verbatim.
-  const runner = process.env.npm_execpath ?? '';
-  const npm = basename(runner) === 'npm-cli.js'
-    ? runner
-    : join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  if (!existsSync(npm)) throw new Error('Could not find npm-cli.js. Install Node.js with npm.');
-  run(process.execPath, [npm, ...args]);
-}
-
-function setupDevelopment() {
-  const modules = join(tui, 'node_modules');
-  const marker = join(modules, '.messenger-lock');
-  const expected = createHash('sha256')
-    .update(readFileSync(manifestPath))
-    .update(readFileSync(lockfile))
-    .digest('hex');
-  if (!existsSync(join(modules, '.modules.yaml'))
-      && existsSync(marker) && readFileSync(marker, 'utf8') === expected) return;
-  installDependencies(tui);
-  writeFileSync(marker, expected);
+function installDependencies(directory, production = false) {
+  const args = ['install', '--frozen-lockfile', ...(production ? ['--prod'] : [])];
+  // pnpm 12 is a native executable, so invoke the pinned runner directly.
+  run(pnpm, args, {cwd: directory});
 }
 
 function hostTarget() {
@@ -101,7 +76,9 @@ function stageBundle(bundle, executable) {
   cpSync(join(tui, 'src'), join(bundle, 'src'), {recursive: true});
   const {scripts, ...manifest} = JSON.parse(readFileSync(manifestPath, 'utf8'));
   writeFileSync(join(bundle, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
-  copyFileSync(lockfile, join(bundle, 'package-lock.json'));
+  for (const file of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    copyFileSync(join(tui, file), join(bundle, file));
+  }
   copyFileSync(join(root, 'LICENSE'), join(bundle, 'LICENSE'));
   mkdirSync(join(bundle, 'bin'));
   const bundledCore = join(bundle, 'bin', basename(executable));
@@ -118,7 +95,7 @@ function stageBundle(bundle, executable) {
       '',
     ].join('\n'), {mode: 0o755});
   }
-  installDependencies(bundle);
+  installDependencies(bundle, true);
 }
 
 function release(target, executable, output) {
@@ -155,6 +132,9 @@ function release(target, executable, output) {
 }
 
 function main(command, args) {
+  if (!pnpm || !process.env.npm_config_user_agent?.startsWith('pnpm/12.')) {
+    throw new Error('Run the TUI workflow with pnpm 12, for example pnpm --prefix tui run dev.');
+  }
   if (!['dev', 'build', 'test', 'release'].includes(command)) throw new Error('Unknown TUI workflow.');
   let output = join(tui, 'dist');
   if (command === 'release') {
@@ -165,7 +145,7 @@ function main(command, args) {
   }
 
   const target = hostTarget();
-  if (command !== 'release') setupDevelopment();
+  if (command !== 'release') installDependencies(tui);
   if (command !== 'dev') checkSources();
   const executable = build(target, command === 'release');
   const app = join(tui, 'src', 'main.js');
@@ -190,7 +170,7 @@ function main(command, args) {
 
 try {
   const [, , command, ...args] = process.argv;
-  // pnpm forwards the separator that npm consumes before invoking the script.
+  // Accept a separator before arguments forwarded by pnpm.
   main(command, args[0] === '--' ? args.slice(1) : args);
 } catch (error) {
   console.error(`TUI workflow: ${error.message}`);
