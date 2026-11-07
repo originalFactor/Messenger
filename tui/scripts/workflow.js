@@ -5,7 +5,7 @@ import {
   readdirSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -31,18 +31,32 @@ function capture(program, args) {
 }
 
 function installDependencies(directory) {
-  const npm = process.env.npm_execpath;
-  if (!npm) throw new Error('Run this workflow through npm.');
-  run(process.execPath, [npm, 'ci', '--prefix', directory, '--omit=dev', '--no-audit', '--no-fund']);
+  // The script runner may be pnpm, including its native executable. Install
+  // through npm regardless of the runner because this workflow uses npm's lockfile.
+  const args = ['ci', '--prefix', directory, '--omit=dev', '--no-audit', '--no-fund'];
+  if (process.platform !== 'win32') {
+    run('npm', args);
+    return;
+  }
+  // Windows distributes npm as a .cmd shim. Run its JS entry without a shell
+  // so arguments such as the staging directory are passed verbatim.
+  const runner = process.env.npm_execpath ?? '';
+  const npm = basename(runner) === 'npm-cli.js'
+    ? runner
+    : join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!existsSync(npm)) throw new Error('Could not find npm-cli.js. Install Node.js with npm.');
+  run(process.execPath, [npm, ...args]);
 }
 
 function setupDevelopment() {
-  const marker = join(tui, 'node_modules', '.messenger-lock');
+  const modules = join(tui, 'node_modules');
+  const marker = join(modules, '.messenger-lock');
   const expected = createHash('sha256')
     .update(readFileSync(manifestPath))
     .update(readFileSync(lockfile))
     .digest('hex');
-  if (existsSync(marker) && readFileSync(marker, 'utf8') === expected) return;
+  if (!existsSync(join(modules, '.modules.yaml'))
+      && existsSync(marker) && readFileSync(marker, 'utf8') === expected) return;
   installDependencies(tui);
   writeFileSync(marker, expected);
 }
@@ -175,7 +189,9 @@ function main(command, args) {
 }
 
 try {
-  main(process.argv[2], process.argv.slice(3));
+  const [, , command, ...args] = process.argv;
+  // pnpm forwards the separator that npm consumes before invoking the script.
+  main(command, args[0] === '--' ? args.slice(1) : args);
 } catch (error) {
   console.error(`TUI workflow: ${error.message}`);
   process.exitCode = 1;

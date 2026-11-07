@@ -173,6 +173,9 @@ npm --prefix tui run build        # install dependencies and build the debug Cor
 npm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
 ```
 
+You can also run scripts with `pnpm --prefix tui run dev`. The workflow installs
+dependencies with npm using `tui/package-lock.json`.
+
 Pass TUI options after `--`, for example `npm --prefix tui run dev -- --db ./test-chat.db`.
 
 The release command uses `tar` and writes a versioned archive for the current
