@@ -4,12 +4,13 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from textual.widgets import Checkbox, Input, OptionList, Static
 
 from messenger_tui.app import Messenger
 from messenger_tui.chat import Chat
-from messenger_tui.cloud import BUILTIN_PROVIDER_ID, CloudAccount, normalize_server_url
+from messenger_tui.cloud import BUILTIN_PROVIDER_ID, CloudAccount, normalize_server_url, sync_builtin_models
 from messenger_tui.cloud_screen import CloudDialog
 from messenger_tui.core import ApiError, open_core
 from messenger_tui.models_screen import ModelEditor, ModelManager
@@ -81,7 +82,7 @@ class CloudTerminalTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
-    async def mock_cloud(self, name):
+    async def mock_cloud(self, name, uploads=None):
         requests = []
 
         async def respond(reader, writer):
@@ -89,7 +90,8 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
                 line = await reader.readline()
                 if not line:
                     return
-                _, path, _ = line.decode().split()
+                method, target, _ = line.decode().split()
+                path = urlsplit(target).path
                 headers = {}
                 while (line := await reader.readline()) not in (b"\r\n", b""):
                     key, value = line.decode().split(":", 1)
@@ -121,6 +123,34 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
                         }]}
                     else:
                         status, payload = "401 Unauthorized", {"error": "invalid AI key"}
+                elif path == "/messenger/v1/chat/completions":
+                    data = b'data: {"choices":[{"delta":{"content":"cloud reply"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+                    writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n" + data)
+                    await writer.drain()
+                    return
+                elif uploads is not None and path == "/messenger/api/sync":
+                    self.assertEqual(headers.get("cookie"), f"messenger_session={name}")
+                    query = parse_qs(urlsplit(target).query)
+                    status = "200 OK"
+                    if query["collection"] == ["agents"]:
+                        payload = {"documents": [{"_id": f"cloud-default-{name}", "isDefault": True}], "latestVersion": 1}
+                    else:
+                        since = int(query["since"][0])
+                        payload = {
+                            "documents": [
+                                {"_id": row["id"], "version": row["version"]}
+                                for row in uploads["rows"].values() if row["version"] > since
+                            ],
+                            "latestVersion": uploads["version"],
+                        }
+                elif uploads is not None and method == "PUT" and "/api/conversations/" in path:
+                    self.assertEqual(headers.get("cookie"), f"messenger_session={name}")
+                    if uploads.get("fail"):
+                        status, payload = "503 Service Unavailable", {"error": "temporarily unavailable"}
+                    else:
+                        uploads["version"] += 1
+                        uploads["rows"][body["id"]] = {**body, "version": uploads["version"]}
+                        status, payload = "200 OK", {"id": body["id"], "version": uploads["version"]}
                 data = json.dumps(payload).encode()
                 writer.write((
                     f"HTTP/1.1 {status}\r\n{cookie}Content-Type: application/json\r\n"
@@ -136,6 +166,75 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(server.close)
         url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/messenger"
         return url, requests
+
+    async def test_tui_uploads_completed_turns_and_backfills_history(self):
+        uploads = {"rows": {}, "version": 1}
+        second_uploads = {"rows": {}, "version": 1}
+        first_url, _ = await self.mock_cloud("first", uploads)
+        second_url, _ = await self.mock_cloud("second", second_uploads)
+        executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "chat.db"
+            async with open_core(executable, database) as (api, version):
+                agent = await api.json("/agents/default")
+                chat = Chat(api, agent, None)
+                provider = await chat.save_provider({
+                    "name": "Local", "base_url": f"{first_url}/v1", "api_key": "", "api_format": "chat",
+                })
+                local_model = await chat.save_model({
+                    "provider_id": provider["id"], "model_id": "local", "display_name": "Local", "is_enabled": True,
+                })
+                await chat.choose_model(local_model)
+                await chat.turn({"content": "older offline chat"}, lambda: None)
+                offline_id = chat.session["id"]
+                self.assertEqual(uploads["rows"], {})
+
+                account = await CloudAccount.load(api)
+                await account.login(first_url, "user@example.com", "secret")
+                await sync_builtin_models(api)
+                await chat.new()
+                cloud_model, = await chat.provider_models(BUILTIN_PROVIDER_ID)
+                await chat.choose_model(cloud_model)
+                await chat.turn({"content": "new online chat"}, lambda: None)
+                online_id = chat.session["id"]
+                self.assertEqual(set(uploads["rows"]), {online_id})
+                payload = uploads["rows"][online_id]
+                self.assertEqual(payload["agentId"], "cloud-default-first")
+                self.assertEqual(payload["overrideModelId"], "model-first")
+                self.assertEqual([row["content"] for row in payload["messages"]], ["new online chat", "cloud reply"])
+
+                uploads["fail"] = True
+                await chat.turn({"content": "keep this on upload error"}, lambda: None)
+                self.assertIn("temporarily unavailable", chat.sync_fault)
+                self.assertEqual(chat.messages[-2]["content"], "keep this on upload error")
+                self.assertEqual(len(uploads["rows"][online_id]["messages"]), 2)
+                uploads["fail"] = False
+
+                app = Messenger(chat, version)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.press("/", "s", "y", "enter")
+                    if app.operation:
+                        await app.operation
+                    self.assertEqual(set(uploads["rows"]), {online_id, offline_id})
+                    self.assertEqual(len(uploads["rows"][online_id]["messages"]), 4)
+                    self.assertIn("Uploaded 2", chat.notice)
+                synced_version = uploads["version"]
+                await chat.upload_conversations()
+                self.assertEqual(uploads["version"], synced_version)
+
+                uploads["version"] += 1
+                uploads["rows"][online_id]["version"] = uploads["version"]
+                await chat.turn({"content": "cloud has newer edits"}, lambda: None)
+                self.assertIn("Cloud has newer changes", chat.sync_fault)
+                self.assertEqual(len(uploads["rows"][online_id]["messages"]), 4)
+
+            async with open_core(executable, database) as (api, _):
+                account = await CloudAccount.load(api)
+                await account.login(second_url, "user@example.com", "secret")
+                chat = Chat(api, await api.json("/agents/default"), None)
+                await chat.upload_conversations()
+                self.assertEqual(second_uploads["rows"], {})
+                self.assertIn("Skipped 2", chat.notice)
 
     async def test_login_persists_and_switching_server_clears_the_session(self):
         first_url, first_requests = await self.mock_cloud("first")

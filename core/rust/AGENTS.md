@@ -19,6 +19,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
 - `/cloud/builtin-models/sync` provisions Messenger Cloud AI from the saved account before fetching its catalog. Clearing the Cloud session removes that provider and its models.
+- `/cloud/conversations/push` uploads standalone TUI conversations without applying Cloud data. It stores the account/server binding and last uploaded digest/version, checks for newer Cloud changes before updates, and maps local-only Agent IDs to the Cloud default. Keep provider credentials and unrelated entities out of these uploads.
 - Model rows persist capability metadata separately from explicit overrides. Provider discovery reads Messenger extensions from `/models`. TUI discovery skips models.dev and fills missing capabilities with pi-catalog. Built-in models persist only Cloud-supplied capabilities.
 - Tool policy stays in Rust. Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`. The TUI returns an explicit unavailable result for local tool requests.
 - Dropping the chat SSE cancels the turn token, wakes a pending tool host and finalizes partial rows.

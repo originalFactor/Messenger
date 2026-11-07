@@ -48,6 +48,10 @@ finishes with an `isError` result the model can read.
 A turn ends with exactly one of `Finished`, `Cancelled`, or `Error`. If the HTTP
 stream closes without one, clients emit a local `stream_ended` error.
 
+After receiving a terminal event, the TUI can upload the persisted conversation
+through `POST /api/v1/cloud/conversations/push`. Upload errors are separate from
+the chat stream.
+
 For `ToolCallRequested`, the client executes the tool and posts the result to
 `POST /api/v1/turns/tools/{callId}/result` with
 `{ "output": string, "isError": boolean }`. Dropping the SSE connection cancels

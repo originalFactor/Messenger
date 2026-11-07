@@ -559,6 +559,32 @@ paths:
     post:
       operationId: cloudPushPending
       responses: { "200": { description: Sync result } }
+  /cloud/conversations/push:
+    post:
+      operationId: cloudUploadConversations
+      description: Upload finalized standalone TUI conversations. Supply a conversation ID after a turn. Omit the ID to explicitly upload eligible history. Bound conversations stay with their original server and account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conversationId: { type: [string, "null"] }
+                claimNew: { type: boolean, default: false, description: Bind a newly created conversation to the current signed-in account. }
+      responses:
+        "200":
+          description: Counts of uploaded, skipped, and conflicting conversations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploaded, skipped, conflicts]
+                properties:
+                  uploaded: { type: integer }
+                  skipped: { type: integer }
+                  conflicts: { type: integer }
+        "401": { $ref: "#/components/responses/CloudError" }
   /cloud/push-snapshot:
     post:
       operationId: cloudPushSnapshot

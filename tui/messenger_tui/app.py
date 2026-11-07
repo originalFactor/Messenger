@@ -25,6 +25,7 @@ COMMANDS = (
     ("providers", "Manage providers", ""),
     ("connect", "Add a provider and model", ""),
     ("cloud", "Messenger Cloud account and server address", ""),
+    ("sync", "Upload local conversations to Messenger Cloud", ""),
     ("retry", "Retry the last failed reply", ""),
     ("regenerate", "Regenerate the last reply", ""),
     ("help", "Keyboard shortcuts", ""),
@@ -143,7 +144,7 @@ class Messenger(App):
                                               "PgUp for older messages" if chat.has_older else "")))
 
         rendered = (id(chat.messages), [(item["role"], item["content"]) for item in chat.live],
-                    chat.fault, model_enabled)
+                    chat.fault, chat.sync_fault, model_enabled)
         if rendered != self.rendered:
             self.rendered = rendered
             follow = self.history_view.is_vertical_scroll_end
@@ -167,7 +168,10 @@ class Messenger(App):
                 text.append("\n")
             if chat.fault:
                 text.append("Assistant\n", style="bold")
-                text.append(display(chat.fault), style="red")
+                text.append(display(chat.fault) + "\n", style="red")
+            if chat.sync_fault:
+                text.append("Messenger Cloud\n", style="bold red")
+                text.append(display(chat.sync_fault), style="red")
             self.base.query_one("#transcript", Static).update(text)
             if follow:
                 self.call_after_refresh(self.history_view.scroll_end, animate=False)
@@ -336,6 +340,8 @@ class Messenger(App):
                 self.start(self.open_providers)
             case "cloud":
                 self.start(self.open_cloud)
+            case "sync":
+                self.start(self.chat.upload_conversations)
             case "new":
                 self.start(self.new_session)
             case "sessions" | "models" | "agents":

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from httpx import TimeoutException
 
+from .cloud import BUILTIN_PROVIDER_ID
 from .core import ApiError, CoreApi, entity
 from .model_metadata import PiCatalog, effective_metadata, legacy_metadata, model_overrides
 
@@ -38,6 +39,7 @@ class Chat:
         self.has_older = False
         self.live: list[dict] = []
         self.fault = ""
+        self.sync_fault = ""
         self.notice = ""
         self.notice_error = False
         self.update = lambda: None
@@ -242,6 +244,38 @@ class Chat:
             "agent_id": self.agent["id"], "created_at": now, "updated_at": now,
         })
 
+    async def upload_conversations(self, conversation_id: str | None = None, *, claim_new: bool = False) -> None:
+        try:
+            result = await self.api.json("/cloud/conversations/push", method="POST", body={
+                "conversationId": conversation_id, "claimNew": claim_new,
+            }, timeout=25 if conversation_id else 125)
+        except Exception as error:
+            detail = f"Cloud upload failed. {error}"
+            if isinstance(error, ApiError) and error.code == "session_expired":
+                detail += " Sign in again with /cloud, then use /sync."
+                if self.model and self.model["provider_id"] == BUILTIN_PROVIDER_ID:
+                    self.model = None
+            self.sync_fault = detail
+            self.status(detail, True)
+            return
+        self.sync_fault = ""
+        if result["conflicts"]:
+            self.sync_fault = (
+                f"Cloud has newer changes for {result['conflicts']} conversations. "
+                f"Uploaded {result['uploaded']} other conversations."
+            )
+            self.status(self.sync_fault, True)
+            return
+        if conversation_id is None:
+            skipped = f" Skipped {result['skipped']} conversations." if result["skipped"] else ""
+            self.status(f"Uploaded {result['uploaded']} conversations to Messenger Cloud.{skipped}")
+        elif result["uploaded"] and not self.notice:
+            self.status("Conversation synced to Messenger Cloud.")
+        elif result["skipped"] and not self.notice:
+            self.status("Conversation upload skipped. Use /sync to upload eligible local conversations.")
+        else:
+            self.update()
+
     def accept(self, body: dict) -> None:
         self.accepted = True
         if body.get("operation") == "retry":
@@ -265,6 +299,8 @@ class Chat:
         last_round = None
         failure = None
         refresh_failure = None
+        new_session = self.session is None
+        terminal = False
         try:
             if not self.model:
                 raise ApiError("model_required", "Choose a model with /models or add one through /providers.")
@@ -299,10 +335,13 @@ class Chat:
                             failed = event["isError"]
                             self.status(f"Tool failed · {event['name']}" if failed else "Waiting for the model…", failed)
                         case "Error":
+                            terminal = True
                             failure = ApiError(event["code"], event["message"])
                         case "Cancelled":
+                            terminal = True
                             self.status("Turn cancelled.")
                         case "Finished":
+                            terminal = True
                             self.status()
         except Exception as error:
             failure = failure or error
@@ -321,6 +360,8 @@ class Chat:
             if not isinstance(failure, ApiError) or not persisted_error or persisted_error != failure.message:
                 self.fault = str(failure or refresh_failure)
             self.status(" · ".join(str(error) for error in (failure, refresh_failure) if error), True)
+        if terminal and self.session:
+            await self.upload_conversations(self.session["id"], claim_new=new_session)
 
     async def cancel(self) -> None:
         if self.turn_task and not self.accepted:

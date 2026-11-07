@@ -425,6 +425,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/cloud/sync-with", post(cloud_sync_with))
         .route("/cloud/push-pending", post(cloud_push_pending))
         .route("/cloud/push-snapshot", post(cloud_push_snapshot))
+        .route("/cloud/conversations/push", post(cloud_upload_conversations))
         .route(
             "/cloud/replace-cloud-with-local",
             post(cloud_replace_cloud_with_local),
@@ -1625,6 +1626,32 @@ async fn cloud_push_snapshot(State(state): State<ApiState>) -> Result<Json<i64>,
         .await
         .map_err(ApiError::cloud)?;
     Ok(Json(version))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadConversationsBody {
+    conversation_id: Option<String>,
+    #[serde(default)]
+    claim_new: bool,
+}
+
+async fn cloud_upload_conversations(
+    State(state): State<ApiState>,
+    Json(body): Json<UploadConversationsBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let seconds = if body.conversation_id.is_some() { 20 } else { 120 };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
+        let _sync = state.cloud_sync_gate.lock().await;
+        let active = state.active_turns.lock().await.keys().cloned().collect();
+        sync_engine(&state.store)?
+            .upload_conversations(body.conversation_id.as_deref(), body.claim_new, &active)
+            .await
+            .map_err(ApiError::cloud)
+    })
+    .await
+    .map_err(|_| ApiError::cloud(CloudError::Network("Conversation upload timed out.".into())))??;
+    json(result)
 }
 
 async fn cloud_replace_cloud_with_local(

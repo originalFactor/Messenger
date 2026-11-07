@@ -215,11 +215,15 @@ open the built-in entry in `/providers` to sync the catalog, view its read-only
 Cloud metadata, or enable and disable individual models. Signing out removes the
 Cloud provider and its models.
 
+New standalone chats started while signed in upload to Messenger Cloud after
+each turn. Run `/sync` to upload older local chats or retry an upload. Core
+links uploaded chats to their Cloud server and account. TUI conversation sync
+uploads local history and reports detected newer Cloud edits as conflicts.
+
 The TUI stores chats, provider credentials, and its Cloud session in `~/.messenger/tui.db`.
 Use `--db PATH` for a separate TUI profile and `--core PATH` for a custom
 Core executable. Keep the TUI database separate from a running Desktop
-instance. The TUI renders plain text and supports chat, with local workspace
-tools and cloud sync outside its current scope.
+instance. The TUI renders plain text and supports chat.
 
 _For more details on architecture, conventions, and hard constraints, please refer to [AGENTS.md](AGENTS.md)_
 

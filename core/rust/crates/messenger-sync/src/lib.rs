@@ -6,6 +6,7 @@
 pub mod api;
 pub mod avatar;
 pub mod cards;
+pub mod conversation_upload;
 pub mod documents;
 pub mod market;
 pub mod model_discovery;
