@@ -191,8 +191,12 @@ to run the highlighted command. Esc closes suggestions and keeps the draft.
 Use `/providers` to search and manage providers. **Add provider** saves the
 provider and automatically fetches and imports available models. For an
 existing provider, open **Manage models** to fetch again, add a model manually,
-edit its ID or display name, enable or disable it, or delete it. Fetching only
-imports missing models. If fetching fails, you can still add models by ID.
+edit it, enable or disable it, or delete it. Discovery imports new models and
+refreshes metadata using the provider's extended `/models` response first and
+pi-catalog for missing fields. Saved overrides survive refresh. The model editor
+has **Fetch metadata** and supports display name, input modalities, reasoning
+efforts, context window, max output tokens, and support for temperature, top_p,
+and penalties. If fetching fails, you can still add models by ID.
 Deleting a provider also deletes its models. Use `/connect` to add a provider
 and choose a model in one flow. Enter sends a message,
 Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the
@@ -207,8 +211,9 @@ self-hosted server and choose **Save address**, or sign in with that address.
 Saving a different address signs out the current account first.
 Signing in with a Cloud AI key automatically adds **Messenger Cloud AI** and
 syncs its models from that server. Use `/models` to select a Cloud model, or
-open the built-in entry in `/providers` to sync the catalog or enable and
-disable individual models. Signing out removes the Cloud provider and its models.
+open the built-in entry in `/providers` to sync the catalog, view its read-only
+Cloud metadata, or enable and disable individual models. Signing out removes the
+Cloud provider and its models.
 
 The TUI stores chats, provider credentials, and its Cloud session in `~/.messenger/tui.db`.
 Use `--db PATH` for a separate TUI profile and `--core PATH` for a custom

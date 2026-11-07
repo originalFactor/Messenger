@@ -2,7 +2,7 @@
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -74,6 +74,19 @@ pub fn has_project_device_id_column(conn: &rusqlite::Connection) -> rusqlite::Re
     Ok(false)
 }
 
+/// v5 → v6: capability metadata and explicit overrides for models.
+pub fn add_model_metadata_columns(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(models)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for column in ["metadata", "metadataOverrides"] {
+        if !columns.iter().any(|name| name == column) {
+            conn.execute(&format!("ALTER TABLE models ADD COLUMN {column} TEXT"), [])?;
+        }
+    }
+    Ok(())
+}
+
 /// Created after the v1 → v2 ALTER, so a fresh database (whose table already
 /// has the column) and a migrated one converge on the same index.
 pub const CREATE_PROJECT_ID_INDEX: &str =
@@ -105,7 +118,9 @@ pub const CREATE_TABLES: &[&str] = &[
         supportsThinking INTEGER NOT NULL DEFAULT 0,
         supportsJsonOutput INTEGER NOT NULL DEFAULT 0,
         supportsTemperature INTEGER NOT NULL DEFAULT 0,
-        createdAt INTEGER NOT NULL
+        createdAt INTEGER NOT NULL,
+        metadata TEXT,
+        metadataOverrides TEXT
     )",
     "CREATE INDEX IF NOT EXISTS index_models_providerId ON models(providerId)",
     "CREATE TABLE IF NOT EXISTS agents (

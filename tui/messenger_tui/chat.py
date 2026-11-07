@@ -8,6 +8,7 @@ from uuid import uuid4
 from httpx import TimeoutException
 
 from .core import ApiError, CoreApi, entity
+from .model_metadata import PiCatalog, effective_metadata, legacy_metadata, model_overrides
 
 HISTORY_LIMIT = 100
 
@@ -43,6 +44,7 @@ class Chat:
         self.turn_task: asyncio.Task | None = None
         self.turn_path: str | None = None
         self.accepted = False
+        self.catalog = PiCatalog()
 
     def status(self, text: str = "", error: bool = False) -> None:
         self.notice = text
@@ -131,11 +133,29 @@ class Chat:
     async def save_model(self, values: dict) -> dict:
         identifier = values.setdefault("id", str(uuid4()))
         values.setdefault("created_at", now_ms())
+        if values.get("metadata") is not None:
+            metadata = effective_metadata(values["model_id"], values["metadata"], values.get("metadata_overrides") or {})
+            values.update(
+                display_name=metadata["displayName"],
+                context_window=metadata.get("contextWindow", 0),
+                input_modalities=",".join(metadata["inputModalities"]),
+                supports_thinking=metadata.get("reasoning", False),
+                supports_temperature=metadata["supportsTemperature"],
+            )
         model = await self.api.json(entity("models", identifier), method="PUT", body=values)
         if self.model and self.model["id"] == identifier:
             self.model = model
             self.update()
         return model
+
+    async def set_model_enabled(self, model: dict, enabled: bool) -> dict:
+        path = entity("models", model["id"])
+        await self.api.json(f"{path}/enabled", method="PUT", body={"enabled": enabled})
+        saved = {**model, "is_enabled": enabled}
+        if self.model and self.model["id"] == saved["id"]:
+            self.model = saved
+            self.update()
+        return saved
 
     async def delete_model(self, identifier: str) -> None:
         await self.api.json(entity("models", identifier), method="DELETE")
@@ -143,26 +163,62 @@ class Chat:
             self.model = None
             self.update()
 
-    async def fetch_models(self, provider: dict) -> int:
+    async def discover_models(self, provider: dict) -> list[dict]:
         key = provider["api_key"]
         try:
-            discovered = await self.api.json("/models/discover", method="POST", body={
+            return await self.api.json("/models/discover", method="POST", body={
                 "baseUrl": provider["base_url"], "apiKey": key, "apiFormat": provider["api_format"],
+                "skipCatalog": True,
             }, timeout=45)
         except TimeoutException:
             raise ApiError("discovery_timeout", "Model discovery timed out.") from None
         except Exception as error:
             message = str(error)
             raise ApiError("discovery_failed", message.replace(key, "••••") if key else message) from None
-        existing = {model["model_id"] for model in await self.provider_models(provider["id"])}
-        imported = 0
+    async def fetch_models(self, provider: dict) -> str:
+        discovered = await self.discover_models(provider)
+        if not discovered:
+            return "No models returned by the provider."
+        catalog, warning = await self.catalog.load()
+        existing = {model["model_id"]: model for model in await self.provider_models(provider["id"])}
+        imported = refreshed = 0
+        seen = set()
         for model in discovered:
             identifier = model["model_id"]
-            if identifier.strip() and identifier not in existing:
-                await self.save_model({**model, "provider_id": provider["id"], "is_enabled": True})
-                existing.add(identifier)
+            if not identifier.strip() or identifier in seen:
+                continue
+            seen.add(identifier)
+            if previous := existing.get(identifier):
+                overrides = model_overrides(previous)
+                metadata = {
+                    **(previous.get("metadata") if previous.get("metadata") is not None else legacy_metadata(previous)),
+                    **catalog.match(identifier), **model["metadata"],
+                }
+                if metadata != previous.get("metadata"):
+                    await self.save_model({**previous, "metadata": metadata, "metadata_overrides": overrides})
+                    refreshed += 1
+            else:
+                await self.save_model({
+                    **model, "provider_id": provider["id"], "is_enabled": True,
+                    "metadata": {**catalog.match(identifier), **model["metadata"]},
+                })
                 imported += 1
-        return imported
+        return f"Imported {imported} new models. Updated metadata for {refreshed}. {warning}".strip()
+
+    async def fetch_model_metadata(self, provider: dict, model_id: str) -> tuple[dict, str]:
+        discovered, catalog_result = await asyncio.gather(
+            self.discover_models(provider), self.catalog.load(), return_exceptions=True,
+        )
+        if isinstance(catalog_result, Exception):
+            raise catalog_result
+        catalog, warning = catalog_result
+        metadata = catalog.match(model_id)
+        if isinstance(discovered, Exception):
+            warning = f"Provider discovery failed. {discovered} {warning}".strip()
+        else:
+            upstream = next((model["metadata"] for model in discovered if model["model_id"] == model_id), {})
+            metadata = {**metadata, **upstream}
+        return metadata, warning
 
     async def connect(self, values: dict) -> None:
         provider = await self.save_provider(values)
@@ -173,12 +229,11 @@ class Chat:
         })
         await self.choose_model(model)
         try:
-            imported = await self.fetch_models(provider)
+            result = await self.fetch_models(provider)
         except Exception as error:
             self.status(f"Model set to {model['display_name']}. Fetching more models failed. {error}", True)
         else:
-            if imported:
-                self.status(f"Model set to {model['display_name']}. Imported {imported} additional models.")
+            self.status(result)
 
     async def create_session(self, content: str) -> dict:
         now = now_ms()

@@ -89,6 +89,7 @@ class Messenger(App):
         self.dismissed_prefix: str | None = None
         self.last_prefix: str | None = None
         self.rendered = None
+        self.checked_cloud_metadata = False
         self.closing = False
 
     def compose(self) -> ComposeResult:
@@ -353,10 +354,13 @@ class Messenger(App):
         api = self.chat.api
         providers = await api.list("/providers")
         if any(provider["id"] == BUILTIN_PROVIDER_ID for provider in providers):
-            return providers
-        # Profiles signed in before the TUI supported the Cloud catalog can
-        # provision it from their saved account the first time they need it.
-        if not (await api.json("/cloud/me") or {}).get("aiApiKey"):
+            if self.checked_cloud_metadata:
+                return providers
+            self.checked_cloud_metadata = True
+            models = await self.chat.provider_models(BUILTIN_PROVIDER_ID)
+            if all(model.get("metadata") is not None for model in models):
+                return providers
+        elif not (await api.json("/cloud/me") or {}).get("aiApiKey"):
             return providers
         try:
             await sync_builtin_models(api)

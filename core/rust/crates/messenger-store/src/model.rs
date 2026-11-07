@@ -59,6 +59,37 @@ pub struct StoredModel {
     #[serde(default)]
     pub supports_temperature: bool,
     pub created_at: i64,
+    #[serde(default)]
+    pub metadata: Option<ModelMetadata>,
+    #[serde(default)]
+    pub metadata_overrides: Option<ModelMetadata>,
+}
+
+/// Provider and catalog capabilities, in the same shape as Messenger Web.
+/// Absent fields can inherit a fallback independently.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ModelMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_temperature: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_top_p: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_penalties: Option<bool>,
 }
 
 fn default_text_modality() -> String {

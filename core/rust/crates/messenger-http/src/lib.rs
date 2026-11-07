@@ -1399,6 +1399,8 @@ struct DiscoverModelsBody {
     base_url: String,
     api_key: String,
     api_format: Option<String>,
+    #[serde(default)]
+    skip_catalog: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1498,8 +1500,11 @@ async fn discover_models(
         discover_provider_models(&body.base_url, &body.api_key, body.api_format.as_deref())
             .await
             .map_err(ApiError::BadRequest)?;
-    let enriched = enrich_with_models_dev(&state.store, discovered).await;
-    json(enriched)
+    if body.skip_catalog {
+        json(discovered)
+    } else {
+        json(enrich_with_models_dev(&state.store, discovered).await)
+    }
 }
 
 async fn model_metadata(
@@ -3072,6 +3077,8 @@ mod tests {
                 supports_json_output: false,
                 supports_temperature: true,
                 created_at: 1,
+                metadata: None,
+                metadata_overrides: None,
             })
             .unwrap();
         state

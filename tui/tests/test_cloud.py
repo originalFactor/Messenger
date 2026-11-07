@@ -113,7 +113,12 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
                     requests.append(("models", headers.get("authorization"), None))
                     if headers.get("authorization") == f"Bearer key-{name}":
                         status = "200 OK"
-                        payload = {"data": [{"id": f"model-{name}", "context_window": 4096}]}
+                        payload = {"data": [{
+                            "id": f"model-{name}", "display_name": "Cloud label", "context_window": 4096,
+                            "max_output_tokens": 512, "input_modalities": ["text", "image"],
+                            "reasoning": False, "reasoning_efforts": [],
+                            "supports_temperature": False, "supports_top_p": True, "supports_penalties": False,
+                        }]}
                     else:
                         status, payload = "401 Unauthorized", {"error": "invalid AI key"}
                 data = json.dumps(payload).encode()
@@ -175,6 +180,12 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
                     await pilot.press("enter")
                     self.assertIsInstance(app.screen, ModelEditor)
                     self.assertFalse(app.screen.query("#delete-model"))
+                    self.assertFalse(app.screen.query(Input))
+                    self.assertFalse(app.screen.query("#fetch-metadata"))
+                    self.assertIn("Cloud label", str(app.screen.query_one("#model-name", Static).content))
+                    self.assertIn("512", str(app.screen.query_one("#model-max-tokens", Static).content))
+                    self.assertIn("false", str(app.screen.query_one("#model-penalties", Static).content))
+                    self.assertIn("[]", str(app.screen.query_one("#model-efforts", Static).content))
                     app.screen.query_one(Checkbox).value = False
                     await pilot.click("#save-model")
                     await app.workers.wait_for_complete()

@@ -7,7 +7,7 @@
 use messenger_llm::client::OpenAiClient;
 use messenger_store::model::StoredModel;
 
-use crate::model_discovery::models_dev_context_window;
+use crate::model_discovery::provider_metadata;
 use crate::models::BUILTIN_PROVIDER_ID;
 use crate::sync::SyncEngine;
 
@@ -35,7 +35,9 @@ impl<'a> SyncEngine<'a> {
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
 
-        if !force && !existing.is_empty() && (now - last_sync) < BUILTIN_MODELS_SYNC_INTERVAL_MS {
+        if !force && !existing.is_empty() && existing.iter().all(|model| model.metadata.is_some())
+            && (now - last_sync) < BUILTIN_MODELS_SYNC_INTERVAL_MS
+        {
             return Ok(existing.len());
         }
 
@@ -74,35 +76,31 @@ impl<'a> SyncEngine<'a> {
 
         for dto in &entries {
             let prev = existing_map.get(&dto.id);
+            let metadata = provider_metadata(dto);
             let row = StoredModel {
                 id: prev
                     .map(|p| p.id.clone())
                     .unwrap_or_else(|| format!("{BUILTIN_PROVIDER_ID}:{}", dto.id)),
                 provider_id: BUILTIN_PROVIDER_ID.to_string(),
                 model_id: dto.id.clone(),
-                display_name: dto.id.clone(),
+                display_name: metadata.display_name.clone().unwrap_or_else(|| dto.id.clone()),
                 is_enabled: prev.map(|p| p.is_enabled).unwrap_or(true),
-                context_window: match dto.context_window {
-                    Some(context) => context,
-                    // The proxy omits the column, so the models.dev catalogue
-                    // fills the gap before the previous row's value falls back.
-                    None => models_dev_context_window(self.store, &dto.id)
-                        .await
-                        .or_else(|| prev.map(|p| p.context_window))
-                        .unwrap_or(0),
-                },
+                context_window: metadata.context_window.unwrap_or(0),
                 input_rate: dto.input_rate.or_else(|| prev.and_then(|p| p.input_rate)),
                 output_rate: dto.output_rate.or_else(|| prev.and_then(|p| p.output_rate)),
                 cache_read_rate: dto
                     .cache_read_rate
                     .or_else(|| prev.and_then(|p| p.cache_read_rate)),
-                input_modalities: "text".to_string(),
+                input_modalities: metadata.input_modalities.as_ref().map(|values| values.join(","))
+                    .unwrap_or_else(|| "text".to_string()),
                 output_modalities: "text".to_string(),
                 supports_tool_calling: false,
-                supports_thinking: false,
+                supports_thinking: metadata.reasoning.unwrap_or(false),
                 supports_json_output: false,
-                supports_temperature: false,
+                supports_temperature: metadata.supports_temperature.unwrap_or(false),
                 created_at: prev.map(|p| p.created_at).unwrap_or(now),
+                metadata: Some(metadata),
+                metadata_overrides: Some(Default::default()),
             };
             self.store.upsert_model(&row).map_err(|e| e.to_string())?;
             count += 1;
@@ -164,6 +162,8 @@ mod tests {
                 supports_json_output: false,
                 supports_temperature: false,
                 created_at: 1,
+                metadata: None,
+                metadata_overrides: None,
             })
             .unwrap();
 
@@ -233,6 +233,8 @@ mod tests {
                 supports_json_output: false,
                 supports_temperature: false,
                 created_at: 1,
+                metadata: None,
+                metadata_overrides: None,
             })
             .unwrap();
 

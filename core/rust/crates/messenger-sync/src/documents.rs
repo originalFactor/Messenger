@@ -143,6 +143,8 @@ pub fn model_document_to_row(doc: &CloudModelDocument, provider_id: &str) -> Sto
         supports_json_output: doc.supports_json_output,
         supports_temperature: doc.supports_temperature,
         created_at: doc.created_at,
+        metadata: None,
+        metadata_overrides: None,
     }
 }
 

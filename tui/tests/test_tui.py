@@ -1,18 +1,18 @@
 import asyncio
 import json
 import os
-import sqlite3
 import tempfile
 import unittest
 from collections import Counter
-from contextlib import aclosing, closing
+from contextlib import aclosing
 from pathlib import Path
+from unittest.mock import patch
 
 from textual import events
 from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
 
 from messenger_tui.app import Messenger
-from messenger_tui.chat import Chat, model_for, now_ms
+from messenger_tui.chat import Chat, model_for
 from messenger_tui.core import open_core
 from messenger_tui.models_screen import ModelEditor, ModelManager
 from messenger_tui.providers_screen import ProviderEditor, ProviderManager
@@ -88,13 +88,35 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
         executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
         discoveries = []
         fail_discovery = False
+        context_window = 4096
 
         async def upstream(reader, writer):
             try:
-                discoveries.append(await reader.readuntil(b"\r\n\r\n"))
-                status = b"401 Unauthorized" if fail_discovery else b"200 OK"
-                body = (b'{"error":"Invalid test-provider-key"}' if fail_discovery else
-                        b'{"data":[{"id":"discovered","context_window":4096},{"id":"discovered"}]}')
+                request = await reader.readuntil(b"\r\n\r\n")
+                status = b"200 OK"
+                if request.startswith(b"GET /pi-catalog "):
+                    self.assertNotIn(b"authorization:", request.lower())
+                    payload = {"openai": {
+                        "discovered": {
+                            "name": "Pi Label", "maxTokens": 1024, "contextWindow": 32768,
+                            "reasoning": True, "input": ["text", "image"],
+                            "thinkingLevelMap": {"minimal": None, "low": "light", "high": "light", "max": "full"},
+                            "compat": {"supportsTemperature": True},
+                        },
+                        "manual": {"name": "Manual Pi Label", "contextWindow": 8192},
+                    }}
+                else:
+                    discoveries.append(request)
+                    if fail_discovery:
+                        status = b"401 Unauthorized"
+                        payload = {"error": "Invalid test-provider-key"}
+                    else:
+                        payload = {"data": [{
+                            "id": "discovered", "context_window": context_window,
+                            "display_name": "Provider label", "supports_temperature": False,
+                            "metadata": {"supportsTopP": False},
+                        }, {"id": "discovered"}]}
+                body = json.dumps(payload).encode()
                 writer.write(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n"
                              b"Connection: close\r\n\r\n" + body)
                 await writer.drain()
@@ -106,14 +128,10 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(server.wait_closed)
         self.addCleanup(server.close)
         port = server.sockets[0].getsockname()[1]
+        self.enterContext(patch("messenger_tui.model_metadata.PI_CATALOG_URL", f"http://127.0.0.1:{port}/pi-catalog"))
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "providers.db"
             async with open_core(executable, database) as (api, version):
-                # Keep discovery integration independent of the public metadata catalogue.
-                with closing(sqlite3.connect(database)) as connection, connection:
-                    connection.executemany("INSERT INTO kv (key, value) VALUES (?, ?)", [
-                        ("models_dev_body", '{"test/fixture":{}}'), ("models_dev_fetched_at", str(now_ms())),
-                    ])
                 agent = await api.json("/agents/default")
                 chat = Chat(api, agent, None)
                 app = Messenger(chat, version)
@@ -145,6 +163,13 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(provider["name"], "Local Provider")
                     [discovered] = await api.list("/models")
                     self.assertEqual(discovered["context_window"], 4096)
+                    self.assertEqual(discovered["display_name"], "Provider label")
+                    self.assertEqual(discovered["metadata"], {
+                        "displayName": "Provider label", "contextWindow": 4096, "maxOutputTokens": 1024,
+                        "inputModalities": ["text", "image"], "reasoning": True,
+                        "reasoningEfforts": ["light", "medium", "full"],
+                        "supportsTemperature": False, "supportsTopP": False,
+                    })
                     self.assertTrue(discovered["is_enabled"])
                     self.assertEqual(len(discoveries), 1)
                     self.assertIn(b"GET /v1/models ", discoveries[0])
@@ -154,6 +179,9 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     await pilot.press("enter")
                     self.assertIsInstance(app.screen, ModelEditor)
                     app.screen.query_one("#model-name", Input).value = "Renamed model"
+                    app.screen.query_one("#model-context", Input).value = "2048"
+                    app.screen.query_one("#model-efforts", Input).value = "[]"
+                    app.screen.query_one("#model-penalties", Input).value = "false"
                     app.screen.query_one("#model-enabled", Checkbox).value = False
                     await pilot.click("#save-model")
                     await app.workers.wait_for_complete()
@@ -161,14 +189,20 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(app.screen, models)
                     [edited_model] = await api.list("/models")
                     self.assertEqual(edited_model, {
-                        **discovered, "display_name": "Renamed model", "is_enabled": False,
+                        **discovered, "display_name": "Renamed model", "is_enabled": False, "context_window": 2048,
+                        "metadata_overrides": {
+                            "displayName": "Renamed model", "contextWindow": 2048,
+                            "reasoningEfforts": [], "supportsPenalties": False,
+                        },
                     })
                     await chat.turn({"content": "disabled model"}, lambda: self.fail("draft cleared"))
                     self.assertIn("model_disabled", chat.fault)
                     self.assertEqual(await api.list("/conversations"), [])
 
+                    context_window = 8192
                     await pilot.click("#fetch-models")
                     await app.workers.wait_for_complete()
+                    edited_model["metadata"]["contextWindow"] = 8192
                     self.assertEqual(await api.list("/models"), [edited_model])
                     self.assertEqual(len(discoveries), 2)
 
@@ -184,6 +218,9 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     await pilot.click("#add-model")
                     self.assertIsInstance(app.screen, ModelEditor)
                     app.screen.query_one("#model-id", Input).value = "manual"
+                    await pilot.click("#fetch-metadata")
+                    await app.workers.wait_for_complete()
+                    self.assertIn("Manual Pi Label", app.screen.query_one("#model-name", Input).placeholder)
                     await pilot.click("#save-model")
                     await app.workers.wait_for_complete()
                     await pilot.pause()
@@ -227,7 +264,7 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     await pilot.click("#manage-models")
                     await app.workers.wait_for_complete()
                     self.assertIsInstance(app.screen, ModelManager)
-                    self.assertEqual(len(discoveries), 3)
+                    self.assertEqual(len(discoveries), 4)
                     await pilot.press("escape")
                     self.assertIsInstance(app.screen, ProviderEditor)
                     await pilot.click("#delete-provider")

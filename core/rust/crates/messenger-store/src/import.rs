@@ -179,6 +179,8 @@ fn read_models(legacy: &Connection) -> Result<Vec<StoredModel>, rusqlite::Error>
             supports_json_output: row.get::<_, i64>(12)? != 0,
             supports_temperature: row.get::<_, i64>(13)? != 0,
             created_at: row.get(14)?,
+            metadata: None,
+            metadata_overrides: None,
         })
     })?;
     rows.collect()

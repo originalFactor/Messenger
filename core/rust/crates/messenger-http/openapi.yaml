@@ -266,7 +266,8 @@ paths:
                 baseUrl: { type: string }
                 apiKey: { type: string }
                 apiFormat: { type: [string, "null"] }
-      responses: { "200": { description: Enriched model list, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+                skipCatalog: { type: boolean, default: false, description: Skip models.dev enrichment and return provider-supplied metadata. }
+      responses: { "200": { description: Discovered model list with optional provider capability metadata, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
   /models/metadata/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -716,6 +717,23 @@ components:
       type: object
       additionalProperties: true
       required: [id, provider_id, model_id, display_name, is_enabled, created_at]
+      properties:
+        metadata: { $ref: "#/components/schemas/ModelMetadata" }
+        metadata_overrides: { $ref: "#/components/schemas/ModelMetadata" }
+    ModelMetadata:
+      type: [object, "null"]
+      description: Optional capability fields. Explicit false, zero, and empty lists are preserved.
+      properties:
+        displayName: { type: string }
+        inputModalities: { type: array, items: { type: string } }
+        reasoning: { type: boolean }
+        reasoningEfforts: { type: array, items: { type: string } }
+        defaultReasoningEffort: { type: string }
+        contextWindow: { type: integer, minimum: 0 }
+        maxOutputTokens: { type: integer, minimum: 1 }
+        supportsTemperature: { type: boolean }
+        supportsTopP: { type: boolean }
+        supportsPenalties: { type: boolean }
     Agent:
       type: object
       additionalProperties: true

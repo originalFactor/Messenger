@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::model::{
-    StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
+    ModelMetadata, StoredAgent, StoredConversation, StoredMessage, StoredModel, StoredProject, StoredProvider,
 };
 use crate::schema::{CREATE_TABLES, SCHEMA_VERSION};
 
@@ -78,6 +78,7 @@ impl Store {
         if !crate::schema::has_project_device_id_column(&conn)? {
             conn.execute_batch(crate::schema::ADD_PROJECT_DEVICE_ID_COLUMN)?;
         }
+        crate::schema::add_model_metadata_columns(&conn)?;
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
@@ -783,7 +784,7 @@ const PROJECT_COLUMNS: &str = "id, name, workspace, deviceId, createdAt, updated
 const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6";
 const PROJECT_UPDATES: &str = "name=?2, workspace=?3, deviceId=?4, updatedAt=?6";
 
-const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt";
+const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides";
 
 const AGENT_COLUMNS: &str = "id, name, avatar, systemPrompt, description, defaultModelId, temperature, topP, maxTokens, reasoningEffort, isDefault, followDefaultSystemPrompt, followDefaultModel, followDefaultTemperature, followDefaultTopP, followDefaultMaxTokens, followDefaultReasoningEffort, marketAgentId, marketAgentVersion, marketAgentRole, role, toolsEnabled, toolsFollowDefault, toolsConfig, createdAt, updatedAt";
 const AGENT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26";
@@ -849,7 +850,17 @@ fn map_model(row: &rusqlite::Row<'_>) -> Result<StoredModel, rusqlite::Error> {
         supports_json_output: row.get::<_, i64>(13)? != 0,
         supports_temperature: row.get::<_, i64>(14)? != 0,
         created_at: row.get(15)?,
+        metadata: read_model_metadata(row, 16)?,
+        metadata_overrides: read_model_metadata(row, 17)?,
     })
+}
+
+fn read_model_metadata(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<ModelMetadata>> {
+    row.get::<_, Option<String>>(index)?.map(|value| {
+        serde_json::from_str(&value).map_err(|error| rusqlite::Error::FromSqlConversionFailure(
+            index, rusqlite::types::Type::Text, Box::new(error),
+        ))
+    }).transpose()
 }
 
 fn map_agent(row: &rusqlite::Row<'_>) -> Result<StoredAgent, rusqlite::Error> {
@@ -974,15 +985,20 @@ fn upsert_provider_sql(conn: &Connection, p: &StoredProvider) -> Result<(), rusq
 
 fn upsert_model_sql(conn: &Connection, m: &StoredModel) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, cacheReadRate=?9, inputModalities=?10, outputModalities=?11, supportsToolCalling=?12, supportsThinking=?13, supportsJsonOutput=?14, supportsTemperature=?15",
+        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, cacheReadRate=?9, inputModalities=?10, outputModalities=?11, supportsToolCalling=?12, supportsThinking=?13, supportsJsonOutput=?14, supportsTemperature=?15, metadata=CASE WHEN models.providerId=excluded.providerId AND models.modelId=excluded.modelId THEN COALESCE(excluded.metadata, models.metadata) ELSE excluded.metadata END,
+         metadataOverrides=CASE WHEN models.providerId=excluded.providerId AND models.modelId=excluded.modelId THEN COALESCE(excluded.metadataOverrides, models.metadataOverrides) ELSE excluded.metadataOverrides END",
         rusqlite::params![
             m.id, m.provider_id, m.model_id, m.display_name, m.is_enabled as i64,
             m.context_window, m.input_rate, m.output_rate, m.cache_read_rate,
             m.input_modalities, m.output_modalities, m.supports_tool_calling as i64,
             m.supports_thinking as i64, m.supports_json_output as i64,
-            m.supports_temperature as i64, m.created_at
+            m.supports_temperature as i64, m.created_at,
+            m.metadata.as_ref().map(serde_json::to_string).transpose()
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+            m.metadata_overrides.as_ref().map(serde_json::to_string).transpose()
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
         ],
     )?;
     Ok(())

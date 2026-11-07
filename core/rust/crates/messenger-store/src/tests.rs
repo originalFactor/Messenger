@@ -113,6 +113,8 @@ fn crud_round_trips_all_five_entities() {
         supports_json_output: false,
         supports_temperature: true,
         created_at: 1_000,
+        metadata: None,
+        metadata_overrides: None,
     };
     store.upsert_model(&model).unwrap();
     store.upsert_agent(&sample_agent("a1", true)).unwrap();
@@ -667,8 +669,31 @@ fn v3_database_gains_the_model_cache_read_rate_column() {
         .unwrap();
     }
     let store = Store::open(&path).unwrap();
-    let model = store.get_model("p1:m").unwrap().unwrap();
+    let mut model = store.get_model("p1:m").unwrap().unwrap();
     assert_eq!(model.cache_read_rate, None);
+    assert_eq!(model.metadata, None);
+    assert_eq!(model.metadata_overrides, None);
+
+    model.metadata = Some(serde_json::from_value(serde_json::json!({
+        "maxOutputTokens": 512,
+        "supportsTopP": false,
+        "reasoningEfforts": [],
+    })).unwrap());
+    model.metadata_overrides = Some(serde_json::from_value(serde_json::json!({
+        "supportsPenalties": false
+    })).unwrap());
+    store.upsert_model(&model).unwrap();
+    // An older client sends neither field when updating this row.
+    let mut old_client = model.clone();
+    old_client.metadata = None;
+    old_client.metadata_overrides = None;
+    old_client.is_enabled = false;
+    store.upsert_model(&old_client).unwrap();
+    drop(store);
+    let saved = Store::open(&path).unwrap().get_model("p1:m").unwrap().unwrap();
+    assert!(!saved.is_enabled);
+    assert_eq!(saved.metadata, model.metadata);
+    assert_eq!(saved.metadata_overrides, model.metadata_overrides);
 }
 
 #[test]

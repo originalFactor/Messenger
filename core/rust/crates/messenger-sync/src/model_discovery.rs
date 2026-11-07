@@ -17,9 +17,10 @@
 use std::collections::BTreeSet;
 
 use messenger_llm::client::OpenAiClient;
-use messenger_store::model::StoredModel;
+use messenger_llm::dto::ModelEntry;
+use messenger_store::model::{ModelMetadata, StoredModel};
 use messenger_store::Store;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
 /// One discovered model, already enriched with models.dev metadata.
@@ -42,6 +43,42 @@ pub struct DiscoveredModel {
     pub supports_thinking: bool,
     pub supports_json_output: bool,
     pub supports_temperature: bool,
+    pub metadata: ModelMetadata,
+}
+
+/// Messenger extensions take precedence over camelCase and nested aliases.
+/// Parse each field independently so a malformed extension cannot drop a model.
+pub(crate) fn provider_metadata(entry: &ModelEntry) -> ModelMetadata {
+    fn read<T: DeserializeOwned>(entry: &ModelEntry, snake: &str, camel: &str) -> Option<T> {
+        let nested = entry.extra.get("metadata");
+        [
+            entry.extra.get(snake), entry.extra.get(camel),
+            nested.and_then(|value| value.get(camel)), nested.and_then(|value| value.get(snake)),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_null())
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+    let reasoning = read(entry, "reasoning", "reasoning");
+    ModelMetadata {
+        display_name: read::<String>(entry, "display_name", "displayName")
+            .filter(|name| !name.trim().is_empty()),
+        input_modalities: read(entry, "input_modalities", "inputModalities"),
+        reasoning,
+        reasoning_efforts: if reasoning == Some(false) {
+            Some(Vec::new())
+        } else {
+            read(entry, "reasoning_efforts", "reasoningEfforts")
+        },
+        default_reasoning_effort: read(entry, "default_reasoning_effort", "defaultReasoningEffort"),
+        context_window: entry.context_window.or_else(|| read(entry, "context_window", "contextWindow"))
+            .filter(|window| *window >= 0),
+        max_output_tokens: read(entry, "max_output_tokens", "maxOutputTokens").filter(|limit| *limit > 0),
+        supports_temperature: read(entry, "supports_temperature", "supportsTemperature"),
+        supports_top_p: read(entry, "supports_top_p", "supportsTopP"),
+        supports_penalties: read(entry, "supports_penalties", "supportsPenalties"),
+    }
 }
 
 const MODELS_DEV_URL: &str = "https://models.dev/models.json";
@@ -66,19 +103,24 @@ pub async fn discover_provider_models(
     Ok(response
         .entries()
         .into_iter()
-        .map(|entry| DiscoveredModel {
-            display_name: entry.id.clone(),
-            model_id: entry.id,
-            context_window: entry.context_window.unwrap_or(0),
-            input_rate: entry.input_rate,
-            output_rate: entry.output_rate,
-            cache_read_rate: entry.cache_read_rate,
-            input_modalities: "text".to_string(),
-            output_modalities: "text".to_string(),
-            supports_tool_calling: false,
-            supports_thinking: false,
-            supports_json_output: false,
-            supports_temperature: false,
+        .map(|entry| {
+            let metadata = provider_metadata(&entry);
+            DiscoveredModel {
+                display_name: metadata.display_name.clone().unwrap_or_else(|| entry.id.clone()),
+                model_id: entry.id,
+                context_window: metadata.context_window.unwrap_or(0),
+                input_rate: entry.input_rate,
+                output_rate: entry.output_rate,
+                cache_read_rate: entry.cache_read_rate,
+                input_modalities: metadata.input_modalities.as_ref().map(|values| values.join(","))
+                    .unwrap_or_else(|| "text".to_string()),
+                output_modalities: "text".to_string(),
+                supports_tool_calling: false,
+                supports_thinking: metadata.reasoning.unwrap_or(false),
+                supports_json_output: false,
+                supports_temperature: metadata.supports_temperature.unwrap_or(false),
+                metadata,
+            }
         })
         .collect())
 }
@@ -152,6 +194,7 @@ pub async fn models_dev_metadata(store: &Store, model_id: &str) -> Option<Discov
             supports_thinking: false,
             supports_json_output: false,
             supports_temperature: false,
+            metadata: ModelMetadata::default(),
         },
         Some(record),
     ))
@@ -389,6 +432,8 @@ pub fn discovered_to_stored(
         supports_json_output: discovered.supports_json_output,
         supports_temperature: discovered.supports_temperature,
         created_at: previous.map(|row| row.created_at).unwrap_or(now),
+        metadata: Some(discovered.metadata.clone()),
+        metadata_overrides: None,
     }
 }
 
@@ -415,6 +460,7 @@ mod tests {
             supports_thinking: false,
             supports_json_output: false,
             supports_temperature: false,
+            metadata: ModelMetadata::default(),
         }
     }
 
@@ -562,6 +608,8 @@ mod tests {
             supports_json_output: false,
             supports_temperature: false,
             created_at: 7,
+            metadata: None,
+            metadata_overrides: None,
         };
         let row = discovered_to_stored("p1", &blank("m"), Some(&previous), false, 99);
         assert_eq!(row.id, "p1:m");
