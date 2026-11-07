@@ -1,6 +1,6 @@
 # core ? Rust Agent Core and local API
 
-`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android, Desktop, and the Node.js TUI use the loopback `/api/v1` REST/SSE service in `messenger-http`.
+`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android, Desktop, and the Python TUI use the loopback `/api/v1` REST/SSE service in `messenger-http`.
 
 ## Crates
 

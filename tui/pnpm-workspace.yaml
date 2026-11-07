@@ -1,4 +1,0 @@
-# The workflow explicitly installs from the frozen lockfile before building.
-verifyDepsBeforeRun: false
-# Keep release dependencies portable when the archive is unpacked elsewhere.
-nodeLinker: hoisted

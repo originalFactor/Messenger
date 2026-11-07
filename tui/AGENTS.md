@@ -1,11 +1,10 @@
-# tui — Node.js terminal client
+# tui — Python terminal client
 
-- Node.js 26.4+ with OpenTUI Core and its React bindings. Run from the repository root with `pnpm --prefix tui run dev`. The local workflow in `scripts/workflow.js` uses `pnpm-lock.yaml` and Cargo's reported executable path. `build` uses the debug profile. `test` runs the Rust API suite, the Node-to-Core integration test, and the OpenTUI render and input test.
-- Run the workflow with pnpm 12. It installs from the frozen pnpm lockfile and uses a hoisted layout so the production bundle can be moved after extraction.
-- `pnpm --prefix tui run release` builds the optimized Core for the current host, tests it, and bundles the launcher, production dependencies, and Core in a versioned tarball. It reads the shared version from the compiled Core. Release output defaults to the ignored `dist/` directory and supports `-- --out PATH`. This workflow is local.
-- `src/main.js` owns renderer startup and awaits OpenTUI cleanup before stopping Core. The workflow and package launchers set `--experimental-ffi`. `src/core.js` starts the sidecar with piped stdio, authenticates to its loopback API, and parses chat SSE. Keep the bearer token off command lines and out of logs.
-- `src/chat.js` manages chat, model selection, and history through `/api/v1`. `src/app.js` owns the composer, keyboard shortcuts, and command picker. The Rust Core owns database access, provider protocols, and agent execution.
-- Slash completion uses the same command catalog as the command palette. Suggestions only appear for a single slash prefix in the composer. Tab fills the selected command, Enter runs it, and Esc dismisses suggestions without clearing the draft.
-- The dedicated store defaults to `~/.messenger/tui.db`. Use `--db PATH` for a test or separate profile, and `--core PATH` to select a non-default build. The TUI reads the Core version from `/meta`.
-- Retain the draft until Core accepts a turn. Keep chat errors visible in both the transcript and the status line, and never silently retry. Close the chat stream when exiting so Core can cancel the turn. For local `ToolCallRequested` events, post an error result to release the pending call.
-- Test terminal input and resize behavior in a PTY. Use a temporary database and a local fake provider to verify streaming, cancellation, failures, and session reload without a real API key.
+- Use Python 3.11+, Textual and Poetry 2. Run `poetry -C tui install` to install the dependencies from `poetry.lock` into `.venv`.
+- Run `poetry -C tui run python workflow.py dev` to build and launch. `build` builds the debug Core. `test` runs the Rust API suite, the Python-to-Core integration test, and Textual's headless keyboard test.
+- The workflow uses Cargo's reported executable path and the regular build cache. `release` builds the optimized Core, tests it, and stages the locked Python runtime dependencies in an isolated Poetry environment. It creates a host tarball in `dist/` using the Core version and supports `--out PATH`.
+- `messenger_tui/__main__.py` owns startup and shutdown. `core.py` owns the stdio handshake and authenticated REST/SSE transport. Keep the loopback bearer token off command lines and out of logs.
+- `chat.py` owns turn state, persistence calls and history. `app.py` and `screens.py` own the Textual layout, composer, and dialogs. Slash completion shares the command catalog with the command palette.
+- The dedicated store defaults to `~/.messenger/tui.db`. Use `--db PATH` for a test or separate profile and `--core PATH` for a custom executable. The TUI reads the product version from `/meta`.
+- Retain the draft until Core accepts the turn. Show chat failures in the transcript and status line. Never silently retry. Close active chat streams on exit. Return an error result for local tool requests to release the pending call.
+- Verify terminal input in a PTY and run chat integration against a temporary database and mock provider.

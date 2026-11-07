@@ -49,7 +49,7 @@
           |               |                     |               |
        Android          iOS                 Desktop           TUI
           |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Node.js / OpenTUI
+       Compose        SwiftUI/            Compose MP        Python / Textual
        + Wear         UIKit               / Native
 ```
 
@@ -274,7 +274,7 @@ Native / Skia / wgpu renderer
 # 15. TUI
 
 
-TUI 在 Node.js 中使用 OpenTUI 渲染，通过 loopback REST/SSE 连接 Rust Core。
+TUI 在 Python 中使用 Textual 渲染，通过 loopback REST/SSE 连接 Rust Core。
 
 ```text
 Rust Core
@@ -530,7 +530,7 @@ Kotlin renderer
 
 ## Phase 6 — TUI
 
-Node.js 客户端通过本地 Rust Core API 实现会话历史、模型配置、流式聊天和键盘导航，并显示工具调用状态。MCP 与本地工作区工具执行属于后续范围。
+Python 客户端通过本地 Rust Core API 实现会话历史、模型配置、流式聊天和键盘导航，并显示工具调用状态。MCP 与本地工作区工具执行属于后续范围。
 
 ---
 
@@ -549,7 +549,7 @@ Node.js 客户端通过本地 Rust Core API 实现会话历史、模型配置、
 | Wear OS        | **Native View / Canvas**             |
 | iOS            | SwiftUI / UIKit                      |
 | Desktop        | Compose MP / Native，根据 benchmark     |
-| TUI            | **Node.js / OpenTUI**                  |
+| TUI            | **Python / Textual**                  |
 | 跨平台协议          | Rust-defined API / FFI               |
 | 状态同步           | Event-driven                         |
 | UI Streaming   | Batched updates                      |
@@ -651,7 +651,7 @@ Compose vs View vs Canvas vs Native
           |               |                     |               |
        Android          iOS                 Desktop           TUI
           |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Node.js / OpenTUI
+       Compose        SwiftUI/            Compose MP        Python / Textual
        + Wear         UIKit               / Native
 ```
 text
@@ -676,7 +676,7 @@ text
           │               │           │              │              │
           ▼               ▼           ▼              ▼              ▼
           │               │           │              │              │
-      Native View      SwiftUI/    Native/       Desktop      Node.js TUI
+      Native View      SwiftUI/    Native/       Desktop      Python TUI
       / Canvas         UIKit       Compose MP      Renderer      Renderer
           │
        ┌──┴───┐

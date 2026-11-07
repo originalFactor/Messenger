@@ -160,28 +160,29 @@ not contain a Rust document renderer.
 
 ### Terminal client (optional)
 
-The Node.js TUI uses OpenTUI with React for its OpenCode-style command palette
-and keyboard navigation. It uses the same Rust Core API for model configuration,
-conversation history, and streaming chat.
+The Python TUI uses Textual for the command palette, composer, and conversation
+view. It connects to the Rust Core API for model configuration, history, and
+streaming chat.
 
-From the repository root, with Node.js 26.4+, pnpm 12, and a current stable Rust toolchain:
+From the repository root, with Python 3.11+, Poetry 2, and a current stable Rust toolchain:
 
 ```sh
-pnpm --prefix tui run dev          # install dependencies, build Core, and open the TUI
-pnpm --prefix tui test             # Rust API, mock-provider integration, and terminal render tests
-pnpm --prefix tui run build        # install dependencies and build the debug Core
-pnpm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
+poetry -C tui install
+poetry -C tui run python workflow.py dev
+poetry -C tui run python workflow.py test
+poetry -C tui run python workflow.py build
+poetry -C tui run python workflow.py release
 ```
 
-Pass TUI options after `--`, for example `pnpm --prefix tui run dev -- --db ./test-chat.db`.
+The workflow reuses Cargo's regular build cache. Pass application options
+after `--`, for example `poetry -C tui run python workflow.py dev -- --db ./test-chat.db`.
+The example stores the test profile relative to `tui/`.
 
-The release command uses `tar` and writes a versioned archive for the current
-Rust host to `tui/dist/`. Pass `-- --out PATH` to choose another directory.
+The release command bundles the optimized Core and Python dependencies into
+a host archive under `tui/dist/`. Pass `--out PATH` to choose another directory.
 Extract the archive and run `./messenger` on Linux/macOS or `.\messenger.cmd`
-on Windows. The extracted client requires Node.js 26.4+. The launchers enable
-OpenTUI's Node.js FFI flag. Run the launcher with `--version` to check the
-packaged Core version. On musl-based Linux, set `OPENTUI_LIBC=musl` before
-running the workflow or launcher.
+on Windows. The extracted client requires Python 3.11+. Run the launcher
+with `--version` to check the packaged Core version.
 
 Type `/` in the composer to open command suggestions and keep typing to filter
 by prefix. Use the arrow keys to select a suggestion, Tab to fill it, or Enter

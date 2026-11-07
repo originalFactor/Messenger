@@ -1,0 +1,11 @@
+[tool.poetry]
+package-mode = false
+
+[project]
+name = "messenger-tui"
+requires-python = ">=3.11,<4"
+dependencies = [
+    "httpx>=0.28,<0.29",
+    "rich>=14.2,<16",
+    "textual>=8,<9",
+]
