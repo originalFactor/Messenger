@@ -5,6 +5,8 @@ import time
 from contextlib import aclosing
 from uuid import uuid4
 
+from httpx import TimeoutException
+
 from .core import ApiError, CoreApi, entity
 
 HISTORY_LIMIT = 100
@@ -119,6 +121,45 @@ class Chat:
             self.model = None
             self.update()
 
+    async def provider_models(self, provider_id: str) -> list[dict]:
+        return await self.api.list(f"{entity('providers', provider_id)}/models")
+
+    async def save_model(self, values: dict) -> dict:
+        identifier = values.setdefault("id", str(uuid4()))
+        values.setdefault("created_at", now_ms())
+        model = await self.api.json(entity("models", identifier), method="PUT", body=values)
+        if self.model and self.model["id"] == identifier:
+            self.model = model
+            self.update()
+        return model
+
+    async def delete_model(self, identifier: str) -> None:
+        await self.api.json(entity("models", identifier), method="DELETE")
+        if self.model and self.model["id"] == identifier:
+            self.model = None
+            self.update()
+
+    async def fetch_models(self, provider: dict) -> int:
+        key = provider["api_key"]
+        try:
+            discovered = await self.api.json("/models/discover", method="POST", body={
+                "baseUrl": provider["base_url"], "apiKey": key, "apiFormat": provider["api_format"],
+            }, timeout=45)
+        except TimeoutException:
+            raise ApiError("discovery_timeout", "Model discovery timed out.") from None
+        except Exception as error:
+            message = str(error)
+            raise ApiError("discovery_failed", message.replace(key, "••••") if key else message) from None
+        existing = {model["model_id"] for model in await self.provider_models(provider["id"])}
+        imported = 0
+        for model in discovered:
+            identifier = model["model_id"]
+            if identifier.strip() and identifier not in existing:
+                await self.save_model({**model, "provider_id": provider["id"], "is_enabled": True})
+                existing.add(identifier)
+                imported += 1
+        return imported
+
     async def connect(self, values: dict) -> None:
         provider = await self.save_provider(values)
         model_id = values.setdefault("record_id", str(uuid4()))
@@ -127,6 +168,13 @@ class Chat:
             "display_name": values["model_id"], "is_enabled": True, "created_at": provider["created_at"],
         })
         await self.choose_model(model)
+        try:
+            imported = await self.fetch_models(provider)
+        except Exception as error:
+            self.status(f"Model set to {model['display_name']}. Fetching more models failed. {error}", True)
+        else:
+            if imported:
+                self.status(f"Model set to {model['display_name']}. Imported {imported} additional models.")
 
     async def create_session(self, content: str) -> dict:
         now = now_ms()
@@ -160,7 +208,9 @@ class Chat:
         refresh_failure = None
         try:
             if not self.model:
-                raise ApiError("model_required", "Choose a model with /models or add one with /connect.")
+                raise ApiError("model_required", "Choose a model with /models or add one through /providers.")
+            if not self.model["is_enabled"]:
+                raise ApiError("model_disabled", "Choose an enabled model with /models before sending.")
             if not self.session:
                 self.session = await self.create_session(body["content"])
             self.turn_path = entity("conversations", self.session["id"])

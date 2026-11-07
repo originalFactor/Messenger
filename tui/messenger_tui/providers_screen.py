@@ -7,7 +7,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Checkbox, Input, Label, Static
 
 from .chat import Chat
-from .screens import Choice, Dialog, FilterInput, Picker, PROVIDER_FIELDS, provider_field_error
+from .models_screen import ModelManager
+from .screens import Choice, ConfirmDelete, Dialog, FilterInput, Picker, PROVIDER_FIELDS, provider_field_error
 
 
 class ProviderManager(Picker):
@@ -34,7 +35,12 @@ class ProviderManager(Picker):
 
     @on(Button.Pressed, "#add-provider")
     def add_provider(self) -> None:
-        self.app.push_screen(ProviderEditor(self.chat), self.apply_change)
+        self.app.push_screen(ProviderEditor(self.chat), self.provider_added)
+
+    def provider_added(self, change: tuple[str, dict] | None) -> None:
+        if change is not None:
+            self.apply_change(change)
+            self.app.push_screen(ModelManager(self.chat, change[1], auto_fetch=True))
 
     def apply_change(self, change: tuple[str, dict | None] | None) -> None:
         if change is None:
@@ -84,6 +90,7 @@ class ProviderEditor(Dialog):
             with Horizontal(id="provider-actions"):
                 yield Button("Save", variant="primary", id="save-provider")
                 if self.provider:
+                    yield Button("Manage models", id="manage-models")
                     yield Button("Delete", variant="error", id="delete-provider")
             yield Static("Tab moves between fields · Esc closes", id="provider-result", markup=False)
 
@@ -113,7 +120,12 @@ class ProviderEditor(Dialog):
 
     @on(Button.Pressed, "#delete-provider")
     def confirm_delete(self) -> None:
-        self.app.push_screen(ConfirmProviderDelete(self.provider["name"]), self.delete_confirmed)
+        name = self.provider["name"]
+        self.app.push_screen(ConfirmDelete(f"Delete {name} and all its models?", "Delete provider"), self.delete_confirmed)
+
+    @on(Button.Pressed, "#manage-models")
+    def manage_models(self) -> None:
+        self.app.push_screen(ModelManager(self.chat, self.provider))
 
     def delete_confirmed(self, confirmed: bool | None) -> None:
         if confirmed:
@@ -151,22 +163,3 @@ class ProviderEditor(Dialog):
             self.query_one("#delete-provider" if deleting else "#save-provider", Button).focus()
         else:
             self.dismiss(change)
-
-
-class ConfirmProviderDelete(Dialog):
-    def __init__(self, name: str):
-        super().__init__()
-        self.provider_name = name
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(f"Delete {self.provider_name} and all its models?", markup=False)
-            yield Button("Cancel", id="cancel-delete")
-            yield Button("Delete provider", variant="error", id="confirm-delete")
-
-    def on_mount(self) -> None:
-        self.query_one("#cancel-delete", Button).focus()
-
-    @on(Button.Pressed)
-    def choose(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "confirm-delete")

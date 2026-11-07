@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, OptionList, Static
+from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 
@@ -38,6 +38,26 @@ class Dialog(ModalScreen):
 
     def action_dismiss_dialog(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmDelete(Dialog):
+    def __init__(self, prompt: str, button: str):
+        super().__init__()
+        self.prompt = prompt
+        self.button = button
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.prompt, markup=False)
+            yield Button("Cancel", id="cancel-delete")
+            yield Button(self.button, variant="error", id="confirm-delete")
+
+    def on_mount(self) -> None:
+        self.query_one("#cancel-delete", Button).focus()
+
+    @on(Button.Pressed)
+    def choose(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-delete")
 
 
 class FilterInput(Input):

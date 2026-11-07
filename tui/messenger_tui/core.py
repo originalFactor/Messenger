@@ -40,8 +40,8 @@ class CoreApi:
             error.get("detail"),
         )
 
-    async def json(self, path: str, *, method: str = "GET", body=None, params=None):
-        response = await self.client.request(method, path, json=body, params=params)
+    async def json(self, path: str, *, method: str = "GET", body=None, params=None, timeout=httpx.USE_CLIENT_DEFAULT):
+        response = await self.client.request(method, path, json=body, params=params, timeout=timeout)
         self.check(response)
         if response.status_code not in (202, 204):
             return response.json()

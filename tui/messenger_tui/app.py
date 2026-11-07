@@ -130,7 +130,10 @@ class Messenger(App):
         chat = self.chat
         title = (chat.session.get("title") or "Untitled") if chat.session else "New session"
         self.base.query_one("#heading", Static).update(display(f"MESSENGER  {self.version}   /   {title}"))
+        model_enabled = bool(chat.model and chat.model["is_enabled"])
         model = chat.model["display_name"] if chat.model else "No model"
+        if chat.model and not model_enabled:
+            model += " (disabled)"
         self.base.query_one("#model", Static).update(display(f"{chat.agent['name']}  ·  {model}"))
         status = self.base.query_one("#status", Static)
         status.set_class(chat.notice_error, "error")
@@ -138,7 +141,7 @@ class Messenger(App):
                                               "PgUp for older messages" if chat.has_older else "")))
 
         rendered = (id(chat.messages), [(item["role"], item["content"]) for item in chat.live],
-                    chat.fault, bool(chat.model))
+                    chat.fault, model_enabled)
         if rendered != self.rendered:
             self.rendered = rendered
             follow = self.history_view.is_vertical_scroll_end
@@ -146,8 +149,8 @@ class Messenger(App):
             messages = chat.messages + chat.live
             if not messages and not chat.fault:
                 text.append("Start a conversation\n", style="bold cyan")
-                text.append("Write a message below." if chat.model else
-                            "Use /connect to add a provider and model, or /models to choose one.", style="dim")
+                text.append("Write a message below." if model_enabled else
+                            "Use /providers to add a provider, or /models to choose an enabled model.", style="dim")
             for message in messages:
                 content, error = message["content"], message.get("error_message")
                 if not content and not error:
@@ -384,7 +387,7 @@ class Messenger(App):
                        f"{providers.get(row['provider_id'], '')} / {row['model_id']}", row)
                 for row in rows if row["is_enabled"]
             ]
-            title, empty, action = "Models", "No enabled models. Use /connect to add one.", self.chat.choose_model
+            title, empty, action = "Models", "No enabled models. Manage them with /providers.", self.chat.choose_model
         else:
             options = [
                 Choice(row["id"], row["name"], "Default" if row["is_default"] else "", row)

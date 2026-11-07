@@ -1,20 +1,22 @@
 import asyncio
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from collections import Counter
-from contextlib import aclosing
+from contextlib import aclosing, closing
 from pathlib import Path
 
 from textual import events
-from textual.widgets import Button, Input, Label, OptionList, Static
+from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
 
 from messenger_tui.app import Messenger
-from messenger_tui.chat import Chat, model_for
+from messenger_tui.chat import Chat, model_for, now_ms
 from messenger_tui.core import open_core
-from messenger_tui.providers_screen import ConfirmProviderDelete, ProviderEditor, ProviderManager
-from messenger_tui.screens import Picker, ProviderDialog
+from messenger_tui.models_screen import ModelEditor, ModelManager
+from messenger_tui.providers_screen import ProviderEditor, ProviderManager
+from messenger_tui.screens import ConfirmDelete, Picker, ProviderDialog
 
 
 class TerminalTest(unittest.IsolatedAsyncioTestCase):
@@ -76,8 +78,34 @@ def delta(text, reason=None):
 class CoreTest(unittest.IsolatedAsyncioTestCase):
     async def test_manage_providers_from_terminal(self):
         executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
+        discoveries = []
+        fail_discovery = False
+
+        async def upstream(reader, writer):
+            try:
+                discoveries.append(await reader.readuntil(b"\r\n\r\n"))
+                status = b"401 Unauthorized" if fail_discovery else b"200 OK"
+                body = (b'{"error":"Invalid test-provider-key"}' if fail_discovery else
+                        b'{"data":[{"id":"discovered","context_window":4096},{"id":"discovered"}]}')
+                writer.write(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n"
+                             b"Connection: close\r\n\r\n" + body)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(upstream, "127.0.0.1", 0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        port = server.sockets[0].getsockname()[1]
         with tempfile.TemporaryDirectory() as directory:
-            async with open_core(executable, Path(directory) / "providers.db") as (api, version):
+            database = Path(directory) / "providers.db"
+            async with open_core(executable, database) as (api, version):
+                # Keep discovery integration independent of the public metadata catalogue.
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.executemany("INSERT INTO kv (key, value) VALUES (?, ?)", [
+                        ("models_dev_body", '{"test/fixture":{}}'), ("models_dev_fetched_at", str(now_ms())),
+                    ])
                 agent = await api.json("/agents/default")
                 chat = Chat(api, agent, None)
                 app = Messenger(chat, version)
@@ -95,17 +123,72 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("without embedded credentials", str(editor.query_one("#provider-result", Static).content))
                     self.assertEqual(await api.list("/providers"), [])
 
-                    editor.query_one("#base_url", Input).value = "http://localhost:1234/v1"
+                    editor.query_one("#base_url", Input).value = f"http://127.0.0.1:{port}/v1"
                     editor.query_one("#api_key", Input).value = "test-provider-key"
                     await pilot.pause(0.3)
                     editor.query_one("#save-provider", Button).focus()
                     await pilot.press("enter")
+                    await pilot.pause()
                     await app.workers.wait_for_complete()
                     await pilot.pause()
-                    self.assertIs(app.screen, manager)
+                    self.assertIsInstance(app.screen, ModelManager)
+                    models = app.screen
                     [provider] = await api.list("/providers")
                     self.assertEqual(provider["name"], "Local Provider")
-                    self.assertEqual(await api.list("/models"), [])
+                    [discovered] = await api.list("/models")
+                    self.assertEqual(discovered["context_window"], 4096)
+                    self.assertTrue(discovered["is_enabled"])
+                    self.assertEqual(len(discoveries), 1)
+                    self.assertIn(b"GET /v1/models ", discoveries[0])
+                    self.assertIn(b"authorization: Bearer test-provider-key", discoveries[0])
+
+                    await chat.choose_model(discovered)
+                    await pilot.press("enter")
+                    self.assertIsInstance(app.screen, ModelEditor)
+                    app.screen.query_one("#model-name", Input).value = "Renamed model"
+                    app.screen.query_one("#model-enabled", Checkbox).value = False
+                    await pilot.click("#save-model")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertIs(app.screen, models)
+                    [edited_model] = await api.list("/models")
+                    self.assertEqual(edited_model, {
+                        **discovered, "display_name": "Renamed model", "is_enabled": False,
+                    })
+                    await chat.turn({"content": "disabled model"}, lambda: self.fail("draft cleared"))
+                    self.assertIn("model_disabled", chat.fault)
+                    self.assertEqual(await api.list("/conversations"), [])
+
+                    await pilot.click("#fetch-models")
+                    await app.workers.wait_for_complete()
+                    self.assertEqual(await api.list("/models"), [edited_model])
+                    self.assertEqual(len(discoveries), 2)
+
+                    fail_discovery = True
+                    await pilot.pause(0.3)
+                    await pilot.click("#fetch-models")
+                    await app.workers.wait_for_complete()
+                    status = str(models.query_one("#model-list-status", Static).content)
+                    self.assertIn("Fetching models failed", status)
+                    self.assertNotIn("test-provider-key", status)
+                    self.assertEqual(await api.list("/providers"), [provider])
+
+                    await pilot.click("#add-model")
+                    self.assertIsInstance(app.screen, ModelEditor)
+                    app.screen.query_one("#model-id", Input).value = "manual"
+                    await pilot.click("#save-model")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertIs(app.screen, models)
+                    await pilot.press(*"manual", "enter")
+                    await pilot.click("#delete-model")
+                    self.assertIsInstance(app.screen, ConfirmDelete)
+                    await pilot.click("#confirm-delete")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertEqual(await api.list("/models"), [edited_model])
+                    await pilot.press("escape")
+                    self.assertIs(app.screen, manager)
                     self.assertNotIn("test-provider-key", str(manager.query_one(OptionList).options[0].prompt))
 
                     await pilot.press(*"local", "enter")
@@ -129,10 +212,18 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                         "display_name": "Model", "is_enabled": True, "created_at": 0,
                     })
                     await chat.choose_model(model)
-                    await pilot.press("ctrl+a", "backspace", "enter")
+                    manager.query_one(Input).value = ""
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    self.assertIsInstance(app.screen, ProviderEditor)
+                    await pilot.click("#manage-models")
+                    await app.workers.wait_for_complete()
+                    self.assertIsInstance(app.screen, ModelManager)
+                    self.assertEqual(len(discoveries), 3)
+                    await pilot.press("escape")
                     self.assertIsInstance(app.screen, ProviderEditor)
                     await pilot.click("#delete-provider")
-                    self.assertIsInstance(app.screen, ConfirmProviderDelete)
+                    self.assertIsInstance(app.screen, ConfirmDelete)
                     await pilot.press("enter")
                     self.assertIsInstance(app.screen, ProviderEditor)
                     self.assertEqual(await api.list("/providers"), [updated])
@@ -157,11 +248,15 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
 
         async def upstream(reader, writer):
             try:
-                await reader.readline()
+                request = await reader.readline()
                 headers = {}
                 while (line := await reader.readline()) not in (b"\r\n", b""):
                     name, value = line.decode().split(":", 1)
                     headers[name.lower()] = value.strip()
+                if request.startswith(b"GET /v1/models "):
+                    writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    await writer.drain()
+                    return
                 body = json.loads(await reader.readexactly(int(headers["content-length"])))
                 prompt = body["messages"][-1]["content"]
                 upstream_auth.append(headers.get("authorization"))
@@ -194,6 +289,7 @@ class CoreTest(unittest.IsolatedAsyncioTestCase):
                     port = server.sockets[0].getsockname()[1]
                     await chat.connect({"name": "Fake", "api_key": "test-key", "api_format": "chat",
                                         "base_url": f"http://127.0.0.1:{port}/v1", "model_id": "test"})
+                    self.assertIn("Fetching more models failed", chat.notice)
                     await chat.turn({"content": "第一行\n\tsecond line"}, lambda: None)
                     self.assertEqual(chat.messages[-1]["content"], "你好，Messenger!")
                     self.assertEqual(upstream_auth, ["Bearer test-key"])
