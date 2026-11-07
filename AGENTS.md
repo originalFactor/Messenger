@@ -32,8 +32,10 @@ Every local Gradle invocation MUST go through the `gradlew-cli` wrapper (`gradle
 cd core/rust && cargo test --workspace                 # Rust core + REST/SSE tests
 cd core/rust && cargo test -p messenger-http           # API contract tests only
 
-cargo build --locked --manifest-path core/rust/Cargo.toml -p messenger-http --bin messenger-core-server
-npm --prefix tui ci && node tui/src/main.js             # Node.js terminal client
+npm --prefix tui run dev                              # set up, build, and run the terminal client
+npm --prefix tui test                                 # Rust API + Node/Core integration checks
+npm --prefix tui run build                            # build the local debug Core
+npm --prefix tui run release                          # test and package for the host in tui/dist/
 
 cd server && pnpm install && pnpm dev                  # server; checks: pnpm lint && pnpm typecheck
 ```

@@ -20,7 +20,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .next()
         .map(PathBuf::from)
         .filter(|_| args.next().is_none())
-        .ok_or("usage: messenger-core-server <database path>")?;
+        .ok_or("usage: messenger-core-server <database path> | --version")?;
+    if path.as_os_str() == "--version" {
+        println!("{}", messenger_core::version::NAME);
+        return Ok(());
+    }
 
     // Keep API turn state in one process per database. Use a sidecar so this
     // lock is independent of SQLite's locks, and let the OS release it on exit.

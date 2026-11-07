@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import {execFileSync} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import {mkdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
@@ -14,6 +16,7 @@ import {terminalText} from './editor.js';
 async function main() {
   const {values} = parseArgs({options: {
     help: {type: 'boolean', short: 'h'},
+    version: {type: 'boolean', short: 'V'},
     db: {type: 'string'},
     core: {type: 'string'},
   }});
@@ -21,18 +24,27 @@ async function main() {
     console.log(`Usage: messenger [--db PATH] [--core PATH]
 
   --db PATH     SQLite database (default: ~/.messenger/tui.db)
-  --core PATH   messenger-core-server executable (default: local Cargo debug build)
+  --core PATH   messenger-core-server executable (default: bundled Core or Cargo debug build)
+  -V, --version Show the Messenger version
   -h, --help    Show help
 
 Open the command palette with Ctrl+P. Use /connect to add a provider.`);
+    return;
+  }
+  const binary = process.platform === 'win32' ? 'messenger-core-server.exe' : 'messenger-core-server';
+  const bundledCore = fileURLToPath(new URL(`../bin/${binary}`, import.meta.url));
+  const debugCore = fileURLToPath(new URL(`../../core/rust/target/debug/${binary}`, import.meta.url));
+  const defaultCore = existsSync(bundledCore) ? bundledCore : debugCore;
+  const executable = values.core ? resolve(values.core) : defaultCore;
+  if (values.version) {
+    const version = execFileSync(executable, ['--version'], {encoding: 'utf8', windowsHide: true});
+    console.log(`Messenger ${version.trim()}`);
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('Messenger TUI needs an interactive terminal.');
   }
 
-  const defaultCore = fileURLToPath(new URL('../../core/rust/target/debug/messenger-core-server', import.meta.url));
-  const executable = values.core ? resolve(values.core) : defaultCore + (process.platform === 'win32' ? '.exe' : '');
   const database = resolve(values.db ?? join(homedir(), '.messenger', 'tui.db'));
   await mkdir(dirname(database), {recursive: true, mode: 0o700});
   const core = await startCore(executable, database);

@@ -9,7 +9,11 @@
     "messenger": "./src/main.js"
   },
   "scripts": {
-    "start": "node src/main.js"
+    "start": "node scripts/workflow.js dev",
+    "dev": "node scripts/workflow.js dev",
+    "test": "node scripts/workflow.js test",
+    "build": "node scripts/workflow.js build",
+    "release": "node scripts/workflow.js release"
   },
   "dependencies": {
     "ink": "^7.0.0",

@@ -164,13 +164,22 @@ The Node.js TUI has an OpenCode-style command palette and keyboard navigation.
 It uses the same Rust Core API for model configuration, conversation history,
 and streaming chat.
 
-From the repository root, with Node.js 22+ and a current stable Rust toolchain:
+From the repository root, with Node.js 22+, npm, and a current stable Rust toolchain:
 
 ```sh
-cargo build --locked --manifest-path core/rust/Cargo.toml -p messenger-http --bin messenger-core-server
-npm --prefix tui ci
-node tui/src/main.js
+npm --prefix tui run dev          # install dependencies, build Core, and open the TUI
+npm --prefix tui test             # Rust API tests and a local mock-provider integration test
+npm --prefix tui run build        # install dependencies and build the debug Core
+npm --prefix tui run release      # test and package the optimized Core and Node.js dependencies
 ```
+
+Pass TUI options after `--`, for example `npm --prefix tui run dev -- --db ./test-chat.db`.
+
+The release command uses `tar` and writes a versioned archive for the current
+Rust host to `tui/dist/`. Pass `-- --out PATH` to choose another directory.
+Extract the archive and run `./messenger` on Linux/macOS or `.\messenger.cmd`
+on Windows. The extracted client requires Node.js 22+. Run the launcher
+with `--version` to check the packaged Core version.
 
 Use `/connect` to add a provider and its first model. Enter sends a message,
 Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the

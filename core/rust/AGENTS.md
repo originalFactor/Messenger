@@ -33,7 +33,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 
 ## Versioning
 
-`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. Rust never uses `CARGO_PKG_VERSION` as the product version.
+`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. The TUI packaging workflow reads the version from `messenger-core-server --version`. Rust never uses `CARGO_PKG_VERSION` as the product version.
 
 ## Testing / CI
 
