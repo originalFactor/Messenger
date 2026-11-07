@@ -42,6 +42,8 @@ cd server && pnpm install && pnpm dev                  # server; checks: pnpm li
 
 The wrapper runs Gradle with `--daemon` but under its own daemon registry (`~/.gradle/cli-daemon`), so a CLI build never queues behind Android Studio's busy daemon — that collision is why this repo used to mandate `--no-daemon`, which cost ~4 s of JVM start plus a lost VFS/Kotlin-daemon warm-up on every invocation. Do not use bare `./gradlew` for local builds, and do not add `--no-daemon`: with the isolated registry a warm daemon is both safe and ~4 s faster per run. If a cache-lock stall is ever observed anyway (both daemons share `~/.gradle/caches`), fall back to `./gradlew --no-daemon` for that one run and note it here.
 
+Use the developer's regular Cargo cache for local builds. If sandboxed verification requires a temporary `CARGO_HOME`, pair it with a separate `CARGO_TARGET_DIR` and isolate any configured `CARGO_BUILD_BUILD_DIR` as well. Cargo fingerprints registry source paths, so sharing build artifacts across Cargo homes invalidates the developer's dependency cache.
+
 Prerequisites: JDK 17, Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core. `llm-typewriter` is resolved from Maven Central by Android/Desktop builds.
 
 ## Hard Constraints
