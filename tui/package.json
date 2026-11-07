@@ -1,0 +1,19 @@
+{
+  "name": "messenger-tui",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "messenger": "./src/main.js"
+  },
+  "scripts": {
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "ink": "^7.0.0",
+    "react": "^19.2.0",
+    "wrap-ansi": "^10.0.0"
+  }
+}

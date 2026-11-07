@@ -146,7 +146,7 @@ Messenger speaks the OpenAI-compatible Chat Completions API, so any provider tha
 
 ### Local Rust core
 
-Android and Desktop start the Rust core on an ephemeral loopback port. Every
+Android, Desktop, and the terminal client start the Rust core on an ephemeral loopback port. Every
 non-health request carries a per-start bearer token, and all business calls use
 the versioned `/api/v1` HTTP API; chat turns and core change notifications use
 SSE. The OpenAPI contract lives at
@@ -157,6 +157,32 @@ Markdown and LaTeX on Android/Desktop are rendered in Kotlin with
 [`llm-typewriter`](https://github.com/originalFactor/llm-typewriter). The Rust
 core owns agent execution, storage, tools, models and synchronization; it does
 not contain a Rust document renderer.
+
+### Terminal client (optional)
+
+The Node.js TUI has an OpenCode-style command palette and keyboard navigation.
+It uses the same Rust Core API for model configuration, conversation history,
+and streaming chat.
+
+From the repository root, with Node.js 22+ and a current stable Rust toolchain:
+
+```sh
+cargo build --locked --manifest-path core/rust/Cargo.toml -p messenger-http --bin messenger-core-server
+npm --prefix tui ci
+node tui/src/main.js
+```
+
+Use `/connect` to add a provider and its first model. Enter sends a message,
+Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the
+command palette. Use `/new`, `/sessions`, `/models`, and `/agents` to
+start a session, resume one, change the model, or select an agent for a new
+session. Use Page Up and Page Down to read older messages.
+
+The TUI stores chats and provider credentials in `~/.messenger/tui.db`.
+Use `--db PATH` for a separate TUI profile and `--core PATH` for a custom
+Core executable. Keep the TUI database separate from a running Desktop
+instance. The TUI renders plain text and supports chat, with local workspace
+tools and cloud sync outside its current scope.
 
 _For more details on architecture, conventions, and hard constraints, please refer to [AGENTS.md](AGENTS.md)_
 

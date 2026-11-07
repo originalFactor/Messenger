@@ -9,6 +9,7 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 | `shared` | KMP library: shared Android/Desktop logic (Clean Architecture data/domain/presentation) | `shared/AGENTS.md` |
 | `androidApp` | Android application shell | `androidApp/AGENTS.md` |
 | `desktopApp` | Desktop (JVM) application shell | `desktopApp/AGENTS.md` |
+| `tui` | Node.js terminal chat client for the local Rust Core | `tui/AGENTS.md` |
 | `wear` | Wear OS chat-only companion | `wear/AGENTS.md` |
 | `runtime` | Companion shell-runtime app (terminal UI + tool host) | `runtime/AGENTS.md` |
 | `core/rust`, `core/bindings` | Rust Agent Core (Cargo workspace), `/api/v1` REST/SSE server, minimal native lifecycle bridge | `core/rust/AGENTS.md` |
@@ -31,6 +32,9 @@ Every local Gradle invocation MUST go through the `gradlew-cli` wrapper (`gradle
 cd core/rust && cargo test --workspace                 # Rust core + REST/SSE tests
 cd core/rust && cargo test -p messenger-http           # API contract tests only
 
+cargo build --locked --manifest-path core/rust/Cargo.toml -p messenger-http --bin messenger-core-server
+npm --prefix tui ci && node tui/src/main.js             # Node.js terminal client
+
 cd server && pnpm install && pnpm dev                  # server; checks: pnpm lint && pnpm typecheck
 ```
 
@@ -51,13 +55,13 @@ These MUST be followed at all times:
 7. **AGP 9 built-in Kotlin**: never apply `org.jetbrains.kotlin.android` in Android modules; prefer KSP over kapt. The `shared` / `androidApp` / `desktopApp` split is irreversible (AGP 9.5.0 forbids `com.android.application` + KMP in one module). R8 runs on EVERY release build (`:androidApp`, `:wear`, `:runtime`), and Compose Desktop's ProGuard step runs on `:desktopApp` release too.
 8. **Wear scope**: `wear` stays chat-only — provider/model/agent/settings management stays on the phone. `wear` is NOT a KMP module.
 9. **AGENTS.md currency**: structural changes (new module/layer/entity/repository/feature, changed constraints or conventions, build or CI changes) must update the relevant AGENTS.md in the same commit.
-10. **Local Core API**: Android/Desktop business calls go through Rust's `/api/v1` REST/SSE service. It binds loopback only and requires the per-start bearer token; the native bridge exposes lifecycle only (`CoreHandle.open`, `startHttpServer`, `HttpServerHandle.stop`). Keep `core/rust/crates/messenger-http/openapi.yaml` and `docs/SSE.md` current with route/event changes.
+10. **Local Core API**: Android/Desktop/TUI business calls go through Rust's `/api/v1` REST/SSE service. It binds loopback only and requires the per-start bearer token; the lifecycle bridges are UniFFI (`CoreHandle.open`, `startHttpServer`, `HttpServerHandle.stop`) and a stdio child process for the TUI. Keep `core/rust/crates/messenger-http/openapi.yaml` and `docs/SSE.md` current with route/event changes.
 11. **Rendering ownership**: Android/Desktop Markdown, code highlighting and LaTeX are rendered in Kotlin with `cc.ptoe:llm-typewriter`; do not reintroduce native Document/Markdown/LaTeX rendering exits for those clients. There is no Rust Document/Markdown/LaTeX renderer; Android/Desktop use Kotlin `llm-typewriter`.
 
 ## Conventions
 
-- **Versioning (one scheme for all five clients)**: version name = repo-root `VERSION` file (`MAJOR.MINOR.PATCH`, the single source of truth, read only by the root `build.gradle.kts` and `messenger-core/build.rs`; missing/invalid VERSION fails the build); version code = `git rev-list --count HEAD`. Release tags `vX.Y.Z` MUST equal `VERSION` (`release.yml` fails otherwise). Release via `./release.ps1 -Bump patch|minor|major` (bumps, commits, tags, pushes; `-NoPush`/`-WhatIf` available). Desktop MSI packages use `MAJOR.MINOR.<commitCount>` (jpackage needs a strictly increasing numeric product version).
-- **Dependencies**: all versions go through `gradle/libs.versions.toml`. Never globally exclude `com.google.guava:listenablefuture` — it is the runtime `ListenableFuture` provider that `androidx.profileinstaller` needs (excluding it crashes `:wear` at launch). JitPack is kept only for `ucrop`.
+- **Versioning (one scheme across clients)**: version name = repo-root `VERSION` file (`MAJOR.MINOR.PATCH`, the single source of truth, read only by the root `build.gradle.kts` and `messenger-core/build.rs`; missing/invalid VERSION fails the build); version code = `git rev-list --count HEAD`. The TUI reads the product version from Core’s `/api/v1/meta`. Release tags `vX.Y.Z` MUST equal `VERSION` (`release.yml` fails otherwise). Release via `./release.ps1 -Bump patch|minor|major` (bumps, commits, tags, pushes; `-NoPush`/`-WhatIf` available). Desktop MSI packages use `MAJOR.MINOR.<commitCount>` (jpackage needs a strictly increasing numeric product version).
+- **Dependencies**: Gradle dependency versions go through `gradle/libs.versions.toml`. The TUI uses `tui/package-lock.json`. Never globally exclude `com.google.guava:listenablefuture` — it is the runtime `ListenableFuture` provider that `androidx.profileinstaller` needs (excluding it crashes `:wear` at launch). JitPack is kept only for `ucrop`.
 - **API error handling**: cloud HTTP failures use `HttpException` + `extractHttpErrorMessage()`; local `/api/v1` failures carry `{code,message,detail}` and are surfaced with their status/detail. Never silently retry.
 - **Cloud session expiry**: the cloud server owns session state, so a `401` on an authenticated cloud call is terminal — the app drops the local session and the user signs in again (see `shared/AGENTS.md` → "Server-rejected sessions sign the app out"). Never treat it as a retryable error.
 - **SSE stream handling**: chat streams carry a `hasFinished` flag; if the stream ends without `Finished`/`Cancelled`/`Error`, emit `stream_ended` proactively. A client disconnect cancels the turn and any pending tool call.

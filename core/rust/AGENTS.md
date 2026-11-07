@@ -1,6 +1,6 @@
 # core ? Rust Agent Core and local API
 
-`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 8 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android and Desktop business calls use the loopback `/api/v1` REST/SSE service in `messenger-http`.
+`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android, Desktop, and the Node.js TUI use the loopback `/api/v1` REST/SSE service in `messenger-http`.
 
 ## Crates
 
@@ -10,7 +10,7 @@
 - `messenger-store` ? SQLite schema v5 (`projects.deviceId`), typed CRUD, store events, sync/kv bookkeeping and legacy Room import.
 - `messenger-sync` ? paged delta sync, cloud auth/session handling, avatar caching, market/card APIs and model discovery.
 - `messenger-remote` ? cross-device project routing: `RemoteHub` holds the per-device cloud relay SSE connection (`/api/remote/*`), tracks which devices are online, forwards workspace tool calls to the project's owner and validates/executes inbound ones. Contract: `crates/messenger-http/docs/REMOTE.md`.
-- `messenger-http` ? axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation.
+- `messenger-http` ? axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation. Its `messenger-core-server` binary is the TUI’s lifecycle bridge. It opens a dedicated SQLite store under an advisory lock, ensures the default Agent exists before serving, writes the loopback URL and bearer token to the child’s stdout pipe, and shuts down on stdin EOF.
 - `messenger-ffi` ? lifecycle-only `CoreHandle.open`, `start_http_server`, `HttpServerHandle.local_addr/token/stop` and `CoreError`.
 
 The Rust core does not contain a Document Engine, Markdown parser, LaTeX renderer, syntax highlighter, browser boundary or TUI crate. Android/Desktop render Markdown, code and LaTeX in Kotlin with `cc.ptoe:llm-typewriter`.
@@ -18,7 +18,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 ## Local API boundary
 
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
-- Tool policy stays in Rust; Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`.
+- Tool policy stays in Rust. Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`. The TUI returns an explicit unavailable result for local tool requests.
 - Dropping the chat SSE cancels the turn token, wakes a pending tool host and finalizes partial rows.
 - **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.
 - **`ApiState` is `Clone`, so its cleanup cannot be in `Drop`**: axum clones the state per request, and the first dropped clone used to `unsubscribe` the store listener, silently killing the change feed for every later subscriber. The registration lives in `StoreFeed`, held through an `Arc`, so it ends with the last clone.
