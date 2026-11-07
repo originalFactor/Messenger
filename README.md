@@ -194,7 +194,12 @@ command palette. Use `/new`, `/sessions`, `/models`, and `/agents` to
 start a session, resume one, change the model, or select an agent for a new
 session. Use Page Up and Page Down to read older messages.
 
-The TUI stores chats and provider credentials in `~/.messenger/tui.db`.
+Use `/cloud` to sign in to Messenger Cloud, view the saved account, or sign out.
+The dialog shows the configured Cloud base URL. Enter an HTTP(S) URL for a
+self-hosted server and choose **Save address**, or sign in with that address.
+Saving a different address signs out the current account first.
+
+The TUI stores chats, provider credentials, and its Cloud session in `~/.messenger/tui.db`.
 Use `--db PATH` for a separate TUI profile and `--core PATH` for a custom
 Core executable. Keep the TUI database separate from a running Desktop
 instance. The TUI renders plain text and supports chat, with local workspace

@@ -12,6 +12,8 @@ from textual.containers import VerticalScroll
 from textual.widgets import OptionList, Static, TextArea
 
 from .chat import Chat
+from .cloud import CloudAccount
+from .cloud_screen import CloudDialog
 from .screens import Choice, Help, Picker, ProviderDialog
 
 COMMANDS = (
@@ -20,6 +22,7 @@ COMMANDS = (
     ("models", "Choose model", "m"),
     ("agents", "Choose agent for a new session", "a"),
     ("connect", "Add a provider and model", ""),
+    ("cloud", "Messenger Cloud account and server address", ""),
     ("retry", "Retry the last failed reply", ""),
     ("regenerate", "Regenerate the last reply", ""),
     ("help", "Keyboard shortcuts", ""),
@@ -322,12 +325,18 @@ class Messenger(App):
                 self.push_screen(Help())
             case "connect":
                 self.push_screen(ProviderDialog(), self.save_provider)
+            case "cloud":
+                self.start(self.open_cloud)
             case "new":
                 self.start(self.new_session)
             case "sessions" | "models" | "agents":
                 self.start(lambda: self.show_choices(identifier))
             case "retry" | "regenerate":
                 self.repeat_turn(identifier)
+
+    async def open_cloud(self) -> None:
+        account = await CloudAccount.load(self.chat.api)
+        self.push_screen(CloudDialog(account))
 
     async def new_session(self, agent: dict | None = None) -> None:
         await self.chat.new(agent)
