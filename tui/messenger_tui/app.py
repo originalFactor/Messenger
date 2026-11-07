@@ -14,6 +14,7 @@ from textual.widgets import OptionList, Static, TextArea
 from .chat import Chat
 from .cloud import CloudAccount
 from .cloud_screen import CloudDialog
+from .providers_screen import ProviderManager
 from .screens import Choice, Help, Picker, ProviderDialog
 
 COMMANDS = (
@@ -21,6 +22,7 @@ COMMANDS = (
     ("sessions", "Switch session", "l"),
     ("models", "Choose model", "m"),
     ("agents", "Choose agent for a new session", "a"),
+    ("providers", "Manage providers", ""),
     ("connect", "Add a provider and model", ""),
     ("cloud", "Messenger Cloud account and server address", ""),
     ("retry", "Retry the last failed reply", ""),
@@ -325,6 +327,8 @@ class Messenger(App):
                 self.push_screen(Help())
             case "connect":
                 self.push_screen(ProviderDialog(), self.save_provider)
+            case "providers":
+                self.start(self.open_providers)
             case "cloud":
                 self.start(self.open_cloud)
             case "new":
@@ -337,6 +341,10 @@ class Messenger(App):
     async def open_cloud(self) -> None:
         account = await CloudAccount.load(self.chat.api)
         self.push_screen(CloudDialog(account))
+
+    async def open_providers(self) -> None:
+        providers = await self.chat.api.list("/providers")
+        self.push_screen(ProviderManager(self.chat, providers))
 
     async def new_session(self, agent: dict | None = None) -> None:
         await self.chat.new(agent)

@@ -65,10 +65,13 @@ class Picker(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(Text(self.title_text, style="bold"))
-            yield FilterInput(placeholder="Filter…")
-            yield OptionList()
-            yield Static(id="picker-hint", markup=False)
+            yield from self.compose_picker()
+
+    def compose_picker(self) -> ComposeResult:
+        yield Label(Text(self.title_text, style="bold"))
+        yield FilterInput(placeholder="Filter…")
+        yield OptionList()
+        yield Static(id="picker-hint", markup=False)
 
     def on_mount(self) -> None:
         self.filter("")
@@ -108,8 +111,28 @@ PROVIDER_FIELDS = (
     ("base_url", "Provider base URL", "https://api.openai.com/v1", None),
     ("api_format", "API format", "chat / responses / messages / interactions", "chat"),
     ("api_key", "API key", "Enter to leave empty", ""),
+)
+CONNECT_FIELDS = (
+    *PROVIDER_FIELDS,
     ("model_id", "Model ID", "Use the exact ID from your provider", None),
 )
+
+
+def provider_field_error(key: str, label: str, value: str | None) -> str:
+    if value is None:
+        return f"{label} is required."
+    if key == "base_url":
+        try:
+            url = urlsplit(value)
+            valid = url.scheme in ("http", "https") and url.hostname and url.username is None and url.password is None
+            _ = url.port
+        except ValueError:
+            valid = False
+        if not valid:
+            return "Enter an HTTP(S) base URL without embedded credentials."
+    if key == "api_format" and value not in ("chat", "responses", "messages", "interactions"):
+        return "Choose chat, responses, messages or interactions."
+    return ""
 
 
 class ProviderDialog(Dialog):
@@ -129,8 +152,8 @@ class ProviderDialog(Dialog):
         self.show_field()
 
     def show_field(self) -> None:
-        key, label, example, _ = PROVIDER_FIELDS[self.step]
-        self.query_one(Label).update(f"Connect · {self.step + 1}/{len(PROVIDER_FIELDS)} · {label}")
+        key, label, example, _ = CONNECT_FIELDS[self.step]
+        self.query_one(Label).update(f"Connect · {self.step + 1}/{len(CONNECT_FIELDS)} · {label}")
         field = self.query_one(Input)
         field.password = key == "api_key"
         field.placeholder = example
@@ -139,28 +162,15 @@ class ProviderDialog(Dialog):
 
     @on(Input.Submitted)
     def submit_field(self, event: Input.Submitted) -> None:
-        key, label, _, default = PROVIDER_FIELDS[self.step]
+        key, label, _, default = CONNECT_FIELDS[self.step]
         value = event.value.strip() or default
-        error = ""
-        if value is None:
-            error = f"{label} is required."
-        elif key == "base_url":
-            try:
-                url = urlsplit(value)
-                valid = url.scheme in ("http", "https") and url.hostname and url.username is None and url.password is None
-                _ = url.port
-            except ValueError:
-                valid = False
-            if not valid:
-                error = "Enter an HTTP(S) base URL without embedded credentials."
-        elif key == "api_format" and value not in ("chat", "responses", "messages", "interactions"):
-            error = "Choose chat, responses, messages or interactions."
+        error = provider_field_error(key, label, value)
         if error:
             self.query_one("#provider-hint", Static).update(error)
             return
         self.values[key] = value
         self.step += 1
-        if self.step == len(PROVIDER_FIELDS):
+        if self.step == len(CONNECT_FIELDS):
             self.dismiss(self.values)
         else:
             self.query_one("#provider-hint", Static).update("Enter to continue · Esc to close")

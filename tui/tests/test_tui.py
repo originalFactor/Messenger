@@ -8,11 +8,12 @@ from contextlib import aclosing
 from pathlib import Path
 
 from textual import events
-from textual.widgets import Input, Label, Static
+from textual.widgets import Button, Input, Label, OptionList, Static
 
 from messenger_tui.app import Messenger
 from messenger_tui.chat import Chat, model_for
 from messenger_tui.core import open_core
+from messenger_tui.providers_screen import ConfirmProviderDelete, ProviderEditor, ProviderManager
 from messenger_tui.screens import Picker, ProviderDialog
 
 
@@ -73,6 +74,82 @@ def delta(text, reason=None):
 
 
 class CoreTest(unittest.IsolatedAsyncioTestCase):
+    async def test_manage_providers_from_terminal(self):
+        executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
+        with tempfile.TemporaryDirectory() as directory:
+            async with open_core(executable, Path(directory) / "providers.db") as (api, version):
+                agent = await api.json("/agents/default")
+                chat = Chat(api, agent, None)
+                app = Messenger(chat, version)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.press("/", *"prov", "enter")
+                    self.assertIsInstance(app.screen, ProviderManager)
+                    manager = app.screen
+                    await pilot.click("#add-provider")
+                    self.assertIsInstance(app.screen, ProviderEditor)
+                    editor = app.screen
+                    editor.query_one("#name", Input).value = "Local Provider"
+                    editor.query_one("#base_url", Input).value = "http://user:secret@localhost/v1"
+                    self.assertTrue(editor.query_one("#api_key", Input).password)
+                    await pilot.click("#save-provider")
+                    self.assertIn("without embedded credentials", str(editor.query_one("#provider-result", Static).content))
+                    self.assertEqual(await api.list("/providers"), [])
+
+                    editor.query_one("#base_url", Input).value = "http://localhost:1234/v1"
+                    editor.query_one("#api_key", Input).value = "test-provider-key"
+                    await pilot.pause(0.3)
+                    editor.query_one("#save-provider", Button).focus()
+                    await pilot.press("enter")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertIs(app.screen, manager)
+                    [provider] = await api.list("/providers")
+                    self.assertEqual(provider["name"], "Local Provider")
+                    self.assertEqual(await api.list("/models"), [])
+                    self.assertNotIn("test-provider-key", str(manager.query_one(OptionList).options[0].prompt))
+
+                    await pilot.press(*"local", "enter")
+                    editor = app.screen
+                    self.assertIsInstance(editor, ProviderEditor)
+                    self.assertEqual(editor.query_one("#api_key", Input).value, "")
+                    editor.query_one("#name", Input).value = "Renamed Provider"
+                    editor.query_one("#api_format", Input).value = "responses"
+                    await pilot.click("#save-provider")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertIs(app.screen, manager)
+                    [updated] = await api.list("/providers")
+                    self.assertEqual(updated, {
+                        **provider, "name": "Renamed Provider", "api_format": "responses",
+                        "updated_at": updated["updated_at"],
+                    })
+
+                    model = await api.json("/models", method="PUT", body={
+                        "id": "model", "provider_id": provider["id"], "model_id": "upstream-model",
+                        "display_name": "Model", "is_enabled": True, "created_at": 0,
+                    })
+                    await chat.choose_model(model)
+                    await pilot.press("ctrl+a", "backspace", "enter")
+                    self.assertIsInstance(app.screen, ProviderEditor)
+                    await pilot.click("#delete-provider")
+                    self.assertIsInstance(app.screen, ConfirmProviderDelete)
+                    await pilot.press("enter")
+                    self.assertIsInstance(app.screen, ProviderEditor)
+                    self.assertEqual(await api.list("/providers"), [updated])
+                    await pilot.pause(0.3)
+                    app.screen.query_one("#delete-provider", Button).focus()
+                    await pilot.press("enter")
+                    await pilot.click("#confirm-delete")
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    self.assertIs(app.screen, manager)
+                    self.assertEqual(await api.list("/providers"), [])
+                    self.assertEqual(await api.list("/models"), [])
+                    self.assertIsNone(chat.model)
+                    await chat.turn({"content": "without model"}, lambda: self.fail("draft cleared"))
+                    self.assertIn("model_required", chat.fault)
+                    self.assertEqual(await api.list("/conversations"), [])
+
     async def test_local_core_stream_retry_cancel_and_restore(self):
         executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
         requests = Counter()

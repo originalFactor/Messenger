@@ -103,18 +103,28 @@ class Chat:
         self.model = model
         self.status(f"Model set to {model['display_name']}.")
 
-    async def connect(self, values: dict) -> None:
-        now = values.setdefault("created_at", now_ms())
-        provider_id = values.setdefault("provider_id", str(uuid4()))
-        model_id = values.setdefault("record_id", str(uuid4()))
-        await self.api.json("/providers", method="PUT", body={
+    async def save_provider(self, values: dict) -> dict:
+        now = now_ms()
+        created_at = values.setdefault("created_at", now)
+        provider_id = values.setdefault("id", str(uuid4()))
+        return await self.api.json(entity("providers", provider_id), method="PUT", body={
             "id": provider_id, "name": values["name"], "base_url": values["base_url"],
             "api_format": values["api_format"], "api_key": values["api_key"],
-            "created_at": now, "updated_at": now,
+            "created_at": created_at, "updated_at": now,
         })
+
+    async def delete_provider(self, provider_id: str) -> None:
+        await self.api.json(entity("providers", provider_id), method="DELETE")
+        if self.model and self.model["provider_id"] == provider_id:
+            self.model = None
+            self.update()
+
+    async def connect(self, values: dict) -> None:
+        provider = await self.save_provider(values)
+        model_id = values.setdefault("record_id", str(uuid4()))
         model = await self.api.json("/models", method="PUT", body={
-            "id": model_id, "provider_id": provider_id, "model_id": values["model_id"],
-            "display_name": values["model_id"], "is_enabled": True, "created_at": now,
+            "id": model_id, "provider_id": provider["id"], "model_id": values["model_id"],
+            "display_name": values["model_id"], "is_enabled": True, "created_at": provider["created_at"],
         })
         await self.choose_model(model)
 

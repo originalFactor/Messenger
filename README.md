@@ -188,7 +188,10 @@ Type `/` in the composer to open command suggestions and keep typing to filter
 by prefix. Use the arrow keys to select a suggestion, Tab to fill it, or Enter
 to run the highlighted command. Esc closes suggestions and keeps the draft.
 
-Use `/connect` to add a provider and its first model. Enter sends a message,
+Use `/providers` to search and manage providers. Choose **Add provider** to
+save a provider, or select an existing one to edit its settings or delete it.
+Deleting a provider also deletes its models. Use `/connect` to add a provider
+and its first model in one flow. Enter sends a message,
 Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the
 command palette. Use `/new`, `/sessions`, `/models`, and `/agents` to
 start a session, resume one, change the model, or select an agent for a new
