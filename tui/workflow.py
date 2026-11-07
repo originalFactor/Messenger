@@ -56,7 +56,7 @@ def vendor_dependencies(stage: Path, bundle: Path) -> None:
         shutil.copy2(TUI / file, project / file)
     env = {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "CONDA_PREFIX", "POETRY_ACTIVE")}
     env.update(POETRY_VIRTUALENVS_IN_PROJECT="true", POETRY_VIRTUALENVS_CREATE="true",
-               POETRY_VIRTUALENVS_OPTIONS_NO_PIP="true")
+               POETRY_VIRTUALENVS_OPTIONS_NO_PIP="true", POETRY_INSTALLER_PARALLEL="false")
     invoke(["poetry", "env", "use", sys.executable], cwd=project, env=env)
     python = invoke(["poetry", "env", "info", "--executable"], cwd=project, capture=True, env=env)
     if not python or not Path(python).parent.resolve().is_relative_to((project / ".venv").resolve()):
