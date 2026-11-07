@@ -6,6 +6,12 @@ from urllib.parse import urlsplit
 
 from .core import CoreApi
 
+BUILTIN_PROVIDER_ID = "builtin-messenger-cloud-ai"
+
+
+async def sync_builtin_models(api: CoreApi, *, force: bool = False) -> int:
+    return await api.json("/cloud/builtin-models/sync", method="POST", body={"force": force}, timeout=45)
+
 
 def normalize_server_url(value: str) -> str:
     url = value.strip().rstrip("/")
@@ -32,6 +38,10 @@ class CloudAccount:
     api: CoreApi
     server_url: str
     user: dict | None
+
+    @property
+    def has_ai_key(self) -> bool:
+        return bool(self.user and (self.user.get("aiApiKey") or "").strip())
 
     @classmethod
     async def load(cls, api: CoreApi) -> "CloudAccount":

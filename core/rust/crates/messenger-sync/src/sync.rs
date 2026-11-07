@@ -80,6 +80,7 @@ impl<'a> SyncEngine<'a> {
     }
 
     pub fn clear_session(&self) -> Result<(), String> {
+        self.remove_builtin_provider().map_err(|e| e.to_string())?;
         self.store.kv_delete(KV_SESSION).map_err(|e| e.to_string())?;
         self.store.kv_delete(KV_SESSION_HOST).map_err(|e| e.to_string())?;
         self.store.kv_delete(KV_USER).map_err(|e| e.to_string())

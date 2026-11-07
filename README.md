@@ -199,11 +199,16 @@ Ctrl+O inserts a newline, and Esc cancels the current turn. Ctrl+P opens the
 command palette. Use `/new`, `/sessions`, `/models`, and `/agents` to
 start a session, resume one, change the model, or select an agent for a new
 session. Use Page Up and Page Down to read older messages.
+`/quit` and `/exit` both close the terminal client.
 
 Use `/cloud` to sign in to Messenger Cloud, view the saved account, or sign out.
 The dialog shows the configured Cloud base URL. Enter an HTTP(S) URL for a
 self-hosted server and choose **Save address**, or sign in with that address.
 Saving a different address signs out the current account first.
+Signing in with a Cloud AI key automatically adds **Messenger Cloud AI** and
+syncs its models from that server. Use `/models` to select a Cloud model, or
+open the built-in entry in `/providers` to sync the catalog or enable and
+disable individual models. Signing out removes the Cloud provider and its models.
 
 The TUI stores chats, provider credentials, and its Cloud session in `~/.messenger/tui.db`.
 Use `--db PATH` for a separate TUI profile and `--core PATH` for a custom

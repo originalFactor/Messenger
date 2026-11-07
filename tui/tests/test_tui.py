@@ -20,6 +20,14 @@ from messenger_tui.screens import ConfirmDelete, Picker, ProviderDialog
 
 
 class TerminalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_exit_alias_completes_and_quits(self):
+        app = Messenger(Chat(None, {"name": "Default"}, None), "1.1.0")
+        async with app.run_test(size=(84, 24)) as pilot:
+            await pilot.press("/", "e", "x", "tab")
+            self.assertEqual(app.composer.text, "/exit")
+            await pilot.press("enter")
+            self.assertFalse(app.is_running)
+
     async def test_completion_palette_and_provider_input(self):
         class Api:
             async def list(self, path):

@@ -7,6 +7,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Checkbox, Input, Label, Static
 
 from .chat import Chat
+from .cloud import BUILTIN_PROVIDER_ID
 from .models_screen import ModelManager
 from .screens import Choice, ConfirmDelete, Dialog, FilterInput, Picker, PROVIDER_FIELDS, provider_field_error
 
@@ -26,12 +27,17 @@ class ProviderManager(Picker):
 
     def update_choices(self) -> None:
         self.choices = [
-            Choice(provider["id"], provider["name"], provider["base_url"])
+            Choice(provider["id"], provider["name"],
+                   f"Built-in · {provider['base_url']}" if provider["id"] == BUILTIN_PROVIDER_ID else provider["base_url"])
             for provider in self.providers.values()
         ]
 
     def select(self, identifier: str) -> None:
-        self.app.push_screen(ProviderEditor(self.chat, self.providers[identifier]), self.apply_change)
+        provider = self.providers[identifier]
+        if identifier == BUILTIN_PROVIDER_ID:
+            self.app.push_screen(ModelManager(self.chat, provider))
+        else:
+            self.app.push_screen(ProviderEditor(self.chat, provider), self.apply_change)
 
     @on(Button.Pressed, "#add-provider")
     def add_provider(self) -> None:

@@ -1533,6 +1533,7 @@ async fn cloud_register(
 }
 
 async fn cloud_logout(State(state): State<ApiState>) -> Result<StatusCode, ApiError> {
+    let _sync = state.cloud_sync_gate.lock().await;
     sync_engine(&state.store)?
         .logout()
         .await
@@ -1658,7 +1659,16 @@ async fn cloud_sync_builtin_models(
     State(state): State<ApiState>,
     Json(body): Json<BuiltinModelsBody>,
 ) -> Result<Json<usize>, ApiError> {
-    let count = sync_engine(&state.store)?
+    let _sync = state.cloud_sync_gate.lock().await;
+    let engine = sync_engine(&state.store)?;
+    let Some(user) = engine.current_user() else {
+        return Ok(Json(0));
+    };
+    if user.ai_api_key.as_deref().is_none_or(|key| key.trim().is_empty()) {
+        return Ok(Json(0));
+    }
+    engine.ensure_builtin_provider(&user).map_err(ApiError::internal)?;
+    let count = engine
         .sync_builtin_provider_models(body.force)
         .await
         .map_err(ApiError::BadRequest)?;

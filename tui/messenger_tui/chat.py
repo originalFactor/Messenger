@@ -49,6 +49,10 @@ class Chat:
         self.notice_error = error
         self.update()
 
+    async def refresh_model(self) -> None:
+        self.model = await model_for(self.api, self.agent, self.session)
+        self.update()
+
     async def new(self, agent: dict | None = None) -> None:
         owner = agent or self.agent
         self.model = await model_for(self.api, owner)

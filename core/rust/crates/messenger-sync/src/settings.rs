@@ -50,7 +50,6 @@ impl<'a> SyncEngine<'a> {
             .await
             .map_err(CloudError::into_credential_error)?;
 
-        self.remove_builtin_provider()?;
         self.clear_session().map_err(CloudError::Network)?;
         // The account is gone: its cursor and pending queues are meaningless.
         let _ = self.store.clear_sync_meta(&account.id);

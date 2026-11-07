@@ -579,6 +579,7 @@ paths:
   /cloud/builtin-models/sync:
     post:
       operationId: syncBuiltinModels
+      description: Provision Messenger Cloud AI from the saved account and sync its model catalog. Returns zero when the account has no AI key.
       requestBody:
         content:
           application/json:

@@ -12,7 +12,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import OptionList, Static, TextArea
 
 from .chat import Chat
-from .cloud import CloudAccount
+from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
 from .cloud_screen import CloudDialog
 from .providers_screen import ProviderManager
 from .screens import Choice, Help, Picker, ProviderDialog
@@ -29,6 +29,7 @@ COMMANDS = (
     ("regenerate", "Regenerate the last reply", ""),
     ("help", "Keyboard shortcuts", ""),
     ("quit", "Exit Messenger", "q"),
+    ("exit", "Alias for /quit", ""),
 )
 COMMAND_IDS = {command for command, _, _ in COMMANDS}
 LEADER_KEYS = {key: command for command, _, key in COMMANDS if key}
@@ -324,7 +325,7 @@ class Messenger(App):
 
     def command(self, identifier: str) -> None:
         match identifier:
-            case "quit":
+            case "quit" | "exit":
                 self.exit()
             case "help":
                 self.push_screen(Help())
@@ -343,11 +344,26 @@ class Messenger(App):
 
     async def open_cloud(self) -> None:
         account = await CloudAccount.load(self.chat.api)
-        self.push_screen(CloudDialog(account))
+        self.push_screen(CloudDialog(account, self.chat))
 
     async def open_providers(self) -> None:
-        providers = await self.chat.api.list("/providers")
-        self.push_screen(ProviderManager(self.chat, providers))
+        self.push_screen(ProviderManager(self.chat, await self.load_providers()))
+
+    async def load_providers(self) -> list[dict]:
+        api = self.chat.api
+        providers = await api.list("/providers")
+        if any(provider["id"] == BUILTIN_PROVIDER_ID for provider in providers):
+            return providers
+        # Profiles signed in before the TUI supported the Cloud catalog can
+        # provision it from their saved account the first time they need it.
+        if not (await api.json("/cloud/me") or {}).get("aiApiKey"):
+            return providers
+        try:
+            await sync_builtin_models(api)
+            await self.chat.refresh_model()
+        except Exception as error:
+            self.chat.status(f"Messenger Cloud model sync failed. {error}", True)
+        return await api.list("/providers")
 
     async def new_session(self, agent: dict | None = None) -> None:
         await self.chat.new(agent)
@@ -372,6 +388,8 @@ class Messenger(App):
 
     async def show_choices(self, kind: str) -> None:
         api = self.chat.api
+        if kind == "models":
+            providers = {row["id"]: row["name"] for row in await self.load_providers()}
         rows = await api.list("/conversations" if kind == "sessions" else f"/{kind}")
         if kind == "sessions":
             options = [
@@ -381,7 +399,6 @@ class Messenger(App):
             ]
             title, empty, action = "Sessions", "No saved sessions.", self.open_session
         elif kind == "models":
-            providers = {row["id"]: row["name"] for row in await api.list("/providers")}
             options = [
                 Choice(row["id"], row["display_name"],
                        f"{providers.get(row['provider_id'], '')} / {row['model_id']}", row)

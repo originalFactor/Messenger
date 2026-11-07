@@ -6,7 +6,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, Label, Static
 
-from .cloud import CloudAccount
+from .chat import Chat
+from .cloud import CloudAccount, sync_builtin_models
 from .screens import Dialog
 
 
@@ -18,9 +19,10 @@ class CloudDialog(Dialog):
     #cloud-actions Button { width: 1fr; min-width: 0; }
     """
 
-    def __init__(self, account: CloudAccount):
+    def __init__(self, account: CloudAccount, chat: Chat):
         super().__init__()
         self.account = account
+        self.chat = chat
         self.pending = False
 
     def compose(self) -> ComposeResult:
@@ -90,11 +92,17 @@ class CloudDialog(Dialog):
         url = self.query_one("#cloud-url", Input)
         password = self.query_one("#cloud-password", Input)
         submitted_password = password.value if action == "cloud-login" else ""
+        signed_in = False
+        result = ""
         try:
             if action == "cloud-login":
                 email = self.query_one("#cloud-email", Input)
                 await self.account.login(url.value, email.value, submitted_password)
+                signed_in = True
                 result = "Signed in to Messenger Cloud."
+                if self.account.has_ai_key:
+                    count = await sync_builtin_models(self.account.api)
+                    result += f" Synced {count} Cloud models."
             elif action == "cloud-save":
                 signed_out = await self.account.set_server(url.value)
                 result = "Cloud address saved. Signed out of the previous server." if signed_out else "Cloud address saved."
@@ -104,9 +112,15 @@ class CloudDialog(Dialog):
             url.value = self.account.server_url
         except Exception as error:
             result = str(error)
+            if signed_in:
+                result = f"Signed in to Messenger Cloud. Model sync failed. {result}"
             if submitted_password:
                 result = result.replace(submitted_password, "••••")
         finally:
+            try:
+                await self.chat.refresh_model()
+            except Exception as error:
+                result += f" Could not reload the active model. {error}"
             if action == "cloud-login":
                 password.value = ""
             self.pending = False

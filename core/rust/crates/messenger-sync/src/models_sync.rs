@@ -43,7 +43,8 @@ impl<'a> SyncEngine<'a> {
         let models_resp = match client.get_models().await {
             Ok(resp) => resp,
             Err(e) => {
-                return Err(format!("Built-in model sync failed: {e}"));
+                let detail = e.to_string().replace(&provider.api_key, "••••");
+                return Err(format!("Built-in model sync failed: {detail}"));
             }
         };
 

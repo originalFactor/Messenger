@@ -18,6 +18,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 ## Local API boundary
 
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
+- `/cloud/builtin-models/sync` provisions Messenger Cloud AI from the saved account before fetching its catalog. Clearing the Cloud session removes that provider and its models.
 - Tool policy stays in Rust. Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`. The TUI returns an explicit unavailable result for local tool requests.
 - Dropping the chat SSE cancels the turn token, wakes a pending tool host and finalizes partial rows.
 - **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.

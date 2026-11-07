@@ -7,6 +7,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
 
 from .chat import Chat
+from .cloud import BUILTIN_PROVIDER_ID, sync_builtin_models
 from .screens import Choice, ConfirmDelete, Dialog, FilterInput, Picker
 
 
@@ -21,6 +22,7 @@ class ModelManager(Picker):
         super().__init__(f"Models · {provider['name']}", [], "No models saved.")
         self.chat = chat
         self.provider = provider
+        self.builtin = provider["id"] == BUILTIN_PROVIDER_ID
         self.auto_fetch = auto_fetch
         self.models: dict[str, dict] = {}
         self.pending = False
@@ -29,8 +31,9 @@ class ModelManager(Picker):
         with Vertical():
             yield from self.compose_picker()
             with Horizontal(id="model-list-actions"):
-                yield Button("Add model", variant="primary", id="add-model")
-                yield Button("Fetch models", id="fetch-models")
+                if not self.builtin:
+                    yield Button("Add model", variant="primary", id="add-model")
+                yield Button("Sync Cloud models" if self.builtin else "Fetch models", id="fetch-models")
             yield Static(id="model-list-status", markup=False)
 
     def on_mount(self) -> None:
@@ -67,8 +70,13 @@ class ModelManager(Picker):
         status = ""
         if fetch:
             try:
-                imported = await self.chat.fetch_models(self.provider)
-                status = f"Imported {imported} new models." if imported else "No new models found."
+                if self.builtin:
+                    count = await sync_builtin_models(self.chat.api, force=True)
+                    await self.chat.refresh_model()
+                    status = f"Synced {count} Cloud models."
+                else:
+                    imported = await self.chat.fetch_models(self.provider)
+                    status = f"Imported {imported} new models." if imported else "No new models found."
             except Exception as error:
                 status = f"Fetching models failed. {error}"
         try:
@@ -113,20 +121,24 @@ class ModelEditor(Dialog):
         super().__init__()
         self.chat = chat
         self.model = model
+        self.builtin = provider_id == BUILTIN_PROVIDER_ID
         self.values = dict(model or {"provider_id": provider_id})
         self.pending = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(Text("Edit model" if self.model else "Add model", style="bold"))
-            yield Label("Upstream model ID")
-            yield Input(value=self.values.get("model_id", ""), id="model-id")
-            yield Label("Display name")
-            yield Input(value=self.values.get("display_name", ""), placeholder="Defaults to the model ID", id="model-name")
+            if self.builtin:
+                yield Static(f"{self.model['display_name']} · Managed by Messenger Cloud", markup=False)
+            else:
+                yield Label("Upstream model ID")
+                yield Input(value=self.values.get("model_id", ""), id="model-id")
+                yield Label("Display name")
+                yield Input(value=self.values.get("display_name", ""), placeholder="Defaults to the model ID", id="model-name")
             yield Checkbox("Enabled", value=self.values.get("is_enabled", True), id="model-enabled")
             with Horizontal(id="model-actions"):
                 yield Button("Save", variant="primary", id="save-model")
-                if self.model:
+                if self.model and not self.builtin:
                     yield Button("Delete", variant="error", id="delete-model")
             yield Static("Tab moves between fields · Esc closes", id="model-result", markup=False)
 
@@ -136,17 +148,18 @@ class ModelEditor(Dialog):
 
     @on(Button.Pressed, "#save-model")
     def save(self) -> None:
-        field = self.query_one("#model-id", Input)
-        model_id = field.value.strip()
-        if not model_id:
-            self.query_one("#model-result", Static).update("Model ID is required.")
-            field.focus()
-            return
-        self.values.update(
-            model_id=model_id,
-            display_name=self.query_one("#model-name", Input).value.strip() or model_id,
-            is_enabled=self.query_one("#model-enabled", Checkbox).value,
-        )
+        if not self.builtin:
+            field = self.query_one("#model-id", Input)
+            model_id = field.value.strip()
+            if not model_id:
+                self.query_one("#model-result", Static).update("Model ID is required.")
+                field.focus()
+                return
+            self.values.update(
+                model_id=model_id,
+                display_name=self.query_one("#model-name", Input).value.strip() or model_id,
+            )
+        self.values["is_enabled"] = self.query_one("#model-enabled", Checkbox).value
         self.submit(deleting=False)
 
     @on(Button.Pressed, "#delete-model")
