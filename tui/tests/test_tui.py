@@ -16,7 +16,7 @@ from messenger_tui.chat import Chat, model_for
 from messenger_tui.core import open_core
 from messenger_tui.models_screen import ModelEditor, ModelManager
 from messenger_tui.providers_screen import ProviderEditor, ProviderManager
-from messenger_tui.screens import ConfirmDelete, Picker, ProviderDialog
+from messenger_tui.screens import ConfirmDelete, Picker, ProviderDialog, TrustWorkspace
 
 
 class TerminalTest(unittest.IsolatedAsyncioTestCase):
@@ -84,6 +84,72 @@ def delta(text, reason=None):
 
 
 class CoreTest(unittest.IsolatedAsyncioTestCase):
+    async def test_workspace_trust_and_device_owned_sessions(self):
+        executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "project"
+            nested = root / "src" / "lib"
+            nested.mkdir(parents=True)
+            neighbor = root.with_name("project-other")
+            neighbor.mkdir()
+            async with open_core(executable, root.parent / "chat.db") as (api, version):
+                agent = await api.json("/agents/default")
+                chat = Chat(api, agent, None)
+                app = Messenger(chat, version, workspace=root)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.pause()
+                    self.assertIsInstance(app.screen, TrustWorkspace)
+                    await pilot.press("enter")
+                    self.assertIs(app.screen, app.base)
+                    self.assertIsNone(chat.project_id)
+                    self.assertEqual(await api.list("/projects"), [])
+
+                await api.json("/projects", method="PUT", body={
+                    "id": "remote", "name": "Other device", "workspace": str(root),
+                    "device_id": "other-device", "created_at": 1, "updated_at": 1,
+                })
+                app = Messenger(chat, version, workspace=root)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.pause()
+                    self.assertIsInstance(app.screen, TrustWorkspace)
+                    await pilot.click("#trust-workspace")
+                    if app.operation:
+                        await app.operation
+                    project = await api.json(f"/projects/{chat.project_id}")
+                    self.assertEqual(project["workspace"], str(root))
+                    self.assertEqual(project["owner"], {"kind": "local"})
+                    self.assertEqual(project["device_id"], (await api.json("/remote/status"))["deviceId"])
+                    self.assertEqual((await api.json("/projects/remote"))["device_id"], "other-device")
+
+                    chat.model = {"provider_id": "test-provider", "display_name": "Test", "is_enabled": True}
+                    session = await chat.create_session("Project chat")
+                    self.assertEqual(session["project_id"], project["id"])
+                    standalone = Chat(api, agent, chat.model)
+                    plain = await standalone.create_session("Standalone chat")
+                    self.assertIsNone(plain["project_id"])
+                    self.assertEqual(await standalone.list_sessions(), [plain])
+
+                chat = Chat(api, agent, None)
+                app = Messenger(chat, version, workspace=nested)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.pause()
+                    self.assertIs(app.screen, app.base)
+                    self.assertEqual(chat.project_id, project["id"])
+                    self.assertEqual(len(await api.list("/projects")), 2)
+                    await pilot.press("/", *"sessions", "enter")
+                    self.assertIsInstance(app.screen, Picker)
+                    options = app.screen.query_one(OptionList).options
+                    self.assertEqual([option.id for option in options], [session["id"]])
+                    await pilot.press("enter")
+                    if app.operation:
+                        await app.operation
+                    self.assertEqual(chat.session["id"], session["id"])
+
+                app = Messenger(Chat(api, agent, None), version, workspace=neighbor)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    await pilot.pause()
+                    self.assertIsInstance(app.screen, TrustWorkspace)
+
     async def test_manage_providers_from_terminal(self):
         executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
         discoveries = []

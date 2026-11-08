@@ -3,6 +3,7 @@
 import asyncio
 import time
 from contextlib import aclosing
+from pathlib import Path
 from uuid import uuid4
 
 from httpx import TimeoutException
@@ -34,6 +35,7 @@ class Chat:
         self.api = api
         self.agent = agent
         self.model = model
+        self.project: dict | None = None
         self.session = None
         self.messages: list[dict] = []
         self.has_older = False
@@ -56,6 +58,46 @@ class Chat:
     async def refresh_model(self) -> None:
         self.model = await model_for(self.api, self.agent, self.session)
         self.update()
+
+    @property
+    def project_id(self) -> str | None:
+        return self.project["id"] if self.project else None
+
+    async def use_workspace(self, directory: Path, *, trusted: bool = False) -> bool:
+        matches = []
+        for project in await self.api.list("/projects"):
+            if project["owner"]["kind"] != "local":
+                continue
+            try:
+                root = Path(project["workspace"]).expanduser()
+                if not root.is_absolute():
+                    continue
+                root = root.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if directory.is_relative_to(root):
+                matches.append((len(root.parts), project))
+        if matches:
+            project = max(matches, key=lambda match: match[0])[1]
+        elif trusted:
+            if directory.resolve(strict=True) != directory or not directory.is_dir():
+                raise ValueError("The workspace changed. Reopen Messenger to review the directory.")
+            now = now_ms()
+            project = {
+                "id": str(uuid4()), "name": directory.name or str(directory), "workspace": str(directory),
+                "created_at": now, "updated_at": now,
+            }
+        else:
+            return False
+        if not project.get("device_id"):
+            project = await self.api.json("/projects", method="PUT", body=project)
+        self.project = project
+        return True
+
+    async def list_sessions(self) -> list[dict]:
+        if self.project_id is not None:
+            return await self.api.list(f"{entity('projects', self.project_id)}/conversations")
+        return [row for row in await self.api.list("/conversations") if row.get("project_id") is None]
 
     async def new(self, agent: dict | None = None) -> None:
         owner = agent or self.agent
@@ -80,6 +122,8 @@ class Chat:
 
     async def open(self, selected: dict) -> None:
         conversation, history = await self.history(entity("conversations", selected["id"]))
+        if conversation.get("project_id") != self.project_id:
+            raise ValueError("This conversation belongs to a different workspace.")
         owner = await self.api.json(entity("agents", conversation["agent_id"]))
         self.model = await model_for(self.api, owner, conversation)
         self.agent = owner
@@ -241,7 +285,7 @@ class Chat:
         now = now_ms()
         return await self.api.json("/conversations", method="PUT", body={
             "id": str(uuid4()), "title": content.splitlines()[0][:64], "provider_id": self.model["provider_id"],
-            "agent_id": self.agent["id"], "created_at": now, "updated_at": now,
+            "agent_id": self.agent["id"], "project_id": self.project_id, "created_at": now, "updated_at": now,
         })
 
     async def upload_conversations(self, conversation_id: str | None = None, *, claim_new: bool = False) -> None:
@@ -360,7 +404,7 @@ class Chat:
             if not isinstance(failure, ApiError) or not persisted_error or persisted_error != failure.message:
                 self.fault = str(failure or refresh_failure)
             self.status(" · ".join(str(error) for error in (failure, refresh_failure) if error), True)
-        if terminal and self.session:
+        if terminal and self.session and self.session.get("project_id") is None:
             await self.upload_conversations(self.session["id"], claim_new=new_session)
 
     async def cancel(self) -> None:

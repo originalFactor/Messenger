@@ -24,11 +24,11 @@ def default_core() -> Path:
     return directory.parent / "core" / "rust" / "target" / "debug" / executable_name()
 
 
-async def run(executable: Path, database: Path) -> None:
+async def run(executable: Path, database: Path, workspace: Path) -> None:
     database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     async with open_core(executable, database) as (api, core):
         meta, agent = await asyncio.gather(api.json("/meta"), api.json("/agents/default"))
-        app = Messenger(Chat(api, agent, await model_for(api, agent)), meta["serverVersion"])
+        app = Messenger(Chat(api, agent, await model_for(api, agent)), meta["serverVersion"], workspace=workspace)
         watch = asyncio.create_task(core.wait())
         terminal = asyncio.create_task(app.run_async())
         try:
@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--db", type=Path, default=Path.home() / ".messenger" / "tui.db",
                         help="SQLite profile (default: ~/.messenger/tui.db)")
     parser.add_argument("--core", type=Path, default=default_core(), help="Core executable")
+    parser.add_argument("--workspace", type=Path, help="startup directory (default: current directory)")
     parser.add_argument("-V", "--version", action="store_true", help="print the Messenger version")
     args = parser.parse_args()
     executable = args.core.expanduser().resolve()
@@ -61,7 +62,10 @@ def main() -> int:
         else:
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 raise RuntimeError("Messenger TUI needs an interactive terminal.")
-            asyncio.run(run(executable, args.db.expanduser().resolve()))
+            workspace = (args.workspace or Path.cwd()).expanduser().resolve(strict=True)
+            if not workspace.is_dir():
+                raise ValueError("The startup workspace must be a directory.")
+            asyncio.run(run(executable, args.db.expanduser().resolve(), workspace))
     except KeyboardInterrupt:
         return 130
     except Exception as error:

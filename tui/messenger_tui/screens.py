@@ -40,6 +40,27 @@ class Dialog(ModalScreen):
         self.dismiss(None)
 
 
+class TrustWorkspace(Dialog):
+    def __init__(self, directory: str):
+        super().__init__()
+        self.directory = directory
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Trust this folder?")
+            yield Static(self.directory, markup=False)
+            yield Static("Trust creates a project on this device and groups new chats in it.", markup=False)
+            yield Button("Continue without a project", id="standalone")
+            yield Button("Trust and create project", variant="primary", id="trust-workspace")
+
+    def on_mount(self) -> None:
+        self.query_one("#standalone", Button).focus()
+
+    @on(Button.Pressed)
+    def choose(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "trust-workspace")
+
+
 class ConfirmDelete(Dialog):
     def __init__(self, prompt: str, button: str):
         super().__init__()

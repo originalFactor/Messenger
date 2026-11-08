@@ -3,6 +3,7 @@
 import asyncio
 import re
 from datetime import datetime
+from pathlib import Path
 
 from rich.text import Text
 from textual import events, on
@@ -15,7 +16,7 @@ from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
 from .cloud_screen import CloudDialog
 from .providers_screen import ProviderManager
-from .screens import Choice, Help, Picker, ProviderDialog
+from .screens import Choice, Help, Picker, ProviderDialog, TrustWorkspace
 
 COMMANDS = (
     ("new", "New session", "n"),
@@ -80,10 +81,11 @@ class Messenger(App):
     Screen.compact #composer { height: 3; }
     """
 
-    def __init__(self, chat: Chat, version: str):
+    def __init__(self, chat: Chat, version: str, *, workspace: Path | None = None):
         super().__init__()
         self.chat = chat
         self.version = version
+        self.workspace = workspace
         self.operation: asyncio.Task | None = None
         self.cancel_task: asyncio.Task | None = None
         self.leader = False
@@ -114,6 +116,16 @@ class Messenger(App):
         self.chat.update = self.refresh_view
         self.resize_layout(self.size.height)
         self.refresh_view()
+        if self.workspace is not None:
+            self.start(self.open_workspace)
+
+    async def open_workspace(self) -> None:
+        if not await self.chat.use_workspace(self.workspace):
+            self.push_screen(TrustWorkspace(repr(str(self.workspace))), self.workspace_trusted)
+
+    def workspace_trusted(self, confirmed: bool | None) -> None:
+        if confirmed:
+            self.start(lambda: self.chat.use_workspace(self.workspace, trusted=True))
 
     def on_resize(self, event: events.Resize) -> None:
         if hasattr(self, "base"):
@@ -132,6 +144,8 @@ class Messenger(App):
             return
         chat = self.chat
         title = (chat.session.get("title") or "Untitled") if chat.session else "New session"
+        if chat.project:
+            title = f"{chat.project['name']}   /   {title}"
         self.base.query_one("#heading", Static).update(display(f"MESSENGER  {self.version}   /   {title}"))
         model_enabled = bool(chat.model and chat.model["is_enabled"])
         model = chat.model["display_name"] if chat.model else "No model"
@@ -400,7 +414,7 @@ class Messenger(App):
         api = self.chat.api
         if kind == "models":
             providers = {row["id"]: row["name"] for row in await self.load_providers()}
-        rows = await api.list("/conversations" if kind == "sessions" else f"/{kind}")
+        rows = await self.chat.list_sessions() if kind == "sessions" else await api.list(f"/{kind}")
         if kind == "sessions":
             options = [
                 Choice(row["id"], row.get("title") or "Untitled",

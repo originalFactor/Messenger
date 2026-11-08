@@ -123,7 +123,15 @@ def main() -> int:
         if args.command == "dev":
             if options[:1] == ["--"]:
                 options = options[1:]
-            return subprocess.run([sys.executable, "-m", "messenger_tui", "--core", executable, *options], cwd=TUI).returncode
+            workspace = Path.cwd()
+            # Poetry -C changes the process directory while keeping the shell's PWD.
+            shell_directory = Path(os.environ.get("PWD", ""))
+            if workspace == TUI and shell_directory.is_absolute() and shell_directory.is_dir():
+                workspace = shell_directory
+            return subprocess.run(
+                [sys.executable, "-m", "messenger_tui", "--core", executable,
+                 "--workspace", workspace, *options], cwd=TUI,
+            ).returncode
         if args.command == "build":
             print(f"Core: {executable}")
         else:

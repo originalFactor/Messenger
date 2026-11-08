@@ -205,6 +205,13 @@ start a session, resume one, change the model, or select an agent for a new
 session. Use Page Up and Page Down to read older messages.
 `/quit` and `/exit` both close the terminal client.
 
+Messenger opens the closest local project containing your current directory.
+If the directory is outside a project, choose **Trust and create project** to
+create a project owned by this device, or **Continue without a project** to
+start a standalone chat. New conversations belong to the active project, and
+`/sessions` shows only the active project's conversations in project mode.
+Use `--workspace PATH` to open a different directory.
+
 Use `/cloud` to sign in to Messenger Cloud, view the saved account, or sign out.
 The dialog shows the configured Cloud base URL. Enter an HTTP(S) URL for a
 self-hosted server and choose **Save address**, or sign in with that address.
