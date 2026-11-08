@@ -211,6 +211,10 @@ create a project owned by this device, or **Continue without a project** to
 start a standalone chat. New conversations belong to the active project, and
 `/sessions` shows only the active project's conversations in project mode.
 Use `--workspace PATH` to open a different directory.
+In standalone mode, use `/project` to create a project or reopen one by its
+folder. Inside a project, use `/project` to edit its name or workspace folder,
+or select **Leave project** to start a standalone chat. The saved project and
+its conversations remain available when you reopen it.
 
 Use `/cloud` to sign in to Messenger Cloud, view the saved account, or sign out.
 The dialog shows the configured Cloud base URL. Enter an HTTP(S) URL for a

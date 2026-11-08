@@ -15,6 +15,7 @@ from textual.widgets import OptionList, Static, TextArea
 from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
 from .cloud_screen import CloudDialog
+from .project_screen import ProjectDialog
 from .providers_screen import ProviderManager
 from .screens import Choice, Help, Picker, ProviderDialog, TrustWorkspace
 
@@ -24,6 +25,7 @@ COMMANDS = (
     ("models", "Choose model", "m"),
     ("agents", "Choose agent for a new session", "a"),
     ("providers", "Manage providers", ""),
+    ("project", "Create, edit, or leave a project", ""),
     ("connect", "Add a provider and model", ""),
     ("cloud", "Messenger Cloud account and server address", ""),
     ("sync", "Upload local conversations to Messenger Cloud", ""),
@@ -352,6 +354,8 @@ class Messenger(App):
                 self.push_screen(ProviderDialog(), self.save_provider)
             case "providers":
                 self.start(self.open_providers)
+            case "project":
+                self.start(self.open_project)
             case "cloud":
                 self.start(self.open_cloud)
             case "sync":
@@ -369,6 +373,11 @@ class Messenger(App):
 
     async def open_providers(self) -> None:
         self.push_screen(ProviderManager(self.chat, await self.load_providers()))
+
+    async def open_project(self) -> None:
+        directory = self.workspace or Path.cwd()
+        suggested = self.chat.project or await self.chat.enclosing_project(directory)
+        self.push_screen(ProjectDialog(self.chat, directory, suggested))
 
     async def load_providers(self) -> list[dict]:
         api = self.chat.api

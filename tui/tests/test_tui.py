@@ -15,6 +15,7 @@ from messenger_tui.app import Messenger
 from messenger_tui.chat import Chat, model_for
 from messenger_tui.core import open_core
 from messenger_tui.models_screen import ModelEditor, ModelManager
+from messenger_tui.project_screen import ProjectDialog
 from messenger_tui.providers_screen import ProviderEditor, ProviderManager
 from messenger_tui.screens import ConfirmDelete, Picker, ProviderDialog, TrustWorkspace
 
@@ -84,6 +85,73 @@ def delta(text, reason=None):
 
 
 class CoreTest(unittest.IsolatedAsyncioTestCase):
+    async def test_project_command_creates_edits_leaves_and_reopens(self):
+        executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            workspace = root / "workspace"
+            moved = root / "moved"
+            workspace.mkdir()
+            moved.mkdir()
+            async with open_core(executable, root / "chat.db") as (api, version):
+                chat = Chat(api, await api.json("/agents/default"), None)
+                app = Messenger(chat, version, workspace=workspace)
+                async with app.run_test(size=(84, 24)) as pilot:
+                    async def project_menu():
+                        await pilot.press("/", *"project", "enter")
+                        self.assertIsInstance(app.screen, ProjectDialog)
+                        return app.screen
+
+                    async def submit_project(button):
+                        await pilot.click(button)
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+
+                    await pilot.pause()
+                    await pilot.press("escape")
+                    editor = await project_menu()
+                    self.assertEqual(editor.query_one("#project-path", Input).value, str(workspace))
+                    editor.query_one("#project-path", Input).value = str(root / "missing")
+                    await submit_project("#project-save")
+                    self.assertIs(app.screen, editor)
+                    self.assertIn("existing directory", str(editor.query_one("#project-result", Static).content))
+                    self.assertEqual(await api.list("/projects"), [])
+
+                    editor.query_one("#project-path", Input).value = str(workspace)
+                    editor.query_one("#project-name", Input).value = "My project"
+                    await pilot.pause(0.3)
+                    await submit_project("#project-save")
+                    self.assertIs(app.screen, app.base)
+                    project = chat.project
+                    self.assertEqual(project["name"], "My project")
+                    self.assertEqual(project["owner"], {"kind": "local"})
+
+                    chat.model = {"provider_id": "test-provider", "display_name": "Test", "is_enabled": True}
+                    session = await chat.create_session("Project chat")
+                    await chat.open(session)
+                    editor = await project_menu()
+                    editor.query_one("#project-name", Input).value = "Renamed project"
+                    editor.query_one("#project-path", Input).value = "../moved"
+                    await submit_project("#project-save")
+                    self.assertEqual(chat.project_id, project["id"])
+                    self.assertEqual(chat.project["device_id"], project["device_id"])
+                    self.assertEqual(chat.project["workspace"], str(moved))
+                    self.assertEqual(chat.project["name"], "Renamed project")
+                    self.assertEqual(chat.session["id"], session["id"])
+
+                    await project_menu()
+                    await submit_project("#project-leave")
+                    self.assertIsNone(chat.project_id)
+                    self.assertIsNone(chat.session)
+                    self.assertEqual(await chat.list_sessions(), [])
+
+                    editor = await project_menu()
+                    editor.query_one("#project-path", Input).value = str(moved)
+                    await submit_project("#project-save")
+                    self.assertEqual(chat.project_id, project["id"])
+                    self.assertEqual(await chat.list_sessions(), [session])
+                    self.assertEqual(len(await api.list("/projects")), 1)
+
     async def test_workspace_trust_and_device_owned_sessions(self):
         executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
         with tempfile.TemporaryDirectory() as directory:

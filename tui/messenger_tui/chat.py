@@ -63,8 +63,8 @@ class Chat:
     def project_id(self) -> str | None:
         return self.project["id"] if self.project else None
 
-    async def use_workspace(self, directory: Path, *, trusted: bool = False) -> bool:
-        matches = []
+    async def local_workspaces(self) -> list[tuple[Path, dict]]:
+        workspaces = []
         for project in await self.api.list("/projects"):
             if project["owner"]["kind"] != "local":
                 continue
@@ -75,24 +75,61 @@ class Chat:
                 root = root.resolve(strict=True)
             except (OSError, RuntimeError, ValueError):
                 continue
-            if directory.is_relative_to(root):
-                matches.append((len(root.parts), project))
-        if matches:
-            project = max(matches, key=lambda match: match[0])[1]
-        elif trusted:
+            workspaces.append((root, project))
+        return workspaces
+
+    async def enclosing_project(self, directory: Path) -> dict | None:
+        matches = [(len(root.parts), project) for root, project in await self.local_workspaces()
+                   if directory.is_relative_to(root)]
+        return max(matches, key=lambda match: match[0])[1] if matches else None
+
+    async def use_workspace(self, directory: Path, *, trusted: bool = False) -> bool:
+        project = await self.enclosing_project(directory)
+        if project is None:
+            if not trusted:
+                return False
             if directory.resolve(strict=True) != directory or not directory.is_dir():
                 raise ValueError("The workspace changed. Reopen Messenger to review the directory.")
-            now = now_ms()
-            project = {
-                "id": str(uuid4()), "name": directory.name or str(directory), "workspace": str(directory),
-                "created_at": now, "updated_at": now,
-            }
-        else:
-            return False
+            await self.save_project(directory.name or str(directory), directory)
+            return True
         if not project.get("device_id"):
             project = await self.api.json("/projects", method="PUT", body=project)
         self.project = project
         return True
+
+    async def save_project(self, name: str, directory: Path) -> None:
+        workspaces = await self.local_workspaces()
+        existing = next((project for root, project in workspaces if root == directory), None)
+        entering = self.project_id is None
+        if entering and existing:
+            project = existing
+            if not project.get("device_id"):
+                project = await self.api.json("/projects", method="PUT", body=project)
+            action = "Opened"
+        else:
+            now = now_ms()
+            if entering:
+                current = {"id": str(uuid4()), "created_at": now}
+                action = "Created"
+            else:
+                current = await self.api.json(entity("projects", self.project_id))
+                if current["owner"]["kind"] != "local":
+                    raise ValueError("This project belongs to another device.")
+                if existing and existing["id"] != current["id"]:
+                    raise ValueError("This folder already belongs to another local project.")
+                action = "Updated"
+            project = await self.api.json("/projects", method="PUT", body={
+                **current, "name": name, "workspace": str(directory), "updated_at": now,
+            })
+        if entering:
+            await self.new()
+        self.project = project
+        self.status(f"{action} project {project['name']}.")
+
+    async def leave_project(self) -> None:
+        await self.new()
+        self.project = None
+        self.status("Switched to standalone chat.")
 
     async def list_sessions(self) -> list[dict]:
         if self.project_id is not None:
