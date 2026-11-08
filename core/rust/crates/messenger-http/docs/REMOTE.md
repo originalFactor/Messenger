@@ -58,10 +58,13 @@ The core reconnects with 1 s→30 s backoff and polls every 3 s while signed out
 
 **ACP and device control** in Desktop or Android enables the second relay
 lane for the signed-in account. It is off by default. An enabled device exposes
-the sessions, Agents and workspaces available to local chat. Model requests,
-tool execution and history writes happen on the device. In the web Messenger,
-open **Remote device sessions** and select that device. See [ACP.md](ACP.md)
-for local Agent configuration and editor setup.
+Agents, workspaces, and sessions in projects it owns. The session catalog
+includes `projectId` and `updatedAt` for each session. Model requests, tool
+execution, and history writes happen on the device. In Messenger Web, open
+**Remote device sessions** and select a device to open its latest project
+session. Creating a remote session requires a workspace. Standalone Web chats
+send directly through the Web chat proxy. See [ACP.md](ACP.md) for local Agent
+configuration and editor setup.
 
 The existing SSE connection adds `control=host` or `control=client` to the
 events query. A `controlReady` event provides an opaque `connectionId`.

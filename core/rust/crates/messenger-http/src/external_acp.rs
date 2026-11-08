@@ -55,10 +55,12 @@ pub(crate) struct Record {
     pub id: String,
     pub title: String,
     profile: String,
-    project: Option<String>,
+    pub project: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
     cwd: PathBuf,
     agent_session: SessionId,
-    messages: Vec<Value>,
+    pub messages: Vec<Value>,
 }
 
 struct Prompt {
@@ -98,9 +100,10 @@ impl ExternalSessions {
             .unwrap_or_else(|| Ok(HashMap::new()))
     }
 
-    fn save(&self, store: &Store, record: Record) -> Result<(), ApiError> {
+    fn save(&self, store: &Store, mut record: Record) -> Result<(), ApiError> {
         let _write = self.records.lock().unwrap();
         let mut records = self.sessions(store)?;
+        record.updated_at = now_ms();
         records.insert(record.id.clone(), record);
         store
             .kv_set(
@@ -110,11 +113,12 @@ impl ExternalSessions {
             .map_err(ApiError::store)
     }
 
-    pub fn history(&self, store: &Store, id: &str) -> Result<Vec<Value>, ApiError> {
+    #[cfg(test)]
+    fn history(&self, store: &Store, id: &str) -> Result<Vec<Value>, ApiError> {
         Ok(self.record(store, id)?.messages)
     }
 
-    fn record(&self, store: &Store, id: &str) -> Result<Record, ApiError> {
+    pub fn record(&self, store: &Store, id: &str) -> Result<Record, ApiError> {
         self.sessions(store)?
             .remove(id)
             .ok_or_else(|| ApiError::not_found("ACP session"))
@@ -146,6 +150,7 @@ impl ExternalSessions {
                 title: profile.name,
                 profile: profile.id,
                 project: project.map(|project| project.id),
+                updated_at: 0,
                 cwd,
                 agent_session,
                 messages: Vec::new(),

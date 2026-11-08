@@ -169,7 +169,15 @@ impl ControlHost for DeviceControl {
         permissions: mpsc::Receiver<String>,
         updates: mpsc::Sender<Value>,
     ) -> Value {
-        dispatch(self.0.clone(), request, cancel, permissions, updates).await
+        dispatch(
+            self.0.clone(),
+            request,
+            cancel,
+            permissions,
+            updates,
+            ControlScope::Remote,
+        )
+        .await
     }
 }
 
@@ -220,6 +228,7 @@ pub(crate) async fn commands(
             task_cancel,
             choices,
             updates.clone(),
+            ControlScope::Local,
         )
         .await;
         let _ = updates.send(result).await;
@@ -256,14 +265,36 @@ pub(crate) async fn permission(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Clone, Copy)]
+enum ControlScope {
+    Local,
+    Remote,
+}
+
+impl ControlScope {
+    fn workspace(
+        self,
+        state: &ApiState,
+        project_id: Option<&str>,
+    ) -> Result<Option<StoredProject>, ApiError> {
+        if matches!(self, Self::Remote) && project_id.is_none() {
+            return Err(ApiError::BadRequest(
+                "remote control requires a project".into(),
+            ));
+        }
+        local_workspace(state, project_id)
+    }
+}
+
 async fn dispatch(
     state: ApiState,
     request: Value,
     cancel: CancellationToken,
     permissions: mpsc::Receiver<String>,
     updates: mpsc::Sender<Value>,
+    scope: ControlScope,
 ) -> Value {
-    match execute(state, request, cancel, permissions, updates).await {
+    match execute(state, request, cancel, permissions, updates, scope).await {
         Ok(result) => result,
         Err(error) => {
             let reply = error.into_response();
@@ -285,6 +316,7 @@ async fn execute(
     cancel: CancellationToken,
     permissions: mpsc::Receiver<String>,
     updates: mpsc::Sender<Value>,
+    scope: ControlScope,
 ) -> Result<Value, ApiError> {
     if cancel.is_cancelled() {
         return Ok(json!({"type":"Cancelled"}));
@@ -308,14 +340,33 @@ async fn execute(
                 .filter(|project| state.remote.owner_of(project) == ProjectOwner::Local)
                 .map(|project| json!({"id":project.id,"name":project.name}));
             let sessions = state.store.list_conversations().map_err(ApiError::store)?
-                .into_iter().filter(|conversation| local_workspace(&state, conversation.project_id.as_deref()).is_ok())
-                .take(100).map(|conversation| json!({"id":conversation.id,"title":short(&conversation.title, 160),"kind":"messenger"}));
+                .into_iter()
+                .filter(|conversation| scope.workspace(&state, conversation.project_id.as_deref()).is_ok())
+                .take(100)
+                .map(|conversation| json!({
+                    "id": conversation.id, "title": short(&conversation.title, 160), "kind": "messenger",
+                    "projectId": conversation.project_id, "updatedAt": conversation.updated_at
+                }));
             let profiles = settings(&state.store)?.agents;
             let external_agents = profiles.into_iter().map(
                 |agent| json!({"id":format!("acp:{}",agent.id),"name":agent.name,"kind":"acp"}),
             );
-            let external = state.external.sessions(&state.store)?
-                .into_values().take(100).map(|session| json!({"id":session.id,"title":short(&session.title,160),"kind":"acp"}));
+            let mut external: Vec<_> = state
+                .external
+                .sessions(&state.store)?
+                .into_values()
+                .filter(|session| {
+                    matches!(scope, ControlScope::Local)
+                        || scope.workspace(&state, session.project.as_deref()).is_ok()
+                })
+                .collect();
+            external.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+            let external = external.into_iter().take(100).map(|session| {
+                json!({
+                    "id": session.id, "title": short(&session.title, 160), "kind": "acp",
+                    "projectId": session.project, "updatedAt": session.updated_at
+                })
+            });
             Ok(
                 json!({"type":"Catalog","agents":agents.chain(external_agents).take(100).collect::<Vec<_>>(),
                 "projects":projects.take(100).collect::<Vec<_>>(),
@@ -325,11 +376,15 @@ async fn execute(
         Command::History { session_id, before } => {
             let mut writable = None;
             let mut rows = if session_id.starts_with("acp:") {
-                state.external.history(&state.store, &session_id)?
+                let session = state.external.record(&state.store, &session_id)?;
+                if matches!(scope, ControlScope::Remote) {
+                    scope.workspace(&state, session.project.as_deref())?;
+                }
+                session.messages
             } else {
                 let conversation = conversation(&state, &session_id)?;
                 writable = Some(conversation.writable);
-                local_workspace(&state, conversation.project_id.as_deref())?;
+                scope.workspace(&state, conversation.project_id.as_deref())?;
                 state.store.list_messages_by_conversation(&session_id).map_err(ApiError::store)?
                     .into_iter().map(|message| json!({
                         "id":message.id,"role":message.role,
@@ -372,7 +427,7 @@ async fn execute(
                 });
             }
             let mut row = conversation(&state, &session_id)?;
-            local_workspace(&state, row.project_id.as_deref())?;
+            scope.workspace(&state, row.project_id.as_deref())?;
             row.writable = writable;
             upsert_conversation_checked(&state.store, &row)?;
             queue_sync(&state, &row.id);
@@ -383,7 +438,7 @@ async fn execute(
             project_id,
             writable,
         } => {
-            let project = local_workspace(&state, project_id.as_deref())?;
+            let project = scope.workspace(&state, project_id.as_deref())?;
             let id = if let Some(profile) = agent_id.strip_prefix("acp:") {
                 state
                     .external
@@ -401,13 +456,17 @@ async fn execute(
                 ));
             }
             if session_id.starts_with("acp:") {
+                if matches!(scope, ControlScope::Remote) {
+                    let session = state.external.record(&state.store, &session_id)?;
+                    scope.workspace(&state, session.project.as_deref())?;
+                }
                 return state
                     .external
                     .prompt(&state, session_id, text, cancel, permissions, updates)
                     .await;
             }
             let conversation = conversation(&state, &session_id)?;
-            local_workspace(&state, conversation.project_id.as_deref())?;
+            scope.workspace(&state, conversation.project_id.as_deref())?;
             let mut events =
                 start_turn(state, session_id, text_request(text), cancel.clone(), true).await?;
             while let Some(event) = events.recv().await {

@@ -60,7 +60,8 @@ the turn and wakes any pending tool host with a cancellation result.
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 
 Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode` or
-`Error`. Prompt commands stream the turn events above, ending in `Finished`,
+`Error`. Catalog sessions include `projectId` (nullable) and `updatedAt`
+(milliseconds since the Unix epoch, or 0 for legacy ACP sessions). Prompt commands stream the turn events above, ending in `Finished`,
 `Cancelled` or `Error`. The device sends `UserMessagePersisted {messageId}`
 when the Messenger user row is accepted. Third-party ACP turns can also send
 `ThoughtDelta {text}`, `ToolUpdate {update}` and

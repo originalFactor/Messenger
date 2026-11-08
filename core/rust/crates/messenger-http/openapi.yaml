@@ -126,6 +126,7 @@ paths:
       - $ref: "#/components/parameters/ControlRequestId"
     post:
       operationId: runDeviceSessionCommand
+      description: Catalog sessions include projectId (nullable) and updatedAt (Unix milliseconds).
       requestBody:
         required: true
         content:

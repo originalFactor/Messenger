@@ -3168,6 +3168,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_control_only_exposes_project_sessions() {
+        use messenger_remote::ControlHost;
+        use serde_json::json;
+
+        let state = test_state();
+        seed_text_chat(&state, "http://localhost");
+        state
+            .store
+            .upsert_project(&StoredProject {
+                id: "workspace".into(),
+                device_id: Some(state.remote.device_id().into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut project_chat = state.store.get_conversation("c1").unwrap().unwrap();
+        project_chat.id = "project-chat".into();
+        project_chat.project_id = Some("workspace".into());
+        project_chat.updated_at = 42;
+        state.store.upsert_conversation(&project_chat).unwrap();
+
+        let host = control::DeviceControl(state.clone());
+        let remote = |command| {
+            let (_, permissions) = mpsc::channel(1);
+            let (updates, _) = mpsc::channel(1);
+            host.dispatch(command, CancellationToken::new(), permissions, updates)
+        };
+        let catalog = remote(json!({ "action": "catalog" })).await;
+        assert_eq!(
+            catalog["sessions"],
+            json!([{
+                "id": "project-chat", "title": "chat", "kind": "messenger",
+                "projectId": "workspace", "updatedAt": 42
+            }])
+        );
+        for command in [
+            json!({ "action": "create", "agentId": "a1" }),
+            json!({ "action": "history", "sessionId": "c1" }),
+            json!({ "action": "setMode", "sessionId": "c1", "writable": true }),
+            json!({ "action": "prompt", "sessionId": "c1", "text": "hello" }),
+        ] {
+            assert_eq!(
+                remote(command).await["detail"],
+                "remote control requires a project"
+            );
+        }
+        assert_eq!(
+            remote(json!({ "action": "history", "sessionId": "project-chat" })).await["type"],
+            "History"
+        );
+
+        let response = router(state)
+            .oneshot(request(
+                axum::http::Method::POST,
+                "/api/v1/control/commands/00000000-0000-0000-0000-000000000001",
+                Some(r#"{"action":"history","sessionId":"c1"}"#),
+            ))
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("\"type\":\"History\""));
+    }
+
+    #[tokio::test]
     async fn chat_sse_runs_the_agent_and_persists_the_reply() {
         let provider = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
