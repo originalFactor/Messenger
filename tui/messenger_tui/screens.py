@@ -7,7 +7,7 @@ from rich.text import Text
 from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
@@ -28,16 +28,46 @@ class Choice:
 
 
 class Dialog(ModalScreen):
-    BINDINGS = [Binding("escape", "dismiss_dialog", "Close", show=False)]
-    DEFAULT_CSS = """
-    Dialog { align: center middle; background: $background 65%; }
-    Dialog > Vertical { width: 72; max-width: 96%; height: auto; max-height: 95%;
-        border: round $accent; padding: 0 1; background: $surface; }
-    Dialog Label, Dialog Static { height: auto; }
-    """
+    BINDINGS = [
+        Binding("escape", "dismiss_dialog", "Back", show=False),
+        Binding("f4", "primary", "Primary action", show=False),
+        Binding("pageup", "page_up", "Scroll up", show=False),
+        Binding("pagedown", "page_down", "Scroll down", show=False),
+    ]
 
     def action_dismiss_dialog(self) -> None:
         self.dismiss(None)
+
+    def on_mount(self) -> None:
+        self.set_class(self.size.width < 65 or self.size.height < 18, "narrow")
+        for fields in self.query(VerticalScroll):
+            fields.can_focus = False
+        if self.focused is None or not self.focused.can_focus:
+            self.focus_next()
+        if not isinstance(self, (Picker, Help, ProviderDialog)):
+            keys = (
+                "Tab select   Enter confirm   Esc cancel"
+                if isinstance(self, ConfirmDelete)
+                else ("Tab / Shift+Tab focus   F4 primary action   Esc back")
+            )
+            self.query_one(Vertical).mount(Static(keys, classes="dialog-keys", markup=False))
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.width < 65 or event.size.height < 18, "narrow")
+
+    def action_primary(self) -> None:
+        if getattr(self, "pending", False):
+            return
+        for button in self.query(Button):
+            if button.variant == "primary" and button.display and not button.disabled:
+                button.press()
+                break
+
+    def action_page_up(self) -> None:
+        self.query_one(Vertical).scroll_page_up(animate=False)
+
+    def action_page_down(self) -> None:
+        self.query_one(Vertical).scroll_page_down(animate=False)
 
 
 class TrustWorkspace(Dialog):
@@ -47,7 +77,7 @@ class TrustWorkspace(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("Trust this folder?")
+            yield Label("Trust this folder?", classes="dialog-title")
             yield Static(self.directory, markup=False)
             yield Static("Trust creates a project on this device and groups new chats in it.", markup=False)
             yield Button("Continue without a project", id="standalone")
@@ -69,7 +99,7 @@ class ConfirmDelete(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self.prompt, markup=False)
+            yield Static(self.prompt, markup=False, classes="dialog-title")
             yield Button("Cancel", id="cancel-delete")
             yield Button(self.button, variant="error", id="confirm-delete")
 
@@ -83,19 +113,26 @@ class ConfirmDelete(Dialog):
 
 class FilterInput(Input):
     def on_key(self, event: events.Key) -> None:
-        if event.key in ("up", "down"):
+        actions = {
+            "up": "cursor_up",
+            "down": "cursor_down",
+            "pageup": "page_up",
+            "pagedown": "page_down",
+            "ctrl+home": "first",
+            "ctrl+end": "last",
+        }
+        if event.key in actions:
             event.stop()
             event.prevent_default()
             options = self.screen.query_one(OptionList)
-            if event.key == "up":
-                options.action_cursor_up()
-            else:
-                options.action_cursor_down()
+            getattr(options, f"action_{actions[event.key]}")()
 
 
 class Picker(Dialog):
     DEFAULT_CSS = """
-    Picker OptionList { height: auto; max-height: 12; border: none; padding: 0; }
+    Picker OptionList { height: auto; max-height: 40vh; border: none; padding: 0; }
+    #picker-count { height: 1; color: $text-muted; }
+    #picker-hint { height: auto; color: $text-muted; }
     """
 
     def __init__(self, title: str, choices: list[Choice], empty: str):
@@ -103,14 +140,16 @@ class Picker(Dialog):
         self.title_text = title
         self.choices = choices
         self.empty = empty
+        self.extra_keys = ""
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield from self.compose_picker()
 
     def compose_picker(self) -> ComposeResult:
-        yield Label(Text(self.title_text, style="bold"))
-        yield FilterInput(placeholder="Filter…")
+        yield Label(Text(self.title_text, style="bold"), classes="dialog-title")
+        yield FilterInput(placeholder="Type to filter…")
+        yield Static(id="picker-count", markup=False)
         yield OptionList()
         yield Static(id="picker-hint", markup=False)
 
@@ -125,9 +164,17 @@ class Picker(Dialog):
         options.set_options(item.option() for item in matches)
         options.highlighted = 0 if matches else None
         options.display = bool(matches)
-        self.query_one("#picker-hint", Static).update(
-            "↑/↓ select · Enter open · Esc close" if matches else "No matches." if self.choices else self.empty
+        hint = (
+            "↑/↓ select   Enter open   Esc back"
+            if matches
+            else "No matches. Clear the filter to see all items."
+            if self.choices
+            else self.empty
         )
+        if self.extra_keys:
+            hint += f"   {self.extra_keys}"
+        self.query_one("#picker-hint", Static).update(hint)
+        self.query_one("#picker-count", Static).update(f"{len(matches)} of {len(self.choices)}")
 
     @on(Input.Changed)
     def filter_changed(self, event: Input.Changed) -> None:
@@ -177,6 +224,8 @@ def provider_field_error(key: str, label: str, value: str | None) -> str:
 
 
 class ProviderDialog(Dialog):
+    BINDINGS = [Binding("shift+tab", "previous_field", "Previous field", priority=True, show=False)]
+
     def __init__(self, values: dict | None = None, error: str = ""):
         super().__init__()
         self.step = 0
@@ -185,9 +234,9 @@ class ProviderDialog(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("", id="provider-label", markup=False)
+            yield Label("", id="provider-label", markup=False, classes="dialog-title")
             yield Input(id="provider-input")
-            yield Static(self.error or "Enter to continue · Esc to close", id="provider-hint", markup=False)
+            yield Static(self.error or "Enter next   Shift+Tab previous   Esc back", id="provider-hint", markup=False)
 
     def on_mount(self) -> None:
         self.show_field()
@@ -200,6 +249,14 @@ class ProviderDialog(Dialog):
         field.placeholder = example
         field.value = self.values.get(key, "")
         field.focus()
+
+    def action_previous_field(self) -> None:
+        if self.step:
+            key = CONNECT_FIELDS[self.step][0]
+            self.values[key] = self.query_one(Input).value
+            self.step -= 1
+            self.show_field()
+            self.query_one("#provider-hint", Static).update("Enter next   Shift+Tab previous   Esc back")
 
     @on(Input.Submitted)
     def submit_field(self, event: Input.Submitted) -> None:
@@ -214,20 +271,34 @@ class ProviderDialog(Dialog):
         if self.step == len(CONNECT_FIELDS):
             self.dismiss(self.values)
         else:
-            self.query_one("#provider-hint", Static).update("Enter to continue · Esc to close")
+            self.query_one("#provider-hint", Static).update("Enter next   Shift+Tab previous   Esc back")
             self.show_field()
 
 
 class Help(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical():
+            yield Label("Keyboard guide", classes="dialog-title")
             yield Static(
-                "Keyboard shortcuts\n\n"
-                "Enter sends · Ctrl+O or Shift+Enter inserts a line break\n"
-                "Type / for suggestions · ↑/↓ select · Tab fills · Enter runs\n"
-                "Ctrl+P opens the command palette\n"
-                "Ctrl+X then N/L/M/A/Q opens new/sessions/models/agents/quit\n"
-                "Page Up/Down scrolls history\n"
-                "Esc cancels or closes · Ctrl+C exits",
+                "Conversation\n"
+                "Enter          Send message\n"
+                "Ctrl+O         Insert a line break (also Shift+Enter)\n"
+                "PgUp / PgDn    Read history\n"
+                "Ctrl+Home/End  First / latest loaded message\n"
+                "Esc            Cancel the active turn\n\n"
+                "Navigation\n"
+                "Ctrl+P         Search all commands\n"
+                "F2 / F3        New session / saved sessions\n"
+                "Ctrl+X then    N new, L sessions, M models, A agents, Q quit\n"
+                "/              Suggest commands; Tab fills, Enter runs\n\n"
+                "Menus and forms\n"
+                "Tab/Shift+Tab  Next / previous control\n"
+                "Up/Down/PgDn   Navigate a filtered list\n"
+                "F4             Primary action (save or add)\n"
+                "F5             Fetch models in the model manager\n"
+                "Shift+Tab      Previous step in /connect\n"
+                "Esc            Back; return to the previous control\n\n"
+                "F1 opens this guide anywhere. /theme switches appearance.\n"
+                "Ctrl+C exits. Esc closes this guide.",
                 markup=False,
             )

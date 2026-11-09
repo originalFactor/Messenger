@@ -3,8 +3,9 @@
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
+from textual.widgets import Button, Checkbox, Input, Label, Static
 
 from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID, sync_builtin_models
@@ -57,6 +58,7 @@ def parse_field(value: str, kind: type, key: str):
 
 
 class ModelManager(Picker):
+    BINDINGS = [Binding("f5", "fetch", "Fetch models", show=False)]
     DEFAULT_CSS = """
     ModelManager OptionList { max-height: 8; }
     #model-list-actions { height: auto; }
@@ -68,6 +70,7 @@ class ModelManager(Picker):
         self.chat = chat
         self.provider = provider
         self.builtin = provider["id"] == BUILTIN_PROVIDER_ID
+        self.extra_keys = "F5 sync models" if self.builtin else "F4 add model   F5 fetch models"
         self.auto_fetch = auto_fetch
         self.models: dict[str, dict] = {}
         self.pending = False
@@ -75,11 +78,14 @@ class ModelManager(Picker):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield from self.compose_picker()
-            with Horizontal(id="model-list-actions"):
+            with Horizontal(id="model-list-actions", classes="action-row"):
                 if not self.builtin:
                     yield Button("Add model", variant="primary", id="add-model")
                 yield Button("Sync Cloud models" if self.builtin else "Fetch models", id="fetch-models")
             yield Static(id="model-list-status", markup=False)
+
+    def action_fetch(self) -> None:
+        self.fetch_models()
 
     def on_mount(self) -> None:
         self.load(fetch=self.auto_fetch)
@@ -144,8 +150,11 @@ class ModelManager(Picker):
 
     def refresh_models(self, status: str) -> None:
         self.choices = [
-            Choice(model["id"], model["display_name"],
-                   f"{model['model_id']} · {'Enabled' if model['is_enabled'] else 'Disabled'}")
+            Choice(
+                model["id"],
+                model["display_name"],
+                f"{model['model_id']} · {'Enabled' if model['is_enabled'] else 'Disabled'}",
+            )
             for model in self.models.values()
         ]
         search = self.query_one(FilterInput)
@@ -170,8 +179,10 @@ class ModelEditor(Dialog):
         self.builtin = provider["id"] == BUILTIN_PROVIDER_ID
         self.values = dict(model or {"provider_id": provider["id"], "model_id": ""})
         saved_metadata = self.values.get("metadata")
-        self.metadata = dict(saved_metadata) if saved_metadata is not None else (
-            {} if self.builtin else legacy_metadata(self.values)
+        self.metadata = (
+            dict(saved_metadata)
+            if saved_metadata is not None
+            else ({} if self.builtin else legacy_metadata(self.values))
         )
         self.metadata_model_id = self.values["model_id"]
         self.overrides = {} if self.builtin else model_overrides(self.values)
@@ -180,7 +191,7 @@ class ModelEditor(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical():
             title = "Cloud model metadata" if self.builtin else "Edit model" if self.model else "Add model"
-            yield Label(Text(title, style="bold"))
+            yield Label(Text(title, style="bold"), classes="dialog-title")
             with VerticalScroll(id="model-fields"):
                 if self.builtin:
                     yield Static(f"{self.metadata_model_id} · Managed by Messenger Cloud", markup=False)
@@ -192,18 +203,28 @@ class ModelEditor(Dialog):
                     yield Input(value=self.metadata_model_id, id="model-id")
                     for key, identifier, label, kind in METADATA_FIELDS:
                         yield Label(label)
-                        yield Input(value=field_text(self.overrides.get(key)),
-                                    placeholder=self.placeholder(key, kind), id=identifier)
+                        yield Input(
+                            value=field_text(self.overrides.get(key)),
+                            placeholder=self.placeholder(key, kind),
+                            id=identifier,
+                        )
                 yield Checkbox("Enabled", value=self.values.get("is_enabled", True), id="model-enabled")
-            with Horizontal(id="model-actions"):
+            with Horizontal(id="model-actions", classes="action-row"):
                 yield Button("Save", variant="primary", id="save-model")
                 if not self.builtin:
                     yield Button("Fetch metadata", id="fetch-metadata")
                 if self.model and not self.builtin:
                     yield Button("Delete", variant="error", id="delete-model")
-            hint = ("Metadata comes from Messenger Cloud." if self.builtin else
-                    "Blank fields inherit · Comma-separated lists · [] clears a list")
+            hint = (
+                "Metadata comes from Messenger Cloud."
+                if self.builtin
+                else "Blank fields inherit · Comma-separated lists · [] clears a list"
+            )
             yield Static(hint, id="model-result", markup=False)
+
+    @on(Input.Submitted)
+    def next_field(self) -> None:
+        self.focus_next()
 
     def placeholder(self, key: str, kind: type) -> str:
         inherited = effective_metadata(self.metadata_model_id, self.metadata, {}).get(key)
@@ -263,8 +284,11 @@ class ModelEditor(Dialog):
                     self.query_one("#model-result", Static).update(f"{label} · {error}")
                     entry.focus()
                     return
-            self.values.update(model_id=model_id, metadata_overrides=overrides,
-                               metadata=self.metadata if model_id == self.metadata_model_id else {})
+            self.values.update(
+                model_id=model_id,
+                metadata_overrides=overrides,
+                metadata=self.metadata if model_id == self.metadata_model_id else {},
+            )
         self.values["is_enabled"] = self.query_one("#model-enabled", Checkbox).value
         self.submit(deleting=False)
 
@@ -302,8 +326,10 @@ class ModelEditor(Dialog):
             else:
                 if not self.model or self.model["model_id"] != self.values["model_id"]:
                     rows = await self.chat.provider_models(self.values["provider_id"])
-                    if any(row["model_id"] == self.values["model_id"] and row["id"] != self.values.get("id")
-                           for row in rows):
+                    if any(
+                        row["model_id"] == self.values["model_id"] and row["id"] != self.values.get("id")
+                        for row in rows
+                    ):
                         raise ValueError("This provider already has a model with that ID.")
                 if self.builtin:
                     saved = await self.chat.set_model_enabled(self.model, self.values["is_enabled"])

@@ -25,15 +25,21 @@ class ProjectDialog(Dialog):
     def compose(self) -> ComposeResult:
         project = self.suggested or {}
         with Vertical():
-            yield Label("Edit project" if self.editing else "Create or open a project")
+            yield Label("Edit project" if self.editing else "Create or open a project", classes="dialog-title")
             yield Label("Name")
             yield Input(project.get("name", self.directory.name or str(self.directory)), id="project-name")
             yield Label("Workspace folder")
             yield Input(project.get("workspace", str(self.directory)), id="project-path")
-            yield Button("Save project" if self.editing else "Trust and open project", variant="primary", id="project-save")
+            yield Button(
+                "Save project" if self.editing else "Trust and open project", variant="primary", id="project-save"
+            )
             if self.editing:
                 yield Button("Leave project", id="project-leave")
-            hint = "Esc closes this menu." if self.editing else "Choose a folder you trust. A saved project at that folder will reopen."
+            hint = (
+                "Esc closes this menu."
+                if self.editing
+                else "Choose a folder you trust. A saved project at that folder will reopen."
+            )
             yield Static(hint, id="project-result", markup=False)
 
     def action_dismiss_dialog(self) -> None:

@@ -1,0 +1,40 @@
+Screen { background: $background; color: $text; align-horizontal: center; }
+#workspace { width: 100%; max-width: 86; height: 1fr; padding: 1 2 0 2; }
+#heading { height: 2; text-style: bold; text-overflow: ellipsis; }
+#model { height: 2; color: $text-muted; text-overflow: ellipsis; }
+#history { height: 1fr; padding: 1 1; scrollbar-size: 1 1; }
+#transcript { height: auto; }
+#suggestions { height: auto; max-height: 5; border: none; padding: 0 1; background: $surface; }
+#composer { height: 5; min-height: 3; border: tall $panel; padding: 0 1; }
+#composer:focus { border: tall $accent; }
+#composer.busy { border: tall $panel; }
+#status, #keys { height: 1; text-overflow: ellipsis; }
+#status { color: $text-muted; }
+#status.error { color: $error; text-style: bold; }
+#keys { color: $text-muted; }
+Screen.compact #workspace { padding: 0 1; }
+Screen.compact #heading, Screen.compact #model { height: 1; }
+Screen.compact #history { padding: 0 1; }
+Screen.compact #composer { height: 3; }
+#size-warning { display: none; height: 1fr; content-align: center middle; padding: 1; }
+Screen.too-small #workspace { display: none; }
+Screen.too-small #size-warning { display: block; }
+Dialog { padding: 0; align: center middle; background: $background 75%; }
+Dialog > Vertical {
+    width: 76; max-width: 96%; height: auto; max-height: 95%;
+    border: tall $panel; padding: 1 2; background: $surface; overflow-y: auto;
+}
+Dialog Label, Dialog Static { height: auto; }
+Dialog .dialog-title { color: $accent; text-style: bold; margin-bottom: 1; }
+Dialog Input { border: tall $panel; }
+Dialog Input:focus { border: tall $accent; }
+Dialog Button { min-width: 12; margin-top: 0; }
+Dialog Button:focus { text-style: bold reverse; }
+Dialog Checkbox:focus { text-style: bold reverse; }
+Dialog .dialog-keys { color: $text-muted; height: auto; margin-top: 1; }
+Dialog OptionList { border: none; padding: 0; background: $surface; scrollbar-size: 1 1; }
+OptionList > .option-list--option-highlighted { text-style: bold reverse; }
+Dialog .action-row { height: auto; }
+Dialog.narrow .action-row { layout: vertical; }
+Dialog.narrow .action-row Button { width: 100%; }
+Dialog.narrow > Vertical { padding: 0 1; max-height: 100%; }

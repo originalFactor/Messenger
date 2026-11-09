@@ -9,9 +9,10 @@ from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import OptionList, Static, TextArea
 
+from .appearance import THEMES
 from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
 from .cloud_screen import CloudDialog
@@ -33,6 +34,7 @@ COMMANDS = (
     ("retry", "Retry the last failed reply", ""),
     ("regenerate", "Regenerate the last reply", ""),
     ("help", "Keyboard shortcuts", ""),
+    ("theme", "Switch light or dark appearance", ""),
     ("quit", "Exit Messenger", "q"),
     ("exit", "Alias for /quit", ""),
 )
@@ -40,7 +42,7 @@ COMMAND_IDS = {command for command, _, _ in COMMANDS}
 LEADER_KEYS = {key: command for command, _, key in COMMANDS if key}
 COMPLETIONS = [Choice(command, f"/{command}", description) for command, description, _ in COMMANDS]
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-DEFAULT_HINT = "Ctrl+P commands  ·  Ctrl+O newline  ·  PgUp/PgDn history"
+DEFAULT_HINT = "Enter send   Ctrl+O newline   Ctrl+P commands   F1 help"
 
 
 def display(value: str) -> str:
@@ -68,24 +70,17 @@ class Messenger(App):
         Binding("ctrl+p", "palette", "Commands", priority=True),
         Binding("ctrl+x", "leader", "Leader", priority=True),
         Binding("ctrl+c", "quit", "Quit", priority=True),
+        Binding("f1", "help", "Help", priority=True),
+        Binding("f2", "new_chat", "New session", priority=True),
+        Binding("f3", "sessions", "Sessions", priority=True),
     ]
-    CSS = """
-    Screen { padding: 0 1; }
-    #heading { height: 1; color: $accent; text-style: bold; }
-    #history { height: 1fr; padding: 0 1; }
-    #transcript { height: auto; }
-    #suggestions { height: auto; max-height: 5; border: none; padding: 0 1; }
-    #composer { height: 5; min-height: 3; border: round $accent; }
-    #status, #model, #keys { height: 1; }
-    #status { color: $text-muted; }
-    #status.error { color: $error; }
-    #model { color: $accent; }
-    #keys { color: $text-muted; }
-    Screen.compact #composer { height: 3; }
-    """
+    CSS_PATH = "messenger.tcss"
 
     def __init__(self, chat: Chat, version: str, *, workspace: Path | None = None):
         super().__init__()
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = "messenger-dark"
         self.chat = chat
         self.version = version
         self.workspace = workspace
@@ -99,18 +94,25 @@ class Messenger(App):
         self.closing = False
 
     def compose(self) -> ComposeResult:
-        yield Static(id="heading", markup=False)
-        with VerticalScroll(id="history"):
-            yield Static(id="transcript", markup=False)
-        yield Suggestions(id="suggestions")
-        yield Composer(id="composer", placeholder="Write a message or type /")
-        yield Static(id="status", markup=False)
-        yield Static(id="model", markup=False)
-        yield Static(DEFAULT_HINT, id="keys", markup=False)
+        with Vertical(id="workspace"):
+            yield Static(id="heading", markup=False)
+            yield Static(id="model", markup=False)
+            with VerticalScroll(id="history"):
+                yield Static(id="transcript", markup=False)
+            yield Suggestions(id="suggestions")
+            yield Composer(id="composer", placeholder="Message, or / for commands")
+            yield Static(id="status", markup=False)
+            yield Static(DEFAULT_HINT, id="keys", markup=False)
+        yield Static(
+            "Messenger needs at least 40 columns and 10 rows.\nResize the terminal. Ctrl+C exits.",
+            id="size-warning",
+            markup=False,
+        )
 
     def on_mount(self) -> None:
         self.base = self.screen
         self.composer = self.query_one(Composer)
+        self.composer.border_title = "Message"
         self.suggestions = self.query_one(Suggestions)
         self.history_view = self.query_one("#history", VerticalScroll)
         self.history_view.can_focus = False
@@ -132,11 +134,16 @@ class Messenger(App):
 
     def on_resize(self, event: events.Resize) -> None:
         if hasattr(self, "base"):
-            self.resize_layout(event.size.height)
+            self.resize_layout(event.size.height, event.size.width)
+            self.update_suggestions()
 
-    def resize_layout(self, height: int) -> None:
-        self.base.set_class(height < 14, "compact")
+    def resize_layout(self, height: int, width: int | None = None) -> None:
+        width = self.size.width if width is None else width
+        self.base.set_class(height < 20 or width < 65, "compact")
+        self.base.set_class(height < 10 or width < 40, "too-small")
         self.suggestions.styles.max_height = min(5, max(1, height - (8 if height < 14 else 10)))
+        if height >= 10 and width >= 40 and self.screen is self.base and self.focused is None:
+            self.call_after_refresh(self.composer.focus)
 
     @property
     def busy(self) -> bool:
@@ -149,44 +156,60 @@ class Messenger(App):
         title = (chat.session.get("title") or "Untitled") if chat.session else "New session"
         if chat.project:
             title = f"{chat.project['name']}   /   {title}"
-        self.base.query_one("#heading", Static).update(display(f"MESSENGER  {self.version}   /   {title}"))
+        self.base.query_one("#heading", Static).update(display(f"Messenger   /   {title}"))
         model_enabled = bool(chat.model and chat.model["is_enabled"])
         model = chat.model["display_name"] if chat.model else "No model"
         if chat.model and not model_enabled:
             model += " (disabled)"
         tools = chat.tool_mode or "agent default"
-        self.base.query_one("#model", Static).update(display(f"{chat.agent['name']}  ·  {model}  ·  Tools: {tools}"))
+        self.base.query_one("#model", Static).update(display(f"{chat.agent['name']} / {model}    Tools: {tools}"))
         status = self.base.query_one("#status", Static)
         status.set_class(chat.notice_error, "error")
-        status.update(display(chat.notice or ("Working… · Esc cancel" if self.busy else
-                                              "PgUp for older messages" if chat.has_older else "")))
+        notice = chat.notice or (
+            "Working…  Esc cancels" if self.busy else "PgUp loads older messages" if chat.has_older else "Ready"
+        )
+        status.update(display(("! " if chat.notice_error else "") + notice))
 
-        rendered = (id(chat.messages), [(item["role"], item["content"]) for item in chat.live],
-                    chat.fault, chat.sync_fault, model_enabled)
+        rendered = (
+            id(chat.messages),
+            [(item["role"], item["content"]) for item in chat.live],
+            chat.fault,
+            chat.sync_fault,
+            model_enabled,
+        )
         if rendered != self.rendered:
             self.rendered = rendered
             follow = self.history_view.is_vertical_scroll_end
             text = Text()
             messages = chat.messages + chat.live
             if not messages and not chat.fault:
-                text.append("Start a conversation\n", style="bold cyan")
-                text.append("Write a message below." if model_enabled else
-                            "Use /providers to add a provider, or /models to choose an enabled model.", style="dim")
+                text.append("What would you like to work on?\n\n", style="bold")
+                text.append(
+                    "Write below to start a conversation.\n\n" if model_enabled else "Choose a model to start.\n\n",
+                    style="dim",
+                )
+                text.append(
+                    "/models     Choose a model\n/providers  Add your provider\n/sessions   Continue a conversation\n\n",
+                    style="dim",
+                )
+                text.append("Ctrl+P opens all commands. F1 shows keyboard shortcuts.", style="dim")
             for message in messages:
                 content, error = message["content"], message.get("error_message")
                 if not content and not error:
                     continue
                 role = message["role"]
-                label = {"user": "You", "assistant": "Assistant", "tool": "Tool", "system": "System"}.get(role, "Message")
-                text.append(label + "\n", style="bold cyan" if role == "user" else "bold")
+                label = {"user": "You", "assistant": "Assistant", "tool": "Tool", "system": "System"}.get(
+                    role, "Message"
+                )
+                text.append(label + "\n", style="bold" if role != "tool" else "bold dim")
                 if content:
                     text.append(display(content) + "\n")
                 if error:
-                    text.append(display(error) + "\n", style="red")
+                    text.append("! " + display(error) + "\n", style="red")
                 text.append("\n")
             if chat.fault:
                 text.append("Assistant\n", style="bold")
-                text.append(display(chat.fault) + "\n", style="red")
+                text.append("! " + display(chat.fault) + "\n", style="red")
             if chat.sync_fault:
                 text.append("Messenger Cloud\n", style="bold red")
                 text.append(display(chat.sync_fault), style="red")
@@ -199,9 +222,11 @@ class Messenger(App):
         prefix = self.composer.text
         if prefix != self.last_prefix:
             self.dismissed_prefix = None
-        choices = [
-            item for item in COMPLETIONS if item.label.startswith(prefix)
-        ] if re.fullmatch(r"/[a-z]*", prefix) and prefix != self.dismissed_prefix and not self.busy else []
+        choices = (
+            [item for item in COMPLETIONS if item.label.startswith(prefix)]
+            if re.fullmatch(r"/[a-z]*", prefix) and prefix != self.dismissed_prefix and not self.busy
+            else []
+        )
         if prefix != self.last_prefix or self.suggestions.display != bool(choices):
             self.suggestions.set_options(item.option() for item in choices)
             self.suggestions.highlighted = 0 if choices and prefix != "/" else None
@@ -211,7 +236,11 @@ class Messenger(App):
         if self.leader:
             hint = "Ctrl+X  n new  l sessions  m models  a agents  q quit"
         elif choices:
-            hint = "↑/↓ select  ·  Tab complete  ·  Enter run  ·  Esc close"
+            hint = "↑/↓ select   Tab complete   Enter run   Esc dismiss"
+        elif self.busy:
+            hint = "Esc cancel   PgUp/PgDn history   Ctrl+C exit"
+        elif self.size.width < 65:
+            hint = "Enter send   Ctrl+P commands   F1 help"
         self.base.query_one("#keys", Static).update(hint)
 
     @on(TextArea.Changed, "#composer")
@@ -227,6 +256,18 @@ class Messenger(App):
         if self.screen is self.base and not self.busy:
             choices = [Choice(command, description, f"/{command}") for command, description, _ in COMMANDS]
             self.push_screen(Picker("Commands", choices, "No commands."), self.pick_command)
+
+    def action_help(self) -> None:
+        if not isinstance(self.screen, Help):
+            self.push_screen(Help())
+
+    def action_new_chat(self) -> None:
+        if self.screen is self.base and not self.busy:
+            self.command("new")
+
+    def action_sessions(self) -> None:
+        if self.screen is self.base and not self.busy:
+            self.command("sessions")
 
     def pick_command(self, choice: Choice | None) -> None:
         if choice:
@@ -249,8 +290,19 @@ class Messenger(App):
         if key in ("pageup", "pagedown"):
             self.scroll_history(key)
             return True
+        if key in ("ctrl+home", "ctrl+end"):
+            if key == "ctrl+home":
+                self.history_view.scroll_home(animate=False)
+            else:
+                self.history_view.scroll_end(animate=False)
+            return True
         if self.busy:
             return key in ("enter", "ctrl+o", "shift+enter")
+        if key in ("tab", "shift+tab") and not self.suggestions.display:
+            # There is only one editable control on the chat screen. Keep
+            # Tab as focus navigation rather than inserting invisible tabs.
+            self.composer.focus()
+            return True
         if key in ("ctrl+o", "shift+enter"):
             self.composer.replace("\n", *self.composer.selection, maintain_selection_offset=False)
             return True
@@ -307,6 +359,8 @@ class Messenger(App):
             return
         self.operation = asyncio.create_task(self.perform(job))
         self.composer.read_only = True
+        self.composer.set_class(True, "busy")
+        self.composer.border_title = "Working / Esc cancels"
         self.chat.status()
 
     async def perform(self, job) -> None:
@@ -321,6 +375,8 @@ class Messenger(App):
             self.operation = None
             if not self.closing:
                 self.composer.read_only = False
+                self.composer.set_class(False, "busy")
+                self.composer.border_title = "Message"
                 self.refresh_view()
 
     async def stop_work(self) -> None:
@@ -354,7 +410,9 @@ class Messenger(App):
             case "quit" | "exit":
                 self.exit()
             case "help":
-                self.push_screen(Help())
+                self.action_help()
+            case "theme":
+                self.theme = "messenger-light" if self.theme == "messenger-dark" else "messenger-dark"
             case "connect":
                 self.push_screen(ProviderDialog(), self.save_provider)
             case "providers":
@@ -365,9 +423,11 @@ class Messenger(App):
                 if not self.chat.project:
                     self.chat.status("Open a trusted workspace with /project before enabling tools.", True)
                 else:
-                    choices = [Choice("read", "Enable tools", "Inspection mode; terminal uses your user permissions"),
-                               Choice("write", "Enable tools with file editing", "Allows edit/create and terminal changes"),
-                               Choice("off", "Disable tools")]
+                    choices = [
+                        Choice("read", "Enable tools", "Inspection mode; terminal uses your user permissions"),
+                        Choice("write", "Enable tools with file editing", "Allows edit/create and terminal changes"),
+                        Choice("off", "Disable tools"),
+                    ]
                     self.push_screen(Picker("Conversation tools", choices, ""), self.pick_tools)
             case "cloud":
                 self.start(self.open_cloud)
@@ -427,6 +487,7 @@ class Messenger(App):
 
     def save_provider(self, values: dict | None) -> None:
         if values is not None:
+
             async def save() -> None:
                 try:
                     await self.chat.connect(values)
@@ -443,22 +504,29 @@ class Messenger(App):
         rows = await self.chat.list_sessions() if kind == "sessions" else await api.list(f"/{kind}")
         if kind == "sessions":
             options = [
-                Choice(row["id"], row.get("title") or "Untitled",
-                       datetime.fromtimestamp(row["updated_at"] / 1000).date().isoformat(), row)
+                Choice(
+                    row["id"],
+                    row.get("title") or "Untitled",
+                    datetime.fromtimestamp(row["updated_at"] / 1000).date().isoformat(),
+                    row,
+                )
                 for row in rows
             ]
             title, empty, action = "Sessions", "No saved sessions.", self.open_session
         elif kind == "models":
             options = [
-                Choice(row["id"], row["display_name"],
-                       f"{providers.get(row['provider_id'], '')} / {row['model_id']}", row)
-                for row in rows if row["is_enabled"]
+                Choice(
+                    row["id"], row["display_name"], f"{providers.get(row['provider_id'], '')} / {row['model_id']}", row
+                )
+                for row in rows
+                if row["is_enabled"]
             ]
             title, empty, action = "Models", "No enabled models. Manage them with /providers.", self.chat.choose_model
         else:
             options = [
                 Choice(row["id"], row["name"], "Default" if row["is_default"] else "", row)
-                for row in rows if row.get("role") != "title"
+                for row in rows
+                if row.get("role") != "title"
             ]
             title, empty, action = "Agents · starts a new session", "No chat agents.", self.new_session
 
@@ -471,7 +539,7 @@ class Messenger(App):
     def repeat_turn(self, operation: str) -> None:
         messages = self.chat.messages
         last_user = max((index for index, row in enumerate(messages) if row["role"] == "user"), default=-1)
-        replies = [row for row in messages[last_user + 1:] if row["role"] == "assistant"]
+        replies = [row for row in messages[last_user + 1 :] if row["role"] == "assistant"]
         retry = operation == "retry"
         target = replies[-1 if retry else 0] if replies else None
         if not target or target["status"] == "sending" or (retry and target["status"] != "error"):

@@ -27,18 +27,18 @@ class CloudDialog(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(Text("Messenger Cloud", style="bold"))
+            yield Label(Text("Messenger Cloud", style="bold"), classes="dialog-title")
             yield Static(id="cloud-account", markup=False)
             yield Label("Cloud base URL")
             yield Input(value=self.account.server_url, id="cloud-url")
             with Vertical(id="cloud-credentials"):
                 yield Input(placeholder="Email", id="cloud-email")
                 yield Input(placeholder="Password", password=True, id="cloud-password")
-            with Horizontal(id="cloud-actions"):
+            with Horizontal(id="cloud-actions", classes="action-row"):
                 yield Button("Sign in", variant="primary", id="cloud-login")
                 yield Button("Save address", id="cloud-save")
                 yield Button("Sign out", id="cloud-logout")
-            yield Static("Tab moves between fields · Esc closes", id="cloud-result", markup=False)
+            yield Static(id="cloud-result", markup=False)
 
     def on_mount(self) -> None:
         self.update_account()
@@ -54,6 +54,7 @@ class CloudDialog(Dialog):
         self.query_one("#cloud-credentials").display = user is None
         self.query_one("#cloud-login", Button).display = user is None
         self.query_one("#cloud-logout", Button).display = user is not None
+        self.query_one("#cloud-save", Button).variant = "primary" if user else "default"
 
     def action_dismiss_dialog(self) -> None:
         if not self.pending:
@@ -105,7 +106,9 @@ class CloudDialog(Dialog):
                     result += f" Synced {count} Cloud models."
             elif action == "cloud-save":
                 signed_out = await self.account.set_server(url.value)
-                result = "Cloud address saved. Signed out of the previous server." if signed_out else "Cloud address saved."
+                result = (
+                    "Cloud address saved. Signed out of the previous server." if signed_out else "Cloud address saved."
+                )
             else:
                 await self.account.logout()
                 result = "Signed out of Messenger Cloud."

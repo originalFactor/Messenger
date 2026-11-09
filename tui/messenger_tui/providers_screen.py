@@ -9,13 +9,14 @@ from textual.widgets import Button, Checkbox, Input, Label, Static
 from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID
 from .models_screen import ModelManager
-from .screens import Choice, ConfirmDelete, Dialog, FilterInput, Picker, PROVIDER_FIELDS, provider_field_error
+from .screens import PROVIDER_FIELDS, Choice, ConfirmDelete, Dialog, FilterInput, Picker, provider_field_error
 
 
 class ProviderManager(Picker):
     def __init__(self, chat: Chat, providers: list[dict]):
         super().__init__("Providers", [], "No providers configured.")
         self.chat = chat
+        self.extra_keys = "F4 add provider"
         self.providers = {provider["id"]: provider for provider in providers}
         self.update_choices()
 
@@ -27,8 +28,11 @@ class ProviderManager(Picker):
 
     def update_choices(self) -> None:
         self.choices = [
-            Choice(provider["id"], provider["name"],
-                   f"Built-in · {provider['base_url']}" if provider["id"] == BUILTIN_PROVIDER_ID else provider["base_url"])
+            Choice(
+                provider["id"],
+                provider["name"],
+                f"Built-in · {provider['base_url']}" if provider["id"] == BUILTIN_PROVIDER_ID else provider["base_url"],
+            )
             for provider in self.providers.values()
         ]
 
@@ -82,7 +86,9 @@ class ProviderEditor(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(Text("Edit provider" if self.provider else "Add provider", style="bold"))
+            yield Label(
+                Text("Edit provider" if self.provider else "Add provider", style="bold"), classes="dialog-title"
+            )
             with VerticalScroll(id="provider-fields"):
                 for key, label, example, default in PROVIDER_FIELDS:
                     yield Label(label)
@@ -93,15 +99,19 @@ class ProviderEditor(Dialog):
                         yield Input(value=self.values.get(key, default or ""), placeholder=example, id=key)
                 if self.values.get("api_key"):
                     yield Checkbox("Remove saved API key", id="clear-api-key")
-            with Horizontal(id="provider-actions"):
+            with Horizontal(id="provider-actions", classes="action-row"):
                 yield Button("Save", variant="primary", id="save-provider")
                 if self.provider:
                     yield Button("Manage models", id="manage-models")
                     yield Button("Delete", variant="error", id="delete-provider")
-            yield Static("Tab moves between fields · Esc closes", id="provider-result", markup=False)
+            yield Static(id="provider-result", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#name", Input).focus()
+
+    @on(Input.Submitted)
+    def next_field(self) -> None:
+        self.focus_next()
 
     def action_dismiss_dialog(self) -> None:
         if not self.pending:
@@ -127,7 +137,9 @@ class ProviderEditor(Dialog):
     @on(Button.Pressed, "#delete-provider")
     def confirm_delete(self) -> None:
         name = self.provider["name"]
-        self.app.push_screen(ConfirmDelete(f"Delete {name} and all its models?", "Delete provider"), self.delete_confirmed)
+        self.app.push_screen(
+            ConfirmDelete(f"Delete {name} and all its models?", "Delete provider"), self.delete_confirmed
+        )
 
     @on(Button.Pressed, "#manage-models")
     def manage_models(self) -> None:

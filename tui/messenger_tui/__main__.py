@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,15 @@ async def run(executable: Path, database: Path, workspace: Path) -> None:
         app = Messenger(Chat(api, agent, await model_for(api, agent)), meta["serverVersion"], workspace=workspace)
         watch = asyncio.create_task(core.wait())
         terminal = asyncio.create_task(app.run_async())
+        loop = asyncio.get_running_loop()
+        previous_termination = signal.getsignal(signal.SIGTERM)
+        handles_termination = False
+        try:
+            loop.add_signal_handler(signal.SIGTERM, app.exit)
+            handles_termination = True
+        except (NotImplementedError, RuntimeError, ValueError):
+            # Windows event loops don't support Unix signal handlers.
+            pass
         try:
             done, _ = await asyncio.wait((terminal, watch), return_when=asyncio.FIRST_COMPLETED)
             if watch in done and not terminal.done():
@@ -44,12 +54,19 @@ async def run(executable: Path, database: Path, workspace: Path) -> None:
                 app.exit()
             watch.cancel()
             await asyncio.gather(terminal, watch, return_exceptions=True)
+            if handles_termination:
+                loop.remove_signal_handler(signal.SIGTERM)
+                signal.signal(signal.SIGTERM, previous_termination)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="messenger", description="Messenger terminal chat client")
-    parser.add_argument("--db", type=Path, default=Path.home() / ".messenger" / "tui.db",
-                        help="SQLite profile (default: ~/.messenger/tui.db)")
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path.home() / ".messenger" / "tui.db",
+        help="SQLite profile (default: ~/.messenger/tui.db)",
+    )
     parser.add_argument("--core", type=Path, default=default_core(), help="Core executable")
     parser.add_argument("--workspace", type=Path, help="startup directory (default: current directory)")
     parser.add_argument("-V", "--version", action="store_true", help="print the Messenger version")
@@ -62,6 +79,10 @@ def main() -> int:
         else:
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 raise RuntimeError("Messenger TUI needs an interactive terminal.")
+            if os.environ.get("TERM") == "dumb":
+                raise RuntimeError(
+                    "Messenger TUI needs a cursor-addressable terminal. Use --help for command-line options."
+                )
             workspace = (args.workspace or Path.cwd()).expanduser().resolve(strict=True)
             if not workspace.is_dir():
                 raise ValueError("The startup workspace must be a directory.")
