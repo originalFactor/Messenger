@@ -9,7 +9,7 @@ from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList, Static, TextArea
 
 from .appearance import THEMES
@@ -42,7 +42,7 @@ COMMAND_IDS = {command for command, _, _ in COMMANDS}
 LEADER_KEYS = {key: command for command, _, key in COMMANDS if key}
 COMPLETIONS = [Choice(command, f"/{command}", description) for command, description, _ in COMMANDS]
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-DEFAULT_HINT = "Enter send   Ctrl+O newline   Ctrl+P commands   F1 help"
+DEFAULT_HINT = "/ commands   Ctrl+P search   F1 help"
 
 
 def display(value: str) -> str:
@@ -96,11 +96,13 @@ class Messenger(App):
     def compose(self) -> ComposeResult:
         with Vertical(id="workspace"):
             yield Static(id="heading", markup=False)
-            yield Static(id="model", markup=False)
             with VerticalScroll(id="history"):
                 yield Static(id="transcript", markup=False)
             yield Suggestions(id="suggestions")
-            yield Composer(id="composer", placeholder="Message, or / for commands")
+            with Horizontal(id="input-row"):
+                yield Static("›", id="prompt", markup=False)
+                yield Composer(id="composer", placeholder="Ask anything, or / for commands")
+            yield Static(id="model", markup=False)
             yield Static(id="status", markup=False)
             yield Static(DEFAULT_HINT, id="keys", markup=False)
         yield Static(
@@ -112,7 +114,6 @@ class Messenger(App):
     def on_mount(self) -> None:
         self.base = self.screen
         self.composer = self.query_one(Composer)
-        self.composer.border_title = "Message"
         self.suggestions = self.query_one(Suggestions)
         self.history_view = self.query_one("#history", VerticalScroll)
         self.history_view.can_focus = False
@@ -144,6 +145,13 @@ class Messenger(App):
         self.suggestions.styles.max_height = min(5, max(1, height - (8 if height < 14 else 10)))
         if height >= 10 and width >= 40 and self.screen is self.base and self.focused is None:
             self.call_after_refresh(self.composer.focus)
+        self.update_input_height(height)
+
+    def update_input_height(self, height: int | None = None) -> None:
+        height = self.size.height if height is None else height
+        rows = min(3 if height < 20 else 5, self.composer.document.line_count)
+        self.composer.styles.height = rows
+        self.base.query_one("#input-row").styles.height = rows + 2
 
     @property
     def busy(self) -> bool:
@@ -156,7 +164,11 @@ class Messenger(App):
         title = (chat.session.get("title") or "Untitled") if chat.session else "New session"
         if chat.project:
             title = f"{chat.project['name']}   /   {title}"
-        self.base.query_one("#heading", Static).update(display(f"Messenger   /   {title}"))
+        heading = Text("Messenger", style="bold")
+        heading.append(f"  {display(str(self.version))}", style="dim")
+        if chat.project or chat.session:
+            heading.append(f"\n{display(title)}", style="dim")
+        self.base.query_one("#heading", Static).update(heading)
         model_enabled = bool(chat.model and chat.model["is_enabled"])
         model = chat.model["display_name"] if chat.model else "No model"
         if chat.model and not model_enabled:
@@ -166,8 +178,9 @@ class Messenger(App):
         status = self.base.query_one("#status", Static)
         status.set_class(chat.notice_error, "error")
         notice = chat.notice or (
-            "Working…  Esc cancels" if self.busy else "PgUp loads older messages" if chat.has_older else "Ready"
+            "Working…  Esc cancels" if self.busy else "PgUp loads older messages" if chat.has_older else ""
         )
+        status.display = bool(notice)
         status.update(display(("! " if chat.notice_error else "") + notice))
 
         rendered = (
@@ -183,27 +196,22 @@ class Messenger(App):
             text = Text()
             messages = chat.messages + chat.live
             if not messages and not chat.fault:
-                text.append("What would you like to work on?\n\n", style="bold")
                 text.append(
-                    "Write below to start a conversation.\n\n" if model_enabled else "Choose a model to start.\n\n",
-                    style="dim",
+                    "Start with a message.\n" if model_enabled else "Choose a model to get started.\n", style="dim"
                 )
-                text.append(
-                    "/models     Choose a model\n/providers  Add your provider\n/sessions   Continue a conversation\n\n",
-                    style="dim",
-                )
-                text.append("Ctrl+P opens all commands. F1 shows keyboard shortcuts.", style="dim")
+                if not model_enabled:
+                    text.append("/providers to connect a provider, /models to select a model.", style="dim")
             for message in messages:
                 content, error = message["content"], message.get("error_message")
                 if not content and not error:
                     continue
                 role = message["role"]
-                label = {"user": "You", "assistant": "Assistant", "tool": "Tool", "system": "System"}.get(
-                    role, "Message"
-                )
-                text.append(label + "\n", style="bold" if role != "tool" else "bold dim")
                 if content:
-                    text.append(display(content) + "\n")
+                    marker = "› " if role == "user" else "• " if role == "assistant" else "  "
+                    text.append(
+                        marker + display(content).replace("\n", "\n  ") + "\n",
+                        style="bold" if role == "user" else "dim" if role == "tool" else "",
+                    )
                 if error:
                     text.append("! " + display(error) + "\n", style="red")
                 text.append("\n")
@@ -245,6 +253,7 @@ class Messenger(App):
 
     @on(TextArea.Changed, "#composer")
     def draft_changed(self) -> None:
+        self.update_input_height()
         self.update_suggestions()
 
     def action_leader(self) -> None:
@@ -360,7 +369,7 @@ class Messenger(App):
         self.operation = asyncio.create_task(self.perform(job))
         self.composer.read_only = True
         self.composer.set_class(True, "busy")
-        self.composer.border_title = "Working / Esc cancels"
+        self.base.query_one("#prompt", Static).update("·")
         self.chat.status()
 
     async def perform(self, job) -> None:
@@ -376,7 +385,7 @@ class Messenger(App):
             if not self.closing:
                 self.composer.read_only = False
                 self.composer.set_class(False, "busy")
-                self.composer.border_title = "Message"
+                self.base.query_one("#prompt", Static).update("›")
                 self.refresh_view()
 
     async def stop_work(self) -> None:

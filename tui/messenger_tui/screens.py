@@ -157,11 +157,16 @@ class Picker(Dialog):
         self.filter("")
         self.query_one(FilterInput).focus()
 
+    def on_resize(self, event: events.Resize) -> None:
+        options = self.query_one(OptionList)
+        options.styles.height = min(options.option_count, max(1, int(event.size.height * 0.4)))
+
     def filter(self, text: str) -> None:
         query = text.strip().casefold()
         options = self.query_one(OptionList)
         matches = [item for item in self.choices if query in f"{item.label} {item.hint}".casefold()]
         options.set_options(item.option() for item in matches)
+        options.styles.height = min(len(matches), max(1, int(self.size.height * 0.4)))
         options.highlighted = 0 if matches else None
         options.display = bool(matches)
         hint = (

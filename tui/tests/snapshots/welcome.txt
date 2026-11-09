@@ -1,24 +1,24 @@
 
-  Messenger   /   New session
-
-  Default / No model    Tools: agent default
+  Messenger  test
 
 
-   What would you like to work on?
-
-   Choose a model to start.
-
-   /models     Choose a model
-   /providers  Add your provider
-   /sessions   Continue a conversation
-
-   Ctrl+P opens all commands. F1 shows keyboard shortcuts.
+  Choose a model to get started.
+  /providers to connect a provider, /models to select a model.
 
 
-  ▊▔ Message ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎
-  ▊ Message, or / for commands                                                   ▎
-  ▊                                                                              ▎
-  ▊                                                                              ▎
-  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎
-  Ready
-  Enter send   Ctrl+O newline   Ctrl+P commands   F1 help
+
+
+
+
+
+
+
+
+
+
+
+
+   › Ask anything, or / for commands
+
+    Default / No model    Tools: agent default
+  / commands   Ctrl+P search   F1 help

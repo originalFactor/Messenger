@@ -64,6 +64,18 @@ class InterfaceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(instance.composer.text, "中文 👨‍💻 é مرحبا / Hello")
             self.assertIs(instance.focused, instance.composer)
 
+    async def test_prompt_grows_for_multiline_drafts_without_a_border(self):
+        instance = app()
+        async with instance.run_test(size=(84, 24)) as pilot:
+            self.assertEqual(instance.composer.region.height, 1)
+            instance.set_draft("first\nsecond\nthird")
+            await pilot.pause()
+            self.assertEqual(instance.composer.region.height, 3)
+            self.assertEqual(instance.query_one("#prompt", Static).content, "›")
+            instance.set_draft("")
+            await pilot.pause()
+            self.assertEqual(instance.composer.region.height, 1)
+
     async def test_palette_page_navigation_help_and_focus_return(self):
         instance = app()
         async with instance.run_test(size=(84, 24)) as pilot:

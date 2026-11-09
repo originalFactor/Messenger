@@ -2,8 +2,10 @@
 
 A keyboard-first chat client backed by the local Rust Core. Bring a provider
 key, choose a model, and keep conversations in a trusted project or in standalone
-chat. The conversation stays in one readable column; the composer and contextual
-key hints remain at the bottom.
+chat. The Codex-inspired interface uses a neutral palette, a borderless `›`
+prompt and flat menus. The prompt grows for multiline drafts; model/tool context
+and short key hints stay beneath it. User turns start with `›`, assistant turns
+with `•`. Status appears only for ongoing work, notices or errors.
 
 ## Run
 
