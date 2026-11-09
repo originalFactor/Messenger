@@ -16,7 +16,7 @@ Thin `org.jetbrains.kotlin.jvm` + `compose.multiplatform` + `kotlin.compose` she
 
 ```bash
 ./gradlew-cli :desktopApp:run
-./gradlew-cli :desktopApp:packageReleaseMsi   # Windows (CI uses windows-latest + .\gradlew.bat)
+./gradlew-cli :desktopApp:packageReleaseMsi   # Windows; locally use gradlew-cli.bat in PowerShell (CI uses gradlew.bat)
 ./gradlew-cli :desktopApp:packageReleaseDmg   # macOS
 ./gradlew-cli :desktopApp:packageReleaseDeb   # Linux
 ```

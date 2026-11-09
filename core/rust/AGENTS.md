@@ -1,17 +1,18 @@
-# core ? Rust Agent Core and local API
+# core — Rust Agent Core and local API
 
 `core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android, Desktop, and the Python TUI use the loopback `/api/v1` REST/SSE service in `messenger-http`.
 
 ## Crates
 
-- `messenger-core` ? agent loop (`run_chat_turn`), parts codec, context math, title helpers and conversation policy.
-- `messenger-llm` ? four wire protocols (`chat`/`responses`/`messages`/`interactions`), streaming parser, tool-call accumulation, usage stashing and request builder.
-- `messenger-tools` ? built-in terminal/workspace declarations and per-tool policy.
-- `messenger-store` ? SQLite schema v6 (model metadata and overrides), typed CRUD, store events, sync/kv bookkeeping and legacy Room import.
-- `messenger-sync` ? paged delta sync, cloud auth/session handling, avatar caching, market/card APIs and model discovery.
-- `messenger-remote` ? cross-device project routing: `RemoteHub` holds the per-device cloud relay SSE connection (`/api/remote/*`), tracks which devices are online, forwards workspace tool calls to the project's owner and validates/executes inbound ones. Contract: `crates/messenger-http/docs/REMOTE.md`.
-- `messenger-http` ? axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation. Its `messenger-core-server` binary is the TUI’s lifecycle bridge. It opens a dedicated SQLite store under an advisory lock, ensures the default Agent exists before serving, writes the loopback URL and bearer token to the child’s stdout pipe, and shuts down on stdin EOF.
-- `messenger-ffi` ? lifecycle-only `CoreHandle.open`, `start_http_server`, `HttpServerHandle.local_addr/token/stop` and `CoreError`.
+- `messenger-core` — agent loop (`run_chat_turn`), parts codec, context math, title helpers and conversation policy.
+- `messenger-llm` — four wire protocols (`chat`/`responses`/`messages`/`interactions`), streaming parser, tool-call accumulation, usage stashing and request builder.
+- `messenger-tools` — built-in terminal/workspace declarations and per-tool policy.
+- `messenger-store` — SQLite schema v6 (model metadata and overrides), typed CRUD, store events, sync/kv bookkeeping and legacy Room import.
+- `messenger-sync` — paged delta sync, cloud auth/session handling, avatar caching, market/card APIs and model discovery.
+- `messenger-mcp` — JSON-RPC MCP client, configuration codec, pluggable stdio / SSE+HTTP transports and tool lifecycle. Kotlin also retains its platform MCP manager; do not assume this crate replaces the native UI inventory.
+- `messenger-remote` — cross-device project routing: `RemoteHub` holds the per-device cloud relay SSE connection (`/api/remote/*`), tracks which devices are online, forwards workspace tool calls to the project's owner and validates/executes inbound ones. Contract: `crates/messenger-http/docs/REMOTE.md`.
+- `messenger-http` — axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation. Its `messenger-core-server` binary is the TUI’s lifecycle bridge. It opens a dedicated SQLite store under an advisory lock, ensures the default Agent exists before serving, writes the loopback URL and bearer token to the child’s stdout pipe, and shuts down on stdin EOF.
+- `messenger-ffi` — lifecycle-only `CoreHandle.open`, `start_http_server`, `HttpServerHandle.local_addr/token/stop` and `CoreError`.
 
 The Rust core does not contain a Document Engine, Markdown parser, LaTeX renderer, syntax highlighter, browser boundary or TUI crate. Android/Desktop render Markdown, code and LaTeX in Kotlin with `cc.ptoe:llm-typewriter`.
 
@@ -20,7 +21,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
 - `/cloud/builtin-models/sync` provisions Messenger Cloud AI from the saved account before fetching its catalog. Clearing the Cloud session removes that provider and its models.
 - `/cloud/conversations/push` uploads standalone TUI conversations without applying Cloud data. It stores the account/server binding and last uploaded digest/version, checks for newer Cloud changes before updates, and maps local-only Agent IDs to the Cloud default. Keep provider credentials and unrelated entities out of these uploads.
-- Model rows persist capability metadata separately from explicit overrides. Provider discovery reads Messenger extensions from `/models`. TUI discovery skips models.dev and fills missing capabilities with pi-catalog. Built-in models persist only Cloud-supplied capabilities.
+- Model rows persist capability metadata separately from explicit overrides. Provider discovery reads Messenger extensions from `/models`. TUI discovery opts out of models.dev; Python `tui/messenger_tui/model_metadata.py` fills missing capabilities from pi-catalog. Built-in models persist only Cloud-supplied capabilities.
 - Tool policy stays in Rust. Kotlin and the TUI execute platform tools and post results to `/turns/tools/{callId}/result`. The TUI's `/tools` command persists conversation overrides; its local executor uses the trusted project's workspace.
 - Dropping the chat SSE cancels the turn token, wakes a pending tool host and finalizes partial rows.
 - **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.
@@ -36,11 +37,18 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 
 ## Versioning
 
-`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. The TUI packaging workflow reads the version from `messenger-core-server --version`. Rust never uses `CARGO_PKG_VERSION` as the product version.
+`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. The TUI packaging workflow reads the version from `messenger-core-server --version`. Rust never uses `CARGO_PKG_VERSION` as the product version. Unlike Gradle, the current build script accepts non-empty version text without a semantic-version check and warns/falls back to `0.0.0` when VERSION is missing/empty; its commit count falls back to 0 without git. TUI release packaging validates the reported semantic version; release tags must still match root VERSION.
+
+## Native bindings
+
+- `:core-bindings` (`core/bindings`) builds host `messenger-ffi` + `uniffi-bindgen` with profile `bindgen` for lifecycle binding generation. Its per-build-type cargo-ndk tasks package the selected Android ABIs using Rust `--release` even for an Android debug variant.
+- `:core-bindings-desktop` (`core/bindings-desktop`) generates the same surface and packages the host cdylib from profile `bindgen` as a JNA resource. This profile is shipped on Desktop: `strip = "none"`, LTO off, 16 codegen units. Keep metadata symbols intact for UniFFI on ELF; it cannot generate bindings from a stripped release library.
+- Both binding modules share the Cargo workspace, with Gradle task ordering to avoid concurrent host-output mutation. Maintain their generated-source and native-resource wiring when changing build tasks.
 
 ## Testing / CI
 
 - `cargo test --workspace` is the workspace verification; `cargo test -p messenger-http` runs the API contract suite.
+- The current GitHub workflows compile/package native clients; they do not run `cargo test` or the TUI test workflow automatically. Run the relevant tests locally.
 - Native client builds use cargo-ndk for Android and host Cargo for Desktop. There is no Web/Wasm build.
 
 ## ACP and device control

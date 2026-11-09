@@ -15,10 +15,10 @@ The agent-tool host and terminal UI for Android. Runs under its OWN UID with **t
 - **Workspace lives here too**: `files/agent-runtime/{runtime-<abi>,workspace}`. The main app cannot read another UID's files, so workspace file operations are brokered over AIDL.
 - **Access control**: `ShellService` is protected by the signature-level `cc.ptoe.messenger.runtime.permission.SHELL` and every call re-checks it via `checkCallingPermission`.
 
-## AIDL surface (`IShellService`/`IShellCallback`, copies duplicated in `androidApp`)
+## AIDL surface (`IShellService`/`IShellCallback`/`IMcpCallback`/`ToolResult`, copies duplicated in `androidApp`)
 
 - `submit` / `cancel` — agent tool commands (per-request jobs; the binding must stay alive for the WHOLE request or the cached-app freezer can suspend the companion mid-work).
-- `workspace{Glob,Grep,Read,Edit,Create}(root, …)` — synchronous, return a `ToolResult` Parcelable (`WorkspaceOps`). Every method takes a leading workspace `root`; a root that is not an existing directory is REJECTED (never silently fall back to the companion's own workspace — a project created elsewhere must report "unavailable").
+- `workspace{Glob,Grep,Read,Edit,Create}(root, …)` — synchronous, return a `ToolResult` Parcelable (`WorkspaceOps`). Every method takes a leading workspace `root`. An explicit non-blank root must be an existing directory or the call reports "unavailable"; null/blank uses the companion's own workspace. Project-bound callers must pass their actual root so an unavailable project cannot silently operate elsewhere.
 - `startMcpProcess` / `sendMcpInput` / `stopMcpProcess` — stdio MCP for the main app's `McpManager`.
 - No session API: the terminal UI is in-process (see below).
 
@@ -35,7 +35,7 @@ The agent-tool host and terminal UI for Android. Runs under its OWN UID with **t
 ## Other notes
 
 - **ripgrep for the `grep` tool**: pre-built static binaries are committed as `src/main/jniLibs/<abi>/librg.so` (AGP strips them — `keepDebugSymbols += "**/librg.so"` keeps them byte-identical in the APK). `TermuxRuntime.ripgrepBinary` copies it to `<prefix>/bin/rg` (on PATH for terminal sessions too) without requiring the bootstrap install; `WorkspaceOps.grep` runs it with the workspace as cwd.
-- AGP's `CANNOT_BUILD_SELECTED_TARGET_ABI` diagnostic is suppressed in `gradle.properties` (some native deps are ARM-only while the emulator ABI stays buildable on demand via `-Pmessenger.abis=x86_64`).
+- AGP's `CANNOT_BUILD_SELECTED_TARGET_ABI` diagnostic is suppressed in `gradle.properties` Some native deps are ARM-only, while the debug emulator ABI defaults to `x86_64`; override debug with `-Pmessenger.debugAbis`, and release with `-Pmessenger.abis`.
 - **Release build**: R8 + resource shrinking are ENABLED (`isMinifyEnabled = true`), with rules in `runtime/proguard-rules.pro`. The kept surface is the vendored Termux classes (one is inflated by FQN from `activity_terminal.xml`, and `libtermux.so` binds `Java_com_termux_terminal_JNI_*` by name), the AIDL stub/proxy/callback classes, `ToolResult`'s `CREATOR`, and the manifest-declared `TerminalActivity`/`ShellService`.
 - Distribution: users install the matching-ABI runtime APK alongside the main APK; CI builds and attaches the `arm64-v8a` `runtime-release.apk` (no ABI splits, so no ABI suffix).
 
