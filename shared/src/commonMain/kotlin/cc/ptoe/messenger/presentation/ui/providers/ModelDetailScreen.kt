@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -382,14 +383,14 @@ private fun ModalityChipGroup(
         )
         Spacer(modifier = Modifier.height(6.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             ModelModality.entries.forEach { modality ->
                 FilterChip(
                     selected = modality in selected,
                     onClick = { onToggle(modality) },
-                    label = { Text(text = modalityLabel(modality)) },
+                    label = { Text(text = modalityLabel(modality), maxLines = 1, softWrap = false) },
                     leadingIcon = if (modality in selected) {
                         {
                             Icon(
