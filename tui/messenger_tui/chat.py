@@ -11,6 +11,7 @@ from httpx import TimeoutException
 from .cloud import BUILTIN_PROVIDER_ID
 from .core import ApiError, CoreApi, entity
 from .model_metadata import PiCatalog, effective_metadata, legacy_metadata, model_overrides
+from .tools import execute_tool
 
 HISTORY_LIMIT = 100
 
@@ -49,6 +50,23 @@ class Chat:
         self.turn_path: str | None = None
         self.accepted = False
         self.catalog = PiCatalog()
+        self.tool_mode: str | None = None
+        self.tool_task: asyncio.Task | None = None
+
+    async def choose_tools(self, mode: str) -> None:
+        if mode not in ("off", "read", "write"):
+            raise ValueError("Unknown tool mode.")
+        if not self.project:
+            raise ValueError("Open a trusted workspace with /project before enabling tools.")
+        if self.session:
+            path = entity("conversations", self.session["id"])
+            current = await self.api.json(path)
+            self.session = await self.api.json(path, method="PUT", body={
+                **current, "override_tools_enabled": mode != "off",
+                "writable": mode == "write", "updated_at": now_ms(),
+            })
+        self.tool_mode = mode
+        self.status(f"Tools: {mode}.")
 
     def status(self, text: str = "", error: bool = False) -> None:
         self.notice = text
@@ -145,6 +163,7 @@ class Chat:
         self.has_older = False
         self.live = []
         self.fault = ""
+        self.tool_mode = None
 
     async def history(self, path: str):
         return await asyncio.gather(
@@ -165,6 +184,10 @@ class Chat:
         self.model = await model_for(self.api, owner, conversation)
         self.agent = owner
         self.apply_history(conversation, history)
+        enabled = conversation.get("override_tools_enabled")
+        self.tool_mode = None if enabled is None else "off" if not enabled else (
+            "write" if conversation.get("writable") else "read"
+        )
         self.fault = ""
 
     async def older(self) -> None:
@@ -320,9 +343,13 @@ class Chat:
 
     async def create_session(self, content: str) -> dict:
         now = now_ms()
+        settings = {} if self.tool_mode is None else {
+            "override_tools_enabled": self.tool_mode != "off", "writable": self.tool_mode == "write",
+        }
         return await self.api.json("/conversations", method="PUT", body={
             "id": str(uuid4()), "title": content.splitlines()[0][:64], "provider_id": self.model["provider_id"],
             "agent_id": self.agent["id"], "project_id": self.project_id, "created_at": now, "updated_at": now,
+            **settings,
         })
 
     async def upload_conversations(self, conversation_id: str | None = None, *, claim_new: bool = False) -> None:
@@ -408,10 +435,20 @@ class Chat:
                             self.status(f"Tool · {event['name']}")
                         case "ToolCallRequested":
                             path = entity("turns/tools", event["callId"])
-                            await self.api.json(f"{path}/result", method="POST", body={
-                                "output": "Local tool execution is unavailable in the terminal client.",
-                                "isError": True,
-                            })
+                            self.tool_task = asyncio.create_task(execute_tool(
+                                self.project, bool(self.session.get("writable")), event["name"], event["argumentsJson"],
+                            ))
+                            try:
+                                result = await self.tool_task
+                            except asyncio.CancelledError:
+                                if asyncio.current_task().cancelling():
+                                    raise
+                                # Core's cancel endpoint already released the
+                                # pending call. A late result would return 404.
+                                continue
+                            finally:
+                                self.tool_task = None
+                            await self.api.json(f"{path}/result", method="POST", body=result)
                         case "ToolCallFinished":
                             failed = event["isError"]
                             self.status(f"Tool failed · {event['name']}" if failed else "Waiting for the model…", failed)
@@ -451,6 +488,8 @@ class Chat:
         elif self.turn_path:
             try:
                 await self.api.json(f"{self.turn_path}/cancel", method="POST")
+                if self.tool_task:
+                    self.tool_task.cancel()
             except Exception as error:
                 if self.turn_path:
                     self.status(str(error), True)

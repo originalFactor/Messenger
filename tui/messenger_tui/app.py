@@ -26,6 +26,7 @@ COMMANDS = (
     ("agents", "Choose agent for a new session", "a"),
     ("providers", "Manage providers", ""),
     ("project", "Create, edit, or leave a project", ""),
+    ("tools", "Enable or disable tools for this conversation", ""),
     ("connect", "Add a provider and model", ""),
     ("cloud", "Messenger Cloud account and server address", ""),
     ("sync", "Upload local conversations to Messenger Cloud", ""),
@@ -153,7 +154,8 @@ class Messenger(App):
         model = chat.model["display_name"] if chat.model else "No model"
         if chat.model and not model_enabled:
             model += " (disabled)"
-        self.base.query_one("#model", Static).update(display(f"{chat.agent['name']}  ·  {model}"))
+        tools = chat.tool_mode or "agent default"
+        self.base.query_one("#model", Static).update(display(f"{chat.agent['name']}  ·  {model}  ·  Tools: {tools}"))
         status = self.base.query_one("#status", Static)
         status.set_class(chat.notice_error, "error")
         status.update(display(chat.notice or ("Working… · Esc cancel" if self.busy else
@@ -308,6 +310,9 @@ class Messenger(App):
         self.chat.status()
 
     async def perform(self, job) -> None:
+        # An eager task factory can finish an in-memory operation inside
+        # create_task(), before start() records it and locks the composer.
+        await asyncio.sleep(0)
         try:
             await job()
         except Exception as error:
@@ -356,6 +361,14 @@ class Messenger(App):
                 self.start(self.open_providers)
             case "project":
                 self.start(self.open_project)
+            case "tools":
+                if not self.chat.project:
+                    self.chat.status("Open a trusted workspace with /project before enabling tools.", True)
+                else:
+                    choices = [Choice("read", "Enable tools", "Inspection mode; terminal uses your user permissions"),
+                               Choice("write", "Enable tools with file editing", "Allows edit/create and terminal changes"),
+                               Choice("off", "Disable tools")]
+                    self.push_screen(Picker("Conversation tools", choices, ""), self.pick_tools)
             case "cloud":
                 self.start(self.open_cloud)
             case "sync":
@@ -370,6 +383,10 @@ class Messenger(App):
     async def open_cloud(self) -> None:
         account = await CloudAccount.load(self.chat.api)
         self.push_screen(CloudDialog(account, self.chat))
+
+    def pick_tools(self, choice: Choice | None) -> None:
+        if choice:
+            self.start(lambda: self.chat.choose_tools(choice.id))
 
     async def open_providers(self) -> None:
         self.push_screen(ProviderManager(self.chat, await self.load_providers()))
