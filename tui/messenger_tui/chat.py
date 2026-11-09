@@ -21,7 +21,11 @@ def now_ms() -> int:
 
 
 async def model_for(api: CoreApi, agent: dict, conversation: dict | None = None):
-    identifier = (conversation or {}).get("override_model_id") or agent.get("default_model_id")
+    identifier = (conversation or {}).get("override_model_id")
+    if not identifier:
+        if not agent.get("is_default") and agent.get("follow_default_model"):
+            agent = await api.json("/agents/default")
+        identifier = agent.get("default_model_id")
     if identifier:
         try:
             return await api.json(entity("models", identifier))
@@ -76,6 +80,19 @@ class Chat:
     async def refresh_model(self) -> None:
         self.model = await model_for(self.api, self.agent, self.session)
         self.update()
+
+    async def save_agent(self, values: dict) -> dict:
+        path = entity("agents", values["id"])
+        current = await self.api.json(path)
+        saved = await self.api.json(path, method="PUT", body={**current, **values, "updated_at": now_ms()})
+        if self.agent["id"] == saved["id"]:
+            self.agent = saved
+        try:
+            await self.refresh_model()
+        except Exception as error:
+            self.model = None
+            self.status(f"Agent saved. Could not refresh the active model. {error}", True)
+        return saved
 
     @property
     def project_id(self) -> str | None:

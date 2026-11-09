@@ -52,6 +52,14 @@ Delete confirmation starts on **Cancel**. Enter cancels unless you move to
 the delete button. F4 never confirms deletion. Esc closes an idle dialog;
 pending saves must finish before the dialog closes.
 
+Use `/agents` to choose or edit chat Agents. Enter starts a new session with
+the selected Agent; F4 opens its settings. Edit the name, description, system
+prompt, default model, sampling/reasoning parameters and tools. Non-default
+Agents can follow each setting of the default Agent. In the system prompt,
+Enter inserts a newline and Tab moves to the next control. F4 saves; Esc leaves
+without saving. Editing keeps the current conversation and draft intact. The
+default Agent's identity and default status are preserved.
+
 ## Appearance and terminal support
 
 Use at least 40 columns × 10 rows; 80×24 or larger is recommended. Below the

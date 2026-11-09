@@ -12,6 +12,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList, Static, TextArea
 
+from .agents_screen import AgentManager
 from .appearance import THEMES
 from .chat import Chat
 from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
@@ -24,7 +25,7 @@ COMMANDS = (
     ("new", "New session", "n"),
     ("sessions", "Switch session", "l"),
     ("models", "Choose model", "m"),
-    ("agents", "Choose agent for a new session", "a"),
+    ("agents", "Choose or edit an Agent", "a"),
     ("providers", "Manage providers", ""),
     ("project", "Create, edit, or leave a project", ""),
     ("tools", "Enable or disable tools for this conversation", ""),
@@ -511,6 +512,15 @@ class Messenger(App):
         if kind == "models":
             providers = {row["id"]: row["name"] for row in await self.load_providers()}
         rows = await self.chat.list_sessions() if kind == "sessions" else await api.list(f"/{kind}")
+        if kind == "agents":
+            models = await api.list("/models")
+
+            def agent_selected(choice: Choice | None) -> None:
+                if choice:
+                    self.start(lambda: self.new_session(choice.value))
+
+            self.push_screen(AgentManager(self.chat, rows, models), agent_selected)
+            return
         if kind == "sessions":
             options = [
                 Choice(
@@ -531,13 +541,6 @@ class Messenger(App):
                 if row["is_enabled"]
             ]
             title, empty, action = "Models", "No enabled models. Manage them with /providers.", self.chat.choose_model
-        else:
-            options = [
-                Choice(row["id"], row["name"], "Default" if row["is_default"] else "", row)
-                for row in rows
-                if row.get("role") != "title"
-            ]
-            title, empty, action = "Agents · starts a new session", "No chat agents.", self.new_session
 
         def selected(choice: Choice | None) -> None:
             if choice:
