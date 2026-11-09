@@ -21,6 +21,8 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 
 ## Commands
 
+Unix Gradle launchers are pinned to LF by `.gitattributes` so Windows checkouts cannot break Linux shebangs.
+
 Every local Gradle invocation MUST go through the `gradlew-cli` wrapper (`gradlew-cli.bat` on Windows), never bare `./gradlew`:
 
 ```bash

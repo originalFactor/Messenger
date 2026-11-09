@@ -1,0 +1,3 @@
+# Linux launchers must remain executable after checkout with core.autocrlf=true.
+/gradlew text eol=lf
+/gradlew-cli text eol=lf

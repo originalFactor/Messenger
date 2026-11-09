@@ -48,6 +48,8 @@ import okio.Path.Companion.toPath
 private lateinit var coreHttpServer: HttpServerHandle
 
 fun main() {
+    // Must run before any AWT/Compose class initializes its toolkit.
+    val nativeWayland = configureDesktopBackend()
     val home = System.getProperty("user.home").toPath()
     val appDirs = AppDirs(
         filesDir = home.resolve(".messenger").resolve("files"),
@@ -102,6 +104,11 @@ fun main() {
                 ))
             }
             .build()
+    }
+
+    if (nativeWayland) {
+        launchWaylandWindow()
+        return
     }
 
     application {

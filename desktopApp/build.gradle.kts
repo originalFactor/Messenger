@@ -40,6 +40,14 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "cc.ptoe.messenger.MainKt"
+        // The app runtime is independent of Gradle's pinned JDK 21. Native
+        // Wayland needs JetBrains Runtime; the same JDK is used by jpackage.
+        providers.gradleProperty("messenger.desktop.javaHome")
+            .orElse(providers.environmentVariable("MESSENGER_DESKTOP_JAVA_HOME"))
+            .orNull?.let { javaHome = it }
+        jvmArgs("-Dmessenger.desktop.backend=" +
+            providers.gradleProperty("messenger.desktop.backend").getOrElse("auto"))
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
         jvmArgs("--add-opens", "java.desktop/sun.awt=ALL-UNNAMED")
         jvmArgs("--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED")
         if (System.getProperty("os.name").contains("Mac")) {
