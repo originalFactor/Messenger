@@ -88,7 +88,7 @@
     <string name="agent_edit_publish_desc">Will make name, avatar, system prompt, and sampling parameters public. Models, Provider, and API Key will not be shared.</string>
     <string name="agent_edit_publish_confirm">Publish</string>
     <string name="agent_edit_push_title">Push update</string>
-    <string name="agent_edit_push_desc">Will overwrite the market version with the current Agent\'s public configuration.</string>
+    <string name="agent_edit_push_desc">Will overwrite the market version with the current Agent's public configuration.</string>
     <string name="agent_edit_unpublish_title">Unpublish from market</string>
     <string name="agent_edit_unpublish_desc">Other users will no longer be able to browse or import this Agent.</string>
     <string name="agent_edit_get_update_title">Get market update</string>
@@ -160,7 +160,7 @@
     <string name="chat_title_default">Chat</string>
     <string name="chat_picture">[Image]</string>
     <string name="chat_select_conversation">Select a conversation to start chatting</string>
-    <string name="context_summarize_prompt">You compress conversation history for a chat app. Compress the conversation below into a concise summary that preserves the user\'s requests and preferences, key facts, decisions, and unfinished tasks. Reply with the summary text only — no preamble, no quotes — written in the same language as the conversation.</string>
+    <string name="context_summarize_prompt">You compress conversation history for a chat app. Compress the conversation below into a concise summary that preserves the user's requests and preferences, key facts, decisions, and unfinished tasks. Reply with the summary text only — no preamble, no quotes — written in the same language as the conversation.</string>
     <string name="error_context_summarize_failed">Context compression failed: %1$s</string>
 
     <!-- Conversations -->
@@ -329,7 +329,7 @@
     <string name="tools_mcp_add">Add MCP Server</string>
     <string name="tools_mcp_edit">Edit MCP Server</string>
     <string name="tools_mcp_delete">Delete MCP Server</string>
-    <string name="tools_mcp_delete_confirm">Are you sure you want to delete MCP server \"%1$s\"?</string>
+    <string name="tools_mcp_delete_confirm">Are you sure you want to delete MCP server &quot;%1$s&quot;?</string>
     <string name="tools_mcp_name">Name</string>
     <string name="tools_mcp_type">Transport Type</string>
     <string name="tools_mcp_command">Command</string>
@@ -357,7 +357,7 @@
     <string name="cloud_settings_plan_source_admin">Admin grant</string>
     <string name="cloud_settings_plan_source_migrated">Migrated quota</string>
     <string name="cloud_redeem_title">Redeem card key</string>
-    <string name="cloud_redeem_desc">Card details are shown for confirmation before redemption. Quota is credited immediately and each plan\'s validity is extended independently.</string>
+    <string name="cloud_redeem_desc">Card details are shown for confirmation before redemption. Quota is credited immediately and each plan's validity is extended independently.</string>
     <string name="cloud_redeem_code_label">Card key</string>
     <string name="cloud_redeem_action">Redeem</string>
     <string name="cloud_redeem_checking">Checking…</string>
@@ -384,7 +384,7 @@
     <string name="cloud_settings_password_label">Password</string>
     <string name="cloud_settings_register_and_login">Register &amp; sign in</string>
     <string name="cloud_settings_have_account">Already have an account? Sign in</string>
-    <string name="cloud_settings_no_account">Don\'t have an account? Sign up</string>
+    <string name="cloud_settings_no_account">Don't have an account? Sign up</string>
     <string name="cloud_settings_login_success">Signed in</string>
     <string name="cloud_settings_local_data_uploaded">Local data uploaded</string>
     <string name="cloud_settings_login_failed">Sign-in failed</string>
