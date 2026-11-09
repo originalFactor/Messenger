@@ -58,7 +58,6 @@ import cc.ptoe.messenger.generated.resources.cloud_dev_use
 import cc.ptoe.messenger.generated.resources.cloud_dev_searching
 import cc.ptoe.messenger.generated.resources.cloud_dev_none
 import cc.ptoe.messenger.generated.resources.cloud_dev_choose
-import cc.ptoe.messenger.generated.resources.cloud_dev_description
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_save
@@ -149,34 +148,29 @@ fun CloudServerScreen(
                     ) {
                         Text(stringResource(Res.string.cloud_settings_use_default_server))
                     }
-                }
-                TextButton(
-                    onClick = {
-                        isDiscovering = true
-                        discoveredServers = emptyList()
-                        coroutineScope.launch {
-                            try {
-                                discoveredServers = discoverDevServers()
-                                if (discoveredServers.size == 1) serverUrl = discoveredServers.single()
-                                if (discoveredServers.isEmpty()) snackbarHostState.showSnackbar(noDevServer)
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Exception) {
-                                snackbarHostState.showSnackbar(error.message ?: operationFailed)
-                            } finally {
-                                isDiscovering = false
+                    TextButton(
+                        onClick = {
+                            isDiscovering = true
+                            discoveredServers = emptyList()
+                            coroutineScope.launch {
+                                try {
+                                    discoveredServers = discoverDevServers()
+                                    if (discoveredServers.size == 1) serverUrl = discoveredServers.single()
+                                    if (discoveredServers.isEmpty()) snackbarHostState.showSnackbar(noDevServer)
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    snackbarHostState.showSnackbar(error.message ?: operationFailed)
+                                } finally {
+                                    isDiscovering = false
+                                }
                             }
-                        }
-                    },
-                    enabled = !isBusy && !isDiscovering
-                ) {
-                    Text(stringResource(if (isDiscovering) Res.string.cloud_dev_searching else Res.string.cloud_dev_use))
+                        },
+                        enabled = !isBusy && !isDiscovering
+                    ) {
+                        Text(stringResource(if (isDiscovering) Res.string.cloud_dev_searching else Res.string.cloud_dev_use))
+                    }
                 }
-                Text(
-                    stringResource(Res.string.cloud_dev_description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 if (isDiscovering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 if (discoveredServers.size > 1) {
                     Text(stringResource(Res.string.cloud_dev_choose))
