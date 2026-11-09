@@ -52,7 +52,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cc.ptoe.messenger.data.cloud.discoverDevServers
 import cc.ptoe.messenger.data.cloud.DEFAULT_CLOUD_SERVER_URL
+import cc.ptoe.messenger.generated.resources.cloud_dev_use
+import cc.ptoe.messenger.generated.resources.cloud_dev_searching
+import cc.ptoe.messenger.generated.resources.cloud_dev_none
+import cc.ptoe.messenger.generated.resources.cloud_dev_choose
+import cc.ptoe.messenger.generated.resources.cloud_dev_description
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_save
@@ -63,6 +69,7 @@ import cc.ptoe.messenger.generated.resources.cloud_settings_server_desc
 import cc.ptoe.messenger.generated.resources.cloud_settings_server_url_label
 import cc.ptoe.messenger.generated.resources.cloud_settings_use_default_server
 import cc.ptoe.messenger.presentation.viewmodel.SettingsViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 
@@ -79,6 +86,10 @@ fun CloudServerScreen(
     val savedServerUrl by viewModel.cloudServerUrl.collectAsStateWithLifecycle()
     var serverUrl by remember(savedServerUrl) { mutableStateOf(savedServerUrl) }
     var isBusy by remember { mutableStateOf(false) }
+
+    var isDiscovering by remember { mutableStateOf(false) }
+    var discoveredServers by remember { mutableStateOf(emptyList<String>()) }
+    val noDevServer = stringResource(Res.string.cloud_dev_none)
 
     val saved = stringResource(Res.string.cloud_server_saved)
     val operationFailed = stringResource(Res.string.cloud_settings_operation_failed)
@@ -126,7 +137,7 @@ fun CloudServerScreen(
                     label = { Text(stringResource(Res.string.cloud_settings_server_url_label)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    enabled = !isBusy
+                    enabled = !isBusy && !isDiscovering
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -134,9 +145,45 @@ fun CloudServerScreen(
                 ) {
                     TextButton(
                         onClick = { serverUrl = DEFAULT_CLOUD_SERVER_URL },
-                        enabled = !isBusy
+                        enabled = !isBusy && !isDiscovering
                     ) {
                         Text(stringResource(Res.string.cloud_settings_use_default_server))
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        isDiscovering = true
+                        discoveredServers = emptyList()
+                        coroutineScope.launch {
+                            try {
+                                discoveredServers = discoverDevServers()
+                                if (discoveredServers.size == 1) serverUrl = discoveredServers.single()
+                                if (discoveredServers.isEmpty()) snackbarHostState.showSnackbar(noDevServer)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                snackbarHostState.showSnackbar(error.message ?: operationFailed)
+                            } finally {
+                                isDiscovering = false
+                            }
+                        }
+                    },
+                    enabled = !isBusy && !isDiscovering
+                ) {
+                    Text(stringResource(if (isDiscovering) Res.string.cloud_dev_searching else Res.string.cloud_dev_use))
+                }
+                Text(
+                    stringResource(Res.string.cloud_dev_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (isDiscovering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (discoveredServers.size > 1) {
+                    Text(stringResource(Res.string.cloud_dev_choose))
+                    discoveredServers.forEach { address ->
+                        TextButton(onClick = { serverUrl = address }, enabled = !isBusy) {
+                            Text(address)
+                        }
                     }
                 }
                 Button(
@@ -157,7 +204,7 @@ fun CloudServerScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !isBusy && serverUrl.isNotBlank()
+                    enabled = !isBusy && !isDiscovering && serverUrl.isNotBlank()
                 ) {
                     Text(stringResource(Res.string.action_save))
                 }

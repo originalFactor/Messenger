@@ -492,4 +492,9 @@
     <string name="acp_message">Message</string>
     <string name="acp_stop">Stop generation</string>
     <string name="acp_send">Send</string>
+    <string name="cloud_dev_use">Use local dev server</string>
+    <string name="cloud_dev_searching">Searching for dev servers…</string>
+    <string name="cloud_dev_none">No dev server found. Start pnpm dev and allow UDP 53319 and the server HTTP port through your firewall. You can also enter the address manually.</string>
+    <string name="cloud_dev_choose">Choose a development server</string>
+    <string name="cloud_dev_description">Find Messenger Cloud development servers on this computer or the local network. Review the address, then save to connect.</string>
 </resources>
