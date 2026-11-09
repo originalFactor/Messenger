@@ -69,7 +69,10 @@ internal fun configureDesktopBackend(): Boolean {
     // ComposeWindow/SkiaSurface uses X11 JAWT handles even with SOFTWARE.
     // Draw into Swing's buffer instead; all popups/dialogs stay in this panel.
     System.setProperty("skiko.renderApi", "SOFTWARE")
-    System.setProperty("compose.layers.type", "COMPONENT")
+    // Component layers use SwingComposeSceneLayer and a separate native picture
+    // recorder per popup. Crash logs place SIGSEGV in SkCanvas::restore on this
+    // software popup path. Keep overlays in the panel's scene to avoid it.
+    System.setProperty("compose.layers.type", "SAME_CANVAS")
     System.setProperty("compose.application.configure.swing.globals", "false")
     check(Toolkit.getDefaultToolkit().javaClass.name == "sun.awt.wl.WLToolkit") {
         "The JVM did not activate WLToolkit; refusing to fall back to XWayland"
