@@ -36,7 +36,7 @@ import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.settings_select_section
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
-import cc.ptoe.messenger.presentation.ui.providers.ProvidersDualPaneScreen
+import cc.ptoe.messenger.presentation.ui.providers.ProvidersSinglePaneScreen
 import org.jetbrains.compose.resources.stringResource
 
 private enum class SettingsDetailPane { Empty, Cloud, Tools, Providers, Licenses }
@@ -91,7 +91,9 @@ fun SettingsDualPaneScreen(
                         mcpManager = AppContainerHolder.instance.mcpManager
                 )
 
-                SettingsDetailPane.Providers -> ProvidersDualPaneScreen()
+                SettingsDetailPane.Providers -> ProvidersSinglePaneScreen(
+                    onBackClick = { pane = SettingsDetailPane.Empty }
+                )
 
                 SettingsDetailPane.Licenses -> LicensesScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty }

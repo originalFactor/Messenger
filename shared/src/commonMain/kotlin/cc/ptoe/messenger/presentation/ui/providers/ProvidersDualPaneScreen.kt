@@ -33,13 +33,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.providers_select_to_view
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
-fun ProvidersDualPaneScreen(
+fun ProvidersDualPaneScreen(modifier: Modifier = Modifier) {
+    ProvidersNavigation(dualPane = true, onBackClick = {}, modifier = modifier)
+}
+
+/** Provider navigation inside Settings' existing detail pane. */
+@Composable
+fun ProvidersSinglePaneScreen(onBackClick: () -> Unit, modifier: Modifier = Modifier) {
+    ProvidersNavigation(dualPane = false, onBackClick = onBackClick, modifier = modifier)
+}
+
+@Composable
+private fun ProvidersNavigation(
+    dualPane: Boolean,
+    onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedProviderId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -48,95 +62,105 @@ fun ProvidersDualPaneScreen(
     var isEditing by rememberSaveable { mutableStateOf(false) }
     var modelSavedMessage by rememberSaveable { mutableStateOf(false) }
 
-    Row(modifier = modifier.fillMaxSize()) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(360.dp)
-        ) {
-            ProvidersScreen(
-                onBackClick = { /* no-op in dual-pane */ },
-                onAddClick = {
-                    isEditing = true
-                    editProviderId = null
-                },
-                onEditClick = { id ->
-                    isEditing = true
-                    editProviderId = id
-                },
-                onProviderClick = { id ->
-                    selectedProviderId = id
-                    selectedModelId = null
-                    isEditing = false
-                }
-            )
+    val navigateBack: () -> Unit = {
+        when {
+            isEditing -> {
+                isEditing = false
+                editProviderId = null
+            }
+            selectedModelId != null -> selectedModelId = null
+            selectedProviderId != null -> selectedProviderId = null
+            else -> onBackClick()
         }
+    }
+    BackHandler(enabled = !dualPane, onBack = navigateBack) {}
 
-        VerticalDivider(
-            modifier = Modifier.fillMaxHeight(),
-            thickness = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant
+    val listContent: @Composable () -> Unit = {
+        ProvidersScreen(
+            onBackClick = onBackClick,
+            onAddClick = {
+                isEditing = true
+                editProviderId = null
+            },
+            onEditClick = { id ->
+                isEditing = true
+                editProviderId = id
+            },
+            onProviderClick = { id ->
+                selectedProviderId = id
+                selectedModelId = null
+                isEditing = false
+            }
         )
-
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier
-                .fillMaxHeight()
-                .weight(1f)
-        ) {
-            when {
-                isEditing -> key(editProviderId) {
-                    // 用 editProviderId 作 key，切换编辑目标时重建 ViewModel，
-                    // 避免 viewModel() 位置缓存导致显示首个 Provider 的内容。
-                    ProviderEditScreen(
-                        providerId = editProviderId,
-                        onBackClick = {
-                            isEditing = false
-                            editProviderId = null
-                        },
-                        onSaved = {
-                            val savedId = editProviderId
-                            isEditing = false
-                            editProviderId = null
-                            if (savedId != null) {
-                                selectedProviderId = savedId
-                            }
-                        }
-                    )
-                }
-                selectedModelId != null -> key(selectedModelId) {
-                    ModelDetailScreen(
-                        modelId = selectedModelId!!,
-                        onBackClick = { selectedModelId = null },
-                        onSaved = {
-                            modelSavedMessage = true
-                            selectedModelId = null
-                        },
-                        onDeleted = { selectedModelId = null }
-                    )
-                }
-                selectedProviderId != null -> key(selectedProviderId) {
-                    ProviderDetailScreen(
-                        providerId = selectedProviderId!!,
-                        onBackClick = { selectedProviderId = null },
-                        onModelClick = { model ->
-                            selectedModelId = model.id
-                        },
-                        onEditProviderClick = {
-                            editProviderId = selectedProviderId
-                            isEditing = true
-                        },
-                        showModelSavedMessage = modelSavedMessage,
-                        onModelSavedMessageShown = { modelSavedMessage = false }
-                    )
-                }
-                else -> EmptyState(
-                    icon = Icons.Default.Dns,
-                    message = stringResource(Res.string.providers_select_to_view),
-                    modifier = Modifier.fillMaxSize()
+    }
+    val detailContent: @Composable () -> Unit = {
+        when {
+            isEditing -> key(editProviderId) {
+                ProviderEditScreen(
+                    providerId = editProviderId,
+                    onBackClick = navigateBack,
+                    onSaved = {
+                        val savedId = editProviderId
+                        isEditing = false
+                        editProviderId = null
+                        if (savedId != null) selectedProviderId = savedId
+                    }
                 )
             }
+            selectedModelId != null -> key(selectedModelId) {
+                ModelDetailScreen(
+                    modelId = selectedModelId!!,
+                    onBackClick = navigateBack,
+                    onSaved = {
+                        modelSavedMessage = true
+                        selectedModelId = null
+                    },
+                    onDeleted = { selectedModelId = null }
+                )
+            }
+            selectedProviderId != null -> key(selectedProviderId) {
+                ProviderDetailScreen(
+                    providerId = selectedProviderId!!,
+                    onBackClick = navigateBack,
+                    onModelClick = { model -> selectedModelId = model.id },
+                    onEditProviderClick = {
+                        editProviderId = selectedProviderId
+                        isEditing = true
+                    },
+                    showModelSavedMessage = modelSavedMessage,
+                    onModelSavedMessageShown = { modelSavedMessage = false }
+                )
+            }
+            else -> EmptyState(
+                icon = Icons.Default.Dns,
+                message = stringResource(Res.string.providers_select_to_view),
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+
+    if (dualPane) {
+        Row(modifier = modifier.fillMaxSize()) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxHeight().width(360.dp),
+                content = listContent
+            )
+            VerticalDivider(
+                modifier = Modifier.fillMaxHeight(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxHeight().weight(1f),
+                content = detailContent
+            )
+        }
+    } else {
+        Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
+            if (isEditing || selectedProviderId != null || selectedModelId != null) detailContent()
+            else listContent()
         }
     }
 }
