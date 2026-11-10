@@ -59,7 +59,7 @@ the turn and wakes any pending tool host with a cancellation result.
 
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 
-Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode`, `Store` or
+Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode`, `Store`, `SessionSettings` or
 `Error`. Catalog sessions include `projectId` (nullable) and `updatedAt`
 (milliseconds since the Unix epoch, or 0 for legacy ACP sessions). Prompt commands stream the turn events above, ending in `Finished`,
 `Cancelled` or `Error`. The device sends `UserMessagePersisted {messageId}`
@@ -78,3 +78,19 @@ Core no longer needs the process. See [ACP.md](ACP.md) for the endpoint pair.
 `Store {items:[...]}`. ACP catalog agents include descriptions and omit disabled
 profiles. Local ACP sessions also appear in the normal conversation list endpoints;
 these are projections of local transcripts and never create Cloud sync rows.
+
+ACP `sessionSettings {sessionId}` restores the Agent if necessary and returns
+`SessionSettings {settings:{configOptions,modes?}}`. `setSessionConfig` uses either
+`{sessionId,configId,value}` (opaque select ID or boolean), or `{sessionId,modeId}`
+for legacy modes. These commands reserve the session and reject active turns.
+The Agent's response is authoritative: replace the full config option list after
+a successful request, and preserve current settings on rejection. Agent
+`config_option_update` / `current_mode_update` notifications update the snapshot;
+during a turn they also emit `SessionSettings`. ACP terminal turn events include
+the latest `settings`. Config changes time out after 30 seconds; cancellation
+discards that worker so later reads restore actual Agent state.
+
+ACP history rows include `timestamp` and optional `events` (thought/tool events).
+`ToolUpdate.update` preserves Agent input, output, content and partial updates.
+Native history pages contain complete local rows; Cloud control pages remain
+bounded previews, with `eventsTruncated:true` if an oversized tool trace is omitted.

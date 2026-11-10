@@ -510,4 +510,6 @@
     <string name="acp_remote_control">远程控制</string>
     <string name="acp_agent_suffix">ACP Agent</string>
     <string name="integrations_empty">暂无配置</string>
+    <string name="acp_no_session_settings">此 Agent 未提供会话设置。</string>
+    <string name="acp_session_mode">模式</string>
 </resources>

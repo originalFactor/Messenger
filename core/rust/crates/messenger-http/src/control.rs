@@ -126,6 +126,13 @@ pub(crate) async fn set_settings(
 enum Command {
     Catalog,
     Store { kind: String },
+    SessionSettings { session_id: String },
+    SetSessionConfig {
+        session_id: String,
+        config_id: Option<String>,
+        value: Option<Value>,
+        mode_id: Option<String>,
+    },
     History {
         session_id: String,
         before: Option<String>,
@@ -387,6 +394,20 @@ async fn execute(
                 "sessions":sessions.chain(external).collect::<Vec<_>>() }),
             )
         }
+        Command::SessionSettings { session_id } => {
+            let record = state.external.record(&state.store, &session_id)?;
+            scope.workspace(&state, record.project.as_deref())?;
+            state.external.settings(&state, &session_id, None, &cancel).await
+        }
+        Command::SetSessionConfig { session_id, config_id, value, mode_id } => {
+            if config_id.is_some() == mode_id.is_some() {
+                return Err(ApiError::BadRequest("Supply either configId/value or modeId.".into()));
+            }
+            let change = json!({"configId":config_id,"value":value,"modeId":mode_id});
+            let record = state.external.record(&state.store, &session_id)?;
+            scope.workspace(&state, record.project.as_deref())?;
+            state.external.settings(&state, &session_id, Some(change), &cancel).await
+        }
         Command::History { session_id, before } => {
             let mut writable = None;
             let mut rows = if session_id.starts_with("acp:") {
@@ -414,10 +435,16 @@ async fn execute(
             let mut messages = Vec::new();
             let mut encoded_size = 0;
             for mut row in rows.into_iter().rev().take(20) {
-                row["text"] = json!(short(row["text"].as_str().unwrap_or_default(), 36_000));
-                encoded_size += row.to_string().len();
-                if encoded_size > 235_000 {
-                    break;
+                if matches!(scope, ControlScope::Remote) {
+                    row["text"] = json!(short(row["text"].as_str().unwrap_or_default(), 36_000));
+                    // Native history retains the full transcript. Cloud relay history remains a
+                    // bounded preview; an oversized tool trace must not stall the page cursor.
+                    if row.to_string().len() > 235_000 {
+                        row.as_object_mut().unwrap().remove("events");
+                        row["eventsTruncated"] = json!(true);
+                    }
+                    encoded_size += row.to_string().len();
+                    if encoded_size > 235_000 { break; }
                 }
                 messages.push(row);
             }

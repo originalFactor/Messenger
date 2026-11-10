@@ -840,12 +840,15 @@ components:
       type: object
       required: [action]
       properties:
-        action: { type: string, enum: [catalog, create, history, setMode, prompt, store] }
+        action: { type: string, enum: [catalog, create, history, setMode, prompt, store, sessionSettings, setSessionConfig] }
         kind: { type: string, enum: [acp, mcp], description: Integration Store category (requires Cloud sign-in). }
         agentId: { type: string }
         projectId: { type: [string, "null"], description: Required when creating an ACP session. }
         sessionId: { type: string }
         before: { type: [string, "null"] }
+        configId: { type: string, description: Agent-provided configuration ID for setSessionConfig. }
+        value: { type: [string, boolean], description: Agent-provided selection ID or boolean value. }
+        modeId: { type: string, description: Legacy Agent mode ID (mutually exclusive with configId). }
         writable: { type: boolean }
         text: { type: string }
     ChatRequest:

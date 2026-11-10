@@ -150,9 +150,9 @@ fun ChatDocumentBubble(
 
         // Both trailing labels start at the bubble's left edge: the avatar (32
         // dp) plus its gap (8 dp) inside the padded row.
-        if (isError) {
+        if (isError && onRetryClick != null) {
             TextButton(
-                onClick = { onRetryClick?.invoke() },
+                onClick = { onRetryClick() },
                 modifier = Modifier.padding(start = 40.dp, top = 2.dp)
             ) {
                 Text(

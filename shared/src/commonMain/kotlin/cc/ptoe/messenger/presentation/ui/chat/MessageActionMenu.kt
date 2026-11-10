@@ -55,7 +55,8 @@ fun MessageActionMenu(
     onCopyClick: () -> Unit,
     onRegenerateClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    allowMessageMutation: Boolean = true
 ) {
     if (!isVisible) return
 
@@ -87,7 +88,7 @@ fun MessageActionMenu(
                     }
                 }
             )
-            if (messageRole == MessageRole.ASSISTANT) {
+            if (allowMessageMutation && messageRole == MessageRole.ASSISTANT) {
                 ListItem(
                     headlineContent = { Text(stringResource(Res.string.action_regenerate)) },
                     leadingContent = {
@@ -104,7 +105,7 @@ fun MessageActionMenu(
                     }
                 )
             }
-            ListItem(
+            if (allowMessageMutation) ListItem(
                 headlineContent = { Text(stringResource(Res.string.action_delete)) },
                 leadingContent = {
                     Icon(
@@ -131,7 +132,8 @@ fun MessageContextMenu(
     onCopyClick: () -> Unit,
     onRegenerateClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    allowMessageMutation: Boolean = true
 ) {
     CursorDropdownMenu(state = state, onDismiss = onDismiss) {
         DropdownMenuItem(
@@ -147,7 +149,7 @@ fun MessageContextMenu(
                 onCopyClick()
             }
         )
-        if (messageRole == MessageRole.ASSISTANT) {
+        if (allowMessageMutation && messageRole == MessageRole.ASSISTANT) {
             DropdownMenuItem(
                 text = { Text(stringResource(Res.string.action_regenerate)) },
                 leadingIcon = {
@@ -162,7 +164,7 @@ fun MessageContextMenu(
                 }
             )
         }
-        DropdownMenuItem(
+        if (allowMessageMutation) DropdownMenuItem(
             text = { Text(stringResource(Res.string.action_delete)) },
             leadingIcon = {
                 Icon(

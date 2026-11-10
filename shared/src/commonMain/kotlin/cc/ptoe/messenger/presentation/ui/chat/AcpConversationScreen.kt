@@ -1,21 +1,32 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.data.util.ioDispatcher
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.Message
+import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.generated.resources.*
+import cc.ptoe.messenger.presentation.platform.copyTextToClipboard
+import cc.ptoe.messenger.presentation.platform.showPlatformToast
 import cc.ptoe.messenger.presentation.ui.acp.*
+import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.utils.WindowSizeClass
+import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,148 +36,190 @@ import org.jetbrains.compose.resources.stringResource
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, showBackButton: Boolean, modifier: Modifier = Modifier) {
-    val core = AppContainerHolder.instance.coreBridge
+    val container = AppContainerHolder.instance
+    val core = container.coreBridge
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val list = rememberLazyListState()
-    var title by remember { mutableStateOf("ACP") }
+    val userAvatar by container.appPreferences.userAvatar.collectAsState(initial = null)
+    var title by remember { mutableStateOf("") }
+    var historyTimestamp by remember { mutableStateOf(currentTimeMillis()) }
+    var agentName by remember { mutableStateOf("ACP") }
     var history by remember { mutableStateOf(emptyList<JsonObject>()) }
     var before by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf(TextFieldValue("")) }
-    var thought by remember { mutableStateOf("") }
-    var thoughtExpanded by remember { mutableStateOf(false) }
     var partial by remember { mutableStateOf("") }
+    var events by remember { mutableStateOf(emptyList<JsonObject>()) }
+    var liveId by remember { mutableStateOf<String?>(null) }
+    var liveTimestamp by remember { mutableStateOf(0L) }
     var active by remember { mutableStateOf("") }
-    var loadingOlder by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf("") }
-    var tools by remember { mutableStateOf(emptyList<JsonObject>()) }
+    var error by remember { mutableStateOf<JsonObject?>(null) }
     var permission by remember { mutableStateOf<JsonObject?>(null) }
+    var selectedMessage by remember { mutableStateOf<Message?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var settingsBusy by remember { mutableStateOf(false) }
+    var settingsError by remember { mutableStateOf<String?>(null) }
+    var settings by remember { mutableStateOf(buildJsonObject {}) }
     val endedEarly = stringResource(Res.string.acp_stream_ended)
+    val copied = stringResource(Res.string.chat_copied_toast)
     fun report(message: String) {
-        error = message
+        error = buildJsonObject {
+            put("id", "screen-error"); put("role", "assistant"); put("text", message)
+            put("status", "error"); put("timestamp", currentTimeMillis())
+        }
         scope.launch { snackbar.showSnackbar(message) }
     }
     suspend fun loadHistory(cursor: String = "") {
         val result = requestAcp(core, "history") { put("sessionId", sessionId); if (cursor.isNotEmpty()) put("before", cursor) }
         history = result.objects("messages") + if (cursor.isEmpty()) emptyList() else history
         before = result.text("before")
+        withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let {
+            val conversation = Json.parseToJsonElement(it).jsonObject
+            title = conversation.text("title")
+            historyTimestamp = (conversation["updated_at"] as? JsonPrimitive)?.longOrNull?.takeIf { timestamp -> timestamp > 0 } ?: historyTimestamp
+        }
+    }
+    fun readSettings(change: JsonObject? = null) {
+        settingsBusy = true
+        settingsError = null
+        scope.launch {
+            try {
+                val result = requestAcp(core, if (change == null) "sessionSettings" else "setSessionConfig") {
+                    put("sessionId", sessionId)
+                    change?.forEach { (key, value) -> put(key, value) }
+                }
+                settings = result["settings"] as? JsonObject ?: buildJsonObject {}
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) {
+                settingsError = failure.message.orEmpty()
+                report(failure.message.orEmpty())
+            } finally { settingsBusy = false }
+        }
     }
     LaunchedEffect(sessionId) {
         try {
-            withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { title = Json.parseToJsonElement(it).jsonObject.text("title") }
             loadHistory()
+            val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
+            val profileId = row?.text("agent_id")?.removePrefix("acp:")
+            agentName = core.controlSettings().objects("agents").firstOrNull { it.text("id") == profileId }?.text("name") ?: "ACP"
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { report(failure.message.orEmpty())
         } finally { loading = false }
     }
-    LaunchedEffect(history.size, partial.length) {
-        if (!loadingOlder && (history.isNotEmpty() || partial.isNotEmpty())) list.animateScrollToItem((list.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
-    }
-    Scaffold(modifier = modifier.fillMaxSize(), snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { TopAppBar(title = { Column { Text(title, maxLines = 1); Text("ACP", style = MaterialTheme.typography.labelMedium) } }, navigationIcon = {
-            if (showBackButton) IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) }
-        }) }, bottomBar = {
-            ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = false,
-                onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
-                onSendClick = {
-                    if (!loading && active.isEmpty() && draft.text.isNotBlank()) {
-                        val text = draft.text
-                        val requestId = randomUuid()
-                        active = requestId
-                        error = ""; partial = ""; thought = ""; tools = emptyList()
-                        scope.launch {
-                            var terminal = false
-                            try {
-                                core.controlCommand(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text) }) { event ->
-                                    when (event.text("type")) {
-                                        "TurnStarted" -> {
-                                            draft = TextFieldValue("")
-                                            history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("status", "sent") }
+    val agent = remember(agentName) { Agent("acp", agentName, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
+    val rows = history + listOfNotNull(liveId?.let { id -> buildJsonObject {
+        put("id", id); put("role", "assistant"); put("text", partial); put("status", if (active.isEmpty()) "sent" else "sending")
+        put("timestamp", liveTimestamp); put("events", JsonArray(events))
+    } }, error?.takeUnless { local -> history.lastOrNull()?.let { it.text("status") == "error" && it.text("text") == local.text("text") } == true })
+    val messages = remember(rows, historyTimestamp) { acpChatMessages(sessionId, rows, historyTimestamp) }
+    val chatItems = remember(messages) { buildChatItems(messages) }
+    val liveContent = messages.firstOrNull { it.id == liveId }?.content
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val contextMenus = windowSizeClassFor(maxWidth) != WindowSizeClass.Compact
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                TopAppBar(
+                    title = { Row(verticalAlignment = Alignment.CenterVertically) {
+                        AgentAvatar(avatar = null, size = 36.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text(title.ifBlank { stringResource(Res.string.chat_title_default) }, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1)
+                            Text(agentName, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        }
+                    } },
+                    navigationIcon = { if (showBackButton) IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) } },
+                    actions = {
+                        TooltipBox(positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above), tooltip = { PlainTooltip { Text(stringResource(Res.string.conversation_settings_title)) } }, state = rememberTooltipState()) {
+                            IconButton(enabled = active.isEmpty() && !settingsBusy && !loading, onClick = { showSettings = true; readSettings() }) {
+                                Icon(Icons.Default.Settings, stringResource(Res.string.conversation_settings_title))
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                )
+            },
+            bottomBar = {
+                Column(Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding().imePadding()) {
+                    permission?.let { event ->
+                        Card(Modifier.fillMaxWidth().padding(12.dp)) { Column(Modifier.padding(12.dp)) {
+                            Text(stringResource(Res.string.acp_permission), style = MaterialTheme.typography.titleMedium)
+                            (event["tool"] as? JsonObject)?.let { tool ->
+                                Text(tool.text("title"), style = MaterialTheme.typography.titleSmall)
+                                if (tool.text("detail").isNotBlank()) Text(tool.text("detail"), style = MaterialTheme.typography.bodySmall)
+                            }
+                            event.objects("options").forEach { option ->
+                                TextButton(onClick = { scope.launch {
+                                    try { core.controlPermission(active, option.text("id")); permission = null }
+                                    catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (failure: Exception) { report(failure.message.orEmpty()) }
+                                } }) { Text(option.text("name")) }
+                            }
+                        } }
+                    }
+                    ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = false,
+                        onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
+                        onSendClick = {
+                            if (!loading && !settingsBusy && active.isEmpty() && draft.text.isNotBlank()) {
+                                val text = draft.text
+                                val requestId = randomUuid()
+                                active = requestId
+                                error = null; partial = ""; events = emptyList()
+                                scope.launch {
+                                    var terminal = false
+                                    try {
+                                        core.controlCommand(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text) }) { event ->
+                                            (event["settings"] as? JsonObject)?.let { settings = it }
+                                            when (event.text("type")) {
+                                                "TurnStarted" -> {
+                                                    draft = TextFieldValue("")
+                                                    liveTimestamp = currentTimeMillis()
+                                                    liveId = randomUuid()
+                                                    history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("status", "sent"); put("timestamp", liveTimestamp) }
+                                                }
+                                                "TextDelta" -> partial += event.text("text")
+                                                "ThoughtDelta", "ToolUpdate" -> events = events + event
+                                                "Permission" -> permission = event
+                                                "Finished", "Cancelled" -> terminal = true
+                                                "Error" -> { terminal = true; report(event.errorDetail()) }
+                                            }
                                         }
-                                        "TextDelta" -> partial += event.text("text")
-                                        "ThoughtDelta" -> thought += event.text("text")
-                                        "ToolUpdate" -> {
-                                            val update = event["update"]?.jsonObject ?: event
-                                            val id = update.text("toolCallId").ifBlank { update.text("id") }
-                                            tools = if (id.isBlank()) tools + update else tools.filterNot { it.text("toolCallId").ifBlank { it.text("id") } == id } + update
-                                        }
-                                        "Permission" -> permission = event
-                                        "Finished", "Cancelled" -> terminal = true
-                                        "Error" -> { terminal = true; report(event.errorDetail()) }
-                                    }
+                                        if (!terminal) report(endedEarly)
+                                        loadHistory()
+                                        liveId = null
+                                    } catch (cancelled: CancellationException) { throw cancelled
+                                    } catch (failure: Exception) { report(failure.message.orEmpty())
+                                    } finally { active = ""; permission = null }
                                 }
-                                if (!terminal) report(endedEarly)
-                                loadHistory()
-                                partial = ""
-                            } catch (cancelled: CancellationException) { throw cancelled
-                            } catch (failure: Exception) { report(failure.message.orEmpty())
-                            } finally { active = ""; permission = null }
-                        }
-                    }
-                }, modifier = Modifier.imePadding())
-        }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (before.isNotEmpty()) item {
-                    TextButton(enabled = !loading && active.isEmpty(), onClick = {
-                        loading = true
-                        loadingOlder = true
-                        scope.launch { try { loadHistory(before) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } finally { loading = false; loadingOlder = false } }
-                    }) { Text(stringResource(Res.string.acp_older_messages)) }
+                            }
+                        })
                 }
-                items(history, key = { it.text("id") }) { message ->
-                    Surface(color = if (message.text("role") == "user") MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
-                        if (message.text("status") == "error") Text(message.text("text"), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
-                        else ChatMarkdownText(message.text("text"), false, Modifier.padding(16.dp))
-                    }
-                }
-                if (thought.isNotEmpty()) item {
-                    Card(Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { thoughtExpanded = !thoughtExpanded }) { Text(stringResource(Res.string.providers_model_supports_thinking)) }
-                        if (thoughtExpanded) ChatMarkdownText(thought, active.isNotEmpty(), Modifier.padding(12.dp))
-                    }
-                }
-                items(tools) { update ->
-                    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) {
-                        Text(update.text("title").ifBlank { update.text("toolCallId") }, style = MaterialTheme.typography.titleSmall)
-                        Text(update.text("status"), style = MaterialTheme.typography.labelSmall)
-                        update["content"]?.let { content ->
-                            val text = acpContentText(content)
-                            if (text.isNotBlank()) ChatMarkdownText(text, false, Modifier.fillMaxWidth())
-                        }
-                    } }
-                }
-                if (partial.isNotEmpty()) item { ChatMarkdownText(partial, true, Modifier.fillMaxWidth()) }
-                if (error.isNotEmpty()) item { Text(error, color = MaterialTheme.colorScheme.error) }
             }
-            permission?.let { event ->
-                Card(Modifier.fillMaxWidth().padding(12.dp)) { Column(Modifier.padding(12.dp)) {
-                    Text(stringResource(Res.string.acp_permission), style = MaterialTheme.typography.titleMedium)
-                    event["tool"]?.let { Text(it.toString(), style = MaterialTheme.typography.bodySmall) }
-                    event.objects("options").forEach { option ->
-                        TextButton(onClick = { scope.launch {
-                            try { core.controlPermission(active, option.text("id")); permission = null }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (failure: Exception) { report(failure.message.orEmpty()) }
-                        } }) { Text(option.text("name")) }
-                    }
-                } }
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.surface)) {
+                if (messages.isEmpty() && loading) CircularProgressIndicator(Modifier.align(Alignment.Center))
+                else if (messages.isEmpty()) EmptyChatState(null, agentName, Modifier.align(Alignment.Center))
+                else ChatMessageList(
+                    chatItems = chatItems, isGenerating = active.isNotEmpty(), streamingContent = liveContent, streamingMessageId = liveId, streamingDiff = null,
+                    agent = agent, userAvatar = userAvatar, enableContextMenu = contextMenus, copiedToastText = copied,
+                    onRetryClick = {}, onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false,
+                    onCopyClick = ::copyTextToClipboard, onMessageLongClick = { selectedMessage = it },
+                    hasOlderMessages = before.isNotEmpty(), isLoadingHistory = loading,
+                    onLoadOlderMessages = {
+                        if (!loading && active.isEmpty()) {
+                            loading = true
+                            scope.launch { try { loadHistory(before) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } finally { loading = false } }
+                        }
+                    }, modifier = Modifier.fillMaxSize()
+                )
             }
         }
+        if (!contextMenus) MessageActionMenu(
+            isVisible = selectedMessage != null, onDismiss = { selectedMessage = null }, messageRole = selectedMessage?.role ?: MessageRole.USER,
+            onCopyClick = { selectedMessage?.content?.let { copyTextToClipboard(it); showPlatformToast(copied) } },
+            onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false
+        )
+        if (showSettings) AcpSessionSettingsDialog(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
     }
-}
-
-private fun acpContentText(content: JsonElement): String = when (content) {
-    is JsonArray -> content.joinToString("\n\n") { acpContentText(it) }
-    is JsonObject -> when (content.text("type")) {
-        "text" -> content.text("text")
-        "diff" -> "`${content.text("path")}`\n```diff\n" +
-            content.text("oldText").lines().joinToString("\n") { "-$it" } + "\n" +
-            content.text("newText").lines().joinToString("\n") { "+$it" } + "\n```"
-        else -> content["content"]?.let { acpContentText(it) } ?: content.text("text")
-    }
-    else -> (content as? JsonPrimitive)?.contentOrNull.orEmpty()
 }

@@ -5,6 +5,25 @@ import sys
 mode = sys.argv[1]
 session_id = "fixture-session"
 pending = None
+permissions = "read-only"
+current_mode = "plan"
+
+
+def session_settings():
+    return {
+        "configOptions": [
+            {"id": "permissions", "name": "Permissions", "type": "select", "category": "permission",
+             "currentValue": permissions, "options": [
+                 {"group": "permissions", "name": "Access", "options": [
+                     {"value": "read-only", "name": "Read only"},
+                     {"value": "workspace-write", "name": "Workspace write"},
+                     {"value": "full-access", "name": "Full access"}]}]},
+            {"id": "network", "name": "Network", "type": "boolean", "currentValue": False}
+        ],
+        "modes": {"currentModeId": current_mode, "availableModes": [
+            {"id": "plan", "name": "Plan"}, {"id": "code", "name": "Code"}]}
+    }
+
 
 
 def send(**packet):
@@ -23,22 +42,49 @@ for line in sys.stdin:
     request_id = packet.get("id")
     method = packet.get("method")
     if method == "initialize":
-        capabilities = {"loadSession": mode == "load"}
+        capabilities = {"loadSession": mode in ("load", "settings", "settings-hang")}
         if mode == "resume":
             capabilities["sessionCapabilities"] = {"resume": {}}
         send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities})
     elif method == "session/new":
-        send(id=request_id, result={"sessionId": session_id})
+        send(id=request_id, result={"sessionId": session_id, **(session_settings() if mode.startswith("settings") else {})})
     elif method == "session/load":
         update("user_message_chunk", "replayed question")
         update("agent_message_chunk", "replayed answer")
+        send(id=request_id, result=session_settings() if mode.startswith("settings") else {})
+    elif method == "session/set_config_option":
+        params = packet["params"]
+        if mode == "settings-hang" and params.get("value") == "full-access":
+            continue  # Deliberately unanswered request for cancellation coverage.
+        if params["configId"] == "network":
+            send(id=request_id, error={"code": -32000, "message": "Network access is unavailable"})
+        else:
+            permissions = "workspace-write" if params["value"] == "full-access" else params["value"]
+            send(id=request_id, result={"configOptions": session_settings()["configOptions"]})
+    elif method == "session/set_mode":
+        current_mode = packet["params"]["modeId"]
+        send(method="session/update", params={"sessionId": session_id, "update": {
+            "sessionUpdate": "current_mode_update", "currentModeId": current_mode}})
         send(id=request_id, result={})
     elif method == "session/resume":
         send(id=request_id, result={})
     elif method == "session/prompt":
         pending = request_id
         text = packet["params"]["prompt"][0]["text"]
-        if text == "wait":
+        if text == "tools" and mode == "settings":
+            update("agent_thought_chunk", "Inspect the file")
+            send(method="session/update", params={"sessionId": session_id, "update": {
+                "sessionUpdate": "tool_call", "toolCallId": "read-file", "title": "Read file",
+                "status": "in_progress", "rawInput": {"path": "sample.txt"}}})
+            send(method="session/update", params={"sessionId": session_id, "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": "read-file", "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "file content"}}]}})
+            permissions = "workspace-write"
+            send(method="session/update", params={"sessionId": session_id, "update": {
+                "sessionUpdate": "config_option_update", "configOptions": session_settings()["configOptions"]}})
+            update("agent_message_chunk", "Read complete")
+            send(id=pending, result={"stopReason": "end_turn"})
+        elif text == "wait":
             update("agent_message_chunk", "partial")
         else:
             send(id="permission", method="session/request_permission", params={

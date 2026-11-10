@@ -82,12 +82,25 @@ pub(crate) struct Record {
     pub messages: Vec<Value>,
 }
 
+#[derive(Clone)]
+struct Worker {
+    requests: mpsc::Sender<WorkerRequest>,
+    lifetime: CancellationToken,
+    output: Arc<Mutex<Output>>,
+}
+
+enum WorkerRequest {
+    Prompt(Prompt),
+    Configure { change: Value, done: oneshot::Sender<Result<(), String>> },
+}
+
 struct Prompt {
     text: String,
     cancel: CancellationToken,
     permissions: mpsc::Receiver<String>,
     updates: mpsc::Sender<Value>,
     answer: Arc<std::sync::Mutex<String>>,
+    transcript: Arc<std::sync::Mutex<Vec<Value>>>,
     done: oneshot::Sender<Value>,
 }
 
@@ -96,18 +109,20 @@ struct LiveTurn {
     permissions: Arc<Mutex<mpsc::Receiver<String>>>,
     updates: mpsc::Sender<Value>,
     answer: Arc<std::sync::Mutex<String>>,
+    transcript: Arc<std::sync::Mutex<Vec<Value>>>,
 }
 
 #[derive(Default)]
 struct Output {
     replay: Option<Vec<Value>>,
     turn: Option<LiveTurn>,
+    settings: Value,
 }
 
 #[derive(Default)]
 pub(crate) struct ExternalSessions {
     records: std::sync::Mutex<()>,
-    workers: Mutex<HashMap<String, mpsc::Sender<Prompt>>>,
+    workers: Mutex<HashMap<String, Worker>>,
 }
 
 impl ExternalSessions {
@@ -250,7 +265,6 @@ impl ExternalSessions {
         updates: mpsc::Sender<Value>,
     ) -> Result<Value, ApiError> {
         let mut record = self.record(&state.store, id)?;
-        let profile = profile_for(state, &record.profile)?;
         if let Some(project) = crate::control::local_workspace(state, record.project.as_deref())? {
             if PathBuf::from(&project.workspace) != record.cwd {
                 return Err(ApiError::BadRequest(
@@ -258,27 +272,8 @@ impl ExternalSessions {
                 ));
             }
         }
-        let previous = self.workers.lock().await.get(id).cloned();
-        let worker = if let Some(worker) = previous.filter(|worker| !worker.is_closed()) {
-            worker
-        } else {
-            let (worker, _, replay) = start_worker(
-                state,
-                profile,
-                record.cwd.clone(),
-                Some(record.agent_session.clone()),
-                &cancel,
-            )
-            .await?;
-            if let Some(replay) = replay {
-                record.messages = replay;
-            }
-            self.workers
-                .lock()
-                .await
-                .insert(id.to_owned(), worker.clone());
-            worker
-        };
+        let (worker, replay) = self.worker(state, &record, &cancel).await?;
+        if let Some(replay) = replay { record.messages = replay; }
         if cancel.is_cancelled() {
             return Ok(json!({"type":"Cancelled"}));
         }
@@ -289,6 +284,7 @@ impl ExternalSessions {
         self.save(&state.store, record.clone())?;
         let (done, reply) = oneshot::channel();
         let answer = Arc::new(std::sync::Mutex::new(String::new()));
+        let transcript = Arc::new(std::sync::Mutex::new(Vec::new()));
         let _ = updates.send(json!({"type":"TurnStarted"})).await;
         let job = Prompt {
             text,
@@ -296,9 +292,10 @@ impl ExternalSessions {
             permissions,
             updates,
             answer: answer.clone(),
+            transcript: transcript.clone(),
             done,
         };
-        let outcome = if worker.send(job).await.is_ok() {
+        let outcome = if worker.requests.send(WorkerRequest::Prompt(job)).await.is_ok() {
             reply.await.ok()
         } else {
             None
@@ -307,8 +304,11 @@ impl ExternalSessions {
             || json!({"type":"Error","code":"agent_exited","message":"The ACP agent exited."}),
         );
         let answer = std::mem::take(&mut *answer.lock().unwrap());
-        if !answer.is_empty() {
-            record.messages.push(message("assistant", &answer, "sent"));
+        let events = std::mem::take(&mut *transcript.lock().unwrap());
+        if !answer.is_empty() || !events.is_empty() {
+            let mut row = message("assistant", &answer, "sent");
+            row["events"] = json!(events);
+            record.messages.push(row);
         }
         if result["type"] == "Error" {
             record.messages.push(message(
@@ -318,12 +318,66 @@ impl ExternalSessions {
             ));
         }
         self.save(&state.store, record)?;
+        let settings = worker.output.lock().await.settings.clone();
+        let mut result = result;
+        result["settings"] = settings;
         Ok(result)
+    }
+
+    async fn worker(&self, state: &ApiState, record: &Record, cancel: &CancellationToken) -> Result<(Worker, Option<Vec<Value>>), ApiError> {
+        let profile = profile_for(state, &record.profile)?;
+        if let Some(worker) = self.workers.lock().await.get(&record.id).cloned().filter(|worker| !worker.requests.is_closed()) {
+            return Ok((worker, None));
+        }
+        let (worker, _, replay) = start_worker(state, profile, record.cwd.clone(), Some(record.agent_session.clone()), cancel).await?;
+        self.workers.lock().await.insert(record.id.clone(), worker.clone());
+        Ok((worker, replay))
+    }
+
+    pub async fn settings(&self, state: &ApiState, id: &str, change: Option<Value>, cancel: &CancellationToken) -> Result<Value, ApiError> {
+        {
+            let mut active = state.active_turns.lock().await;
+            if active.contains_key(id) {
+                return Err(ApiError::Conflict { code: "turn_in_progress".into(), message: "Wait for the ACP turn to finish before changing session settings.".into() });
+            }
+            active.insert(id.to_owned(), cancel.clone());
+        }
+        let result = async {
+            let record = self.record(&state.store, id)?;
+            let project = crate::control::local_workspace(state, record.project.as_deref())?;
+            if project.as_ref().is_some_and(|project| PathBuf::from(&project.workspace) != record.cwd) {
+                return Err(ApiError::BadRequest("the ACP session workspace has moved".into()));
+            }
+            let (worker, _) = self.worker(state, &record, cancel).await?;
+            if let Some(change) = change {
+                let (done, result) = oneshot::channel();
+                worker.requests.send(WorkerRequest::Configure { change, done }).await.map_err(|_| ApiError::internal("The ACP agent exited."))?;
+                tokio::select! {
+                    result = result => result.map_err(ApiError::internal)?.map_err(ApiError::internal)?,
+                    _ = cancel.cancelled() => {
+                        // A configuration response may be ambiguous after cancellation. Drop this worker
+                        // so the next read obtains the agent's actual state through session restore.
+                        worker.lifetime.cancel();
+                        self.workers.lock().await.remove(id);
+                        return Err(ApiError::internal("ACP settings request cancelled"));
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                        worker.lifetime.cancel();
+                        self.workers.lock().await.remove(id);
+                        return Err(ApiError::internal("ACP settings request timed out"));
+                    }
+                }
+            }
+            let settings = worker.output.lock().await.settings.clone();
+            Ok(json!({"type":"SessionSettings","settings":settings}))
+        }.await;
+        state.active_turns.lock().await.remove(id);
+        result
     }
 }
 
 fn message(role: &str, text: &str, status: &str) -> Value {
-    json!({"id":Uuid::new_v4(),"role":role,"text":text,"status":status})
+    json!({"id":Uuid::new_v4(),"role":role,"text":text,"status":status,"timestamp":now_ms()})
 }
 
 fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
@@ -340,14 +394,15 @@ async fn start_worker(
     cwd: PathBuf,
     existing: Option<SessionId>,
     cancel: &CancellationToken,
-) -> Result<(mpsc::Sender<Prompt>, SessionId, Option<Vec<Value>>), ApiError> {
-    let (input, mut prompts) = mpsc::channel::<Prompt>(1);
+) -> Result<(Worker, SessionId, Option<Vec<Value>>), ApiError> {
+    let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
     let (ready, initialized) = oneshot::channel();
     let (failure, mut failed) = oneshot::channel();
     let lifetime = state.shutdown.child_token();
     let mut start_guard = Some(lifetime.clone().drop_guard());
     let transport = spawn_process(state, &profile, &cwd).await?;
     let output = Arc::new(Mutex::new(Output::default()));
+    let worker = Worker { requests: input, output: output.clone(), lifetime: lifetime.clone() };
     let notify_output = output.clone();
     let permission_output = output.clone();
     tokio::spawn(async move {
@@ -378,7 +433,11 @@ async fn start_worker(
                 ByteStreams::new(stdin.compat_write(), stdout.compat()),
                 async move |connection: ConnectionTo<Agent>| {
                     let init = connection
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                            ClientCapabilities::new().session(ClientSessionCapabilities::new().config_options(
+                                SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new())
+                            ))
+                        ))
                         .block_task()
                         .await?;
                     if init.protocol_version != ProtocolVersion::V1 {
@@ -395,16 +454,12 @@ async fn start_worker(
                                 .resume
                                 .is_some()
                             {
-                                connection
-                                    .send_request(ResumeSessionRequest::new(id.clone(), cwd))
-                                    .block_task()
-                                    .await?;
+                                let response = connection.send_request(ResumeSessionRequest::new(id.clone(), cwd)).block_task().await?;
+                                merge_settings(&mut output.lock().await.settings, serde_json::to_value(response).unwrap_or_default());
                             } else if init.agent_capabilities.load_session {
                                 output.lock().await.replay = Some(Vec::new());
-                                connection
-                                    .send_request(LoadSessionRequest::new(id.clone(), cwd))
-                                    .block_task()
-                                    .await?;
+                                let response = connection.send_request(LoadSessionRequest::new(id.clone(), cwd)).block_task().await?;
+                                merge_settings(&mut output.lock().await.settings, serde_json::to_value(response).unwrap_or_default());
                             } else {
                                 return Err(agent_client_protocol::Error::new(
                                     -32000,
@@ -414,11 +469,9 @@ async fn start_worker(
                             id
                         }
                         None => {
-                            connection
-                                .send_request(NewSessionRequest::new(cwd))
-                                .block_task()
-                                .await?
-                                .session_id
+                            let response = connection.send_request(NewSessionRequest::new(cwd)).block_task().await?;
+                            merge_settings(&mut output.lock().await.settings, serde_json::to_value(&response).unwrap_or_default());
+                            response.session_id
                         }
                     };
                     let replay = output.lock().await.replay.take();
@@ -429,9 +482,14 @@ async fn start_worker(
                             _ = connection.incoming_closed() => None,
                         };
                         let Some(prompt) = prompt else { break };
-                        let keep = run_prompt(&connection, &session, &output, prompt).await;
-                        if !keep {
-                            break;
+                        match prompt {
+                            WorkerRequest::Prompt(prompt) => {
+                                if !run_prompt(&connection, &session, &output, prompt).await { break; }
+                            }
+                            WorkerRequest::Configure { change, done } => {
+                                let result = configure(&connection, &session, &output, change).await;
+                                let _ = done.send(result);
+                            }
                         }
                     }
                     Ok(())
@@ -449,7 +507,7 @@ async fn start_worker(
             match result {
                 Ok((id, history)) => {
                     if let Some(guard) = start_guard.take() { guard.disarm(); }
-                    Ok((input, id, history))
+                    Ok((worker, id, history))
                 }
                 Err(_) => Err(ApiError::internal((&mut failed).await.unwrap_or_else(|_| "The ACP agent exited.".into()))),
             }
@@ -457,6 +515,44 @@ async fn start_worker(
         _ = cancel.cancelled() => Err(ApiError::internal("ACP session setup cancelled")),
         _ = tokio::time::sleep(Duration::from_secs(30)) => Err(ApiError::internal("ACP session setup timed out")),
     }
+}
+
+fn merge_settings(settings: &mut Value, update: Value) {
+    if !settings.is_object() { *settings = json!({"configOptions":[]}); }
+    for key in ["configOptions", "modes"] {
+        if let Some(value) = update.get(key) { settings[key] = value.clone(); }
+    }
+    if let Some(mode) = update.get("currentModeId") {
+        if settings["modes"].is_object() { settings["modes"]["currentModeId"] = mode.clone(); }
+    }
+}
+
+fn select_contains(options: &Value, value: &Value) -> bool {
+    options.as_array().is_some_and(|options| options.iter().any(|option| {
+        option.get("value") == Some(value) || select_contains(&option["options"], value)
+    }))
+}
+
+async fn configure(connection: &ConnectionTo<Agent>, session: &SessionId, output: &Mutex<Output>, change: Value) -> Result<(), String> {
+    let settings = output.lock().await.settings.clone();
+    if let Some(mode) = change["modeId"].as_str() {
+        let valid = settings["modes"]["availableModes"].as_array().is_some_and(|modes| modes.iter().any(|item| item["id"] == mode));
+        if !valid { return Err("This ACP session does not offer that mode.".into()); }
+        connection.send_request(SetSessionModeRequest::new(session.clone(), mode.to_owned())).block_task().await.map_err(|error| error.to_string())?;
+        output.lock().await.settings["modes"]["currentModeId"] = json!(mode);
+    } else {
+        let id = change["configId"].as_str().ok_or("Missing ACP configId")?;
+        let option = settings["configOptions"].as_array().and_then(|options| options.iter().find(|option| option["id"] == id)).ok_or("This ACP session does not offer that setting.")?;
+        let value = &change["value"];
+        let value = match option["type"].as_str() {
+            Some("select") if select_contains(&option["options"], value) => SessionConfigOptionValue::value_id(value.as_str().ok_or("Invalid select value")?.to_owned()),
+            Some("boolean") if value.is_boolean() => SessionConfigOptionValue::boolean(value.as_bool().unwrap()),
+            _ => return Err("Invalid value for this ACP session setting.".into()),
+        };
+        let response = connection.send_request(SetSessionConfigOptionRequest::new(session.clone(), id.to_owned(), value)).block_task().await.map_err(|error| error.to_string())?;
+        merge_settings(&mut output.lock().await.settings, serde_json::to_value(response).map_err(|error| error.to_string())?);
+    }
+    Ok(())
 }
 
 async fn run_prompt(
@@ -471,6 +567,7 @@ async fn run_prompt(
         permissions,
         updates,
         answer,
+        transcript,
         done,
     } = prompt;
     output.lock().await.turn = Some(LiveTurn {
@@ -478,6 +575,7 @@ async fn run_prompt(
         permissions: Arc::new(Mutex::new(permissions)),
         updates,
         answer,
+        transcript,
     });
     let request = connection
         .send_request(PromptRequest::new(
@@ -513,12 +611,34 @@ async fn handle_notification(output: &Mutex<Output>, event: SessionNotification)
     let kind = update["sessionUpdate"].as_str().unwrap_or_default();
     let text = update["content"]["text"].as_str().unwrap_or_default();
     let mut output = output.lock().await;
+    if kind == "config_option_update" || kind == "current_mode_update" {
+        merge_settings(&mut output.settings, update.clone());
+        if let Some(turn) = &output.turn {
+            let data = json!({"type":"SessionSettings","settings":output.settings});
+            let updates = turn.updates.clone();
+            let cancel = turn.cancel.clone();
+            drop(output);
+            tokio::select! { _ = updates.send(data) => {}, _ = cancel.cancelled() => {} }
+        }
+        return;
+    }
     if let Some(replay) = &mut output.replay {
         let role = match kind {
             "user_message_chunk" => "user",
-            "agent_message_chunk" => "assistant",
+            "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => "assistant",
             _ => return,
         };
+        if matches!(kind, "agent_thought_chunk" | "tool_call" | "tool_call_update") {
+            if !replay.last().is_some_and(|row| row["role"] == "assistant") {
+                replay.push(message("assistant", "", "sent"));
+            }
+            let row = replay.last_mut().unwrap();
+            if !row["events"].is_array() { row["events"] = json!([]); }
+            row["events"].as_array_mut().unwrap().push(if kind == "agent_thought_chunk" {
+                json!({"type":"ThoughtDelta","text":text})
+            } else { json!({"type":"ToolUpdate","update":update}) });
+            return;
+        }
         let message_id = update["messageId"].as_str();
         if let Some(last) = replay.last_mut().filter(|last| {
             last["role"] == role && (message_id.is_none() || last["id"].as_str() == message_id)
@@ -539,11 +659,10 @@ async fn handle_notification(output: &Mutex<Output>, event: SessionNotification)
         let data = match kind {
             "agent_message_chunk" => json!({"type":"TextDelta","text":text}),
             "agent_thought_chunk" => json!({"type":"ThoughtDelta","text":text}),
-            "tool_call" | "tool_call_update" => json!({"type":"ToolUpdate","update":{
-                "toolCallId":update["toolCallId"],"title":update["title"],"status":update["status"]
-            }}),
+            "tool_call" | "tool_call_update" => json!({"type":"ToolUpdate","update":update}),
             _ => return,
         };
+        if kind != "agent_message_chunk" { turn.transcript.lock().unwrap().push(data.clone()); }
         let updates = turn.updates.clone();
         let cancel = turn.cancel.clone();
         drop(output);
@@ -710,6 +829,80 @@ mod tests {
         state.active_turns.lock().await.remove(&session);
         state.external.delete_conversation(&state, &session, false).await.unwrap();
         assert!(state.external.record(&state.store, &session).is_err());
+        state.shutdown.cancel();
+    }
+
+    async fn settings_command(state: &ApiState, action: &str, change: Value, session: &str) -> Value {
+        let mut body = change;
+        body["action"] = json!(action);
+        body["sessionId"] = json!(session);
+        let response = router(state.clone()).oneshot(axum::http::Request::builder()
+            .uri(format!("/api/v1/control/commands/{}", Uuid::new_v4())).method("POST")
+            .header("authorization", "Bearer local").header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        serde_json::from_str(body.lines().find_map(|line| line.strip_prefix("data: ")).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn acp_settings_follow_agent_responses_notifications_and_rejections() {
+        let (state, session) = setup("settings").await;
+        let initial = settings_command(&state, "sessionSettings", json!({}), &session).await;
+        assert_eq!(initial["settings"]["configOptions"][0]["currentValue"], "read-only");
+        let changed = settings_command(&state, "setSessionConfig", json!({"configId":"permissions","value":"full-access"}), &session).await;
+        // The fixture normalizes full-access to workspace-write: use the response, never the request.
+        assert_eq!(changed["settings"]["configOptions"][0]["currentValue"], "workspace-write");
+        let rejected = settings_command(&state, "setSessionConfig", json!({"configId":"network","value":true}), &session).await;
+        assert_eq!(rejected["type"], "Error");
+        let unchanged = settings_command(&state, "sessionSettings", json!({}), &session).await;
+        assert_eq!(unchanged["settings"]["configOptions"][1]["currentValue"], false);
+        assert_eq!(unchanged["settings"]["configOptions"][0]["currentValue"], "workspace-write");
+        let mode = settings_command(&state, "setSessionConfig", json!({"modeId":"code"}), &session).await;
+        assert_eq!(mode["settings"]["modes"]["currentModeId"], "code");
+        let invalid = settings_command(&state, "setSessionConfig", json!({"configId":"permissions","value":"unknown"}), &session).await;
+        assert_eq!(invalid["type"], "Error");
+        state.active_turns.lock().await.insert(session.clone(), CancellationToken::new());
+        let busy = settings_command(&state, "setSessionConfig", json!({"modeId":"plan"}), &session).await;
+        assert_eq!(busy["code"], "turn_in_progress");
+        state.active_turns.lock().await.remove(&session);
+        state.external.workers.lock().await.remove(&session);
+        let restored = settings_command(&state, "sessionSettings", json!({}), &session).await;
+        assert_eq!(restored["settings"]["configOptions"][0]["currentValue"], "read-only", "restored agent is authoritative");
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn cancelling_acp_settings_releases_admission_and_restores_actual_values() {
+        let (state, session) = setup("settings-hang").await;
+        let cancel = CancellationToken::new();
+        let change = state.external.settings(&state, &session, Some(json!({"configId":"permissions","value":"full-access"})), &cancel);
+        let interrupt = async { tokio::time::sleep(Duration::from_millis(20)).await; cancel.cancel(); };
+        let (result, _) = tokio::join!(change, interrupt);
+        assert!(result.is_err());
+        assert!(!state.active_turns.lock().await.contains_key(&session));
+        let restored = state.external.settings(&state, &session, None, &CancellationToken::new()).await.unwrap();
+        assert_eq!(restored["settings"]["configOptions"][0]["currentValue"], "read-only");
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn acp_tool_and_thought_events_survive_reopening_history() {
+        let (state, session) = setup("settings").await;
+        let (_choices, permissions) = mpsc::channel(8);
+        let (updates, mut events) = mpsc::channel(32);
+        let result = state.external.prompt(&state, session.clone(), "tools".into(), CancellationToken::new(), permissions, updates).await.unwrap();
+        assert_eq!(result["type"], "Finished");
+        assert_eq!(result["settings"]["configOptions"][0]["currentValue"], "workspace-write");
+        let history = state.external.history(&state.store, &session).unwrap();
+        let events_saved = history.last().unwrap()["events"].as_array().unwrap();
+        assert_eq!(events_saved[0]["type"], "ThoughtDelta");
+        assert_eq!(events_saved[1]["update"]["rawInput"]["path"], "sample.txt");
+        assert_eq!(events_saved[2]["update"]["content"][0]["content"]["text"], "file content");
+        let mut settings_update = false;
+        while let Ok(event) = events.try_recv() { settings_update |= event["type"] == "SessionSettings"; }
+        assert!(settings_update, "agent-side changes must be forwarded while streaming");
         state.shutdown.cancel();
     }
 

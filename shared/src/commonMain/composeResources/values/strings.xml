@@ -511,4 +511,6 @@
     <string name="acp_remote_control">Remote control</string>
     <string name="acp_agent_suffix">ACP Agent</string>
     <string name="integrations_empty">No configurations yet</string>
+    <string name="acp_no_session_settings">This Agent does not provide session settings.</string>
+    <string name="acp_session_mode">Mode</string>
 </resources>

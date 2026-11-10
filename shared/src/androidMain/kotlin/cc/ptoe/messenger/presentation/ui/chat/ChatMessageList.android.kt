@@ -68,6 +68,7 @@ internal actual fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    allowMessageMutation: Boolean,
     hasOlderMessages: Boolean,
     isLoadingHistory: Boolean,
     onLoadOlderMessages: () -> Unit,
@@ -117,6 +118,7 @@ internal actual fun ChatMessageList(
                         onCopyClick = onCopyClick,
                         onRegenerateClick = onRegenerateClick,
                         onDeleteClick = onDeleteClick,
+                        allowMessageMutation = allowMessageMutation,
                     )
                     is ChatListItem.MessageItem -> MessageRow(
                         item = item,
@@ -132,6 +134,7 @@ internal actual fun ChatMessageList(
                         onCopyClick = onCopyClick,
                         onRegenerateClick = onRegenerateClick,
                         onDeleteClick = onDeleteClick,
+                        allowMessageMutation = allowMessageMutation,
                     )
                 }
             }
@@ -160,6 +163,7 @@ private fun ToolGroupRow(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    allowMessageMutation: Boolean,
 ) {
     val anchor = item.finalMessage ?: item.rounds.lastOrNull()
     val contextMenuState = rememberContextMenuState()
@@ -183,7 +187,7 @@ private fun ToolGroupRow(
                 interactionSource = interaction,
                 indication = null,
                 onClick = {
-                    if (anchorMessage.status == MessageStatus.ERROR) onRetryClick(anchorMessage.id)
+                    if (allowMessageMutation && anchorMessage.status == MessageStatus.ERROR) onRetryClick(anchorMessage.id)
                 },
                 onLongClick = {
                     if (anchor != null && !enableContextMenu) onMessageLongClick(anchor)
@@ -197,11 +201,12 @@ private fun ToolGroupRow(
             avatar = agent?.avatar,
             isGenerating = isGenerating && isLive,
             isLastInGroup = item.isLastInGroup,
-            onRetryClick = { if (anchorMessage.status == MessageStatus.ERROR) onRetryClick(anchorMessage.id) },
+            onRetryClick = if (allowMessageMutation) ({ onRetryClick(anchorMessage.id) }) else null,
             modifier = Modifier.fillMaxWidth(),
         )
         if (enableContextMenu && anchor != null) {
             MessageContextMenu(
+                allowMessageMutation = allowMessageMutation,
                 state = contextMenuState,
                 messageRole = anchor.role,
                 onCopyClick = {
@@ -232,6 +237,7 @@ private fun MessageRow(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    allowMessageMutation: Boolean,
 ) {
     val message = item.message
     val contextMenuState = rememberContextMenuState()
@@ -247,7 +253,7 @@ private fun MessageRow(
                 interactionSource = interaction,
                 indication = null,
                 onClick = {
-                    if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
+                    if (allowMessageMutation && message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
                         onRetryClick(message.id)
                     }
                 },
@@ -270,13 +276,14 @@ private fun MessageRow(
                 avatar = agent?.avatar,
                 isGenerating = isGenerating && message.id == streamingMessageId,
                 isLastInGroup = item.isLastInGroup,
-                onRetryClick = { if (message.status == MessageStatus.ERROR) onRetryClick(message.id) },
+                onRetryClick = if (allowMessageMutation) ({ onRetryClick(message.id) }) else null,
                 modifier = Modifier.fillMaxWidth(),
             )
             MessageRole.SYSTEM, MessageRole.TOOL -> Unit
         }
         if (enableContextMenu) {
             MessageContextMenu(
+                allowMessageMutation = allowMessageMutation,
                 state = contextMenuState,
                 messageRole = message.role,
                 onCopyClick = {

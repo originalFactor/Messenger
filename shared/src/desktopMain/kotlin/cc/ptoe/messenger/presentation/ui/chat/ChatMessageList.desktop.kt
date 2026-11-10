@@ -69,6 +69,7 @@ internal actual fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    allowMessageMutation: Boolean,
     hasOlderMessages: Boolean,
     isLoadingHistory: Boolean,
     onLoadOlderMessages: () -> Unit,
@@ -151,15 +152,12 @@ internal actual fun ChatMessageList(
                                     avatar = agent?.avatar,
                                     isGenerating = isGenerating && isLiveStreaming,
                                     isLastInGroup = item.isLastInGroup,
-                                    onRetryClick = {
-                                        if (anchorMessage.status == MessageStatus.ERROR) {
-                                            onRetryClick(anchorMessage.id)
-                                        }
-                                    },
+                                    onRetryClick = if (allowMessageMutation) ({ onRetryClick(anchorMessage.id) }) else null,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 if (enableContextMenu && anchor != null) {
                                     MessageContextMenu(
+                allowMessageMutation = allowMessageMutation,
                                         state = contextMenuState,
                                         messageRole = anchor.role,
                                         onCopyClick = {
@@ -204,7 +202,7 @@ internal actual fun ChatMessageList(
                                     interactionSource = bubbleInteractionSource,
                                     indication = null,
                                     onClick = {
-                                        if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
+                                        if (allowMessageMutation && message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
                                             onRetryClick(message.id)
                                         }
                                     },
@@ -240,11 +238,7 @@ internal actual fun ChatMessageList(
                                             avatar = agent?.avatar,
                                             isGenerating = isGenerating && message.id == streamingMessageId,
                                             isLastInGroup = item.isLastInGroup,
-                                            onRetryClick = {
-                                                if (message.status == MessageStatus.ERROR) {
-                                                    onRetryClick(message.id)
-                                                }
-                                            },
+                                            onRetryClick = if (allowMessageMutation) ({ onRetryClick(message.id) }) else null,
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                     }
@@ -253,6 +247,7 @@ internal actual fun ChatMessageList(
 
                                 if (enableContextMenu) {
                                     MessageContextMenu(
+                allowMessageMutation = allowMessageMutation,
                                         state = contextMenuState,
                                         messageRole = message.role,
                                         onCopyClick = {

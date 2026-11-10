@@ -100,3 +100,26 @@ Default adapters: [Codex](https://github.com/agentclientprotocol/codex-acp),
 [Claude Code](https://github.com/agentclientprotocol/claude-agent-acp), and
 [OpenCode](https://opencode.ai/docs/acp/). Package adapters launch with pnpm;
 OpenCode uses `opencode acp`. Merely adding/importing a profile starts no process.
+
+## Agent-provided session settings
+
+The native chat Settings button reads the running Agent's `configOptions`,
+including grouped select options, descriptions and boolean toggles. Model,
+reasoning and Permissions labels/values come from the Agent; Messenger does not
+infer a permission policy from a label. Legacy Agents exposing session modes
+use `session/set_mode`. New options in the mode category supersede that legacy
+selector. Controls are disabled during a prompt or configuration request.
+
+Core reads options from new/load/resume responses and session notifications,
+and sends `session/set_config_option` for changes. A successful response replaces
+the full list; errors never optimistically replace the displayed value or retry.
+Opening an old session restores the process and reads its actual options.
+
+ACP chats reuse the native message list, avatars, bubbles, Markdown, thought
+blocks, tool cards, history paging, copy menus and input layout. Tool/thought
+events are persisted with local messages. Individual transcript deletion and
+regeneration are hidden because ACP does not expose those operations; session
+rename/delete remain available.
+
+Reference: [Zed ACP configuration selectors](https://github.com/zed-industries/zed/blob/0929d569fa3e1b1968b7c486f09c599fe1334587/crates/agent_ui/src/config_options.rs)
+and its [Agent session updates](https://github.com/zed-industries/zed/blob/0929d569fa3e1b1968b7c486f09c599fe1334587/crates/agent_servers/src/acp/session_updates.rs).

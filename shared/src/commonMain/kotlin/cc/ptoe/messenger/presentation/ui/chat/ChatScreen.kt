@@ -608,7 +608,7 @@ internal fun DateSeparator(timestamp: Long, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun EmptyChatState(
+internal fun EmptyChatState(
     avatar: String?,
     agentName: String?,
     modifier: Modifier = Modifier
