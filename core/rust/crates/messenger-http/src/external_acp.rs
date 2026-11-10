@@ -36,7 +36,7 @@ pub(crate) fn default_profiles() -> Vec<Profile> {
         ("claude-code", "Claude Code", "Claude coding agent via ACP", "pnpm", vec!["dlx", "@agentclientprotocol/claude-agent-acp"]),
         ("opencode", "OpenCode", "OpenCode coding agent via ACP", "opencode", vec!["acp"]),
     ].into_iter().map(|(id, name, description, command, args)| Profile {
-        id: id.into(), name: name.into(), description: description.into(), enabled: true,
+        id: id.into(), name: name.into(), description: description.into(), enabled: false,
         command: command.into(), args: args.into_iter().map(str::to_string).collect(),
         env: HashMap::new(), cwd: None,
     }).collect()
@@ -735,18 +735,21 @@ mod tests {
         let settings = crate::control::get_settings(State(state.clone())).await.unwrap().0;
         assert!(!settings.enabled);
         assert_eq!(settings.agents.len(), 3);
+        assert!(settings.agents.iter().all(|profile| !profile.enabled));
         assert_eq!(settings.agents.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["Codex", "Claude Code", "OpenCode"]);
         let mut settings = settings;
         settings.name = "My device".into();
         settings.agents.remove(0);
         settings.agents[0].description = "My coding assistant".into();
         settings.agents[0].enabled = false;
+        settings.agents[1].enabled = true;
         let _ = crate::control::set_settings(State(state.clone()), Json(settings)).await.unwrap();
         let reloaded = crate::control::get_settings(State(state.clone())).await.unwrap().0;
         assert_eq!(reloaded.agents.len(), 2, "deleted templates must not reappear");
         assert_eq!(reloaded.name, "My device");
         assert_eq!(reloaded.agents[0].description, "My coding assistant");
         assert!(!reloaded.agents[0].enabled);
+        assert!(reloaded.agents[1].enabled, "explicitly enabled profiles stay enabled");
         assert!(profile_for(&state, &reloaded.agents[0].id).is_err());
     }
 
