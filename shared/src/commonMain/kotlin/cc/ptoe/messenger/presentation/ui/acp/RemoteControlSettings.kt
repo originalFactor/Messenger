@@ -48,7 +48,12 @@ internal fun RemoteControlSettings(onError: (String) -> Unit) {
             Switch(enabled, { save(it) }, enabled = ready && !busy)
         }
         Text(stringResource(Res.string.acp_control_description), style = MaterialTheme.typography.bodyMedium)
-        OutlinedTextField(name, { name = it }, enabled = ready && !busy, label = { Text(stringResource(Res.string.acp_device_name)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        TextButton(enabled = ready && !busy, onClick = { save(enabled) }) { Text(stringResource(Res.string.action_save)) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(name, { name = it }, enabled = ready && !busy, label = { Text(stringResource(Res.string.acp_device_name)) }, modifier = Modifier.weight(1f), singleLine = true)
+            TextButton(enabled = ready && !busy, onClick = { save(enabled) }) { Text(stringResource(Res.string.action_save)) }
+        }
     }
 }
