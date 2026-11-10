@@ -1,11 +1,13 @@
 package cc.ptoe.messenger.presentation.ui.acp
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -54,10 +56,7 @@ internal fun AcpSessionSettingsDialog(
                         "select" -> {
                             Text(option.text("name"), style = MaterialTheme.typography.titleSmall)
                             if (option.text("description").isNotBlank()) Text(option.text("description"), style = MaterialTheme.typography.bodySmall)
-                            val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
-                            SettingChoices(choices, option["currentValue"], !busy) { value ->
-                                onChange(buildJsonObject { put("configId", option.text("id")); put("value", value) })
-                            }
+                            AcpSettingSelector(option, !busy, onChange)
                         }
                     }
                 }
@@ -85,6 +84,61 @@ private fun SettingChoices(choices: List<AcpSettingChoice>, current: JsonElement
             Column(Modifier.weight(1f)) {
                 Text(choice.name)
                 if (choice.description.isNotBlank()) Text(choice.description, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/** Agent-owned choices are shown next to the composer, including model-dependent effort options. */
+@Composable
+internal fun AcpSessionControls(settings: JsonObject, busy: Boolean, onChange: (JsonObject) -> Unit) {
+    val options = settings.objects("configOptions")
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.sortedBy { when (it.text("category")) { "model" -> 0; "thought_level" -> 1; else -> 2 } }.forEach { option ->
+            key(option.text("id")) {
+                when (option.text("type")) {
+                    "select" -> AcpSettingSelector(option, !busy, onChange)
+                    "boolean" -> FilterChip(
+                        selected = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true,
+                        enabled = !busy,
+                        onClick = { onChange(buildJsonObject {
+                            put("configId", option.text("id"))
+                            put("value", (option["currentValue"] as? JsonPrimitive)?.booleanOrNull != true)
+                        }) },
+                        label = { Text(option.text("name"), maxLines = 1) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AcpSettingSelector(option: JsonObject, enabled: Boolean, onChange: (JsonObject) -> Unit) {
+    var expanded by remember(option.text("id")) { mutableStateOf(false) }
+    val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
+    val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
+    LaunchedEffect(enabled) { if (!enabled) expanded = false }
+    Box {
+        AssistChip(enabled = enabled && choices.isNotEmpty(), onClick = { expanded = true },
+            label = { Text("${option.text("name")}: $current", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 280.dp)) })
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 360.dp).widthIn(max = 360.dp)) {
+            var previousGroup = ""
+            choices.forEach { choice ->
+                if (choice.group.isNotBlank() && choice.group != previousGroup) {
+                    Text(choice.group, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium)
+                }
+                previousGroup = choice.group
+                DropdownMenuItem(text = {
+                    Column {
+                        Text(choice.name, fontWeight = if (choice.value == option["currentValue"]) androidx.compose.ui.text.font.FontWeight.Bold else null)
+                        if (choice.description.isNotBlank()) Text(choice.description, style = MaterialTheme.typography.bodySmall)
+                    }
+                }, onClick = {
+                    expanded = false
+                    onChange(buildJsonObject { put("configId", option.text("id")); put("value", choice.value) })
+                })
             }
         }
     }

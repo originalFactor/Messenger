@@ -105,6 +105,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { report(failure.message.orEmpty())
         } finally { loading = false }
+        readSettings()
     }
     val agent = remember(agentName) { Agent("acp", agentName, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
     val rows = history + listOfNotNull(liveId?.let { id -> buildJsonObject {
@@ -158,6 +159,8 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                             }
                         } }
                     }
+                    if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    AcpSessionControls(settings, settingsBusy || loading || active.isNotEmpty(), ::readSettings)
                     ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = false,
                         onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
                         onSendClick = {
