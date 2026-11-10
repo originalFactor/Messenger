@@ -336,12 +336,12 @@ fun SettingsScreen(
                 }
             }
 
-            item {
-                SectionHeader(title = stringResource(Res.string.settings_advanced))
-            }
             // 终端由伴随的 Messenger Runtime 应用提供(Termux 风格的交互式 shell),
             // 这里只负责拉起它的 TerminalActivity;未安装时提示安装。
             if (runtimeTerminalSupported) {
+                item {
+                    SectionHeader(title = stringResource(Res.string.settings_advanced))
+                }
                 item {
                     ListItem(
                         title = stringResource(Res.string.settings_terminal),
@@ -360,30 +360,33 @@ fun SettingsScreen(
                 SectionHeader(title = stringResource(Res.string.settings_about))
             }
             item {
-                // 版本名是语义化版本（VERSION 文件），括号里是 git commit 计数版本号，
-                // 与 Android 包管理器里的 versionCode 一致。
-                val versionName = appVersionName()
-                val versionCode = appVersionCode()
-                ListItem(
-                    title = stringResource(Res.string.settings_version),
-                    groupIndex = 0, groupCount = 2,
-                    subtitle = versionName?.let { name ->
-                        if (versionCode != null) "$name ($versionCode)" else name
-                    } ?: stringResource(Res.string.settings_version_unknown),
-                    icon = Icons.Default.Info,
-                    showArrow = false,
-                    onClick = null
-                )
+                cc.ptoe.messenger.presentation.ui.components.SettingsGroup {
+                    item {
+                        // 版本名是语义化版本（VERSION 文件），括号里是 git commit 计数版本号，
+                        // 与 Android 包管理器里的 versionCode 一致。
+                        val versionName = appVersionName()
+                        val versionCode = appVersionCode()
+                        ListItem(
+                            title = stringResource(Res.string.settings_version),
+                            subtitle = versionName?.let { name ->
+                                if (versionCode != null) "$name ($versionCode)" else name
+                            } ?: stringResource(Res.string.settings_version_unknown),
+                            icon = Icons.Default.Info,
+                            showArrow = false,
+                            onClick = null
+                        )
+                    }
+                    item {
+                        ListItem(
+                            title = stringResource(Res.string.settings_licenses),
+                            subtitle = stringResource(Res.string.settings_licenses_desc),
+                            icon = Icons.Default.Code,
+                            onClick = onLicensesClick
+                        )
+                    }
+                }
             }
-            item {
-                ListItem(
-                    title = stringResource(Res.string.settings_licenses),
-                    groupIndex = 1, groupCount = 2,
-                    subtitle = stringResource(Res.string.settings_licenses_desc),
-                    icon = Icons.Default.Code,
-                    onClick = onLicensesClick
-                )
-            }
+
         }
 
         if (showThemeDialog) {
