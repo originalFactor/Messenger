@@ -38,7 +38,9 @@ fun NewConversationDialog(
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     val choices = messenger.map { ConversationAgentChoice(it.id, names[it.id] ?: it.name, it.description) } + external
-    LaunchedEffect(core) {
+    LaunchedEffect(core, projectId) {
+        external = emptyList()
+        if (projectId == null) return@LaunchedEffect
         try {
             core.controlSettings() // Seed the editable templates once before listing them.
             external = requestAcp(core, "catalog").objects("agents").filter { it.text("kind") == "acp" }

@@ -56,12 +56,11 @@ The optional `env` object maps environment variable names to strings. A
 selected Messenger project overrides the profile's working directory. On
 Android the command can be the absolute executable path or a name from
 Runtime's bootstrap bin directory, and the working directory must be accessible
-to Runtime. ACP keeps the Runtime terminal home so a project switch retains the Agent’s local login. Desktop uses the user's home directory when no project or `cwd` is
-specified. Core launches the executable with explicit arguments. Browser
+to Runtime. ACP keeps the Runtime terminal home so a project switch retains the Agent’s local login. New ACP sessions always use the selected project's workspace. Core launches the executable with explicit arguments. Browser
 requests refer to profile and project IDs.
 
-Select an ACP Agent in **New conversation** on the home screen or in any locally
-owned project. ACP conversations appear beside other conversations and open in
+Select an ACP Agent in **New conversation** inside a locally owned project.
+Creating an ACP conversation requires a project; the home picker offers only Messenger Agents. ACP conversations appear beside other conversations and open in
 the regular chat area. Rename and delete are supported; their agent/workspace
 binding is fixed. Remote Control is configured separately in **Messenger Cloud**. The device
 stores the transcript and the third-party session ID locally. After the Agent
@@ -83,7 +82,7 @@ All routes use the per-start local bearer.
   is scoped to the selected server and account.
 - `POST /api/v1/control/commands/{requestId}` takes a UUID and an action.
   `catalog` returns available agents, local projects and device sessions.
-  `create` takes `agentId` and optional `projectId` and `writable`.
+  `create` takes `agentId` and optional `projectId` and `writable`; `projectId` is required for ACP agents.
   `history` takes `sessionId` and optional `before` and returns a page of
   text previews with the next cursor. `setMode` sets `writable` on a
   Messenger session. `prompt` takes `sessionId` and `text`.

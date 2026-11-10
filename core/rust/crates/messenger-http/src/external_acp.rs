@@ -189,15 +189,11 @@ impl ExternalSessions {
         project: Option<StoredProject>,
         cancel: &CancellationToken,
     ) -> Result<String, ApiError> {
+        let project = project.ok_or_else(|| ApiError::BadRequest(
+            "ACP conversations require a project".into(),
+        ))?;
         let profile = profile_for(state, profile)?;
-        let cwd = match project
-            .as_ref()
-            .map(|project| PathBuf::from(&project.workspace))
-            .or_else(|| profile.cwd.as_ref().map(PathBuf::from))
-        {
-            Some(cwd) => cwd,
-            None => default_cwd()?,
-        };
+        let cwd = PathBuf::from(&project.workspace);
         let id = format!("acp:{}", Uuid::new_v4());
         let (worker, agent_session, _) =
             start_worker(state, profile.clone(), cwd.clone(), None, cancel).await?;
@@ -207,7 +203,7 @@ impl ExternalSessions {
                 id: id.clone(),
                 title: profile.name,
                 profile: profile.id,
-                project: project.map(|project| project.id),
+                project: Some(project.id),
                 updated_at: 0,
                 cwd,
                 agent_session,
@@ -336,25 +332,6 @@ fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
         .into_iter()
         .find(|profile| profile.id == id && profile.enabled)
         .ok_or_else(|| ApiError::not_found("ACP agent profile"))
-}
-
-fn default_cwd() -> Result<PathBuf, ApiError> {
-    #[cfg(target_os = "android")]
-    {
-        Err(ApiError::BadRequest(
-            "select a Runtime project or configure its absolute workspace path".into(),
-        ))
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| {
-                ApiError::BadRequest("configure an absolute ACP working directory".into())
-            })
-    }
 }
 
 async fn start_worker(
@@ -697,9 +674,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.external.create(&state, "fixture", None, &CancellationToken::new()).await.is_err());
+        let project = StoredProject {
+            id: "fixture-project".into(), name: "Fixture".into(),
+            workspace: std::env::temp_dir().to_string_lossy().into_owned(),
+            device_id: None, created_at: 1, updated_at: 1,
+        };
+        state.store.upsert_project(&project).unwrap();
         let session = state
             .external
-            .create(&state, "fixture", None, &CancellationToken::new())
+            .create(&state, "fixture", Some(project), &CancellationToken::new())
             .await
             .unwrap();
         (state, session)
