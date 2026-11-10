@@ -164,7 +164,7 @@ fun ModelDetailScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    if (!uiState.isReadOnly) TextButton(
                         onClick = { viewModel.save() },
                         enabled = uiState.model != null
                     ) {
@@ -247,13 +247,15 @@ internal fun ModelDetailForm(
 
         ModelEnabledSwitchRow(
             checked = state.isEnabled,
-            onCheckedChange = onEnabledChange
+            onCheckedChange = onEnabledChange,
+            enabled = !state.isReadOnly
         )
 
         // 上下文窗口：输入框自带的 label 已表明字段含义，不再单独加标题
         OutlinedTextField(
             value = state.contextWindowText,
             onValueChange = onContextWindowChange,
+            readOnly = state.isReadOnly,
             label = { Text(stringResource(Res.string.providers_model_context_window_label)) },
             placeholder = { Text(stringResource(Res.string.providers_model_context_window_hint)) },
             singleLine = true,
@@ -264,13 +266,15 @@ internal fun ModelDetailForm(
         ModalityChipGroup(
             label = stringResource(Res.string.providers_model_input_modalities),
             selected = state.inputModalities,
-            onToggle = onToggleInputModality
+            onToggle = onToggleInputModality,
+            enabled = !state.isReadOnly
         )
 
         ModalityChipGroup(
             label = stringResource(Res.string.providers_model_output_modalities),
             selected = state.outputModalities,
-            onToggle = onToggleOutputModality
+            onToggle = onToggleOutputModality,
+            enabled = !state.isReadOnly
         )
 
         // 能力开关放在同一组里，行间只留 2dp
@@ -278,26 +282,30 @@ internal fun ModelDetailForm(
             CapabilitySwitchRow(
                 label = stringResource(Res.string.providers_model_supports_tool_calling),
                 checked = state.supportsToolCalling,
-                onCheckedChange = onToolCallingChange
+                onCheckedChange = onToolCallingChange,
+                enabled = !state.isReadOnly
             )
             CapabilitySwitchRow(
                 label = stringResource(Res.string.providers_model_supports_thinking),
                 checked = state.supportsThinking,
-                onCheckedChange = onThinkingChange
+                onCheckedChange = onThinkingChange,
+                enabled = !state.isReadOnly
             )
             CapabilitySwitchRow(
                 label = stringResource(Res.string.providers_model_supports_json_output),
                 checked = state.supportsJsonOutput,
-                onCheckedChange = onJsonOutputChange
+                onCheckedChange = onJsonOutputChange,
+                enabled = !state.isReadOnly
             )
             CapabilitySwitchRow(
                 label = stringResource(Res.string.providers_model_supports_temperature),
                 checked = state.supportsTemperature,
-                onCheckedChange = onTemperatureChange
+                onCheckedChange = onTemperatureChange,
+                enabled = !state.isReadOnly
             )
         }
 
-        ModelDeleteButton(
+        if (!state.isReadOnly) ModelDeleteButton(
             enabled = state.model != null,
             onClick = onDeleteClick
         )
@@ -311,7 +319,8 @@ internal fun ModelDetailForm(
 internal fun ModelEnabledSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -333,7 +342,8 @@ internal fun ModelEnabledSwitchRow(
         Spacer(modifier = Modifier.width(16.dp))
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
         )
     }
 }
@@ -373,7 +383,8 @@ private fun ModalityChipGroup(
     label: String,
     selected: Set<ModelModality>,
     onToggle: (ModelModality) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -389,6 +400,7 @@ private fun ModalityChipGroup(
             ModelModality.entries.forEach { modality ->
                 FilterChip(
                     selected = modality in selected,
+                    enabled = enabled,
                     onClick = { onToggle(modality) },
                     label = { Text(text = modalityLabel(modality), maxLines = 1, softWrap = false) },
                     leadingIcon = if (modality in selected) {
@@ -419,7 +431,8 @@ private fun CapabilitySwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = modifier
@@ -435,7 +448,8 @@ private fun CapabilitySwitchRow(
         )
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
         )
     }
 }

@@ -21,9 +21,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
+import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.domain.model.ChatModel
 import cc.ptoe.messenger.domain.model.ModelModality
 import cc.ptoe.messenger.domain.repository.ModelRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,7 +52,9 @@ data class ModelDetailUiState(
     val isEnabled: Boolean = true,
     val isSaved: Boolean = false,
     val isDeleted: Boolean = false
-)
+) {
+    val isReadOnly: Boolean get() = model?.providerId == BUILTIN_PROVIDER_ID
+}
 
 class ModelDetailViewModel(
     private val modelRepository: ModelRepository,
@@ -60,13 +64,16 @@ class ModelDetailViewModel(
     private val _uiState = MutableStateFlow(ModelDetailUiState())
     val uiState: StateFlow<ModelDetailUiState> = _uiState.asStateFlow()
 
+    private var loadJob: Job? = null
+
     init {
         loadModel(modelId)
     }
 
     fun loadModel(modelId: String) {
+        loadJob?.cancel()
         _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             try {
                 modelRepository.getById(modelId).collect { model ->
                     // 删除后 store 会推一次 null，不要把它当成加载失败。
@@ -108,6 +115,7 @@ class ModelDetailViewModel(
     }
 
     fun onContextWindowChange(text: String) {
+        if (_uiState.value.isReadOnly) return
         // 只允许数字与空串
         if (text.isNotEmpty() && text.any { !it.isDigit() }) return
         _uiState.value = _uiState.value.copy(
@@ -116,6 +124,7 @@ class ModelDetailViewModel(
     }
 
     fun toggleInputModality(modality: ModelModality) {
+        if (_uiState.value.isReadOnly) return
         val current = _uiState.value.inputModalities
         // 至少保留一个模态，避免清空
         if (modality in current && current.size == 1) return
@@ -125,6 +134,7 @@ class ModelDetailViewModel(
     }
 
     fun toggleOutputModality(modality: ModelModality) {
+        if (_uiState.value.isReadOnly) return
         val current = _uiState.value.outputModalities
         // 至少保留一个模态，避免清空
         if (modality in current && current.size == 1) return
@@ -134,26 +144,32 @@ class ModelDetailViewModel(
     }
 
     fun onToolCallingChange(enabled: Boolean) {
+        if (_uiState.value.isReadOnly) return
         _uiState.value = _uiState.value.copy(supportsToolCalling = enabled)
     }
 
     fun onThinkingChange(enabled: Boolean) {
+        if (_uiState.value.isReadOnly) return
         _uiState.value = _uiState.value.copy(supportsThinking = enabled)
     }
 
     fun onJsonOutputChange(enabled: Boolean) {
+        if (_uiState.value.isReadOnly) return
         _uiState.value = _uiState.value.copy(supportsJsonOutput = enabled)
     }
 
     fun onTemperatureChange(enabled: Boolean) {
+        if (_uiState.value.isReadOnly) return
         _uiState.value = _uiState.value.copy(supportsTemperature = enabled)
     }
 
     fun onEnabledChange(enabled: Boolean) {
+        if (_uiState.value.isReadOnly) return
         _uiState.value = _uiState.value.copy(isEnabled = enabled)
     }
 
     fun save() {
+        if (_uiState.value.isReadOnly) return
         val state = _uiState.value
         val model = state.model ?: return
 
@@ -184,6 +200,7 @@ class ModelDetailViewModel(
      * 成功后界面直接退出编辑页。
      */
     fun delete() {
+        if (_uiState.value.isReadOnly) return
         val model = _uiState.value.model ?: return
         viewModelScope.launch {
             modelRepository.delete(model.id)

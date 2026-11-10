@@ -51,6 +51,56 @@ class ModelDetailViewModelTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun switchingToBuiltinModelReplacesThePreviousSubscription() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val builtin = model.copy(id = "builtin", providerId = cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID)
+            val repository = FakeModelRepository(model)
+            repository.insert(builtin)
+            val viewModel = ModelDetailViewModel(repository, model.id)
+            advanceUntilIdle()
+            viewModel.loadModel(builtin.id)
+            advanceUntilIdle()
+            assertTrue(viewModel.uiState.value.isReadOnly)
+            assertEquals(1, repository.models.subscriptionCount.value)
+            viewModel.loadModel(model.id)
+            advanceUntilIdle()
+            assertEquals(false, viewModel.uiState.value.isReadOnly)
+            assertEquals(1, repository.models.subscriptionCount.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun builtinModelCannotBeEditedSavedOrDeleted() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val builtin = model.copy(providerId = cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID)
+            val repository = FakeModelRepository(builtin)
+            val viewModel = ModelDetailViewModel(repository, builtin.id)
+            advanceUntilIdle()
+            assertTrue(viewModel.uiState.value.isReadOnly)
+            viewModel.onContextWindowChange("1")
+            viewModel.onEnabledChange(false)
+            viewModel.toggleInputModality(ModelModality.IMAGE)
+            viewModel.onThinkingChange(true)
+            viewModel.save()
+            viewModel.delete()
+            advanceUntilIdle()
+            assertEquals(builtin, repository.models.value.single())
+            assertEquals("128000", viewModel.uiState.value.contextWindowText)
+            assertEquals(false, viewModel.uiState.value.supportsThinking)
+            assertEquals(false, viewModel.uiState.value.isSaved)
+            assertEquals(false, viewModel.uiState.value.isDeleted)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun saveWritesTheFormAndSignalsSuccess() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

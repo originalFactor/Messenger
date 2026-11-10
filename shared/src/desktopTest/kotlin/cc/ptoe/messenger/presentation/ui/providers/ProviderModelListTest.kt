@@ -25,6 +25,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -63,6 +65,24 @@ class ProviderModelListTest {
     )
 
     private val models = listOf(model("alpha"), model("beta"))
+
+    @Test
+    fun builtinCatalogOnlyOffersSync() = runComposeUiTest {
+        var syncCount = 0
+        setContent {
+            MaterialTheme {
+                ModelListHeader(
+                    onSyncClick = { syncCount++ },
+                    onAddClick = { error("Built-in models cannot be added") },
+                    canAddModels = false,
+                    modifier = Modifier.width(360.dp)
+                )
+            }
+        }
+        onNodeWithContentDescription(getString(Res.string.action_manual_add)).assertDoesNotExist()
+        onNodeWithContentDescription(getString(Res.string.action_sync_models)).assertIsEnabled().performClick()
+        assertEquals(1, syncCount)
+    }
 
     @Test
     fun headerStaysInPlaceWhenEnteringMultiSelect() = runComposeUiTest {

@@ -86,11 +86,9 @@ impl<'a> SyncEngine<'a> {
                 display_name: metadata.display_name.clone().unwrap_or_else(|| dto.id.clone()),
                 is_enabled: prev.map(|p| p.is_enabled).unwrap_or(true),
                 context_window: metadata.context_window.unwrap_or(0),
-                input_rate: dto.input_rate.or_else(|| prev.and_then(|p| p.input_rate)),
-                output_rate: dto.output_rate.or_else(|| prev.and_then(|p| p.output_rate)),
-                cache_read_rate: dto
-                    .cache_read_rate
-                    .or_else(|| prev.and_then(|p| p.cache_read_rate)),
+                input_rate: dto.input_rate,
+                output_rate: dto.output_rate,
+                cache_read_rate: dto.cache_read_rate,
                 input_modalities: metadata.input_modalities.as_ref().map(|values| values.join(","))
                     .unwrap_or_else(|| "text".to_string()),
                 output_modalities: "text".to_string(),
@@ -153,7 +151,7 @@ mod tests {
                 is_enabled: false,
                 context_window: 1000,
                 input_rate: None,
-                output_rate: None,
+                output_rate: Some(9.0),
                 cache_read_rate: Some(0.15),
                 input_modalities: "text".into(),
                 output_modalities: "text".into(),
@@ -163,7 +161,11 @@ mod tests {
                 supports_temperature: false,
                 created_at: 1,
                 metadata: None,
-                metadata_overrides: None,
+                metadata_overrides: Some(messenger_store::model::ModelMetadata {
+                    display_name: Some("Local override".into()),
+                    context_window: Some(1),
+                    ..Default::default()
+                }),
             })
             .unwrap();
 
@@ -172,7 +174,10 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
                     {"id": "gpt-4o", "context_window": 128000, "input_rate": 0.5,
-                     "cache_read_rate": 0.05},
+                     "cache_read_rate": 0.05, "display_name": "Cloud GPT",
+                     "input_modalities": ["text", "image"], "reasoning": true,
+                     "reasoning_efforts": ["low", "high"], "max_output_tokens": 8192,
+                     "supports_temperature": false, "supports_top_p": false, "supports_penalties": false},
                     {"id": "claude-3-5", "context_window": 200000}
                 ]
             })))
@@ -186,6 +191,17 @@ mod tests {
         assert_eq!(gpt4.context_window, 128000);
         assert_eq!(gpt4.input_rate, Some(0.5));
         assert_eq!(gpt4.cache_read_rate, Some(0.05));
+        assert_eq!(gpt4.display_name, "Cloud GPT");
+        assert_eq!(gpt4.output_rate, None, "removed Cloud rates must not retain local values");
+        assert_eq!(gpt4.input_modalities, "text,image");
+        let metadata = gpt4.metadata.as_ref().unwrap();
+        assert_eq!(metadata.reasoning, Some(true));
+        assert_eq!(metadata.reasoning_efforts, Some(vec!["low".into(), "high".into()]));
+        assert_eq!(metadata.max_output_tokens, Some(8192));
+        assert_eq!(metadata.supports_temperature, Some(false));
+        assert_eq!(metadata.supports_top_p, Some(false));
+        assert_eq!(metadata.supports_penalties, Some(false));
+        assert_eq!(gpt4.metadata_overrides, Some(Default::default()));
         assert!(!gpt4.is_enabled, "disabled state must survive sync");
 
         let claude = store.get_model(&format!("{BUILTIN_PROVIDER_ID}:claude-3-5")).unwrap().unwrap();

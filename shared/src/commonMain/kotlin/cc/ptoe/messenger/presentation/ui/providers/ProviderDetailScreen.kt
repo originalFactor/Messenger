@@ -160,6 +160,7 @@ fun ProviderDetailScreen(
     )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val canEditModels = providerId != BUILTIN_PROVIDER_ID
     val models by viewModel.models.collectAsStateWithLifecycle(initialValue = emptyList())
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -203,7 +204,7 @@ fun ProviderDetailScreen(
 
         Scaffold(
             topBar = {
-                if (uiState.isMultiSelectMode) {
+                if (canEditModels && uiState.isMultiSelectMode) {
                     MultiSelectTopBar(
                         selectedCount = uiState.selectedModelIds.size,
                         onExit = { viewModel.exitMultiSelectMode() },
@@ -276,6 +277,7 @@ fun ProviderDetailScreen(
 
                     ProviderModelList(
                         models = models,
+                        canEditModels = canEditModels,
                         isMultiSelectMode = uiState.isMultiSelectMode,
                         selectedModelIds = uiState.selectedModelIds,
                         onSyncClick = { viewModel.syncModels() },
@@ -286,13 +288,13 @@ fun ProviderDetailScreen(
                         onDeleteClick = { model -> showDeleteDialog = model },
                         onLongClick = { model -> viewModel.enterMultiSelectMode(model.id) },
                         onClick = { model ->
-                            if (uiState.isMultiSelectMode) {
+                            if (canEditModels && uiState.isMultiSelectMode) {
                                 viewModel.toggleModelSelection(model.id)
                             } else {
                                 onModelClick(model)
                             }
                         },
-                        enableContextMenu = enableContextMenu,
+                        enableContextMenu = enableContextMenu && canEditModels,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -321,7 +323,7 @@ fun ProviderDetailScreen(
                 )
             }
 
-            if (showAddDialog) {
+            if (showAddDialog && canEditModels) {
                 AddModelDialog(
                     onConfirm = { modelId, displayName ->
                         val success = viewModel.addModelManually(modelId, displayName)
@@ -489,13 +491,15 @@ internal fun ProviderModelList(
     onLongClick: (ChatModel) -> Unit,
     onClick: (ChatModel) -> Unit,
     modifier: Modifier = Modifier,
-    enableContextMenu: Boolean = false
+    enableContextMenu: Boolean = false,
+    canEditModels: Boolean = true
 ) {
     Column(modifier = modifier) {
         ModelListHeader(
             onSyncClick = onSyncClick,
             onAddClick = onAddClick,
             actionsEnabled = !isMultiSelectMode,
+            canAddModels = canEditModels,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
@@ -524,9 +528,9 @@ internal fun ProviderModelList(
                         isSelected = model.id in selectedModelIds,
                         onToggleEnabled = { enabled -> onToggleEnabled(model, enabled) },
                         onDeleteClick = { onDeleteClick(model) },
-                        onLongClick = { onLongClick(model) },
+                        onLongClick = { if (canEditModels) onLongClick(model) },
                         onClick = { onClick(model) },
-                        enableContextMenu = enableContextMenu,
+                        enableContextMenu = enableContextMenu && canEditModels,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -541,7 +545,8 @@ internal fun ModelListHeader(
     onSyncClick: () -> Unit,
     onAddClick: () -> Unit,
     modifier: Modifier = Modifier,
-    actionsEnabled: Boolean = true
+    actionsEnabled: Boolean = true,
+    canAddModels: Boolean = true
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -570,18 +575,20 @@ internal fun ModelListHeader(
                     )
                 }
             }
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-                tooltip = {
-                    PlainTooltip { Text(stringResource(Res.string.action_manual_add)) }
-                },
-                state = rememberTooltipState()
-            ) {
-                IconButton(onClick = onAddClick, enabled = actionsEnabled) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = stringResource(Res.string.action_manual_add)
-                    )
+            if (canAddModels) {
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                    tooltip = {
+                        PlainTooltip { Text(stringResource(Res.string.action_manual_add)) }
+                    },
+                    state = rememberTooltipState()
+                ) {
+                    IconButton(onClick = onAddClick, enabled = actionsEnabled) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(Res.string.action_manual_add)
+                        )
+                    }
                 }
             }
         }

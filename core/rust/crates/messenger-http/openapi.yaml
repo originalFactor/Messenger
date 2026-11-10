@@ -199,8 +199,9 @@ paths:
       responses: { "200": { $ref: "#/components/responses/ProviderPage" } }
     put:
       operationId: upsertProvider
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
       requestBody: { $ref: "#/components/requestBodies/Provider" }
-      responses: { "200": { $ref: "#/components/responses/Provider" } }
+      responses: { "200": { $ref: "#/components/responses/Provider" }, "409": { description: Built-in catalog is read-only } }
   /providers/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -208,11 +209,13 @@ paths:
       responses: { "200": { $ref: "#/components/responses/Provider" }, "404": { $ref: "#/components/responses/NotFound" } }
     put:
       operationId: replaceProvider
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
       requestBody: { $ref: "#/components/requestBodies/Provider" }
-      responses: { "200": { $ref: "#/components/responses/Provider" } }
+      responses: { "200": { $ref: "#/components/responses/Provider" }, "409": { description: Built-in catalog is read-only } }
     delete:
       operationId: deleteProvider
-      responses: { "204": { description: Deleted } }
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
+      responses: { "204": { description: Deleted }, "409": { description: Built-in catalog is read-only } }
   /providers/{id}/models:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -226,8 +229,9 @@ paths:
       responses: { "200": { $ref: "#/components/responses/ModelPage" } }
     put:
       operationId: upsertModel
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
       requestBody: { $ref: "#/components/requestBodies/Model" }
-      responses: { "200": { $ref: "#/components/responses/Model" } }
+      responses: { "200": { $ref: "#/components/responses/Model" }, "409": { description: Built-in catalog is read-only } }
   /models/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -235,15 +239,18 @@ paths:
       responses: { "200": { $ref: "#/components/responses/Model" }, "404": { $ref: "#/components/responses/NotFound" } }
     put:
       operationId: replaceModel
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
       requestBody: { $ref: "#/components/requestBodies/Model" }
-      responses: { "200": { $ref: "#/components/responses/Model" } }
+      responses: { "200": { $ref: "#/components/responses/Model" }, "409": { description: Built-in catalog is read-only } }
     delete:
       operationId: deleteModel
-      responses: { "204": { description: Deleted } }
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
+      responses: { "204": { description: Deleted }, "409": { description: Built-in catalog is read-only } }
   /models/{id}/enabled:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     put:
       operationId: setModelEnabled
+      description: Built-in Messenger Cloud provider and models are read-only. Mutation returns 409 with code builtin_catalog_read_only; refresh through /cloud/builtin-models/sync.
       requestBody:
         required: true
         content:
@@ -252,7 +259,7 @@ paths:
               type: object
               required: [enabled]
               properties: { enabled: { type: boolean } }
-      responses: { "204": { description: Updated } }
+      responses: { "204": { description: Updated }, "409": { description: Built-in catalog is read-only } }
   /models/discover:
     post:
       operationId: discoverProviderModels
@@ -607,7 +614,7 @@ paths:
   /cloud/builtin-models/sync:
     post:
       operationId: syncBuiltinModels
-      description: Provision Messenger Cloud AI from the saved account and sync its model catalog. Returns zero when the account has no AI key.
+      description: Provision Messenger Cloud AI from the saved account and synchronize its authoritative catalog and Messenger Extended Models Protocol metadata from /v1/models, without models.dev enrichment or local overrides. Returns zero when the account has no AI key.
       requestBody:
         content:
           application/json:

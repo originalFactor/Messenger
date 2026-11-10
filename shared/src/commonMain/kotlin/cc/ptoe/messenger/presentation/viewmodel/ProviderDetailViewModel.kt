@@ -21,6 +21,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
 import kotlin.reflect.KClass
+import cc.ptoe.messenger.data.cloud.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.domain.model.ChatModel
@@ -146,6 +147,11 @@ class ProviderDetailViewModel(
                 syncedModels = emptyList()
             )
             try {
+                if (provider.id == BUILTIN_PROVIDER_ID) {
+                    coreBridge.cloudSyncBuiltinModels(force = true)
+                    _uiState.value = _uiState.value.copy(syncStatus = SyncStatus.SUCCESS)
+                    return@launch
+                }
                 val discovered = coreBridge.discoverProviderModelsJson(
                     baseUrl = provider.baseUrl,
                     apiKey = provider.apiKey,
@@ -178,6 +184,7 @@ class ProviderDetailViewModel(
     }
 
     suspend fun saveSelectedModels(selectedModelIds: List<String>) {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         val provider = _uiState.value.provider ?: return
         val existingModels = modelRepository.getByProviderId(currentProviderId).first()
         val existingModelIds = existingModels.map { it.modelId }.toSet()
@@ -198,12 +205,14 @@ class ProviderDetailViewModel(
     }
 
     fun toggleModelEnabled(modelId: String, enabled: Boolean) {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         viewModelScope.launch {
             modelRepository.setEnabled(modelId, enabled)
         }
     }
 
     fun addModelManually(modelId: String, displayName: String): Boolean {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return false
         val provider = _uiState.value.provider ?: return false
         if (modelId.isBlank()) return false
         viewModelScope.launch {
@@ -231,12 +240,14 @@ class ProviderDetailViewModel(
     }
 
     fun deleteModel(modelId: String) {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         viewModelScope.launch {
             modelRepository.delete(modelId)
         }
     }
 
     fun enterMultiSelectMode(modelId: String) {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         _uiState.value = _uiState.value.copy(
             isMultiSelectMode = true,
             selectedModelIds = setOf(modelId)
@@ -270,6 +281,7 @@ class ProviderDetailViewModel(
     }
 
     fun enableSelectedModels() {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         val ids = _uiState.value.selectedModelIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
@@ -278,6 +290,7 @@ class ProviderDetailViewModel(
     }
 
     fun disableSelectedModels() {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         val ids = _uiState.value.selectedModelIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
@@ -286,6 +299,7 @@ class ProviderDetailViewModel(
     }
 
     fun deleteSelectedModels() {
+        if (currentProviderId == BUILTIN_PROVIDER_ID) return
         val ids = _uiState.value.selectedModelIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {

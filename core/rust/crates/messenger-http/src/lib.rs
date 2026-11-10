@@ -837,6 +837,7 @@ fn upsert_provider_inner(
     store: &Store,
     value: StoredProvider,
 ) -> Result<Json<StoredProvider>, ApiError> {
+    ensure_catalog_editable(&value.id)?;
     store.upsert_provider(&value).map_err(ApiError::store)?;
     Ok(Json(value))
 }
@@ -844,8 +845,20 @@ async fn delete_provider(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    ensure_catalog_editable(&id)?;
     state.store.delete_provider(&id).map_err(ApiError::store)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Cloud provisioning and catalog sync write directly to Store; public CRUD must not.
+fn ensure_catalog_editable(provider_id: &str) -> Result<(), ApiError> {
+    if provider_id == messenger_sync::BUILTIN_PROVIDER_ID {
+        return Err(ApiError::Conflict {
+            code: "builtin_catalog_read_only".into(),
+            message: "Messenger Cloud provider and models are read-only; use Cloud model sync".into(),
+        });
+    }
+    Ok(())
 }
 
 async fn list_models(
@@ -907,6 +920,10 @@ async fn upsert_model(
     upsert_model_inner(&state.store, value)
 }
 fn upsert_model_inner(store: &Store, value: StoredModel) -> Result<Json<StoredModel>, ApiError> {
+    ensure_catalog_editable(&value.provider_id)?;
+    if let Some(existing) = store.get_model(&value.id).map_err(ApiError::store)? {
+        ensure_catalog_editable(&existing.provider_id)?;
+    }
     store.upsert_model(&value).map_err(ApiError::store)?;
     Ok(Json(value))
 }
@@ -920,14 +937,9 @@ async fn set_model_enabled(
     Path(id): Path<String>,
     Json(request): Json<SetEnabledRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if state
-        .store
-        .get_model(&id)
-        .map_err(ApiError::store)?
-        .is_none()
-    {
-        return Err(ApiError::not_found("model"));
-    }
+    let model = state.store.get_model(&id).map_err(ApiError::store)?
+        .ok_or_else(|| ApiError::not_found("model"))?;
+    ensure_catalog_editable(&model.provider_id)?;
     state
         .store
         .set_model_enabled(&id, request.enabled)
@@ -939,6 +951,9 @@ async fn delete_model(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    if let Some(model) = state.store.get_model(&id).map_err(ApiError::store)? {
+        ensure_catalog_editable(&model.provider_id)?;
+    }
     state.store.delete_model(&id).map_err(ApiError::store)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2849,6 +2864,51 @@ mod tests {
         builder
             .body(Body::from(body.unwrap_or_default().to_owned()))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn builtin_catalog_is_read_only_through_crud() {
+        use axum::http::Method;
+        let state = test_state();
+        let builtin = messenger_sync::models::BUILTIN_PROVIDER_ID;
+        let provider = StoredProvider {
+            id: builtin.into(), name: "Cloud".into(), base_url: "http://localhost/v1".into(),
+            api_key: "test".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
+        };
+        state.store.upsert_provider(&provider).unwrap();
+        let model: StoredModel = serde_json::from_value(serde_json::json!({
+            "id":"cloud-model", "provider_id":builtin, "model_id":"gemini",
+            "display_name":"Cloud Gemini", "is_enabled":true, "created_at":1
+        })).unwrap();
+        state.store.upsert_model(&model).unwrap();
+        let app = router(state.clone());
+        let provider_body = serde_json::to_string(&provider).unwrap();
+        let model_body = serde_json::to_string(&model).unwrap();
+        let mut moved = model.clone();
+        moved.provider_id = "other-provider".into();
+        let mut added = model.clone();
+        added.id = "new-cloud-model".into();
+        for (method, path, body) in [
+            (Method::PUT, "/api/v1/providers".to_string(), Some(provider_body.clone())),
+            (Method::PUT, format!("/api/v1/providers/{builtin}"), Some(provider_body)),
+            (Method::DELETE, format!("/api/v1/providers/{builtin}"), None),
+            (Method::PUT, "/api/v1/models".into(), Some(model_body.clone())),
+            (Method::PUT, "/api/v1/models/cloud-model".into(), Some(model_body)),
+            (Method::PUT, "/api/v1/models/cloud-model".into(), Some(serde_json::to_string(&moved).unwrap())),
+            (Method::PUT, "/api/v1/models".into(), Some(serde_json::to_string(&added).unwrap())),
+            (Method::PUT, "/api/v1/models/cloud-model/enabled".into(), Some(r#"{"enabled":false}"#.into())),
+            (Method::DELETE, "/api/v1/models/cloud-model".into(), None),
+        ] {
+            let response = app.clone().oneshot(request(method, &path, body.as_deref())).await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT, "{path}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["code"], "builtin_catalog_read_only");
+        }
+        assert_eq!(state.store.get_model(&model.id).unwrap(), Some(model));
+        assert!(state.store.get_model(&added.id).unwrap().is_none());
+        assert_eq!(state.store.get_provider(builtin).unwrap(), Some(provider));
+        let response = app.oneshot(request(Method::GET, "/api/v1/models/cloud-model", None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
