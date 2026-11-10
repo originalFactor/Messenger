@@ -1,6 +1,14 @@
 package cc.ptoe.messenger.presentation.ui.acp
 
-import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -31,6 +39,7 @@ internal fun acpSettingChoices(options: JsonArray): List<AcpSettingChoice> = opt
     else listOfNotNull(option["value"]?.let { AcpSettingChoice(it, option.text("name"), option.text("description")) })
 }
 
+/** Connected settings and selection rows follow InstallerX-Revived's expressive list pattern. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun AcpSessionSettingsScreen(
@@ -41,119 +50,135 @@ internal fun AcpSessionSettingsScreen(
     errorMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val options = settings.objects("configOptions")
+    val options = settings.objects("configOptions").filter { it.text("type") in listOf("select", "boolean") }.toMutableList()
     val modes = settings["modes"] as? JsonObject
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(Res.string.conversation_settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
+    val modeLabel = stringResource(Res.string.acp_session_mode)
+    if (modes != null && options.none { it.text("category") == "mode" }) options += buildJsonObject {
+        put("id", "legacy-mode"); put("name", modeLabel); put("type", "select")
+        put("currentValue", modes["currentModeId"] ?: JsonNull)
+        put("options", buildJsonArray { modes.objects("availableModes").forEach { mode -> add(buildJsonObject {
+            put("value", mode.text("id")); put("name", mode.text("name")); put("description", mode.text("description"))
+        }) } })
+    }
+    var choosing by remember { mutableStateOf<String?>(null) }
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // Bound corner interpolation: a spring may overshoot zero-radius connected corners.
+    val motion = MaterialTheme.motionScheme
+    val boundedMotion = remember(motion) { object : MotionScheme by motion {
+        override fun <T> fastSpatialSpec(): androidx.compose.animation.core.FiniteAnimationSpec<T> = androidx.compose.animation.core.tween(180)
+    } }
+    MaterialTheme(motionScheme = boundedMotion) {
+        Scaffold(
+            modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            topBar = {
+                LargeFlexibleTopAppBar(
+                    title = { Text(stringResource(Res.string.conversation_settings_title)) },
+                    navigationIcon = { FilledTonalIconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back))
+                    } },
+                    scrollBehavior = scrollBehavior,
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer),
+                )
+            },
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (busy) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
+                    if (!errorMessage.isNullOrBlank()) Surface(shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+                        Text(errorMessage, Modifier.fillMaxWidth().padding(24.dp), style = MaterialTheme.typography.bodyMedium)
                     }
-                },
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            Column(
-                Modifier.widthIn(max = 840.dp).fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                if (busy) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    ContainedLoadingIndicator()
-                }
-                if (!errorMessage.isNullOrBlank()) Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Text(errorMessage, Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.bodyMedium)
-                }
-                if (!busy && options.isEmpty() && modes == null) {
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-                        Text(stringResource(Res.string.acp_no_session_settings), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-                options.forEach { option -> key(option.text("id")) {
-                    when (option.text("type")) {
-                        "boolean" -> {
+                    if (!busy && options.isEmpty()) Text(stringResource(Res.string.acp_no_session_settings), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        options.forEachIndexed { index, option -> key(option.text("id")) {
+                            val boolean = option.text("type") == "boolean"
                             val checked = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true
-                            Card(shape = MaterialTheme.shapes.large,
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-                                ListItem(
-                                    modifier = Modifier.toggleable(value = checked, enabled = !busy, role = Role.Switch) {
-                                        onChange(buildJsonObject { put("configId", option.text("id")); put("value", it) })
-                                    },
-                                    headlineContent = { Text(option.text("name")) },
-                                    supportingContent = option.text("description").takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
-                                    trailingContent = {
-                                        Switch(checked = checked, onCheckedChange = null, enabled = !busy,
-                                            thumbContent = if (checked) ({ Icon(Icons.Default.Check, null, Modifier.size(SwitchDefaults.IconSize)) }) else null)
-                                    },
-                                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                                )
-                            }
-                        }
-                        "select" -> AcpSettingsField(option, !busy, onChange)
+                            val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
+                            val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
+                            ListItem(
+                                selected = false, enabled = !busy && (boolean || choices.isNotEmpty()),
+                                onClick = {
+                                    if (boolean) onChange(buildJsonObject { put("configId", option.text("id")); put("value", !checked) })
+                                    else choosing = option.text("id")
+                                },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).semantics(mergeDescendants = true) {
+                                    if (boolean) { role = Role.Switch; toggleableState = if (checked) ToggleableState.On else ToggleableState.Off }
+                                },
+                                shapes = connectedSettingShapes(index, options.size),
+                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
+                                leadingContent = { Icon(if (boolean) Icons.Default.Tune else Icons.Default.Settings, null) },
+                                supportingContent = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (!boolean) Text(current, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                                    if (option.text("description").isNotBlank()) Text(option.text("description"), style = MaterialTheme.typography.bodyMedium)
+                                } },
+                                trailingContent = {
+                                    if (boolean) Switch(checked, null, enabled = !busy, modifier = Modifier.clearAndSetSemantics {}, thumbContent = {
+                                        Icon(if (checked) Icons.Default.Check else Icons.Default.Close, null, Modifier.size(SwitchDefaults.IconSize))
+                                    }) else Icon(Icons.Default.ExpandMore, null)
+                                },
+                                content = { Text(option.text("name"), style = MaterialTheme.typography.titleMedium) },
+                            )
+                        } }
                     }
-                } }
-                // Legacy modes remain available when no replacement mode config was supplied.
-                if (modes != null && options.none { it.text("category") == "mode" }) {
-                    val modeOption = buildJsonObject {
-                        put("id", "legacy-mode"); put("name", stringResource(Res.string.acp_session_mode))
-                        put("currentValue", modes["currentModeId"] ?: JsonNull)
-                        put("options", buildJsonArray { modes.objects("availableModes").forEach { mode -> add(buildJsonObject {
-                            put("value", mode.text("id")); put("name", mode.text("name")); put("description", mode.text("description"))
-                        }) } })
-                    }
-                    AcpSettingsField(modeOption, !busy) { change -> onChange(buildJsonObject { put("modeId", change["value"] ?: JsonNull) }) }
                 }
             }
+        }
+        options.firstOrNull { it.text("id") == choosing }?.let { option ->
+            val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
+            AlertDialog(
+                onDismissRequest = { choosing = null },
+                title = { Text(option.text("name")) },
+                text = {
+                    Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        choices.forEachIndexed { index, choice ->
+                            if (choice.group.isNotBlank() && (index == 0 || choices[index - 1].group != choice.group)) {
+                                Text(choice.group, Modifier.padding(16.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                            }
+                            val selectedChoice = choice.value == option["currentValue"]
+                            ListItem(
+                                selected = selectedChoice, enabled = !busy,
+                                onClick = {
+                                    choosing = null
+                                    onChange(buildJsonObject {
+                                        if (option.text("id") == "legacy-mode") put("modeId", choice.value)
+                                        else { put("configId", option.text("id")); put("value", choice.value) }
+                                    })
+                                },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).semantics(mergeDescendants = true) { role = Role.RadioButton; selected = selectedChoice },
+                                shapes = connectedSettingShapes(index, choices.size),
+                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright,
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    selectedSupportingContentColor = MaterialTheme.colorScheme.onPrimaryContainer),
+                                supportingContent = choice.description.takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
+                                trailingContent = { RadioButton(selectedChoice, null, enabled = !busy, modifier = Modifier.clearAndSetSemantics {}) },
+                                content = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
+                            )
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { choosing = null }) { Text(stringResource(Res.string.action_close)) } },
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun AcpSettingsField(option: JsonObject, enabled: Boolean, onChange: (JsonObject) -> Unit) {
-    var expanded by remember(option.text("id")) { mutableStateOf(false) }
-    val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
-    val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
-    LaunchedEffect(enabled) { if (!enabled) expanded = false }
-    ExposedDropdownMenuBox(expanded = expanded && enabled, onExpandedChange = { if (enabled) expanded = it }) {
-        OutlinedTextField(
-            value = current, onValueChange = {}, readOnly = true, enabled = enabled && choices.isNotEmpty(),
-            label = { Text(option.text("name")) },
-            supportingText = option.text("description").takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded && enabled) },
-            shape = MaterialTheme.shapes.large,
-            modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled && choices.isNotEmpty()),
-        )
-        ExposedDropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 360.dp)) {
-            var previousGroup = ""
-            choices.forEach { choice ->
-                if (choice.group.isNotBlank() && choice.group != previousGroup) {
-                    Text(choice.group, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                }
-                previousGroup = choice.group
-                DropdownMenuItem(
-                    modifier = Modifier.semantics { selected = choice.value == option["currentValue"] },
-                    text = { Column {
-                        Text(choice.name, style = MaterialTheme.typography.bodyLarge)
-                        if (choice.description.isNotBlank()) Text(choice.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } },
-                    trailingIcon = if (choice.value == option["currentValue"]) ({ Icon(Icons.Default.Check, null) }) else null,
-                    onClick = {
-                        expanded = false
-                        onChange(buildJsonObject { put("configId", option.text("id")); put("value", choice.value) })
-                    },
-                )
-            }
-        }
-    }
+private fun connectedSettingShapes(index: Int, count: Int): ListItemShapes {
+    val outer = MaterialTheme.shapes.extraLarge
+    val inner = MaterialTheme.shapes.extraSmall
+    val shape = outer.copy(
+        topStart = if (index == 0) outer.topStart else inner.topStart,
+        topEnd = if (index == 0) outer.topEnd else inner.topEnd,
+        bottomStart = if (index == count - 1) outer.bottomStart else inner.bottomStart,
+        bottomEnd = if (index == count - 1) outer.bottomEnd else inner.bottomEnd,
+    )
+    return ListItemDefaults.shapes(shape = shape, pressedShape = outer,
+        selectedShape = shape, focusedShape = shape, hoveredShape = shape)
 }
 
 /** Agent-owned choices are shown next to the composer, including model-dependent effort options. */
