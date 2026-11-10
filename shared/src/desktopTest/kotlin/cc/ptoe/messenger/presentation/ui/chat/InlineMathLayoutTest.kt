@@ -23,6 +23,10 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Density
@@ -38,6 +42,47 @@ import kotlin.test.assertTrue
 class InlineMathLayoutTest {
     @Test fun inlineMathUsesFullHeightAndBodyGlyphSize() = checkLayout(1f)
     @Test fun inlineMathReservesScaledBounds() = checkLayout(1.5f)
+
+    @Test fun listMarkersFollowFirstTextBaseline() = checkListBaselines(1f)
+    @Test fun listMarkersFollowScaledFirstTextBaseline() = checkListBaselines(1.5f)
+
+    private fun checkListBaselines(fontScale: Float) = runComposeUiTest {
+        val matrix = "\$\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\$"
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                MaterialTheme {
+                    ProvideTextStyle(MaterialTheme.typography.bodyLarge.copy(color = Color.Black)) {
+                        Column(Modifier.width(320.dp).background(Color.White)) {
+                            ChatMarkdownText(
+                                "- Bullet: $matrix with additional words that wrap onto another line.",
+                                false, Modifier,
+                            )
+                            ChatMarkdownText("7. Number: $matrix", false, Modifier)
+                            ChatMarkdownText("- [ ] Task: $matrix", false, Modifier)
+                        }
+                    }
+                }
+            }
+        }
+        for ((marker, prefix) in listOf("•" to "Bullet:", "7." to "Number:", "☐" to "Task:")) {
+            fun baseline(text: String, substring: Boolean): Float {
+                val node = onNodeWithText(text, substring = substring)
+                val layouts = mutableListOf<TextLayoutResult>()
+                node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                return node.getUnclippedBoundsInRoot().top.value + layouts.single().firstBaseline
+            }
+            val markerBaseline = baseline(marker, false)
+            val bodyBaseline = baseline(prefix, true)
+            assertTrue(abs(markerBaseline - bodyBaseline) < 1f,
+                "$marker baseline $markerBaseline must follow body $bodyBaseline at fontScale $fontScale")
+        }
+        val screenshot = onRoot().captureToImage()
+        Image.makeFromBitmap(screenshot.asSkiaBitmap()).use { image ->
+            image.encodeToData()?.use { data ->
+                File(System.getProperty("java.io.tmpdir"), "messenger-list-baseline-$fontScale.png").writeBytes(data.bytes)
+            }
+        }
+    }
 
     private fun checkLayout(fontScale: Float) = runComposeUiTest {
         setContent {

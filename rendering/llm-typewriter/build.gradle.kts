@@ -11,7 +11,6 @@ import org.gradle.api.file.ArchiveOperations
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileSystemOperations
-import org.gradle.api.file.RegularFileProperty
 import javax.inject.Inject
 
 plugins {
@@ -31,10 +30,8 @@ abstract class PatchTypewriterSources @Inject constructor(
     abstract val sourceArchives: ConfigurableFileCollection
     @get:InputFiles @get:PathSensitive(PathSensitivity.NONE)
     abstract val androidArchive: ConfigurableFileCollection
-    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
-    abstract val before: RegularFileProperty
-    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
-    abstract val after: RegularFileProperty
+    @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val patches: DirectoryProperty
     @get:OutputDirectory abstract val output: DirectoryProperty
     @get:Internal abstract val androidRes: DirectoryProperty
 
@@ -50,10 +47,17 @@ abstract class PatchTypewriterSources @Inject constructor(
             duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         }
         val renderer = output.file("commonMain/cc/ptoe/llmtypewriter/TypewriterRenderer.kt").get().asFile
-        val original = renderer.readText()
-        val old = before.get().asFile.readText()
-        check(original.split(old).size == 2) { "llm-typewriter changed: review inline math patch before upgrading" }
-        renderer.writeText(original.replace(old, after.get().asFile.readText()))
+        var patched = renderer.readText()
+        patches.get().asFile.listFiles()!!.filter { it.name.endsWith(".before.kt") }
+            .sortedBy { it.name }.forEach { before ->
+                val after = before.resolveSibling(before.name.replace(".before.kt", ".after.kt"))
+                val old = before.readText()
+                check(patched.split(old).size == 2) {
+                    "llm-typewriter changed: review ${before.name} before upgrading"
+                }
+                patched = patched.replace(old, after.readText())
+            }
+        renderer.writeText(patched)
     }
 }
 
@@ -68,8 +72,7 @@ dependencies {
 val patchedSources = tasks.register<PatchTypewriterSources>("patchTypewriterSources") {
     sourceArchives.from(upstreamSources)
     androidArchive.from(upstreamAndroid)
-    before.set(layout.projectDirectory.file("patches/inline-math.before.kt"))
-    after.set(layout.projectDirectory.file("patches/inline-math.after.kt"))
+    patches.set(layout.projectDirectory.dir("patches"))
     output.set(layout.buildDirectory.dir("generated/upstream"))
     androidRes.set(output.dir("res"))
 }

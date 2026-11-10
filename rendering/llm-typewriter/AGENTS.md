@@ -6,13 +6,14 @@ this project instead of the upstream binary, preventing duplicate classes.
 
 - `patchTypewriterSources` extracts upstream JVM/common and Android sources plus the original
   Android AAR's Cascadia font resources. Generated sources belong under `build/`, never commit them.
-- `patches/inline-math.before.kt` is the exact upstream section; `inline-math.after.kt` replaces it.
+- `patches/*.before.kt` are exact upstream sections; their paired `*.after.kt` files replace them.
   A version upgrade MUST review this patch: the build fails if the before section no longer matches
   exactly once. Preserve upstream copyright/license headers.
 - The patch measures and paints inline math at the same font size (1.2 × body size to compensate
   for KaTeX's smaller x-height) and reserves the complete measured height. Never clamp matrices,
   fractions or descenders to prose line height or clip them to it. Density/font-scale changes must
   invalidate placeholder sizes. Block math and streaming/parser behavior remain upstream-owned.
+- List markers (bullets, ordered numbers and task checkboxes) align with the content column’s first text baseline. Tall inline math and wrapped/nested items must not detach the marker from the first line.
 - Dependency versions belong in the root catalog. Keep upstream runtime dependencies (including all
   desktop RaTeX native platforms), Android font resources and the app's Skiko exclusions intact.
 - Verify via `./gradlew-cli :shared:desktopTest --tests '*ChatBubbleContentTest'` plus

@@ -7,6 +7,7 @@ Licensed under Apache License 2.0 (see repository-root LICENSE).
 
 Messenger modifications, Copyright 2026 originalFactor:
 - Inline equations use complete measured height without clipping.
+- List markers follow the first content baseline, including tall inline math.
 - Inline math font size compensates for KaTeX/Roboto x-height differences.
 
 All other sources and Android font resources are resolved from the unmodified Maven artifacts.
