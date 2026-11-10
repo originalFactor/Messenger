@@ -84,7 +84,12 @@ internal fun ExpressiveScaffold(
     contentWindowInsets: WindowInsets = ScaffoldDefaults.contentWindowInsets,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // A caller may supply its own app-bar behavior (or no collapsing app bar).
+    // An unbound default state's -Float.MAX_VALUE limit would consume every drag.
+    // Start inert; ExpressiveTopAppBar updates the limit when it binds to this state.
+    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
+        state = rememberTopAppBarState(initialHeightOffsetLimit = 0f),
+    )
     CompositionLocalProvider(LocalPageScroll provides scroll) {
         Scaffold(modifier.nestedScroll(scroll.nestedScrollConnection), topBar, bottomBar, snackbarHost, floatingActionButton,
             floatingActionButtonPosition, containerColor, contentColor, contentWindowInsets, content)
