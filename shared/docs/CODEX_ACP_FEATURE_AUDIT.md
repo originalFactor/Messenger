@@ -45,7 +45,7 @@ The existing Core notification handler explicitly handles text, thought, tool an
 - Android shared compilation and Desktop settings interaction tests pass.
 - No end-to-end generated conversation or visual screenshot validation was performed in this audit.
 
-Implementation: `AcpConversationScreen.kt`, `AcpSessionSettingsDialog.kt`, `AcpChatMessages.kt` and Core `external_acp.rs`. Adapter reference: [Codex ACP](https://github.com/agentclientprotocol/codex-acp).
+Implementation: `AcpConversationScreen.kt`, `AcpSessionSettingsScreen.kt`, `AcpChatMessages.kt` and Core `external_acp.rs`. Adapter reference: [Codex ACP](https://github.com/agentclientprotocol/codex-acp).
 
 ## Subsequent composer integration
 

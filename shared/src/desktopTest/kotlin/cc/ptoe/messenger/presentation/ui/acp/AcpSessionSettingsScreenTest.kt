@@ -9,7 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 @OptIn(ExperimentalTestApi::class)
-class AcpSessionSettingsDialogTest {
+class AcpSessionSettingsScreenTest {
     private val settings = Json.parseToJsonElement("""{
         "configOptions":[{"id":"access-policy","name":"Permissions","type":"select","currentValue":"sandbox",
             "options":[{"group":"access","name":"Access","options":[
@@ -20,21 +20,21 @@ class AcpSessionSettingsDialogTest {
     @Test
     fun groupedSelectionUsesTheAgentValueWithoutOptimisticallyReplacingItsCurrentValue() = runComposeUiTest {
         var submitted: JsonObject? = null
-        setContent { MaterialTheme { AcpSessionSettingsDialog(settings, false, {}, { submitted = it }) } }
-        onNodeWithText("Permissions: Read only").performClick()
+        setContent { MaterialTheme { AcpSessionSettingsScreen(settings, false, {}, { submitted = it }) } }
+        onNodeWithText("Read only").performClick()
         onNodeWithText("Access").assertExists()
         onNodeWithText("Workspace write").performClick()
         assertEquals("access-policy", submitted?.text("configId"))
         assertEquals("project-write", submitted?.text("value"))
         // Keep showing the confirmed value until the Agent replies.
-        onNodeWithText("Permissions: Read only").assertExists()
+        onNodeWithText("Read only").assertExists()
         assertEquals("sandbox", settings.objects("configOptions").single().text("currentValue"))
     }
 
     @Test
     fun aPendingSettingRequestDisablesItsSelectionControls() = runComposeUiTest {
-        setContent { MaterialTheme { AcpSessionSettingsDialog(settings, true, {}, {}) } }
-        onNodeWithText("Permissions: Read only").assertIsNotEnabled()
+        setContent { MaterialTheme { AcpSessionSettingsScreen(settings, true, {}, {}) } }
+        onNodeWithText("Read only").assertIsNotEnabled()
     }
 
     @Test
@@ -64,6 +64,28 @@ class AcpSessionSettingsDialogTest {
         onNodeWithText("Medium").performClick()
         assertEquals("reasoning_effort", submitted?.text("configId"))
         assertEquals("medium", submitted?.text("value"))
+    }
+
+    @Test
+    fun booleanListItemHasOneToggleTargetAndKeepsTheConfirmedValue() = runComposeUiTest {
+        val snapshot = Json.parseToJsonElement("""{"configOptions":[{"id":"fast","name":"Fast mode","description":"Use faster responses","type":"boolean","currentValue":false}]}""").jsonObject
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(snapshot, false, {}, { submitted = it }) } }
+        onAllNodes(isToggleable()).assertCountEquals(1)
+        onNode(isToggleable()).assertIsOff().performClick()
+        assertEquals("fast", submitted?.text("configId"))
+        assertEquals(JsonPrimitive(true), submitted?.get("value"))
+        onNode(isToggleable()).assertIsOff()
+    }
+
+    @Test
+    fun busyScreenKeepsNavigationAvailableAndDisablesToggle() = runComposeUiTest {
+        val snapshot = Json.parseToJsonElement("""{"configOptions":[{"id":"fast","name":"Fast mode","type":"boolean","currentValue":true}]}""").jsonObject
+        var back = false
+        setContent { MaterialTheme { AcpSessionSettingsScreen(snapshot, true, { back = true }, {}) } }
+        onNode(isToggleable()).assertIsNotEnabled()
+        onNodeWithContentDescription("Back").performClick()
+        assertEquals(true, back)
     }
 
 }

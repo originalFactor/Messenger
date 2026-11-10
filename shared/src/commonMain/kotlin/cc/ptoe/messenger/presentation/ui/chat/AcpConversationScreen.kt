@@ -341,7 +341,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false
         )
         cc.ptoe.messenger.presentation.platform.BackHandler(enabled = showSettings, onBack = { showSettings = false }) {}
-        if (showSettings) AcpSessionSettingsDialog(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError, asPage = true)
+        if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
     }
 }
 
