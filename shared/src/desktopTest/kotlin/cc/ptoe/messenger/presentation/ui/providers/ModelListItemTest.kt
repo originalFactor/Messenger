@@ -68,7 +68,7 @@ class ModelListItemTest {
         displayName = "$id-very-long-model-id",
         isEnabled = true,
         contextWindow = 1_000_000,
-        inputRate = 0.33,
+        inputRate = 1.0,
         outputRate = 0.99,
         cacheReadRate = 4.35,
         cacheWriteRate = 1.25,
@@ -98,11 +98,11 @@ class ModelListItemTest {
         // 「1M」与倍率数字与语言无关，避免依赖测试机的资源语言。
         val name = onNodeWithText(model.displayName, useUnmergedTree = true)
         val contextBadge = onNodeWithText("1M", useUnmergedTree = true)
-        val rateBadge = onNode(hasText("×0.33", substring = true), useUnmergedTree = true)
+        val rateBadge = onNode(hasText("Ix1.0", substring = true), useUnmergedTree = true)
         name.assertIsDisplayed()
         contextBadge.assertDoesNotExist()
         rateBadge.assertIsDisplayed()
-        onNodeWithText("×0.33 · ×4.35 · ×1.25 · ×0.99", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("Ix1.0 Rx4.35 Wx1.25 Ox0.99", useUnmergedTree = true).assertIsDisplayed()
 
         val nameBounds = name.getUnclippedBoundsInRoot()
         val rateBounds = rateBadge.getUnclippedBoundsInRoot()

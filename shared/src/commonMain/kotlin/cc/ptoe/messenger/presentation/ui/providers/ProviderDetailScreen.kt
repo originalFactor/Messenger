@@ -745,7 +745,10 @@ private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Do
     val isFree = rates.all { it != null && it == 0.0 }
     val formatted = rates.map { it?.let { rate -> "×${formatRate(rate)}" } ?: "—" }
     val label = if (isFree) stringResource(Res.string.providers_model_rates_free)
-        else formatted.joinToString(" · ")
+        else listOf("I", "R", "W", "O").zip(rates).joinToString(" ") { (prefix, rate) ->
+            val number = rate?.let { formatRate(it).let { value -> if ('.' in value) value else "$value.0" } } ?: "—"
+            "${prefix}x$number"
+        }
     val description = if (isFree) stringResource(Res.string.providers_model_rates_free)
         else stringResource(Res.string.providers_model_rates_cache_write, *formatted.toTypedArray())
     Surface(
