@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.projects
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -33,7 +37,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -142,7 +145,7 @@ fun ProjectConversationsScreen(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val enableContextMenu = windowSizeClassFor(maxWidth) != WindowSizeClass.Compact
 
-        Scaffold(
+        ExpressiveScaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
                 if (uiState.isMultiSelectMode) {
@@ -170,11 +173,11 @@ fun ProjectConversationsScreen(
                         }
                     )
                 } else {
-                    TopAppBar(
+                    ExpressiveTopAppBar(
                         title = { Text(text = title, maxLines = 1) },
                         navigationIcon = {
                             if (showBackButton) {
-                                IconButton(onClick = onBackClick) {
+                                androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                                     Icon(
                                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                         contentDescription = stringResource(Res.string.action_back)

@@ -16,6 +16,9 @@
 
 package cc.ptoe.messenger.presentation.ui.components
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,29 +56,13 @@ fun <T> SingleChoiceDialog(
         onDismissRequest = onDismiss,
         title = { Text(text = title) },
         text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                items.forEach { item ->
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)) {
+                items.forEachIndexed { index, item ->
                     val id = itemId(item)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = id == selectedId,
-                                onClick = { selectedId = id }
-                            )
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = id == selectedId,
-                            onClick = { selectedId = id }
-                        )
-                        Text(
-                            text = itemLabel(item),
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
+                    ExpressiveChoiceRow(
+                        label = itemLabel(item), selected = id == selectedId,
+                        onClick = { selectedId = id }, index = index, count = items.size,
+                    )
                 }
             }
         },

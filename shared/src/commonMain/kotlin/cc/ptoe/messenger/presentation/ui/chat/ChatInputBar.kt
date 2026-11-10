@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package cc.ptoe.messenger.presentation.ui.chat
 
 import androidx.compose.foundation.combinedClickable
@@ -184,7 +186,7 @@ fun ChatInputBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
     ) {
         if (pendingImages.isNotEmpty()) {
             PendingImagesStrip(
@@ -215,7 +217,7 @@ fun ChatInputBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
             ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 panelContent?.invoke()
@@ -257,29 +259,26 @@ fun ChatInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
                 .clip(MaterialTheme.shapes.extraLarge)
-                .background(MaterialTheme.colorScheme.surfaceContainer),
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左侧 + 按钮：切换底部功能面板（微信风格）
-            if (showFunctionPanel) IconButton(
-                onClick = {
+            if (showFunctionPanel) androidx.compose.material3.FilledTonalIconToggleButton(
+                checked = functionPanelExpanded,
+                onCheckedChange = { expanded ->
                     if (!functionPanelExpanded) {
                         // 打开面板时收起键盘（微信行为）
                         focusManager.clearFocus()
                     }
-                    functionPanelExpanded = !functionPanelExpanded
+                    functionPanelExpanded = expanded
                 },
                 enabled = (!isGenerating || sendWhileGenerating) && !isAttachingImage,
                 modifier = Modifier
                     .padding(end = 4.dp)
-                    .size(44.dp)
+                    .size(48.dp)
             ) {
                 if (isAttachingImage) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    androidx.compose.material3.LoadingIndicator(modifier = Modifier.size(24.dp))
                 } else {
                     Icon(
                         imageVector = Icons.Default.Add,
@@ -336,7 +335,7 @@ fun ChatInputBar(
                     onClick = onStopClick,
                     modifier = Modifier
                         .clip(CircleShape)
-                        .size(44.dp),
+                        .size(48.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.error
                     )
@@ -351,7 +350,7 @@ fun ChatInputBar(
             if (!isGenerating || sendWhileGenerating) {
                 val canSend = text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments
                 Box(
-                    modifier = Modifier.clip(CircleShape).size(44.dp)
+                    modifier = Modifier.clip(CircleShape).size(48.dp)
                         .background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)
                         .combinedClickable(enabled = canSend, role = androidx.compose.ui.semantics.Role.Button,
                             onClick = onSendClick, onLongClick = onSendLongClick),
@@ -391,7 +390,7 @@ private fun RowScope.FunctionPanelEntry(
             modifier = Modifier
                 .size(64.dp)
                 .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surfaceContainer),
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
             contentAlignment = Alignment.Center
         ) {
             Icon(

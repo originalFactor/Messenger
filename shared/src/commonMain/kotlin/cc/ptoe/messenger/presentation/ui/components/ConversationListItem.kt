@@ -89,32 +89,12 @@ fun ConversationListItem(
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
     val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    val backgroundColor = when {
-        isHighlighted || isMultiSelected -> MaterialTheme.colorScheme.secondaryContainer
-        hovered && enableContextMenu -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> Color.Transparent
-    }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(backgroundColor)
-            .hoverable(interactionSource)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .then(
-                if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                else Modifier
-            )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+    ExpressiveRow(
+        onClick = onClick, onLongClick = onLongClick, selected = isHighlighted || isMultiSelected,
+        interactionSource = interactionSource,
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            .then(if (enableContextMenu) Modifier.onContextMenu(contextMenuState) else Modifier),
     ) {
         if (isMultiSelectMode) {
             Checkbox(

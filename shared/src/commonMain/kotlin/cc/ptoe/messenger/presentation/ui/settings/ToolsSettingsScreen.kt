@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
@@ -50,7 +54,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -132,13 +135,13 @@ fun ToolsSettingsScreen(
     var isAddingServer by remember { mutableStateOf(false) }
     var serverToDelete by remember { mutableStateOf<McpServerConfig?>(null) }
 
-    Scaffold(
+    ExpressiveScaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(text = stringResource(Res.string.tools_settings_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_cancel)
@@ -165,8 +168,8 @@ fun ToolsSettingsScreen(
         ) {
             LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 720.dp),
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)
             ) {
                 if (mcpConfigurationError) {
@@ -196,20 +199,10 @@ fun ToolsSettingsScreen(
                     }
                 } else {
                     items(mcpServers, key = { it.id }) { server ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer
-                            )
+                        cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                            onClick = { editingServer = server },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = server.name,
@@ -247,7 +240,6 @@ fun ToolsSettingsScreen(
                                         changeServer { mcpManager.toggleServer(server.id, checked) }
                                     }
                                 )
-                            }
                         }
                     }
                 }

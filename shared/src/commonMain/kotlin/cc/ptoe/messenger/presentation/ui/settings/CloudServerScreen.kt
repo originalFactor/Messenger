@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,7 +40,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -96,13 +99,13 @@ fun CloudServerScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    Scaffold(
+    ExpressiveScaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(stringResource(Res.string.cloud_server_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                     }
                 }

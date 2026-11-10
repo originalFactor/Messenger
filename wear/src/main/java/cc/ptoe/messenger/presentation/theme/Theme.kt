@@ -18,16 +18,25 @@ package cc.ptoe.messenger.presentation.theme
 
 import androidx.compose.runtime.Composable
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.MotionScheme
+import androidx.compose.ui.graphics.Color
 
 @Composable
 fun MessengerTheme(
     content: @Composable () -> Unit
 ) {
-    /**
-     * Empty theme to customize for your app.
-     * See: https://developer.android.com/jetpack/compose/designsystems/custom
-     */
     MaterialTheme(
-        content = content
+        colorScheme = ColorScheme(
+            primary = Color(0xFF8BD5C1), primaryDim = Color(0xFF6CB9A5),
+            primaryContainer = Color(0xFF005143), onPrimary = Color(0xFF00382E), onPrimaryContainer = Color(0xFFA7F2DD),
+            secondary = Color(0xFFB6CCD0), secondaryDim = Color(0xFF97ADB1),
+            secondaryContainer = Color(0xFF354B4E), onSecondary = Color(0xFF1C3437), onSecondaryContainer = Color(0xFFD2E9EC),
+            tertiary = Color(0xFFF5B5A7), tertiaryDim = Color(0xFFD4998C),
+            tertiaryContainer = Color(0xFF6A2E24), onTertiary = Color(0xFF4A170F), onTertiaryContainer = Color(0xFFFFDAD2),
+            surfaceContainerLow = Color(0xFF151D1A), surfaceContainer = Color(0xFF19211E), surfaceContainerHigh = Color(0xFF242C29),
+        ),
+        motionScheme = MotionScheme.expressive(),
+        content = content,
     )
 }

@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package cc.ptoe.messenger.presentation.ui.providers
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -56,7 +62,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -199,7 +204,7 @@ fun ProviderDetailScreen(
         val sizeClass = windowSizeClassFor(maxWidth)
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
-        Scaffold(
+        ExpressiveScaffold(
             topBar = {
                 if (canEditModels && uiState.isMultiSelectMode) {
                     MultiSelectTopBar(
@@ -307,10 +312,7 @@ fun ProviderDetailScreen(
                         Row(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.width(24.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            androidx.compose.material3.LoadingIndicator(modifier = Modifier.width(32.dp))
                             Spacer(modifier = Modifier.width(16.dp))
                             Text(stringResource(Res.string.providers_syncing))
                         }
@@ -408,7 +410,7 @@ internal fun ProviderDetailTopBar(
     onEditProviderClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    TopAppBar(
+    ExpressiveTopAppBar(
         modifier = modifier,
         title = {
             Text(
@@ -418,7 +420,7 @@ internal fun ProviderDetailTopBar(
             )
         },
         navigationIcon = {
-            IconButton(onClick = onBackClick) {
+            androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = stringResource(Res.string.action_back)
@@ -606,32 +608,11 @@ internal fun ModelListItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val contextMenuState = rememberContextMenuState()
-    val hovered by interactionSource.collectIsHoveredAsState()
     // 多选只改变整行底色：行内控件与排版保持不变，避免长按后列表“跳版”。
-    val backgroundColor = when {
-        isMultiSelectMode && isSelected -> MaterialTheme.colorScheme.secondaryContainer
-        hovered && enableContextMenu -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> Color.Transparent
-    }
-    Row(
-        modifier = modifier
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(backgroundColor)
-            .hoverable(interactionSource)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .then(
-                if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                else Modifier
-            )
-            .semantics { if (isMultiSelectMode) selected = isSelected }
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+        onClick = onClick, onLongClick = onLongClick, selected = isMultiSelectMode && isSelected,
+        interactionSource = interactionSource,
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp).then(if (enableContextMenu) Modifier.onContextMenu(contextMenuState) else Modifier),
     ) {
         Column(
             modifier = Modifier.weight(1f)

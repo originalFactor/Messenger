@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.conversations
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
@@ -58,7 +62,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -162,12 +165,12 @@ fun ConversationSettingsScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
+        ExpressiveScaffold(
             topBar = {
-                TopAppBar(
+                ExpressiveTopAppBar(
                     title = { Text(stringResource(Res.string.conversation_settings_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBackClick) {
+                        androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(Res.string.action_back)
@@ -545,12 +548,12 @@ private fun ConversationToolsPage(
     onToolEnabledChange: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(stringResource(Res.string.agent_edit_tools_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_back)
@@ -627,51 +630,10 @@ private fun ToolToggleCard(
     enabled: Boolean = true,
     icon: ImageVector? = null
 ) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (subtitle != null) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                enabled = enabled
-            )
-        }
-    }
+    cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow(
+        title = title, subtitle = subtitle, checked = checked, onCheckedChange = onCheckedChange,
+        enabled = enabled, icon = icon, modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
+    )
 }
 
 private const val SUBPAGE_TRANSITION_MS = 350

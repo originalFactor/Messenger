@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package cc.ptoe.messenger.presentation.ui.conversations
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -34,7 +40,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -81,12 +86,12 @@ fun ProviderPickerScreen(
         }
     }
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(stringResource(Res.string.conversation_settings_pick_provider_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_back)
@@ -122,8 +127,13 @@ fun ProviderPickerScreen(
                 )
                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filtered, key = { it.id }) { provider ->
-                        ListItem(
-                            headlineContent = { Text(provider.name) },
+                        androidx.compose.material3.ListItem(
+                            selected = provider.id == selectedProviderId,
+                            onClick = { onProviderSelected(provider.id) },
+                            shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(),
+                            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright,
+                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer),
+                            content = { Text(provider.name) },
                             supportingContent = {
                                 Text(
                                     text = provider.baseUrl,
@@ -142,7 +152,7 @@ fun ProviderPickerScreen(
                                     )
                                 }
                             },
-                            modifier = Modifier.clickable { onProviderSelected(provider.id) }
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
                         )
                     }
                 }

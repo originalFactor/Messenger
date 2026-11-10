@@ -66,7 +66,7 @@ fun ConversationsDualPaneScreen(
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxHeight()
                 .width(360.dp)
@@ -95,7 +95,7 @@ fun ConversationsDualPaneScreen(
         )
 
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxHeight()
                 .weight(1f)

@@ -142,7 +142,7 @@ private fun ProvidersNavigation(
     if (dualPane) {
         Row(modifier = modifier.fillMaxSize()) {
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxHeight().width(360.dp),
                 content = listContent
             )
@@ -152,13 +152,13 @@ private fun ProvidersNavigation(
                 color = MaterialTheme.colorScheme.outlineVariant
             )
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxHeight().weight(1f),
                 content = detailContent
             )
         }
     } else {
-        Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxSize()) {
             if (isEditing || selectedProviderId != null || selectedModelId != null) detailContent()
             else listContent()
         }

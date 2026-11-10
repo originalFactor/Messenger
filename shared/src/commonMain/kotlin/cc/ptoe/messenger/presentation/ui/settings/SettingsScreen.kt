@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -43,7 +45,6 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -177,13 +178,13 @@ fun SettingsScreen(
         }
     }
 
-    Scaffold(
+    ExpressiveScaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(text = stringResource(Res.string.settings_title)) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                 ),
                 scrollBehavior = scrollBehavior
@@ -201,8 +202,8 @@ fun SettingsScreen(
         ) {
             LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
                     .widthIn(max = 720.dp)
+                    .fillMaxWidth()
                     .navigationBarsPadding()
                     .nestedScroll(scrollBehavior.nestedScrollConnection),
             ) {
@@ -286,6 +287,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_cloud),
+                    groupIndex = 0, groupCount = 5,
                     // 昵称是用户中心设置的显示名；未设置时回落到邮箱。
                     subtitle = cloudUser?.displayName?.takeIf { it.isNotBlank() }
                         ?: cloudUser?.email
@@ -297,6 +299,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_providers),
+                    groupIndex = 1, groupCount = 5,
                     subtitle = stringResource(Res.string.settings_providers_desc),
                     icon = Icons.Default.Cloud,
                     onClick = onProvidersClick
@@ -305,6 +308,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_tools),
+                    groupIndex = 2, groupCount = 5,
                     subtitle = stringResource(Res.string.settings_tools_desc),
                     icon = Icons.Default.Build,
                     onClick = onToolsClick
@@ -313,6 +317,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.acp_settings),
+                    groupIndex = 3, groupCount = 5,
                     subtitle = stringResource(Res.string.acp_settings_desc),
                     icon = Icons.Default.Build,
                     onClick = onAcpSettingsClick,
@@ -321,6 +326,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_clear_data),
+                    groupIndex = 4, groupCount = 5,
                     subtitle = stringResource(Res.string.settings_clear_data_desc),
                     icon = Icons.Default.Delete,
                     titleColor = MaterialTheme.colorScheme.error,
@@ -360,6 +366,7 @@ fun SettingsScreen(
                 val versionCode = appVersionCode()
                 ListItem(
                     title = stringResource(Res.string.settings_version),
+                    groupIndex = 0, groupCount = 2,
                     subtitle = versionName?.let { name ->
                         if (versionCode != null) "$name ($versionCode)" else name
                     } ?: stringResource(Res.string.settings_version_unknown),
@@ -371,6 +378,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     title = stringResource(Res.string.settings_licenses),
+                    groupIndex = 1, groupCount = 2,
                     subtitle = stringResource(Res.string.settings_licenses_desc),
                     icon = Icons.Default.Code,
                     onClick = onLicensesClick

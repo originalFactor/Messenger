@@ -27,10 +27,11 @@ import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.ShortNavigationBar
+import androidx.compose.material3.ShortNavigationBarItem
+import androidx.compose.material3.WideNavigationRail
+import androidx.compose.material3.WideNavigationRailDefaults
+import androidx.compose.material3.WideNavigationRailItem
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
@@ -79,20 +80,20 @@ sealed class BottomNavItem(
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BottomNavBar(
     currentRoute: String?,
     onItemClick: (BottomNavItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    NavigationBar(
+    ShortNavigationBar(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp,
         windowInsets = WindowInsets(0, 0, 0, 0)
     ) {
         BottomNavItem.items.forEach { item ->
-            NavigationBarItem(
+            ShortNavigationBarItem(
                 selected = currentRoute == item.screen.route,
                 onClick = { onItemClick(item) },
                 icon = {
@@ -120,17 +121,16 @@ fun BottomNavBar(
  * Each destination is wrapped in a [TooltipBox] so desktop users get a
  * descriptive tooltip on hover (touch surfaces simply never trigger it).
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun NavigationRailBar(
     currentRoute: String?,
     onItemClick: (BottomNavItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    NavigationRail(
+    WideNavigationRail(
         modifier = modifier,
-        containerColor = Color.Transparent,
-        contentColor = MaterialTheme.colorScheme.onSurface
+        colors = WideNavigationRailDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Spacer(modifier = Modifier.height(8.dp))
         BottomNavItem.items.forEach { item ->
@@ -146,7 +146,8 @@ fun NavigationRailBar(
                 },
                 state = rememberTooltipState()
             ) {
-                NavigationRailItem(
+                WideNavigationRailItem(
+                    railExpanded = false,
                     selected = currentRoute == item.screen.route,
                     onClick = { onItemClick(item) },
                     icon = {

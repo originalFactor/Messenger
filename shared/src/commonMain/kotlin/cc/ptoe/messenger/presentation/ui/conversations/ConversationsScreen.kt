@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.conversations
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,7 +39,6 @@ import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleFloatingActionButton
 import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
@@ -160,14 +161,14 @@ fun ConversationsScreen(
         val sizeClass = windowSizeClassFor(maxWidth)
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
-        Scaffold(
+        ExpressiveScaffold(
             modifier = Modifier.fillMaxSize(),
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 androidx.compose.material3.LargeFlexibleTopAppBar(
                     title = { Text(text = stringResource(Res.string.conversations_title)) },
                     colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                     ),
                     modifier = Modifier.statusBarsPadding()

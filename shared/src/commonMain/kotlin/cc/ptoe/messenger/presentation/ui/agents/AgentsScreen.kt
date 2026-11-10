@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.agents
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveRow
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -59,7 +63,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
@@ -151,7 +154,7 @@ fun AgentsScreen(
         val sizeClass = windowSizeClassFor(maxWidth)
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
-        Scaffold(
+        ExpressiveScaffold(
             contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             topBar = {
                 if (uiState.isMultiSelectMode) {
@@ -263,8 +266,8 @@ fun AgentsScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier
-                            .fillMaxWidth()
                             .widthIn(max = 720.dp)
+                            .fillMaxWidth()
                             .navigationBarsPadding(),
                     ) {
                     items(agents, key = { it.agent.id }) { item ->
@@ -372,32 +375,12 @@ private fun AgentListItem(
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
     val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    val backgroundColor = when {
-        isMultiSelected -> MaterialTheme.colorScheme.secondaryContainer
-        hovered && enableContextMenu -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> Color.Transparent
-    }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(backgroundColor)
-            .hoverable(interactionSource)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .then(
-                if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                else Modifier
-            )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+    ExpressiveRow(
+        onClick = onClick, onLongClick = onLongClick, selected = isMultiSelected,
+        interactionSource = interactionSource,
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            .then(if (enableContextMenu) Modifier.onContextMenu(contextMenuState) else Modifier),
     ) {
         if (isMultiSelectMode) {
             Checkbox(

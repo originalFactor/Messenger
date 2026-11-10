@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
@@ -63,7 +67,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -265,13 +268,13 @@ fun CloudSettingsScreen(
     // 主页面始终渲染在底层，子页面作为覆盖层叠在上面——预测性返回划出时
     // 露出的是主页面而非空白背景。
     Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
+        ExpressiveScaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
-                TopAppBar(
+                ExpressiveTopAppBar(
                     title = { Text(stringResource(Res.string.cloud_settings_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBackClick) {
+                        androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                         }
                     },

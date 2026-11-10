@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,7 +44,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -144,9 +147,9 @@ fun ModelDetailScreen(
         )
     }
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = {
                     Text(
                         text = uiState.model?.displayName
@@ -156,7 +159,7 @@ fun ModelDetailScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_back)
@@ -434,22 +437,8 @@ private fun CapabilitySwitchRow(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled
-        )
-    }
+    cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow(
+        title = label, checked = checked, onCheckedChange = onCheckedChange,
+        enabled = enabled, modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
+    )
 }

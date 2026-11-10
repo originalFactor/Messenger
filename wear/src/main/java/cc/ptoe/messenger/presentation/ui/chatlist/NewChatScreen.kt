@@ -107,15 +107,11 @@ private fun AgentPickerItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    androidx.wear.compose.material3.Card(
+        onClick = onClick, enabled = enabled, modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
     ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box {
             WearAvatar(
                 avatarPath = agent.avatarPath,
@@ -163,5 +159,6 @@ private fun AgentPickerItem(
                 )
             }
         }
+    }
     }
 }

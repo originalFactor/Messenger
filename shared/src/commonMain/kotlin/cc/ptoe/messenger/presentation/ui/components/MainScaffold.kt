@@ -70,7 +70,7 @@ fun MainScaffold(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
     ) {
         val sizeClass = windowSizeClassFor(maxWidth)
 
@@ -79,7 +79,7 @@ fun MainScaffold(
                 // Mobile phone: fixed bottom NavigationBar.
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     // The bottom navigation wrapper owns the system navigation inset;
                     // child screens own their top app-bar insets.
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -119,7 +119,7 @@ fun MainScaffold(
                 Row(modifier = Modifier.fillMaxSize()) {
                     if (showTopLevelNav) {
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            color = MaterialTheme.colorScheme.surfaceContainer,
                             modifier = Modifier.fillMaxHeight()
                         ) {
                             NavigationRailBar(

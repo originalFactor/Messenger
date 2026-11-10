@@ -41,3 +41,5 @@ When investigating:
 5. Rebuild and confirm the rule in `configuration.txt`, the class in `usage.txt`/`mapping.txt`, and its presence in the APK. Never `-keep class ** { *; }`.
 6. If unclear, temporarily add `-whyareyoukeeping class <FQN>`, read the reason chain, remove the diagnostic rule afterwards.
 7. Smoke-test the minified APK; use `retrace` with the matching `mapping.txt` for crash stacks. A green R8 build does not prove runtime reflection works.
+
+- **Wear Expressive presentation**: the Wear Material3 theme shares the native mint/neutral tonal palette and explicitly selects MotionScheme.expressive(). Conversation and Agent-picking entries use Wear Material3 Card for platform touch feedback and shape behavior. Keep the two-screen chat flow, rotary scrolling and round-screen clearances; do not import phone navigation or provider/settings features.

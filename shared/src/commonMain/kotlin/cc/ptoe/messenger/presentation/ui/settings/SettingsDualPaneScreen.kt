@@ -50,7 +50,7 @@ fun SettingsDualPaneScreen(
 
     Row(modifier = modifier.fillMaxSize()) {
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxHeight()
                 .width(360.dp)
@@ -71,7 +71,7 @@ fun SettingsDualPaneScreen(
         )
 
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxHeight()
                 .weight(1f)

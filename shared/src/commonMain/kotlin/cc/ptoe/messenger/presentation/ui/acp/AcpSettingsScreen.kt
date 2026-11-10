@@ -1,5 +1,9 @@
 package cc.ptoe.messenger.presentation.ui.acp
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -61,18 +65,20 @@ fun AcpSettingsScreen(onBackClick: () -> Unit) {
         try { reload() } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { snackbar.showSnackbar(failure.message.orEmpty()) }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.acp_settings)) }, navigationIcon = {
-        IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) }
+    ExpressiveScaffold(topBar = { ExpressiveTopAppBar(title = { Text(stringResource(Res.string.acp_settings)) }, navigationIcon = {
+        androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) }
     }) }, snackbarHost = { SnackbarHost(snackbar) }, floatingActionButton = {
         if (ready && !busy) IntegrationFab(expanded, { expanded = it }, { adding = true }, { store = true })
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            LazyColumn(Modifier.fillMaxWidth().widthIn(max = 720.dp), contentPadding = PaddingValues(bottom = 96.dp)) {
+            LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxWidth(), contentPadding = PaddingValues(bottom = 96.dp)) {
                 item { Text(stringResource(Res.string.acp_config_note), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium) }
                 if (ready && profiles.isEmpty()) item { Text(stringResource(Res.string.integrations_empty), Modifier.padding(32.dp)) }
                 items(profiles, key = { it.id }) { profile ->
-                    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                        onClick = { editing = profile }, enabled = !busy,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    ) {
                             Column(Modifier.weight(1f)) {
                                 Text(profile.name, style = MaterialTheme.typography.titleMedium)
                                 if (profile.description.isNotBlank()) Text(profile.description, style = MaterialTheme.typography.bodyMedium)
@@ -81,7 +87,6 @@ fun AcpSettingsScreen(onBackClick: () -> Unit) {
                             IconButton(enabled = !busy, onClick = { editing = profile }) { Icon(Icons.Default.Edit, stringResource(Res.string.action_edit)) }
                             IconButton(enabled = !busy, onClick = { deleting = profile }) { Icon(Icons.Default.Delete, stringResource(Res.string.action_delete)) }
                             Switch(profile.enabled, { enabled -> save(profiles.map { if (it.id == profile.id) it.copy(enabled = enabled) else it }) }, enabled = !busy)
-                        }
                     }
                 }
             }

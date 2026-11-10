@@ -78,31 +78,13 @@ fun ThemePickerDialog(
             Text(text = stringResource(Res.string.theme_picker_title))
         },
         text = {
-            Column {
-                themeOptions.forEach { option ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selectedTheme = option.mode }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = selectedTheme == option.mode,
-                            onClick = { selectedTheme = option.mode }
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Icon(
-                            imageVector = option.icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = option.label,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
+            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)) {
+                themeOptions.forEachIndexed { index, option ->
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveChoiceRow(
+                        label = option.label, selected = selectedTheme == option.mode,
+                        onClick = { selectedTheme = option.mode }, index = index, count = themeOptions.size,
+                        leadingContent = { Icon(option.icon, null, Modifier.padding(end = 16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    )
                 }
             }
         },

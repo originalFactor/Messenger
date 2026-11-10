@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -38,7 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -100,16 +103,16 @@ fun ProviderEditScreen(
         }
     }
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = {
                     Text(
                         text = if (uiState.isEditing) stringResource(Res.string.providers_edit_title) else stringResource(Res.string.providers_new_title)
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_back)

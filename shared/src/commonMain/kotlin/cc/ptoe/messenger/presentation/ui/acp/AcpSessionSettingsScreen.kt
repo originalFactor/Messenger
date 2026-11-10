@@ -1,5 +1,7 @@
 package cc.ptoe.messenger.presentation.ui.acp
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.toggleableState
@@ -68,7 +70,7 @@ internal fun AcpSessionSettingsScreen(
         override fun <T> fastSpatialSpec(): androidx.compose.animation.core.FiniteAnimationSpec<T> = androidx.compose.animation.core.tween(180)
     } }
     MaterialTheme(motionScheme = boundedMotion) {
-        Scaffold(
+        ExpressiveScaffold(
             modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             topBar = {
@@ -107,7 +109,7 @@ internal fun AcpSessionSettingsScreen(
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).semantics(mergeDescendants = true) {
                                     if (boolean) { role = Role.Switch; toggleableState = if (checked) ToggleableState.On else ToggleableState.Off }
                                 },
-                                shapes = connectedSettingShapes(index, options.size),
+                                shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(index, options.size),
                                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
                                 leadingContent = { Icon(if (boolean) Icons.Default.Tune else Icons.Default.Settings, null) },
                                 supportingContent = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -148,7 +150,7 @@ internal fun AcpSessionSettingsScreen(
                                     })
                                 },
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).semantics(mergeDescendants = true) { role = Role.RadioButton; selected = selectedChoice },
-                                shapes = connectedSettingShapes(index, choices.size),
+                                shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(index, choices.size),
                                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright,
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                     selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -164,21 +166,6 @@ internal fun AcpSessionSettingsScreen(
             )
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun connectedSettingShapes(index: Int, count: Int): ListItemShapes {
-    val outer = MaterialTheme.shapes.extraLarge
-    val inner = MaterialTheme.shapes.extraSmall
-    val shape = outer.copy(
-        topStart = if (index == 0) outer.topStart else inner.topStart,
-        topEnd = if (index == 0) outer.topEnd else inner.topEnd,
-        bottomStart = if (index == count - 1) outer.bottomStart else inner.bottomStart,
-        bottomEnd = if (index == count - 1) outer.bottomEnd else inner.bottomEnd,
-    )
-    return ListItemDefaults.shapes(shape = shape, pressedShape = outer,
-        selectedShape = shape, focusedShape = shape, hoveredShape = shape)
 }
 
 /** Agent-owned choices are shown next to the composer, including model-dependent effort options. */

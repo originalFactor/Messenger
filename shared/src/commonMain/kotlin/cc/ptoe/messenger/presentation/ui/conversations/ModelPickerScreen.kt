@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package cc.ptoe.messenger.presentation.ui.conversations
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -33,7 +39,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -89,12 +94,12 @@ fun ModelPickerScreen(
     val providerName = provider?.name
     val title = if (providerName.isNullOrBlank()) baseTitle else "$baseTitle · $providerName"
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(Res.string.action_back)
@@ -130,8 +135,13 @@ fun ModelPickerScreen(
                 )
                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filtered, key = { it.id }) { model ->
-                        ListItem(
-                            headlineContent = { Text(model.displayName) },
+                        androidx.compose.material3.ListItem(
+                            selected = model.id == selectedModelId,
+                            onClick = { onModelSelected(model.id) },
+                            shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(),
+                            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright,
+                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer),
+                            content = { Text(model.displayName) },
                             supportingContent = {
                                 if (model.displayName != model.modelId) {
                                     Text(
@@ -152,7 +162,7 @@ fun ModelPickerScreen(
                                     )
                                 }
                             },
-                            modifier = Modifier.clickable { onModelSelected(model.id) }
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
                         )
                     }
                 }

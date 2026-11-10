@@ -53,8 +53,11 @@ fun NewConversationDialog(
         text = { Column {
             LazyColumn(Modifier.heightIn(max = 400.dp)) {
                 items(choices, key = { it.id }) { choice ->
-                    Row(Modifier.fillMaxWidth().clickable(enabled = !busy) { selected = choice.id }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected == choice.id, onClick = { selected = choice.id }, enabled = !busy)
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                        onClick = { selected = choice.id }, selected = selected == choice.id, enabled = !busy,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    ) {
+                        RadioButton(selected == choice.id, onClick = null, enabled = !busy)
                         Column(Modifier.weight(1f)) {
                             Text(choice.name, style = MaterialTheme.typography.titleSmall)
                             if (choice.id.startsWith("acp:")) Text(stringResource(Res.string.acp_agent_suffix), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

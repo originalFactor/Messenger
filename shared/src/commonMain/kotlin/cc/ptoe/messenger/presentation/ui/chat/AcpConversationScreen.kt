@@ -229,7 +229,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                             Text(agentName, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                         }
                     } },
-                    navigationIcon = { if (showBackButton) IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) } },
+                    navigationIcon = { if (showBackButton) androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) } },
                     actions = {
                         TooltipBox(positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above), tooltip = { PlainTooltip { Text(stringResource(Res.string.conversation_settings_title)) } }, state = rememberTooltipState()) {
                             IconButton(enabled = active.isEmpty() && !settingsBusy && !loading, onClick = { showSettings = true; readSettings() }) {
@@ -318,7 +318,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             }
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.surface)) {
-                if (messages.isEmpty() && loading) CircularProgressIndicator(Modifier.align(Alignment.Center))
+                if (messages.isEmpty() && loading) cc.ptoe.messenger.presentation.ui.components.LoadingIndicator(Modifier.align(Alignment.Center))
                 else if (messages.isEmpty()) EmptyChatState(null, agentName, Modifier.align(Alignment.Center))
                 else ChatMessageList(
                     chatItems = chatItems, isGenerating = active.isNotEmpty(), streamingContent = liveContent, streamingMessageId = liveId, streamingDiff = null,

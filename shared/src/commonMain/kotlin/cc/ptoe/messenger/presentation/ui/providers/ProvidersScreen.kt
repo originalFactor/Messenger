@@ -16,6 +16,10 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveRow
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -49,7 +53,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -115,12 +118,12 @@ fun ProvidersScreen(
         val sizeClass = windowSizeClassFor(maxWidth)
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
-        Scaffold(
+        ExpressiveScaffold(
             topBar = {
                 LargeFlexibleTopAppBar(
                     title = { Text(text = stringResource(Res.string.providers_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBackClick) {
+                        androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(Res.string.action_back)
@@ -128,7 +131,7 @@ fun ProvidersScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                     )
                 )
@@ -158,8 +161,8 @@ fun ProvidersScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier
-                            .fillMaxWidth()
                             .widthIn(max = 720.dp)
+                            .fillMaxWidth()
                     ) {
                         items(providers, key = { it.provider.id }) { item ->
                             ProviderListItem(
@@ -205,28 +208,14 @@ internal fun ProviderListItem(
     var expanded by remember { mutableStateOf(false) }
     val contextMenuState = rememberContextMenuState()
     val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
     // 内置云 AI 服务商由登录流程自动配置，不提供编辑与删除入口。
     val isBuiltin = item.provider.id == BUILTIN_PROVIDER_ID
-    val backgroundColor = when {
-        hovered && enableContextMenu -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> Color.Transparent
-    }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(backgroundColor)
-            .hoverable(interactionSource)
-            .clickable(onClick = onClick)
-            .then(
-                if (enableContextMenu) Modifier.onContextMenu(contextMenuState)
-                else Modifier
-            )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+    ExpressiveRow(
+        onClick = onClick, onLongClick = null, selected = false,
+        interactionSource = interactionSource,
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            .then(if (enableContextMenu) Modifier.onContextMenu(contextMenuState) else Modifier),
     ) {
         Icon(
             imageVector = Icons.Default.Cloud,

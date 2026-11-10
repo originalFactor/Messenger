@@ -262,7 +262,7 @@ private fun MessengerChatScreen(
                 },
                 navigationIcon = {
                     if (showBackButton) {
-                        IconButton(onClick = onBackClick) {
+                        androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(Res.string.action_back)
@@ -340,7 +340,7 @@ private fun MessengerChatScreen(
                 .background(MaterialTheme.colorScheme.surface)
         ) {
             if (messages.isEmpty() && isLoadingHistory) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                cc.ptoe.messenger.presentation.ui.components.LoadingIndicator(modifier = Modifier.align(Alignment.Center))
             } else if (messages.isEmpty()) {
                 EmptyChatState(
                     avatar = agent?.avatar,

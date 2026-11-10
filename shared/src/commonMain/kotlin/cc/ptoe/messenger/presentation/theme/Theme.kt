@@ -52,6 +52,13 @@ private val DarkColorScheme = darkColorScheme(
     background = Color(0xFF0D1513),
     surface = Color(0xFF0D1513),
     surfaceVariant = Color(0xFF3F4946),
+    surfaceDim = Color(0xFF0D1513),
+    surfaceBright = Color(0xFF333B38),
+    surfaceContainerLowest = Color(0xFF080F0D),
+    surfaceContainerLow = Color(0xFF151D1A),
+    surfaceContainer = Color(0xFF19211E),
+    surfaceContainerHigh = Color(0xFF242C29),
+    surfaceContainerHighest = Color(0xFF2F3734),
     onSurface = Color(0xFFE0E3DF),
     onSurfaceVariant = Color(0xFFBEC9C4),
     outline = Color(0xFF89938F),
@@ -74,6 +81,13 @@ private val LightColorScheme = lightColorScheme(
     background = Color(0xFFF6FBF8),
     surface = Color(0xFFF6FBF8),
     surfaceVariant = Color(0xFFDCE5E0),
+    surfaceDim = Color(0xFFD6DDD8),
+    surfaceBright = Color(0xFFF6FBF8),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF0F5F1),
+    surfaceContainer = Color(0xFFEAF0EB),
+    surfaceContainerHigh = Color(0xFFE4EAE5),
+    surfaceContainerHighest = Color(0xFFDEE4DF),
     onSurface = Color(0xFF171D1A),
     onSurfaceVariant = Color(0xFF3F4945),
     outline = Color(0xFF6F7974),
@@ -81,10 +95,10 @@ private val LightColorScheme = lightColorScheme(
 )
 
 private val ExpressiveShapes = Shapes(
-    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-    small = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-    medium = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-    large = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+    small = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
     extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(32.dp)
 )
 
@@ -136,7 +150,7 @@ fun MessengerTheme(
 
     PlatformThemeSideEffects(
         darkTheme = darkTheme,
-        navigationBarColor = colorScheme.surface
+        navigationBarColor = colorScheme.surfaceContainer
     )
 
     // Material 3 Expressive：expressive MotionScheme 带来规范的弹性组件动效

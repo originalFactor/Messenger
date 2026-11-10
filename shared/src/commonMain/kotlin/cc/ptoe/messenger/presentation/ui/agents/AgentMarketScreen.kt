@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package cc.ptoe.messenger.presentation.ui.agents
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
+
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,7 +53,6 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -120,12 +125,12 @@ fun AgentMarketScreen(
         }
     }
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(stringResource(Res.string.agent_market_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                     }
                 },
@@ -161,7 +166,7 @@ fun AgentMarketScreen(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
-                ) { CircularProgressIndicator() }
+                ) { androidx.compose.material3.ContainedLoadingIndicator() }
                 uiState.error != null && uiState.agents.isEmpty() -> EmptyState(
                     icon = Icons.Default.Storefront,
                     message = uiState.error ?: stringResource(Res.string.error_load_failed),
@@ -200,7 +205,7 @@ fun AgentMarketScreen(
                                     .padding(16.dp)
                             ) {
                                 if (uiState.isLoadingMore) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    androidx.compose.material3.LoadingIndicator(modifier = Modifier.size(24.dp))
                                 } else {
                                     Text(stringResource(Res.string.action_load_more))
                                 }
@@ -220,12 +225,8 @@ private fun MarketAgentListItem(
     isImporting: Boolean,
     onImportClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+        onClick = onClick, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
     ) {
         AgentAvatar(avatar = agent.avatarUrl, allowRemote = true, size = 48.dp)
         Spacer(Modifier.width(16.dp))
@@ -246,7 +247,7 @@ private fun MarketAgentListItem(
             contentPadding = ButtonDefaults.ContentPadding
         ) {
             if (isImporting) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                androidx.compose.material3.LoadingIndicator(modifier = Modifier.size(24.dp))
             } else {
                 Icon(Icons.Default.Download, contentDescription = null)
             }
@@ -274,12 +275,12 @@ fun AgentMarketDetailScreen(
     val scope = rememberCoroutineScope()
     val strImportFailed = stringResource(Res.string.agent_market_import_failed)
 
-    Scaffold(
+    ExpressiveScaffold(
         topBar = {
-            TopAppBar(
+            ExpressiveTopAppBar(
                 title = { Text(stringResource(Res.string.agent_market_detail_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                     }
                 }
@@ -292,7 +293,7 @@ fun AgentMarketDetailScreen(
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
-            ) { CircularProgressIndicator() }
+            ) { androidx.compose.material3.ContainedLoadingIndicator() }
             uiState.agent == null -> EmptyState(
                 icon = Icons.Default.Storefront,
                 message = uiState.error ?: stringResource(Res.string.error_agent_not_found),

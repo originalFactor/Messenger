@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ListItem(
     title: String,
@@ -51,53 +52,32 @@ fun ListItem(
     iconColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     /** 卡片背景相对父容器的水平外边距；父容器已有边距（如表单列）时传 0 对齐相邻输入框。 */
     horizontalMargin: Dp = 12.dp,
+    groupIndex: Int = 0,
+    groupCount: Int = 1,
     onClick: (() -> Unit)? = null
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = horizontalMargin, vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .let {
-                if (onClick != null) it.clickable(onClick = onClick) else it
-            }
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = iconColor
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-        }
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = titleColor
-            )
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = subtitleColor
-                )
-            }
-        }
-        if (showArrow) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    val leading: (@Composable () -> Unit)? = icon?.let { image -> {
+        Icon(image, null, Modifier.size(24.dp), tint = iconColor)
+    } }
+    val supporting: (@Composable () -> Unit)? = subtitle?.let { text -> {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = subtitleColor)
+    } }
+    val trailing: (@Composable () -> Unit)? = if (showArrow) ({
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }) else null
+    val itemModifier = modifier.fillMaxWidth().padding(horizontal = horizontalMargin, vertical = 1.dp)
+    ExpressiveListMotion {
+        if (onClick != null) androidx.compose.material3.ListItem(
+            onClick = onClick, modifier = itemModifier,
+            shapes = expressiveItemShapes(groupIndex, groupCount),
+            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
+            leadingContent = leading, supportingContent = supporting, trailingContent = trailing,
+            content = { Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor) },
+        ) else androidx.compose.material3.ListItem(
+            modifier = itemModifier.clip(MaterialTheme.shapes.extraLarge),
+            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
+            leadingContent = leading, supportingContent = supporting, trailingContent = trailing,
+            headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor) },
+        )
     }
 }
