@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,8 +57,6 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -301,16 +300,12 @@ fun CloudSettingsScreen(
                     modifier = Modifier
                         .imePadding()
                         .verticalScroll(rememberScrollState())
-                        .widthIn(max = 600.dp)
+                        .widthIn(max = 720.dp)
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = stringResource(Res.string.cloud_settings_account_sync),
-                            style = MaterialTheme.typography.headlineSmall
-                        )
                         Text(
                             text = stringResource(Res.string.cloud_settings_sync_desc),
                             style = MaterialTheme.typography.bodyLarge,
@@ -319,7 +314,7 @@ fun CloudSettingsScreen(
                     }
 
                     if (user == null) {
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(if (register) Res.string.cloud_settings_create_account else Res.string.cloud_settings_login_account),
                             icon = Icons.Default.Lock
                         ) {
@@ -329,6 +324,7 @@ fun CloudSettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             OutlinedTextField(
+                                shape = MaterialTheme.shapes.large,
                                 value = email,
                                 onValueChange = { email = it },
                                 label = { Text(stringResource(Res.string.cloud_settings_email_label)) },
@@ -337,6 +333,7 @@ fun CloudSettingsScreen(
                                 enabled = !isBusy
                             )
                             OutlinedTextField(
+                                shape = MaterialTheme.shapes.large,
                                 value = password,
                                 onValueChange = { password = it },
                                 label = { Text(stringResource(Res.string.cloud_settings_password_label)) },
@@ -374,7 +371,7 @@ fun CloudSettingsScreen(
                                         viewModel.login(email.trim(), password, normalizedServerUrl, callback)
                                     }
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 enabled = !isBusy &&
                                     email.isNotBlank() &&
                                     password.isNotBlank() &&
@@ -398,7 +395,7 @@ fun CloudSettingsScreen(
                             }
                         }
                     } else {
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.cloud_settings_account),
                             icon = Icons.Default.Cloud
                         ) {
@@ -423,7 +420,7 @@ fun CloudSettingsScreen(
                             }
                         }
 
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.cloud_settings_plan_title),
                             icon = Icons.Default.WorkspacePremium
                         ) {
@@ -433,37 +430,16 @@ fun CloudSettingsScreen(
                             val balance = user!!.quotaBalance ?: entitlements.sumOf { it.balance }
                             val expiresAt = user!!.quotaExpiresAt
                                 ?: entitlements.mapNotNull { it.expiresAt }.maxOrNull()
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = formatQuota(balance),
-                                        style = MaterialTheme.typography.headlineSmall
-                                    )
-                                    Text(
-                                        text = stringResource(Res.string.cloud_settings_plan_balance_label),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = stringResource(Res.string.cloud_settings_plan_expires_label),
-                                        style = MaterialTheme.typography.labelLarge
-                                    )
-                                    Text(
-                                        text = when {
-                                            // 有限期条目取最晚到期；只有不限期条目才是「不限期」；
-                                            // 一条都没有时不该声称不限期。
-                                            expiresAt != null -> formatQuotaExpiry(expiresAt)
-                                            entitlements.isNotEmpty() ->
-                                                stringResource(Res.string.cloud_settings_plan_no_expiry)
-                                            else -> "—"
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
+                            CloudQuotaSummary(
+                                balance = formatQuota(balance),
+                                balanceLabel = stringResource(Res.string.cloud_settings_plan_balance_label),
+                                expiryLabel = stringResource(Res.string.cloud_settings_plan_expires_label),
+                                expiry = when {
+                                    expiresAt != null -> formatQuotaExpiry(expiresAt)
+                                    entitlements.isNotEmpty() -> stringResource(Res.string.cloud_settings_plan_no_expiry)
+                                    else -> "—"
+                                },
+                            )
                             if (entitlements.isEmpty()) {
                                 Text(
                                     text = stringResource(Res.string.cloud_settings_plan_empty),
@@ -480,7 +456,7 @@ fun CloudSettingsScreen(
                             }
                         }
 
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.cloud_redeem_title),
                             icon = Icons.Default.Redeem
                         ) {
@@ -495,6 +471,7 @@ fun CloudSettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 OutlinedTextField(
+                                    shape = MaterialTheme.shapes.large,
                                     value = redeemCode,
                                     onValueChange = { redeemCode = it },
                                     label = { Text(stringResource(Res.string.cloud_redeem_code_label)) },
@@ -524,7 +501,7 @@ fun CloudSettingsScreen(
                             }
                         }
 
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.cloud_settings_sync_data),
                             icon = Icons.Default.Sync
                         ) {
@@ -538,7 +515,7 @@ fun CloudSettingsScreen(
                                     isBusy = true
                                     viewModel.upload { notify(it, localDataUploaded) }
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 enabled = !isBusy
                             ) {
                                 Text(stringResource(Res.string.cloud_settings_upload_sync))
@@ -548,7 +525,7 @@ fun CloudSettingsScreen(
                                     isBusy = true
                                     viewModel.restore { notify(it, cloudDataRestored) }
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 enabled = !isBusy
                             ) {
                                 Text(stringResource(Res.string.cloud_settings_restore))
@@ -558,55 +535,31 @@ fun CloudSettingsScreen(
                             }
                         }
 
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.acp_remote_control),
                             icon = Icons.Default.Cloud
                         ) {
                             RemoteControlSettings(onError = ::showMessage)
                         }
 
-                        CloudSectionCard(
+                        CloudSettingsSection(
                             title = stringResource(Res.string.cloud_settings_account_security),
-                            icon = Icons.Default.Lock
+                            icon = Icons.Default.Lock,
+                            groupedActions = true,
                         ) {
-                            OutlinedButton(
-                                onClick = { showPasswordDialog = true },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !isBusy
-                            ) {
-                                Text(stringResource(Res.string.cloud_settings_change_password))
-                            }
-                            TextButton(
-                                onClick = { viewModel.logout { notify(it, logoutSuccess) } },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !isBusy
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(Res.string.cloud_settings_logout))
-                            }
-                            androidx.compose.material3.HorizontalDivider()
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(
-                                    text = stringResource(Res.string.cloud_settings_delete_account),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                Text(
-                                    text = stringResource(Res.string.cloud_settings_delete_account_desc),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = { showDeleteDialog = true },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !isBusy
-                            ) {
-                                Icon(Icons.Default.DeleteForever, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(Res.string.cloud_settings_permanently_delete), color = MaterialTheme.colorScheme.error)
-                            }
+                            CloudActionRow(
+                                title = stringResource(Res.string.cloud_settings_change_password), icon = Icons.Default.Lock,
+                                onClick = { showPasswordDialog = true }, enabled = !isBusy, index = 0, count = 3,
+                            )
+                            CloudActionRow(
+                                title = stringResource(Res.string.cloud_settings_logout), icon = Icons.AutoMirrored.Filled.Logout,
+                                onClick = { viewModel.logout { notify(it, logoutSuccess) } }, enabled = !isBusy, index = 1, count = 3,
+                            )
+                            CloudActionRow(
+                                title = stringResource(Res.string.cloud_settings_delete_account), icon = Icons.Default.DeleteForever,
+                                description = stringResource(Res.string.cloud_settings_delete_account_desc), destructive = true,
+                                onClick = { showDeleteDialog = true }, enabled = !isBusy, index = 2, count = 3,
+                            )
                         }
                     }
                 }
@@ -646,6 +599,7 @@ fun CloudSettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
+                        shape = MaterialTheme.shapes.large,
                         value = currentPassword,
                         onValueChange = { currentPassword = it },
                         label = { Text(stringResource(Res.string.cloud_settings_current_password_label)) },
@@ -655,6 +609,7 @@ fun CloudSettingsScreen(
                         visualTransformation = PasswordVisualTransformation()
                     )
                     OutlinedTextField(
+                        shape = MaterialTheme.shapes.large,
                         value = newPassword,
                         onValueChange = { newPassword = it },
                         label = { Text(stringResource(Res.string.cloud_settings_new_password_label)) },
@@ -704,6 +659,7 @@ fun CloudSettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(stringResource(Res.string.cloud_settings_delete_account_confirm))
                     OutlinedTextField(
+                        shape = MaterialTheme.shapes.large,
                         value = deletePassword,
                         onValueChange = { deletePassword = it },
                         label = { Text(stringResource(Res.string.cloud_settings_current_password)) },
@@ -832,50 +788,6 @@ fun CloudSettingsScreen(
             },
             onDismiss = { pendingLogin = null }
         )
-    }
-}
-
-@Composable
-private fun CloudSectionCard(
-    title: String,
-    icon: ImageVector,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            content = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CloudIconContainer(icon = icon)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-                content()
-            }
-        )
-    }
-}
-
-@Composable
-private fun CloudIconContainer(icon: ImageVector) {
-    Surface(
-        modifier = Modifier.size(40.dp),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null)
-        }
     }
 }
 

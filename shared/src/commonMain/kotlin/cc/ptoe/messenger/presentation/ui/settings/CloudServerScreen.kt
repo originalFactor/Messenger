@@ -23,6 +23,8 @@ import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -123,7 +126,7 @@ fun CloudServerScreen(
                 modifier = Modifier
                     .imePadding()
                     .verticalScroll(rememberScrollState())
-                    .widthIn(max = 600.dp)
+                    .widthIn(max = 720.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -133,77 +136,83 @@ fun CloudServerScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
-                    label = { Text(stringResource(Res.string.cloud_settings_server_url_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    enabled = !isBusy && !isDiscovering
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                CloudSettingsSection(
+                    title = stringResource(Res.string.cloud_settings_server_url_label),
+                    icon = Icons.Default.Settings,
                 ) {
-                    TextButton(
-                        onClick = { serverUrl = DEFAULT_CLOUD_SERVER_URL },
+                    OutlinedTextField(
+                        shape = MaterialTheme.shapes.large,
+                        value = serverUrl,
+                        onValueChange = { serverUrl = it },
+                        label = { Text(stringResource(Res.string.cloud_settings_server_url_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
                         enabled = !isBusy && !isDiscovering
+                    )
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
                     ) {
-                        Text(stringResource(Res.string.cloud_settings_use_default_server))
+                        TextButton(
+                            onClick = { serverUrl = DEFAULT_CLOUD_SERVER_URL },
+                            enabled = !isBusy && !isDiscovering
+                        ) {
+                            Text(stringResource(Res.string.cloud_settings_use_default_server))
+                        }
+                        TextButton(
+                            onClick = {
+                                isDiscovering = true
+                                discoveredServers = emptyList()
+                                coroutineScope.launch {
+                                    try {
+                                        discoveredServers = discoverDevServers()
+                                        if (discoveredServers.size == 1) serverUrl = discoveredServers.single()
+                                        if (discoveredServers.isEmpty()) snackbarHostState.showSnackbar(noDevServer)
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (error: Exception) {
+                                        snackbarHostState.showSnackbar(error.message ?: operationFailed)
+                                    } finally {
+                                        isDiscovering = false
+                                    }
+                                }
+                            },
+                            enabled = !isBusy && !isDiscovering
+                        ) {
+                            Text(stringResource(if (isDiscovering) Res.string.cloud_dev_searching else Res.string.cloud_dev_use))
+                        }
                     }
-                    TextButton(
+                    if (isDiscovering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    if (discoveredServers.size > 1) {
+                        Text(stringResource(Res.string.cloud_dev_choose))
+                        discoveredServers.forEach { address ->
+                            TextButton(onClick = { serverUrl = address }, enabled = !isBusy) {
+                                Text(address)
+                            }
+                        }
+                    }
+                    Button(
                         onClick = {
-                            isDiscovering = true
-                            discoveredServers = emptyList()
-                            coroutineScope.launch {
-                                try {
-                                    discoveredServers = discoverDevServers()
-                                    if (discoveredServers.size == 1) serverUrl = discoveredServers.single()
-                                    if (discoveredServers.isEmpty()) snackbarHostState.showSnackbar(noDevServer)
-                                } catch (error: CancellationException) {
-                                    throw error
-                                } catch (error: Exception) {
-                                    snackbarHostState.showSnackbar(error.message ?: operationFailed)
-                                } finally {
-                                    isDiscovering = false
+                            isBusy = true
+                            viewModel.setCloudServerUrl(serverUrl.trim()) { result ->
+                                isBusy = false
+                                result.onSuccess {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(saved)
+                                    }
+                                    onBackClick()
+                                }.onFailure { error ->
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(error.message ?: operationFailed)
+                                    }
                                 }
                             }
                         },
-                        enabled = !isBusy && !isDiscovering
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        enabled = !isBusy && !isDiscovering && serverUrl.isNotBlank()
                     ) {
-                        Text(stringResource(if (isDiscovering) Res.string.cloud_dev_searching else Res.string.cloud_dev_use))
+                        Text(stringResource(Res.string.action_save))
                     }
-                }
-                if (isDiscovering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                if (discoveredServers.size > 1) {
-                    Text(stringResource(Res.string.cloud_dev_choose))
-                    discoveredServers.forEach { address ->
-                        TextButton(onClick = { serverUrl = address }, enabled = !isBusy) {
-                            Text(address)
-                        }
-                    }
-                }
-                Button(
-                    onClick = {
-                        isBusy = true
-                        viewModel.setCloudServerUrl(serverUrl.trim()) { result ->
-                            isBusy = false
-                            result.onSuccess {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(saved)
-                                }
-                                onBackClick()
-                            }.onFailure { error ->
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(error.message ?: operationFailed)
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isBusy && !isDiscovering && serverUrl.isNotBlank()
-                ) {
-                    Text(stringResource(Res.string.action_save))
                 }
                 if (isBusy) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

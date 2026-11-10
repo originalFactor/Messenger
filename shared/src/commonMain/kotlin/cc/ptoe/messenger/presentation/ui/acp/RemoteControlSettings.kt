@@ -43,17 +43,17 @@ internal fun RemoteControlSettings(onError: (String) -> Unit) {
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(Res.string.acp_enable_control), Modifier.weight(1f))
-            Switch(enabled, { save(it) }, enabled = ready && !busy)
-        }
-        Text(stringResource(Res.string.acp_control_description), style = MaterialTheme.typography.bodyMedium)
+        cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow(
+            title = stringResource(Res.string.acp_enable_control),
+            subtitle = stringResource(Res.string.acp_control_description),
+            checked = enabled, onCheckedChange = { save(it) }, enabled = ready && !busy,
+        )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            OutlinedTextField(name, { name = it }, enabled = ready && !busy, label = { Text(stringResource(Res.string.acp_device_name)) }, modifier = Modifier.weight(1f), singleLine = true)
-            TextButton(enabled = ready && !busy, onClick = { save(enabled) }) { Text(stringResource(Res.string.action_save)) }
+            OutlinedTextField(shape = MaterialTheme.shapes.large, value = name, onValueChange = { name = it }, enabled = ready && !busy, label = { Text(stringResource(Res.string.acp_device_name)) }, modifier = Modifier.weight(1f), singleLine = true)
+            FilledTonalButton(modifier = Modifier.heightIn(min = 48.dp), enabled = ready && !busy, onClick = { save(enabled) }) { Text(stringResource(Res.string.action_save)) }
         }
     }
 }
