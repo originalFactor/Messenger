@@ -473,7 +473,7 @@
     <string name="tooltip_nav_agents">Agents</string>
     <string name="tooltip_nav_settings">Settings</string>
 
-    <string name="acp_settings">ACP and device control</string>
+    <string name="acp_settings">ACP Agents</string>
     <string name="acp_enable_control">Enable remote control</string>
     <string name="acp_control_description">When enabled, a browser signed in to the same account can use this device with the same permissions as local chat.</string>
     <string name="acp_device_name">Device name</string>
@@ -497,4 +497,18 @@
     <string name="cloud_dev_none">No dev server found. Start pnpm dev and allow UDP 53319 and the server HTTP port through your firewall. You can also enter the address manually.</string>
     <string name="cloud_dev_choose">Choose a development server</string>
     <string name="providers_model_rates_cache_write">Input rate %1$s, cache-read rate %2$s, cache-write rate %3$s, output rate %4$s</string>
+    <string name="integrations_manual">Manual add</string>
+    <string name="integrations_store">Store</string>
+    <string name="integrations_store_signin">Sign in to Messenger Cloud to browse the store.</string>
+    <string name="acp_settings_desc">Manage coding agents for your conversations</string>
+    <string name="acp_description">Description</string>
+    <string name="acp_add">Add ACP Agent</string>
+    <string name="acp_edit">Edit ACP Agent</string>
+    <string name="acp_config_note">Agents run in the selected project workspace. Sign in to the coding agent before starting a conversation.</string>
+    <string name="acp_working_directory">Working directory (optional)</string>
+    <string name="acp_args_json">Arguments (JSON array)</string>
+    <string name="acp_env_json">Environment (JSON object)</string>
+    <string name="acp_remote_control">Remote control</string>
+    <string name="acp_agent_suffix">ACP Agent</string>
+    <string name="integrations_empty">No configurations yet</string>
 </resources>

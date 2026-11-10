@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.ui.acp.NewConversationDialog
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.generated.resources.Res
@@ -279,20 +280,14 @@ fun ConversationsScreen(
             }
 
             if (showAgentPicker) {
-                SingleChoiceDialog(
-                    title = stringResource(Res.string.conversations_select_agent_title),
-                    items = selectableAgents,
-                    initialSelectedId = currentAgent?.id ?: selectableAgents.firstOrNull()?.id,
-                    itemId = { it.id },
-                    itemLabel = { agentNames[it.id] ?: it.name },
-                    confirmButtonText = stringResource(Res.string.action_confirm),
-                    dismissButtonText = stringResource(Res.string.action_cancel),
-                    onConfirm = { agent ->
+                NewConversationDialog(
+                    agents = selectableAgents,
+                    initialAgentId = currentAgent?.id ?: selectableAgents.firstOrNull()?.id,
+                    onAcpCreated = onConversationClick,
+                    onMessengerAgent = { agent ->
                         showAgentPicker = false
-                        if (agent != null) {
-                            viewModel.createNewConversation(agentId = agent.id) { conversationId ->
-                                onConversationClick(conversationId)
-                            }
+                        viewModel.createNewConversation(agentId = agent.id) { conversationId ->
+                            onConversationClick(conversationId)
                         }
                     },
                     onDismiss = { showAgentPicker = false }

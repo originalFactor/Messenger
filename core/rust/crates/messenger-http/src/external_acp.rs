@@ -16,12 +16,30 @@ const SESSIONS: &str = "local_acp_sessions";
 pub(crate) struct Profile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "profile_enabled")]
+    pub enabled: bool,
     command: String,
     #[serde(default)]
     args: Vec<String>,
     #[serde(default)]
     env: HashMap<String, String>,
     cwd: Option<String>,
+}
+
+fn profile_enabled() -> bool { true }
+
+pub(crate) fn default_profiles() -> Vec<Profile> {
+    [
+        ("codex", "Codex", "OpenAI coding agent via ACP", "pnpm", vec!["dlx", "@agentclientprotocol/codex-acp"]),
+        ("claude-code", "Claude Code", "Claude coding agent via ACP", "pnpm", vec!["dlx", "@agentclientprotocol/claude-agent-acp"]),
+        ("opencode", "OpenCode", "OpenCode coding agent via ACP", "opencode", vec!["acp"]),
+    ].into_iter().map(|(id, name, description, command, args)| Profile {
+        id: id.into(), name: name.into(), description: description.into(), enabled: true,
+        command: command.into(), args: args.into_iter().map(str::to_string).collect(),
+        env: HashMap::new(), cwd: None,
+    }).collect()
 }
 
 pub(crate) fn validate_profiles(profiles: &[Profile]) -> Result<(), ApiError> {
@@ -33,6 +51,7 @@ pub(crate) fn validate_profiles(profiles: &[Profile]) -> Result<(), ApiError> {
                 || !ids.insert(&profile.id)
                 || profile.name.trim().is_empty()
                 || profile.name.len() > 120
+                || profile.description.len() > 4000
                 || profile.command.trim().is_empty()
                 || profile.command.contains('\0')
                 || profile
@@ -122,6 +141,45 @@ impl ExternalSessions {
         self.sessions(store)?
             .remove(id)
             .ok_or_else(|| ApiError::not_found("ACP session"))
+    }
+
+    pub fn conversations(&self, store: &Store) -> Result<Vec<StoredConversation>, ApiError> {
+        self.sessions(store)?.into_values().map(|record| Self::conversation(&record)).collect()
+    }
+
+    pub fn conversation(record: &Record) -> Result<StoredConversation, ApiError> {
+        serde_json::from_value(json!({
+            "id": record.id, "title": record.title, "agent_id": format!("acp:{}", record.profile),
+            "provider_id": "", "project_id": record.project, "created_at": record.updated_at,
+            "updated_at": record.updated_at, "last_message": record.messages.last().and_then(|row| row["text"].as_str())
+        })).map_err(ApiError::internal)
+    }
+
+    pub async fn update_conversation(&self, state: &ApiState, row: &StoredConversation) -> Result<(), ApiError> {
+        let active = state.active_turns.lock().await;
+        if active.contains_key(&row.id) {
+            return Err(ApiError::Conflict { code: "turn_in_progress".into(), message: "The ACP conversation is generating.".into() });
+        }
+        let mut record = self.record(&state.store, &row.id)?;
+        if row.agent_id != format!("acp:{}", record.profile) || row.project_id != record.project {
+            return Err(ApiError::BadRequest("ACP conversations keep their original agent and workspace".into()));
+        }
+        record.title = row.title.clone();
+        self.save(&state.store, record)
+    }
+
+    pub async fn delete_conversation(&self, state: &ApiState, id: &str, messages_only: bool) -> Result<(), ApiError> {
+        let active = state.active_turns.lock().await;
+        if active.contains_key(id) {
+            return Err(ApiError::Conflict { code: "turn_in_progress".into(), message: "Stop the ACP turn before deleting its conversation.".into() });
+        }
+        self.workers.lock().await.remove(id);
+        let _write = self.records.lock().unwrap();
+        let mut records = self.sessions(&state.store)?;
+        if messages_only {
+            if let Some(record) = records.get_mut(id) { record.messages.clear(); }
+        } else { records.remove(id); }
+        state.store.kv_set(SESSIONS, &serde_json::to_string(&records).map_err(ApiError::internal)?).map_err(ApiError::store)
     }
 
     pub async fn create(
@@ -276,7 +334,7 @@ fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
     crate::control::settings(&state.store)?
         .agents
         .into_iter()
-        .find(|profile| profile.id == id)
+        .find(|profile| profile.id == id && profile.enabled)
         .ok_or_else(|| ApiError::not_found("ACP agent profile"))
 }
 
@@ -583,7 +641,8 @@ async fn spawn_process(
     cwd: &std::path::Path,
 ) -> Result<Process, ApiError> {
     use std::process::Stdio;
-    let mut child = tokio::process::Command::new(&profile.command)
+    let command = if cfg!(target_os = "windows") && profile.command == "pnpm" { "pnpm.cmd" } else { &profile.command };
+    let mut child = tokio::process::Command::new(command)
         .args(&profile.args)
         .envs(&profile.env)
         .current_dir(cwd)
@@ -644,6 +703,51 @@ mod tests {
             .await
             .unwrap();
         (state, session)
+    }
+
+    #[tokio::test]
+    async fn acp_sessions_are_regular_conversation_entries_without_sync_rows() {
+        let (state, session) = setup("load").await;
+        let app = router(state.clone());
+        let response = app.oneshot(axum::http::Request::builder()
+            .uri("/api/v1/conversations").header("authorization", "Bearer local")
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let page: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page["items"][0]["id"], session);
+        let mut row = ExternalSessions::conversation(&state.external.record(&state.store, &session).unwrap()).unwrap();
+        row.title = "Renamed ACP conversation".into();
+        state.external.update_conversation(&state, &row).await.unwrap();
+        assert_eq!(state.external.record(&state.store, &session).unwrap().title, row.title);
+        assert!(state.store.list_conversations().unwrap().is_empty(), "ACP sessions must never become Cloud sync rows");
+        state.active_turns.lock().await.insert(session.clone(), CancellationToken::new());
+        assert!(state.external.delete_conversation(&state, &session, false).await.is_err());
+        state.active_turns.lock().await.remove(&session);
+        state.external.delete_conversation(&state, &session, false).await.unwrap();
+        assert!(state.external.record(&state.store, &session).is_err());
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn acp_templates_are_seeded_once_and_preserve_user_configuration() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        let settings = crate::control::get_settings(State(state.clone())).await.unwrap().0;
+        assert!(!settings.enabled);
+        assert_eq!(settings.agents.len(), 3);
+        assert_eq!(settings.agents.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["Codex", "Claude Code", "OpenCode"]);
+        let mut settings = settings;
+        settings.name = "My device".into();
+        settings.agents.remove(0);
+        settings.agents[0].description = "My coding assistant".into();
+        settings.agents[0].enabled = false;
+        let _ = crate::control::set_settings(State(state.clone()), Json(settings)).await.unwrap();
+        let reloaded = crate::control::get_settings(State(state.clone())).await.unwrap().0;
+        assert_eq!(reloaded.agents.len(), 2, "deleted templates must not reappear");
+        assert_eq!(reloaded.name, "My device");
+        assert_eq!(reloaded.agents[0].description, "My coding assistant");
+        assert!(!reloaded.agents[0].enabled);
+        assert!(profile_for(&state, &reloaded.agents[0].id).is_err());
     }
 
     #[tokio::test]

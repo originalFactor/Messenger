@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +66,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import cc.ptoe.messenger.presentation.ui.acp.IntegrationFab
+import cc.ptoe.messenger.presentation.ui.acp.IntegrationStoreDialog
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.domain.mcp.McpManager
 import cc.ptoe.messenger.domain.mcp.McpServerConfig
@@ -93,6 +99,9 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_type
 import cc.ptoe.messenger.generated.resources.tools_mcp_url
 import cc.ptoe.messenger.generated.resources.tools_mcp_url_hint
 import cc.ptoe.messenger.generated.resources.tools_settings_title
+import kotlinx.coroutines.CancellationException
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 
@@ -104,9 +113,21 @@ fun ToolsSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val catalogJson = remember { Json { ignoreUnknownKeys = true } }
+    val snackbar = remember { SnackbarHostState() }
+    fun changeServer(onSuccess: () -> Unit = {}, operation: suspend () -> Unit) {
+        scope.launch {
+            try { operation(); onSuccess() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { snackbar.showSnackbar(failure.message ?: failure.toString()) }
+        }
+    }
     val mcpServers by mcpManager.servers.collectAsState()
     val mcpConfigurationError by mcpManager.configurationError.collectAsState()
 
+    var fabExpanded by remember { mutableStateOf(false) }
+    var showStore by remember { mutableStateOf(false) }
+    var storeDraft by remember { mutableStateOf<McpServerConfig?>(null) }
     var editingServer by remember { mutableStateOf<McpServerConfig?>(null) }
     var isAddingServer by remember { mutableStateOf(false) }
     var serverToDelete by remember { mutableStateOf<McpServerConfig?>(null) }
@@ -124,19 +145,15 @@ fun ToolsSettingsScreen(
                         )
                     }
                 },
-                actions = {
-                    IconButton(onClick = { isAddingServer = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(Res.string.tools_mcp_add)
-                        )
-                    }
-                },
                 modifier = Modifier.statusBarsPadding(),
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+        },
+        snackbarHost = { SnackbarHost(snackbar) },
+        floatingActionButton = {
+            IntegrationFab(fabExpanded, { fabExpanded = it }, { isAddingServer = true }, { showStore = true })
         },
         modifier = modifier.fillMaxSize()
     ) { innerPadding ->
@@ -227,7 +244,7 @@ fun ToolsSettingsScreen(
                                 Switch(
                                     checked = server.isEnabled,
                                     onCheckedChange = { checked ->
-                                        scope.launch { mcpManager.toggleServer(server.id, checked) }
+                                        changeServer { mcpManager.toggleServer(server.id, checked) }
                                     }
                                 )
                             }
@@ -235,7 +252,20 @@ fun ToolsSettingsScreen(
                     }
                 }
             }
+            if (fabExpanded) Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { fabExpanded = false } })
         }
+    }
+
+    if (showStore) IntegrationStoreDialog("mcp", { showStore = false }) { row ->
+        try {
+            storeDraft = catalogJson.decodeFromJsonElement<McpServerConfig>(row).copy(id = randomUuid())
+            showStore = false
+        } catch (failure: Exception) { scope.launch { snackbar.showSnackbar(failure.message ?: failure.toString()) } }
+    }
+    storeDraft?.let { draft ->
+        McpServerEditDialog(server = draft, isNew = true, onDismiss = { storeDraft = null }, onSave = { config ->
+            changeServer(onSuccess = { storeDraft = null }) { mcpManager.addServer(config) }
+        })
     }
 
     if (isAddingServer) {
@@ -243,8 +273,7 @@ fun ToolsSettingsScreen(
             server = null,
             onDismiss = { isAddingServer = false },
             onSave = { newServer ->
-                scope.launch { mcpManager.addServer(newServer) }
-                isAddingServer = false
+                changeServer(onSuccess = { isAddingServer = false }) { mcpManager.addServer(newServer) }
             }
         )
     }
@@ -254,8 +283,7 @@ fun ToolsSettingsScreen(
             server = server,
             onDismiss = { editingServer = null },
             onSave = { updated ->
-                scope.launch { mcpManager.updateServer(updated) }
-                editingServer = null
+                changeServer(onSuccess = { editingServer = null }) { mcpManager.updateServer(updated) }
             }
         )
     }
@@ -268,8 +296,7 @@ fun ToolsSettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch { mcpManager.removeServer(server.id) }
-                        serverToDelete = null
+                        changeServer(onSuccess = { serverToDelete = null }) { mcpManager.removeServer(server.id) }
                     }
                 ) {
                     Text(stringResource(Res.string.action_confirm), color = MaterialTheme.colorScheme.error)
@@ -288,7 +315,8 @@ fun ToolsSettingsScreen(
 fun McpServerEditDialog(
     server: McpServerConfig?,
     onDismiss: () -> Unit,
-    onSave: (McpServerConfig) -> Unit
+    onSave: (McpServerConfig) -> Unit,
+    isNew: Boolean = server == null
 ) {
     var name by remember { mutableStateOf(server?.name.orEmpty()) }
     var transportType by remember { mutableStateOf(server?.transportType ?: McpTransportType.STDIO) }
@@ -306,7 +334,7 @@ fun McpServerEditDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                if (server == null) stringResource(Res.string.tools_mcp_add)
+                if (isNew) stringResource(Res.string.tools_mcp_add)
                 else stringResource(Res.string.tools_mcp_edit)
             )
         },

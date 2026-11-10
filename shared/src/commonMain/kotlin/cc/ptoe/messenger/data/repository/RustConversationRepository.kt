@@ -74,14 +74,14 @@ class RustConversationRepository(
         val dto = conversation.toDto()
         coreBridge.upsertConversationJson(NetworkClient.json.encodeToString(dto))
         version.value = currentTimeMillis()
-        onChanged(conversation.id, false)
+        if (!conversation.id.startsWith("acp:")) onChanged(conversation.id, false)
     }
 
     override suspend fun update(conversation: Conversation) {
         val dto = conversation.toDto()
         coreBridge.upsertConversationJson(NetworkClient.json.encodeToString(dto))
         version.value = currentTimeMillis()
-        onChanged(conversation.id, false)
+        if (!conversation.id.startsWith("acp:")) onChanged(conversation.id, false)
     }
 
     override suspend fun updateLastMessage(id: String, lastMessage: String, updatedAt: Long) {
@@ -91,10 +91,10 @@ class RustConversationRepository(
     }
 
     override suspend fun delete(id: String) {
-        coreBridge.deleteMessagesByConversation(id)
+        if (!id.startsWith("acp:")) coreBridge.deleteMessagesByConversation(id)
         coreBridge.deleteConversation(id)
         version.value = currentTimeMillis()
-        onChanged(id, true)
+        if (!id.startsWith("acp:")) onChanged(id, true)
     }
 
     /**

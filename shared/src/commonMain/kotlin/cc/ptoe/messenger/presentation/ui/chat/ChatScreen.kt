@@ -44,8 +44,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
-import cc.ptoe.messenger.generated.resources.acp_chat
-import cc.ptoe.messenger.presentation.ui.acp.AcpChatDialog
 import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -113,9 +111,26 @@ import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
+    conversationId: String,
+    onBackClick: () -> Unit,
+    onSettingsClick: () -> Unit = {},
+    showBackButton: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    if (conversationId.startsWith("acp:")) {
+        androidx.compose.runtime.key(conversationId) {
+            AcpConversationScreen(conversationId, onBackClick, showBackButton, modifier)
+        }
+    } else {
+        MessengerChatScreen(conversationId, onBackClick, onSettingsClick, showBackButton, modifier)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun MessengerChatScreen(
     conversationId: String,
     onBackClick: () -> Unit,
     onSettingsClick: () -> Unit = {},
@@ -218,9 +233,6 @@ fun ChatScreen(
         val sizeClass = windowSizeClassFor(maxWidth)
         val enableContextMenu = sizeClass != WindowSizeClass.Compact
 
-        var showAcpChat by remember { mutableStateOf(false) }
-        if (showAcpChat) AcpChatDialog(onClose = { showAcpChat = false })
-
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
@@ -259,9 +271,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showAcpChat = true }) {
-                        Icon(Icons.Default.Terminal, contentDescription = stringResource(Res.string.acp_chat))
-                    }
                     TooltipBox(
                         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
                         tooltip = {

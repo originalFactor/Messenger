@@ -134,7 +134,8 @@ fun ChatInputBar(
      */
     agentWritable: Boolean? = null,
     onAgentModeChange: (Boolean) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showFunctionPanel: Boolean = true
 ) {
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -187,7 +188,7 @@ fun ChatInputBar(
         // 微信式功能面板：展开时把输入行（及其上方的消息列表）顶起，
         // 在输入行上方原地展开功能项；"+" 再点一次收起。
         AnimatedVisibility(
-            visible = functionPanelExpanded,
+            visible = showFunctionPanel && functionPanelExpanded,
             enter = expandVertically(
                 animationSpec = spring(
                     dampingRatio = Spring.DampingRatioNoBouncy,
@@ -251,7 +252,7 @@ fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左侧 + 按钮：切换底部功能面板（微信风格）
-            IconButton(
+            if (showFunctionPanel) IconButton(
                 onClick = {
                     if (!functionPanelExpanded) {
                         // 打开面板时收起键盘（微信行为）

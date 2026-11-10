@@ -172,7 +172,7 @@ fun ConversationListItem(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
-                    DropdownMenuItem(
+                    if (!conversation.id.startsWith("acp:")) DropdownMenuItem(
                         text = { Text(stringResource(Res.string.action_clone)) },
                         onClick = {
                             expanded = false
@@ -186,7 +186,7 @@ fun ConversationListItem(
                             onRenameClick()
                         }
                     )
-                    DropdownMenuItem(
+                    if (!conversation.id.startsWith("acp:")) DropdownMenuItem(
                         text = { Text(stringResource(Res.string.conversations_switch_agent)) },
                         onClick = {
                             expanded = false
@@ -216,14 +216,14 @@ fun ConversationListItem(
                         onRenameClick()
                     }
                 )
-                DropdownMenuItem(
+                if (!conversation.id.startsWith("acp:")) DropdownMenuItem(
                     text = { Text(stringResource(Res.string.action_clone)) },
                     onClick = {
                         contextMenuState.hide()
                         onCloneClick()
                     }
                 )
-                DropdownMenuItem(
+                if (!conversation.id.startsWith("acp:")) DropdownMenuItem(
                     text = { Text(stringResource(Res.string.conversations_switch_agent)) },
                     onClick = {
                         contextMenuState.hide()

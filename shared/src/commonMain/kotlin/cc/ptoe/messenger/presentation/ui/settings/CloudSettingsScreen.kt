@@ -99,6 +99,8 @@ import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_login
 import cc.ptoe.messenger.generated.resources.action_save
+import cc.ptoe.messenger.generated.resources.acp_remote_control
+import cc.ptoe.messenger.presentation.ui.acp.RemoteControlSettings
 import cc.ptoe.messenger.generated.resources.cloud_server_title
 import cc.ptoe.messenger.generated.resources.cloud_settings_account
 import cc.ptoe.messenger.generated.resources.cloud_settings_account_deleted
@@ -551,6 +553,13 @@ fun CloudSettingsScreen(
                             if (isBusy) {
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             }
+                        }
+
+                        CloudSectionCard(
+                            title = stringResource(Res.string.acp_remote_control),
+                            icon = Icons.Default.Cloud
+                        ) {
+                            RemoteControlSettings(onError = ::showMessage)
                         }
 
                         CloudSectionCard(

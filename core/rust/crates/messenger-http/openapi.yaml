@@ -347,6 +347,7 @@ paths:
   /conversations:
     get:
       operationId: listConversations
+      description: Includes device-local ACP session projections (acp-prefixed IDs) alongside Messenger conversations. ACP rows never enter Cloud sync.
       parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
       responses: { "200": { $ref: "#/components/responses/ConversationPage" } }
     put:
@@ -829,6 +830,8 @@ components:
             properties:
               id: { type: string }
               name: { type: string }
+              description: { type: string, maxLength: 4000 }
+              enabled: { type: boolean, default: true }
               command: { type: string }
               args: { type: array, items: { type: string } }
               env: { type: object, additionalProperties: { type: string } }
@@ -837,7 +840,8 @@ components:
       type: object
       required: [action]
       properties:
-        action: { type: string, enum: [catalog, create, history, setMode, prompt] }
+        action: { type: string, enum: [catalog, create, history, setMode, prompt, store] }
+        kind: { type: string, enum: [acp, mcp], description: Integration Store category (requires Cloud sign-in). }
         agentId: { type: string }
         projectId: { type: [string, "null"] }
         sessionId: { type: string }

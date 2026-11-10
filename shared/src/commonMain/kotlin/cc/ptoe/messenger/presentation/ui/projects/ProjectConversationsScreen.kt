@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.ui.acp.NewConversationDialog
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
@@ -123,6 +124,7 @@ fun ProjectConversationsScreen(
         viewModel.sweepEmptyConversations()
     }
 
+    var showNewConversation by remember { mutableStateOf(false) }
     var renameConversationId by remember { mutableStateOf<String?>(null) }
     var renameInitialTitle by remember { mutableStateOf("") }
     var deleteConversationId by remember { mutableStateOf<String?>(null) }
@@ -150,7 +152,7 @@ fun ProjectConversationsScreen(
                         onSelectAll = { viewModel.selectAll(conversations.map { it.id }) },
                         onDeselectAll = { viewModel.deselectAll() },
                         actions = {
-                            IconButton(onClick = {
+                            IconButton(enabled = conversations.none { it.id in uiState.selectedConversationIds && it.id.startsWith("acp:") }, onClick = {
                                 switchAgentTargetIds = uiState.selectedConversationIds.toList()
                             }) {
                                 Icon(
@@ -187,9 +189,7 @@ fun ProjectConversationsScreen(
                 if (!uiState.isMultiSelectMode) {
                     FloatingActionButton(
                         onClick = {
-                            viewModel.createNewConversation { conversationId ->
-                                onConversationClick(conversationId)
-                            }
+                            showNewConversation = true
                         }
                     ) {
                         Icon(
@@ -250,6 +250,20 @@ fun ProjectConversationsScreen(
                         )
                     }
                 }
+            }
+
+            if (showNewConversation) {
+                NewConversationDialog(
+                    agents = allAgents,
+                    projectId = projectId,
+                    initialAgentId = agentId,
+                    onDismiss = { showNewConversation = false },
+                    onMessengerAgent = { selectedAgent ->
+                        showNewConversation = false
+                        viewModel.createNewConversation(agentIdOverride = selectedAgent.id, onCreated = onConversationClick)
+                    },
+                    onAcpCreated = onConversationClick
+                )
             }
 
             if (renameConversationId != null) {

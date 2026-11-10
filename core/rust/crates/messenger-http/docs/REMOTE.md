@@ -56,7 +56,7 @@ The core reconnects with 1 s→30 s backoff and polls every 3 s while signed out
 
 ## Device-owned sessions
 
-**ACP and device control** in Desktop or Android enables the second relay
+**Remote control** in Messenger Cloud settings on Desktop or Android enables the second relay
 lane for the signed-in account. It is off by default. An enabled device exposes
 Agents, workspaces, and sessions in projects it owns. The session catalog
 includes `projectId` and `updatedAt` for each session. Model requests, tool

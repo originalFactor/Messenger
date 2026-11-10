@@ -59,7 +59,7 @@ the turn and wakes any pending tool host with a cancellation result.
 
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 
-Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode` or
+Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode`, `Store` or
 `Error`. Catalog sessions include `projectId` (nullable) and `updatedAt`
 (milliseconds since the Unix epoch, or 0 for legacy ACP sessions). Prompt commands stream the turn events above, ending in `Finished`,
 `Cancelled` or `Error`. The device sends `UserMessagePersisted {messageId}`
@@ -73,3 +73,8 @@ On Android, the local events feed can additionally emit
 `acpProcess {processId, profile, cwd}` to the signature-protected Runtime
 bridge in the main app. The process input feed emits `{line}` and ends when
 Core no longer needs the process. See [ACP.md](ACP.md) for the endpoint pair.
+
+`store {kind:"acp"|"mcp"}` fetches the signed-in Cloud integration catalog and returns
+`Store {items:[...]}`. ACP catalog agents include descriptions and omit disabled
+profiles. Local ACP sessions also appear in the normal conversation list endpoints;
+these are projections of local transcripts and never create Cloud sync rows.

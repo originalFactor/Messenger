@@ -268,6 +268,10 @@ impl CloudApiClient {
         self.get_json(&full).await
     }
 
+    pub async fn integration_catalog(&self, url: &str) -> CloudResult<serde_json::Value> {
+        self.get_json(url).await
+    }
+
     pub async fn get_market_agent(&self, url: &str) -> CloudResult<CloudMarketAgentResponse> {
         self.get_json(url).await
     }

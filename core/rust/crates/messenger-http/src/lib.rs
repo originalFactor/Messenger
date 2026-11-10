@@ -1162,10 +1162,10 @@ async fn list_conversations(
     State(state): State<ApiState>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Page<StoredConversation>>, ApiError> {
-    Ok(Json(page(
-        state.store.list_conversations().map_err(ApiError::store)?,
-        query,
-    )))
+    let mut rows = state.store.list_conversations().map_err(ApiError::store)?;
+    rows.extend(state.external.conversations(&state.store)?);
+    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    Ok(Json(page(rows, query)))
 }
 async fn list_agent_conversations(
     State(state): State<ApiState>,
@@ -1202,19 +1202,19 @@ async fn list_project_conversations(
     {
         return Err(ApiError::not_found("project"));
     }
-    Ok(Json(page(
-        state
-            .store
-            .list_conversations_by_project(&project_id)
-            .map_err(ApiError::store)?,
-        query,
-    )))
+    let mut rows = state.store.list_conversations_by_project(&project_id).map_err(ApiError::store)?;
+    rows.extend(state.external.conversations(&state.store)?.into_iter().filter(|row| row.project_id.as_deref() == Some(&project_id)));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    Ok(Json(page(rows, query)))
 }
 
 async fn get_conversation(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<Json<StoredConversation>, ApiError> {
+    if id.starts_with("acp:") {
+        return Ok(Json(external_acp::ExternalSessions::conversation(&state.external.record(&state.store, &id)?)?));
+    }
     get_one(
         state.store.get_conversation(&id).map_err(ApiError::store)?,
         "conversation",
@@ -1224,6 +1224,10 @@ async fn upsert_conversation_body(
     State(state): State<ApiState>,
     Json(value): Json<StoredConversation>,
 ) -> Result<Json<StoredConversation>, ApiError> {
+    if value.id.starts_with("acp:") {
+        state.external.update_conversation(&state, &value).await?;
+        return Ok(Json(value));
+    }
     upsert_conversation_inner(&state.store, value)
 }
 async fn upsert_conversation(
@@ -1235,6 +1239,10 @@ async fn upsert_conversation(
         return Err(ApiError::BadRequest(
             "path id does not match payload id".into(),
         ));
+    }
+    if value.id.starts_with("acp:") {
+        state.external.update_conversation(&state, &value).await?;
+        return Ok(Json(value));
     }
     upsert_conversation_inner(&state.store, value)
 }
@@ -1261,6 +1269,10 @@ async fn delete_conversation(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    if id.starts_with("acp:") {
+        state.external.delete_conversation(&state, &id, false).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     state
         .store
         .delete_conversation(&id)
@@ -2017,6 +2029,10 @@ async fn delete_conversation_messages(
     State(state): State<ApiState>,
     Path(conversation_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    if conversation_id.starts_with("acp:") {
+        state.external.delete_conversation(&state, &conversation_id, true).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     if state
         .store
         .get_conversation(&conversation_id)

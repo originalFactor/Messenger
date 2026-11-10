@@ -36,10 +36,11 @@ import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.settings_select_section
 import cc.ptoe.messenger.presentation.ui.components.EmptyState
+import cc.ptoe.messenger.presentation.ui.acp.AcpSettingsScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersSinglePaneScreen
 import org.jetbrains.compose.resources.stringResource
 
-private enum class SettingsDetailPane { Empty, Cloud, Tools, Providers, Licenses }
+private enum class SettingsDetailPane { Empty, Cloud, Tools, Acp, Providers, Licenses }
 
 @Composable
 fun SettingsDualPaneScreen(
@@ -57,6 +58,7 @@ fun SettingsDualPaneScreen(
             SettingsScreen(
                 onProvidersClick = { pane = SettingsDetailPane.Providers },
                 onToolsClick = { pane = SettingsDetailPane.Tools },
+                onAcpSettingsClick = { pane = SettingsDetailPane.Acp },
                 onCloudSettingsClick = { pane = SettingsDetailPane.Cloud },
                 onLicensesClick = { pane = SettingsDetailPane.Licenses }
             )
@@ -85,6 +87,8 @@ fun SettingsDualPaneScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty },
                     cloudSyncRepository = AppContainerHolder.instance.cloud
                 )
+
+                SettingsDetailPane.Acp -> AcpSettingsScreen(onBackClick = { pane = SettingsDetailPane.Empty })
 
                 SettingsDetailPane.Tools -> ToolsSettingsScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty },

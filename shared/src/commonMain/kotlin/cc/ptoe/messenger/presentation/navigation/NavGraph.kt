@@ -55,6 +55,7 @@ import cc.ptoe.messenger.presentation.ui.providers.ProvidersDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersScreen
 import cc.ptoe.messenger.presentation.ui.providers.ModelDetailScreen
 import cc.ptoe.messenger.presentation.ui.settings.LicensesScreen
+import cc.ptoe.messenger.presentation.ui.acp.AcpSettingsScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.settings.SettingsScreen
 import cc.ptoe.messenger.presentation.ui.settings.CloudSettingsScreen
@@ -210,6 +211,7 @@ fun NavGraph(
                             navController.navigate(Screen.Providers.route)
                         },
                         onToolsClick = { navController.navigate(Screen.ToolsSettings.route) },
+                        onAcpSettingsClick = { navController.navigate(Screen.AcpSettings.route) },
                         onLicensesClick = {
                             navController.navigate(Screen.Licenses.route)
                         },
@@ -247,6 +249,9 @@ fun NavGraph(
                 onBackClick = { navController.popBackStack() },
                 cloudSyncRepository = AppContainerHolder.instance.cloud
             )
+        }
+        composable(Screen.AcpSettings.route) {
+            AcpSettingsScreen(onBackClick = { navController.popBackStack() })
         }
         composable(Screen.ToolsSettings.route) {
             ToolsSettingsScreen(

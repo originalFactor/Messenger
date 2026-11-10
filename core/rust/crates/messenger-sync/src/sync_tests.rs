@@ -793,3 +793,28 @@ async fn pull_keeps_the_local_project_owner_when_the_server_omits_device_id() {
     assert_eq!(project.name, "Renamed");
     assert_eq!(project.device_id.as_deref(), Some("dev-a"));
 }
+
+#[tokio::test]
+async fn integration_store_uses_the_cloud_cookie_and_signs_out_on_rejection() {
+    let server = wiremock::MockServer::start().await;
+    let store = Store::open_memory().unwrap();
+    let session = Session { cookie: Some("messenger_session=catalog".into()), host: Some(server.uri()) };
+    let engine = SyncEngine::new(&store, session.clone());
+    engine.save_session(&session).unwrap();
+    engine.save_user(&CloudUser { id: "acct".into(), ..Default::default() }).unwrap();
+    store.kv_set("cloud_server_url", &server.uri()).unwrap();
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/integrations/catalog"))
+        .and(wiremock::matchers::header("cookie", "messenger_session=catalog"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"acp":[],"mcp":[]})))
+        .mount(&server).await;
+    assert_eq!(engine.integration_catalog().await.unwrap(), serde_json::json!({"acp":[],"mcp":[]}));
+    server.reset().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/integrations/catalog"))
+        .respond_with(wiremock::ResponseTemplate::new(401).set_body_json(serde_json::json!({"error":"Unauthorized"})))
+        .mount(&server).await;
+    assert!(matches!(engine.integration_catalog().await.unwrap_err(), CloudError::SessionExpired { .. }));
+    assert!(engine.current_user().is_none());
+    assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
+}

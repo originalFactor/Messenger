@@ -66,13 +66,20 @@ pub(crate) fn settings(store: &Store) -> Result<Settings, ApiError> {
         .kv_get(CONFIG)
         .map_err(ApiError::store)?
         .map(|value| serde_json::from_str(&value).map_err(ApiError::store))
-        .unwrap_or_else(|| Ok(Settings::default()))
+        .unwrap_or_else(|| Ok(Settings { agents: crate::external_acp::default_profiles(), ..Settings::default() }))
 }
 
 pub(crate) async fn get_settings(
     State(state): State<ApiState>,
 ) -> Result<Json<Settings>, ApiError> {
     let mut value = settings(&state.store)?;
+    if state.store.kv_get("acp_templates_seeded").map_err(ApiError::store)?.is_none() {
+        for template in crate::external_acp::default_profiles() {
+            if value.agents.len() < 50 && !value.agents.iter().any(|profile| profile.id == template.id) { value.agents.push(template); }
+        }
+        state.store.kv_set(CONFIG, &serde_json::to_string(&value).map_err(ApiError::store)?).map_err(ApiError::store)?;
+        state.store.kv_set("acp_templates_seeded", "1").map_err(ApiError::store)?;
+    }
     value.enabled &= has_grant(&state.store);
     Ok(Json(value))
 }
@@ -118,6 +125,7 @@ pub(crate) async fn set_settings(
 )]
 enum Command {
     Catalog,
+    Store { kind: String },
     History {
         session_id: String,
         before: Option<String>,
@@ -324,6 +332,12 @@ async fn execute(
     let request: Command =
         serde_json::from_value(request).map_err(|err| ApiError::BadRequest(err.to_string()))?;
     match request {
+        Command::Store { kind } => {
+            if !matches!(kind.as_str(), "acp" | "mcp") { return Err(ApiError::BadRequest("invalid integration kind".into())); }
+            let engine = sync_engine(&state.store)?;
+            let catalog = engine.integration_catalog().await.map_err(ApiError::cloud)?;
+            Ok(json!({"type":"Store", "items":catalog.get(&kind).cloned().unwrap_or_else(|| json!([]))}))
+        }
         Command::Catalog => {
             let agents = state
                 .store
@@ -348,8 +362,8 @@ async fn execute(
                     "projectId": conversation.project_id, "updatedAt": conversation.updated_at
                 }));
             let profiles = settings(&state.store)?.agents;
-            let external_agents = profiles.into_iter().map(
-                |agent| json!({"id":format!("acp:{}",agent.id),"name":agent.name,"kind":"acp"}),
+            let external_agents = profiles.into_iter().filter(|profile| profile.enabled).map(
+                |agent| json!({"id":format!("acp:{}",agent.id),"name":agent.name,"description":agent.description,"kind":"acp"}),
             );
             let mut external: Vec<_> = state
                 .external

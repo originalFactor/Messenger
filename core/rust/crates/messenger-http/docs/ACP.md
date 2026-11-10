@@ -32,14 +32,19 @@ settings.
 ## Running another ACP Agent
 
 Install and sign in to the ACP Agent on the device first. On Android install
-Messenger Runtime and perform the Agent setup in its terminal. Open **ACP and
-device control** in Messenger settings and add an Agent profile, for example:
+Messenger Runtime and perform the Agent setup in its terminal. Open **ACP Agents**
+in Settings and use the FAB to add a profile manually or import one from the
+Messenger Cloud Store. Codex, Claude Code and OpenCode stdio templates are seeded
+once. Profiles support description, enable state, command, JSON arguments and
+environment, and optional working directory. The wire format is:
 
 ```json
 [
   {
     "id": "my-agent",
     "name": "My Agent",
+    "description": "Project coding assistant",
+    "enabled": true,
     "command": "/absolute/path/to/agent",
     "args": ["--acp"],
     "cwd": "/absolute/path/to/workspace"
@@ -55,7 +60,10 @@ to Runtime. ACP keeps the Runtime terminal home so a project switch retains the 
 specified. Core launches the executable with explicit arguments. Browser
 requests refer to profile and project IDs.
 
-Use **ACP chat** in the native app to create or open a session. The device
+Select an ACP Agent in **New conversation** on the home screen or in any locally
+owned project. ACP conversations appear beside other conversations and open in
+the regular chat area. Rename and delete are supported; their agent/workspace
+binding is fixed. Remote Control is configured separately in **Messenger Cloud**. The device
 stores the transcript and the third-party session ID locally. After the Agent
 process exits, Core resumes by capability, using `session/resume` first and
 `session/load` with history replacement second. If neither is available,
@@ -88,3 +96,8 @@ All routes use the per-start local bearer.
   `GET /api/v1/control/processes/{id}/input` (SSE), and
   `POST /api/v1/control/processes/{id}/output` (a JSON `line`, or an empty
   object for EOF). The companion executable runs under Runtime's UID.
+
+Default adapters: [Codex](https://github.com/agentclientprotocol/codex-acp),
+[Claude Code](https://github.com/agentclientprotocol/claude-agent-acp), and
+[OpenCode](https://opencode.ai/docs/acp/). Package adapters launch with pnpm;
+OpenCode uses `opencode acp`. Merely adding/importing a profile starts no process.

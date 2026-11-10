@@ -182,6 +182,10 @@ impl<'a> SyncEngine<'a> {
         Ok(user)
     }
 
+    pub async fn integration_catalog(&self) -> CloudResult<serde_json::Value> {
+        self.with_session(self.client.integration_catalog(&self.endpoint("api/integrations/catalog"))).await
+    }
+
     pub async fn refresh_user(&self) -> CloudResult<CloudUser> {
         let user = self
             .with_session(self.client.me(&self.endpoint("api/auth/me")))
