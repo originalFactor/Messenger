@@ -18,6 +18,8 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -520,7 +522,7 @@ internal fun ProviderModelList(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                items(models, key = { it.id }) { model ->
+                settingsItems(models, key = { it.id }, contentType = "model") { model ->
                     ModelListItem(
                         model = model,
                         isMultiSelectMode = isMultiSelectMode,

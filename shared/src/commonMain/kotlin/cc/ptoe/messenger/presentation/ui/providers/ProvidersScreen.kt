@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.providers
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveRow
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -164,7 +166,7 @@ fun ProvidersScreen(
                             .widthIn(max = 720.dp)
                             .fillMaxWidth()
                     ) {
-                        items(providers, key = { it.provider.id }) { item ->
+                        settingsItems(providers, key = { it.provider.id }, contentType = "provider") { item ->
                             ProviderListItem(
                                 item = item,
                                 onClick = { onProviderClick(item.provider.id) },

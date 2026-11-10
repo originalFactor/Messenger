@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.projects
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -218,7 +220,7 @@ fun ProjectConversationsScreen(
                         .padding(innerPadding)
                         .navigationBarsPadding()
                 ) {
-                    items(conversations, key = { it.id }) { conversation ->
+                    settingsItems(conversations, key = { it.id }, contentType = "conversation") { conversation ->
                         ConversationListItem(
                             conversation = conversation,
                             avatar = agentsById[conversation.agentId]?.avatar,

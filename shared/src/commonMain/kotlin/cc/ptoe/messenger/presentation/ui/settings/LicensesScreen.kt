@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.settings_licenses
+import cc.ptoe.messenger.generated.resources.settings_animated_shape_license
 import org.jetbrains.compose.resources.stringResource
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,7 +92,7 @@ fun LicensesScreen(
                 - OkHttp
                 - Coil
                 - CommonMark
-            """.trimIndent(),
+            """.trimIndent() + "\n\n" + stringResource(Res.string.settings_animated_shape_license),
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier
                 .fillMaxSize()

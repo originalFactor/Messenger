@@ -41,7 +41,7 @@ fun LazyListScope.recentChatSection(
     item(key = "section_recent") {
         SectionHeader(stringResource(Res.string.projects_recent_section))
     }
-    items(items = conversations, key = { "recent_${it.id}" }) { conversation ->
+    settingsItems(items = conversations, key = { "recent_${it.id}" }, contentType = "recent-conversation") { conversation ->
         ConversationListItem(
             conversation = conversation,
             avatar = avatars[conversation.agentId],

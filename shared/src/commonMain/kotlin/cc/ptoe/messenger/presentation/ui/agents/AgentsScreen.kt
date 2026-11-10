@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.agents
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveRow
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -274,7 +276,7 @@ fun AgentsScreen(
                             .fillMaxWidth()
                             .navigationBarsPadding(),
                     ) {
-                    items(agents, key = { it.agent.id }) { item ->
+                    settingsItems(agents, key = { it.agent.id }, contentType = "agent") { item ->
                         // 「必须有且恰好一个标题生成器」只约束角色归属，不约束这一行
                         // 本身：内置标题智能体照常可克隆、可删除，删掉后仓库会在
                         // 没有持有者时补种一个。唯一仍然受保护的是默认 Agent。

@@ -52,8 +52,8 @@ fun ListItem(
     iconColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     /** 卡片背景相对父容器的水平外边距；父容器已有边距（如表单列）时传 0 对齐相邻输入框。 */
     horizontalMargin: Dp = 12.dp,
-    groupIndex: Int = 0,
-    groupCount: Int = 1,
+    groupIndex: Int = LocalSettingsItemPosition.current.index,
+    groupCount: Int = LocalSettingsItemPosition.current.count,
     onClick: (() -> Unit)? = null
 ) {
     val leading: (@Composable () -> Unit)? = icon?.let { image -> {
@@ -65,19 +65,11 @@ fun ListItem(
     val trailing: (@Composable () -> Unit)? = if (showArrow) ({
         Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }) else null
-    val itemModifier = modifier.fillMaxWidth().padding(horizontal = horizontalMargin, vertical = 1.dp)
-    ExpressiveListMotion {
-        if (onClick != null) androidx.compose.material3.ListItem(
-            onClick = onClick, modifier = itemModifier,
-            shapes = expressiveItemShapes(groupIndex, groupCount),
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
-            leadingContent = leading, supportingContent = supporting, trailingContent = trailing,
-            content = { Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor) },
-        ) else androidx.compose.material3.ListItem(
-            modifier = itemModifier.clip(MaterialTheme.shapes.extraLarge),
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
-            leadingContent = leading, supportingContent = supporting, trailingContent = trailing,
-            headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor) },
-        )
-    }
+    val itemModifier = modifier.fillMaxWidth().padding(horizontal = horizontalMargin, vertical = if (groupCount > 1) 0.dp else 1.dp)
+    SettingsItem(
+        modifier = itemModifier, onClick = onClick,
+        index = groupIndex, count = groupCount,
+        leadingContent = leading, supportingContent = supporting, trailingContent = trailing,
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor) },
+    )
 }

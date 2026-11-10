@@ -64,12 +64,6 @@ internal fun AcpSessionSettingsScreen(
     }
     var choosing by remember { mutableStateOf<String?>(null) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    // Bound corner interpolation: a spring may overshoot zero-radius connected corners.
-    val motion = MaterialTheme.motionScheme
-    val boundedMotion = remember(motion) { object : MotionScheme by motion {
-        override fun <T> fastSpatialSpec(): androidx.compose.animation.core.FiniteAnimationSpec<T> = androidx.compose.animation.core.tween(180)
-    } }
-    MaterialTheme(motionScheme = boundedMotion) {
         ExpressiveScaffold(
             modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -100,7 +94,7 @@ internal fun AcpSessionSettingsScreen(
                             val checked = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true
                             val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
                             val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
-                            ListItem(
+                            cc.ptoe.messenger.presentation.ui.components.SettingsItem(
                                 selected = false, enabled = !busy && (boolean || choices.isNotEmpty()),
                                 onClick = {
                                     if (boolean) onChange(buildJsonObject { put("configId", option.text("id")); put("value", !checked) })
@@ -109,8 +103,8 @@ internal fun AcpSessionSettingsScreen(
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).semantics(mergeDescendants = true) {
                                     if (boolean) { role = Role.Switch; toggleableState = if (checked) ToggleableState.On else ToggleableState.Off }
                                 },
-                                shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(index, options.size),
-                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright),
+                                index = index, count = options.size,
+                                containerColor = MaterialTheme.colorScheme.surfaceBright,
                                 leadingContent = { Icon(if (boolean) Icons.Default.Tune else Icons.Default.Settings, null) },
                                 supportingContent = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     if (!boolean) Text(current, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
@@ -121,7 +115,7 @@ internal fun AcpSessionSettingsScreen(
                                         Icon(if (checked) Icons.Default.Check else Icons.Default.Close, null, Modifier.size(SwitchDefaults.IconSize))
                                     }) else Icon(Icons.Default.ExpandMore, null)
                                 },
-                                content = { Text(option.text("name"), style = MaterialTheme.typography.titleMedium) },
+                                headlineContent = { Text(option.text("name"), style = MaterialTheme.typography.titleMedium) },
                             )
                         } }
                     }
@@ -140,7 +134,7 @@ internal fun AcpSessionSettingsScreen(
                                 Text(choice.group, Modifier.padding(16.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                             }
                             val selectedChoice = choice.value == option["currentValue"]
-                            ListItem(
+                            cc.ptoe.messenger.presentation.ui.components.SettingsItem(
                                 selected = selectedChoice, enabled = !busy,
                                 onClick = {
                                     choosing = null
@@ -150,14 +144,12 @@ internal fun AcpSessionSettingsScreen(
                                     })
                                 },
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).semantics(mergeDescendants = true) { role = Role.RadioButton; selected = selectedChoice },
-                                shapes = cc.ptoe.messenger.presentation.ui.components.expressiveItemShapes(index, choices.size),
-                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceBright,
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedSupportingContentColor = MaterialTheme.colorScheme.onPrimaryContainer),
+                                index = index, count = choices.size,
+                                containerColor = MaterialTheme.colorScheme.surfaceBright,
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 supportingContent = choice.description.takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
                                 trailingContent = { RadioButton(selectedChoice, null, enabled = !busy, modifier = Modifier.clearAndSetSemantics {}) },
-                                content = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
+                                headlineContent = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
                             )
                         }
                     }
@@ -165,7 +157,6 @@ internal fun AcpSessionSettingsScreen(
                 confirmButton = { TextButton(onClick = { choosing = null }) { Text(stringResource(Res.string.action_close)) } },
             )
         }
-    }
 }
 
 /** Agent-owned choices are shown next to the composer, including model-dependent effort options. */

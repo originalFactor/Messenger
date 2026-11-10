@@ -517,4 +517,5 @@
     <string name="acp_resume_queue">继续发送队列</string>
     <string name="acp_steer">转为引导</string>
     <string name="acp_context_unavailable">上下文用量暂不可用</string>
+    <string name="settings_animated_shape_license">圆角动画：Copyright 2024 The Android Open Source Project。采用 Apache License 2.0，移植自 BakaSU manager 中保留 Apache 许可声明的 AnimatedShape.kt（548d1dda）。</string>
 </resources>

@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.settings
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -198,7 +200,7 @@ fun ToolsSettingsScreen(
                         }
                     }
                 } else {
-                    items(mcpServers, key = { it.id }) { server ->
+                    settingsItems(mcpServers, key = { it.id }, contentType = "mcp") { server ->
                         cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
                             onClick = { editingServer = server },
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),

@@ -518,4 +518,5 @@
     <string name="acp_resume_queue">Resume queue</string>
     <string name="acp_steer">Steer</string>
     <string name="acp_context_unavailable">Context usage unavailable</string>
+    <string name="settings_animated_shape_license">Animated corner shapes: Copyright 2024 The Android Open Source Project. Apache License 2.0. Adapted from the Apache-licensed AnimatedShape.kt in BakaSU manager (548d1dda).</string>
 </resources>

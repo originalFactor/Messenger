@@ -1,5 +1,7 @@
 package cc.ptoe.messenger.presentation.ui.acp
 
+import cc.ptoe.messenger.presentation.ui.components.settingsItems
+
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveTopAppBar
 
 import cc.ptoe.messenger.presentation.ui.components.ExpressiveScaffold
@@ -74,7 +76,7 @@ fun AcpSettingsScreen(onBackClick: () -> Unit) {
             LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxWidth(), contentPadding = PaddingValues(bottom = 96.dp)) {
                 item { Text(stringResource(Res.string.acp_config_note), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium) }
                 if (ready && profiles.isEmpty()) item { Text(stringResource(Res.string.integrations_empty), Modifier.padding(32.dp)) }
-                items(profiles, key = { it.id }) { profile ->
+                settingsItems(profiles, key = { it.id }, contentType = "acp") { profile ->
                     cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
                         onClick = { editing = profile }, enabled = !busy,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),

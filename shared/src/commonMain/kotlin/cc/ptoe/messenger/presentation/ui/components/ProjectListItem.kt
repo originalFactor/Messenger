@@ -83,7 +83,7 @@ fun LazyListScope.projectSection(
     item(key = "section_projects") {
         SectionHeader(stringResource(Res.string.projects_section))
     }
-    items(items = projects, key = { "project_${it.id}" }) { project ->
+    settingsItems(items = projects, key = { "project_${it.id}" }, contentType = "project") { project ->
         ProjectListItem(
             project = project,
             conversationCount = conversationCounts[project.id] ?: 0,
