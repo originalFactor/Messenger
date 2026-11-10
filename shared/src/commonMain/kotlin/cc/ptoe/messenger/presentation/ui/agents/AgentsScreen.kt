@@ -16,6 +16,7 @@
 
 package cc.ptoe.messenger.presentation.ui.agents
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -49,24 +51,30 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonMenu
+import androidx.compose.material3.FloatingActionButtonMenuItem
+import androidx.compose.material3.ToggleFloatingActionButton
+import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -74,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cc.ptoe.messenger.presentation.platform.BackHandler
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
@@ -133,6 +142,10 @@ fun AgentsScreen(
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var fabExpanded by remember { mutableStateOf(false) }
     val cloudUser by AppContainerHolder.instance.cloud.user.collectAsStateWithLifecycle(initialValue = null)
+    BackHandler(enabled = fabExpanded, onBack = { fabExpanded = false }) {}
+    LaunchedEffect(uiState.isMultiSelectMode) {
+        if (uiState.isMultiSelectMode) fabExpanded = false
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val sizeClass = windowSizeClassFor(maxWidth)
@@ -166,50 +179,68 @@ fun AgentsScreen(
             },
             floatingActionButton = {
                 if (!uiState.isMultiSelectMode) {
-                    Box(
-                        modifier = Modifier.navigationBarsPadding()
-                    ) {
-                        Column(horizontalAlignment = Alignment.End) {
-                        if (cloudUser != null && fabExpanded) {
-                            SmallFloatingActionButton(onClick = {
-                                fabExpanded = false
-                                onMarketClick()
-                            }) {
-                                Icon(imageVector = Icons.Default.Storefront, contentDescription = stringResource(Res.string.agents_market))
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            SmallFloatingActionButton(onClick = {
-                                fabExpanded = false
-                                onAddClick()
-                            }) {
-                                Icon(imageVector = Icons.Default.Add, contentDescription = stringResource(Res.string.agents_new_agent))
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                        TooltipBox(
-                            positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-                            tooltip = {
-                                PlainTooltip {
-                                    Text(
-                                        if (fabExpanded) stringResource(Res.string.agents_close_menu)
-                                        else stringResource(Res.string.action_add)
+                    val fabMenuOffsetX =
+                        if (LocalLayoutDirection.current == LayoutDirection.Ltr) 16.dp else (-16).dp
+                    FloatingActionButtonMenu(
+                        expanded = fabExpanded,
+                        button = {
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                                    if (fabExpanded) TooltipAnchorPosition.Start
+                                    else TooltipAnchorPosition.Above
+                                ),
+                                tooltip = {
+                                    PlainTooltip {
+                                        Text(
+                                            stringResource(
+                                                if (fabExpanded) Res.string.agents_close_menu
+                                                else Res.string.action_add
+                                            )
+                                        )
+                                    }
+                                },
+                                state = rememberTooltipState()
+                            ) {
+                                ToggleFloatingActionButton(
+                                    checked = fabExpanded,
+                                    onCheckedChange = { fabExpanded = it }
+                                ) {
+                                    val expanded = checkedProgress > 0.5f
+                                    Icon(
+                                        imageVector = if (expanded) Icons.Default.Close else Icons.Default.Add,
+                                        contentDescription = stringResource(
+                                            if (expanded) Res.string.agents_close_menu
+                                            else Res.string.action_add
+                                        ),
+                                        modifier = Modifier.animateIcon({ checkedProgress })
                                     )
                                 }
-                            },
-                            state = rememberTooltipState()
-                        ) {
-                            FloatingActionButton(onClick = {
-                                if (cloudUser == null) onAddClick() else fabExpanded = !fabExpanded
-                            }) {
-                                Icon(
-                                    imageVector = if (fabExpanded) Icons.Default.Close else Icons.Default.Add,
-                                    contentDescription = if (fabExpanded) stringResource(Res.string.agents_close_menu) else stringResource(Res.string.action_add)
-                                )
                             }
+                        },
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .offset(x = fabMenuOffsetX, y = 16.dp)
+                    ) {
+                        if (cloudUser != null) {
+                            FloatingActionButtonMenuItem(
+                                onClick = {
+                                    fabExpanded = false
+                                    onMarketClick()
+                                },
+                                text = { Text(stringResource(Res.string.agents_market)) },
+                                icon = { Icon(Icons.Default.Storefront, contentDescription = null) }
+                            )
                         }
+                        FloatingActionButtonMenuItem(
+                            onClick = {
+                                fabExpanded = false
+                                onAddClick()
+                            },
+                            text = { Text(stringResource(Res.string.agents_new_agent)) },
+                            icon = { Icon(Icons.Default.Add, contentDescription = null) }
+                        )
                     }
                 }
-            }
             },
             modifier = Modifier.fillMaxSize()
         ) { innerPadding ->
@@ -308,6 +339,15 @@ fun AgentsScreen(
                         showBatchDeleteDialog = false
                     },
                     onDismiss = { showBatchDeleteDialog = false }
+                )
+            }
+            if (fabExpanded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures { fabExpanded = false }
+                        }
                 )
             }
         }
