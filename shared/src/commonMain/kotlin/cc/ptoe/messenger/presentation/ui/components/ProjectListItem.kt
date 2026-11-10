@@ -83,24 +83,29 @@ fun LazyListScope.projectSection(
     item(key = "section_projects") {
         SectionHeader(stringResource(Res.string.projects_section))
     }
-    settingsItems(items = projects, key = { "project_${it.id}" }, contentType = "project") { project ->
-        ProjectListItem(
-            project = project,
-            conversationCount = conversationCounts[project.id] ?: 0,
-            onClick = { onProjectClick(project.id) },
-            onEditClick = { onProjectEditClick(project.id) },
-            onDeleteClick = { onProjectDeleteClick(project.id) },
-            enableContextMenu = enableContextMenu
-        )
-    }
-    // 始终显示“无项目”文件夹：新建的普通对话总会落在这里，入口不应随
-    // 会话数忽隐忽现。
-    item(key = "unprojected_folder") {
-        UnprojectedFolderItem(
-            conversationCount = unprojectedConversationCount,
-            onClick = onUnprojectedClick,
-            enableContextMenu = enableContextMenu
-        )
+    // The unprojected folder is the last entry in this same dynamic group.
+    val folders: List<Project?> = projects + listOf(null)
+    settingsItems(
+        items = folders,
+        key = { project -> project?.let { "project_${it.id}" } ?: "unprojected_folder" },
+        contentType = "project-folder",
+    ) { project ->
+        if (project == null) {
+            UnprojectedFolderItem(
+                conversationCount = unprojectedConversationCount,
+                onClick = onUnprojectedClick,
+                enableContextMenu = enableContextMenu,
+            )
+        } else {
+            ProjectListItem(
+                project = project,
+                conversationCount = conversationCounts[project.id] ?: 0,
+                onClick = { onProjectClick(project.id) },
+                onEditClick = { onProjectEditClick(project.id) },
+                onDeleteClick = { onProjectDeleteClick(project.id) },
+                enableContextMenu = enableContextMenu,
+            )
+        }
     }
 }
 
