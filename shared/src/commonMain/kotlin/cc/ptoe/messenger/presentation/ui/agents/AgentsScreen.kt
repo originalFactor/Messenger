@@ -176,7 +176,11 @@ fun AgentsScreen(
                 } else {
                     androidx.compose.material3.LargeFlexibleTopAppBar(
                         title = { Text(text = stringResource(Res.string.agents_title)) },
-                        modifier = Modifier.statusBarsPadding()
+                        modifier = Modifier.statusBarsPadding(),
+                        colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
                     )
                 }
             },
