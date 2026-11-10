@@ -342,7 +342,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/remote/status", get(remote_status))
         .route("/control/platform-tools", put(control::platform_tools))
         .route("/control/settings", get(control::get_settings).put(control::set_settings))
-        .route("/control/commands/:id", post(control::commands))
+        .route("/control/commands/:id", post(control::commands).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
         .route("/control/commands/:id/permission", post(control::permission))
         .route("/control/commands/:id/cancel", post(control::cancel_command))
         .route("/providers", get(list_providers).put(upsert_provider_body))

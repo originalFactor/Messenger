@@ -91,11 +91,12 @@ struct Worker {
 
 enum WorkerRequest {
     Prompt(Prompt),
+    Steer { content: Vec<ContentBlock>, done: oneshot::Sender<Result<Value, String>> },
     Configure { change: Value, done: oneshot::Sender<Result<(), String>> },
 }
 
 struct Prompt {
-    text: String,
+    content: Vec<ContentBlock>,
     cancel: CancellationToken,
     permissions: mpsc::Receiver<String>,
     updates: mpsc::Sender<Value>,
@@ -229,15 +230,25 @@ impl ExternalSessions {
         Ok(id)
     }
 
+    pub async fn steer(&self, _state: &ApiState, id: &str, content: Vec<ContentBlock>) -> Result<Value, ApiError> {
+        let worker = self.workers.lock().await.get(id).cloned().ok_or_else(|| ApiError::BadRequest("No running ACP session".into()))?;
+        let (done, reply) = oneshot::channel();
+        worker.requests.send(WorkerRequest::Steer { content, done }).await.map_err(ApiError::internal)?;
+        let result = tokio::time::timeout(Duration::from_secs(30), reply).await.map_err(ApiError::internal)?.map_err(ApiError::internal)?.map_err(ApiError::BadRequest)?;
+        Ok(json!({"type":"Steering","result":result}))
+    }
+
     pub async fn prompt(
         &self,
         state: &ApiState,
         id: String,
         text: String,
+        mut content: Vec<ContentBlock>,
         cancel: CancellationToken,
         permissions: mpsc::Receiver<String>,
         updates: mpsc::Sender<Value>,
     ) -> Result<Value, ApiError> {
+        if content.is_empty() { content.push(ContentBlock::Text(TextContent::new(text.clone()))); }
         {
             let mut active = state.active_turns.lock().await;
             if active.contains_key(&id) {
@@ -249,7 +260,7 @@ impl ExternalSessions {
             active.insert(id.clone(), cancel.clone());
         }
         let result = self
-            .run_prompt(state, &id, text, cancel, permissions, updates)
+            .run_prompt(state, &id, text, content, cancel, permissions, updates)
             .await;
         state.active_turns.lock().await.remove(&id);
         result
@@ -260,6 +271,7 @@ impl ExternalSessions {
         state: &ApiState,
         id: &str,
         text: String,
+        content: Vec<ContentBlock>,
         cancel: CancellationToken,
         permissions: mpsc::Receiver<String>,
         updates: mpsc::Sender<Value>,
@@ -280,14 +292,16 @@ impl ExternalSessions {
         if record.messages.is_empty() {
             record.title = crate::control::short(&text, 80);
         }
-        record.messages.push(message("user", &text, "sent"));
+        let mut user = message("user", &text, "sent");
+        user["content"] = json!(content);
+        record.messages.push(user);
         self.save(&state.store, record.clone())?;
         let (done, reply) = oneshot::channel();
         let answer = Arc::new(std::sync::Mutex::new(String::new()));
         let transcript = Arc::new(std::sync::Mutex::new(Vec::new()));
         let _ = updates.send(json!({"type":"TurnStarted"})).await;
         let job = Prompt {
-            text,
+            content,
             cancel,
             permissions,
             updates,
@@ -305,6 +319,7 @@ impl ExternalSessions {
         );
         let answer = std::mem::take(&mut *answer.lock().unwrap());
         let events = std::mem::take(&mut *transcript.lock().unwrap());
+        for event in &events { if event["type"] == "SteeredUser" { let mut row = message("user", event["text"].as_str().unwrap_or_default(), "sent"); row["content"] = event["content"].clone(); record.messages.push(row); } }
         if !answer.is_empty() || !events.is_empty() {
             let mut row = message("assistant", &answer, "sent");
             row["events"] = json!(events);
@@ -446,6 +461,7 @@ async fn start_worker(
                             "Unsupported ACP protocol version",
                         ));
                     }
+                    output.lock().await.settings = json!({"configOptions":[],"steering": init.meta.as_ref().and_then(|meta| meta.get("steering")).cloned().unwrap_or(Value::Null)});
                     let session = match existing {
                         Some(id) => {
                             if init
@@ -484,8 +500,9 @@ async fn start_worker(
                         let Some(prompt) = prompt else { break };
                         match prompt {
                             WorkerRequest::Prompt(prompt) => {
-                                if !run_prompt(&connection, &session, &output, prompt).await { break; }
+                                if !run_prompt(&connection, &session, &output, prompt, &mut prompts).await { break; }
                             }
+                            WorkerRequest::Steer { done, .. } => { let _ = done.send(Ok(json!({"outcome":"promptRequired"}))); }
                             WorkerRequest::Configure { change, done } => {
                                 let result = configure(&connection, &session, &output, change).await;
                                 let _ = done.send(result);
@@ -519,7 +536,7 @@ async fn start_worker(
 
 fn merge_settings(settings: &mut Value, update: Value) {
     if !settings.is_object() { *settings = json!({"configOptions":[]}); }
-    for key in ["configOptions", "modes"] {
+    for key in ["configOptions", "modes", "availableCommands", "usage"] {
         if let Some(value) = update.get(key) { settings[key] = value.clone(); }
     }
     if let Some(mode) = update.get("currentModeId") {
@@ -560,9 +577,10 @@ async fn run_prompt(
     session: &SessionId,
     output: &Mutex<Output>,
     prompt: Prompt,
+    requests: &mut mpsc::Receiver<WorkerRequest>,
 ) -> bool {
     let Prompt {
-        text,
+        content,
         cancel,
         permissions,
         updates,
@@ -575,18 +593,30 @@ async fn run_prompt(
         permissions: Arc::new(Mutex::new(permissions)),
         updates,
         answer,
-        transcript,
+        transcript: transcript.clone(),
     });
     let request = connection
         .send_request(PromptRequest::new(
             session.clone(),
-            vec![ContentBlock::Text(TextContent::new(text))],
+            content,
         ))
         .block_task();
     tokio::pin!(request);
-    let (result, keep) = tokio::select! {
+    let (result, keep) = loop { tokio::select! {
+        Some(WorkerRequest::Steer { content, done }) = requests.recv() => {
+            let steered_text = content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<Vec<_>>().join("\n");
+            let params = json!({"sessionId":session,"prompt":content,"_meta":{"steering":{"idleBehavior":"promptRequired"}}});
+            let result = tokio::select! {
+                result = tokio::time::timeout(Duration::from_secs(10), connection.send_request(agent_client_protocol::UntypedMessage::new("_session/steering", params).unwrap()).block_task()) => result.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())),
+                _ = cancel.cancelled() => Err("Turn cancelled during steering".into()),
+            };
+            if result.as_ref().is_ok_and(|value| value["outcome"] == "injected") {
+                transcript.lock().unwrap().push(json!({"type":"SteeredUser","text":steered_text,"content":content}));
+            }
+            let _ = done.send(result);
+        }
         result = &mut request => {
-            match result {
+            break match result {
                 Ok(result) if result.stop_reason == StopReason::Cancelled =>
                     (json!({"type":"Cancelled"}), true),
                 Ok(result) => (json!({"type":"Finished","stopReason":result.stop_reason}), true),
@@ -596,9 +626,9 @@ async fn run_prompt(
         _ = cancel.cancelled() => {
             let _ = connection.send_notification(CancelNotification::new(session.clone()));
             let keep = tokio::time::timeout(Duration::from_secs(2), request).await.is_ok_and(|r| r.is_ok());
-            (json!({"type":"Cancelled"}), keep)
+            break (json!({"type":"Cancelled"}), keep)
         }
-    };
+    } };
     output.lock().await.turn.take();
     let _ = done.send(result);
     keep
@@ -611,7 +641,9 @@ async fn handle_notification(output: &Mutex<Output>, event: SessionNotification)
     let kind = update["sessionUpdate"].as_str().unwrap_or_default();
     let text = update["content"]["text"].as_str().unwrap_or_default();
     let mut output = output.lock().await;
-    if kind == "config_option_update" || kind == "current_mode_update" {
+    if kind == "usage_update" { output.settings["usage"] = update.clone(); }
+    if kind == "available_commands_update" { output.settings["availableCommands"] = update["availableCommands"].clone(); }
+    if matches!(kind, "config_option_update" | "current_mode_update" | "usage_update" | "available_commands_update") {
         merge_settings(&mut output.settings, update.clone());
         if let Some(turn) = &output.turn {
             let data = json!({"type":"SessionSettings","settings":output.settings});
@@ -888,11 +920,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steering_injects_content_and_keeps_commands_usage_and_transcript() {
+        let (state, session) = setup("settings").await;
+        let (_choices, permissions) = mpsc::channel(8);
+        let (updates, mut events) = mpsc::channel(32);
+        let content: Vec<ContentBlock> = serde_json::from_value(json!([
+            {"type":"text","text":"change direction"},
+            {"type":"image","mimeType":"image/png","data":"aGVsbG8="}
+        ])).unwrap();
+        let prompt = state.external.prompt(&state, session.clone(), "wait".into(), vec![], CancellationToken::new(), permissions, updates);
+        let steer = async {
+            while let Some(event) = events.recv().await { if event["type"] == "TextDelta" { break; } }
+            let result = state.external.steer(&state, &session, content).await.unwrap();
+            assert_eq!(result["result"]["outcome"], "injected");
+        };
+        let (result, _) = tokio::join!(prompt, steer);
+        assert_eq!(result.unwrap()["type"], "Finished");
+        let rows = state.external.history(&state.store, &session).unwrap();
+        assert!(rows.iter().any(|row| row["role"] == "user" && row["text"] == "change direction" && row["content"][1]["type"] == "image"));
+        let settings = state.external.settings(&state, &session, None, &CancellationToken::new()).await.unwrap();
+        assert_eq!(settings["settings"]["usage"]["used"], 123);
+        assert_eq!(settings["settings"]["availableCommands"][0]["name"], "status");
+        let idle = state.external.steer(&state, &session, vec![]).await.unwrap();
+        assert_eq!(idle["result"]["outcome"], "promptRequired");
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
     async fn acp_tool_and_thought_events_survive_reopening_history() {
         let (state, session) = setup("settings").await;
         let (_choices, permissions) = mpsc::channel(8);
         let (updates, mut events) = mpsc::channel(32);
-        let result = state.external.prompt(&state, session.clone(), "tools".into(), CancellationToken::new(), permissions, updates).await.unwrap();
+        let result = state.external.prompt(&state, session.clone(), "tools".into(), vec![], CancellationToken::new(), permissions, updates).await.unwrap();
         assert_eq!(result["type"], "Finished");
         assert_eq!(result["settings"]["configOptions"][0]["currentValue"], "workspace-write");
         let history = state.external.history(&state.store, &session).unwrap();
@@ -941,6 +1000,7 @@ mod tests {
                 &state,
                 session.clone(),
                 "one".into(),
+                vec![],
                 cancel,
                 permissions,
                 updates,
@@ -971,6 +1031,7 @@ mod tests {
                 &state,
                 session.clone(),
                 "wait".into(),
+                vec![],
                 cancel.clone(),
                 permissions,
                 updates,
@@ -1008,6 +1069,7 @@ mod tests {
                 &state,
                 session.clone(),
                 "never sent".into(),
+                vec![],
                 CancellationToken::new(),
                 permissions,
                 updates,

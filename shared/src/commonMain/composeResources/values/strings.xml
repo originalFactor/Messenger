@@ -513,4 +513,9 @@
     <string name="integrations_empty">No configurations yet</string>
     <string name="acp_no_session_settings">This Agent does not provide session settings.</string>
     <string name="acp_session_mode">Mode</string>
+    <string name="acp_add_file">Add file</string>
+    <string name="acp_paste_attachments">Paste attachments</string>
+    <string name="acp_resume_queue">Resume queue</string>
+    <string name="acp_steer">Steer</string>
+    <string name="acp_context_unavailable">Context usage unavailable</string>
 </resources>

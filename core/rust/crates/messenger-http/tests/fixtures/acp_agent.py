@@ -45,7 +45,7 @@ for line in sys.stdin:
         capabilities = {"loadSession": mode in ("load", "settings", "settings-hang")}
         if mode == "resume":
             capabilities["sessionCapabilities"] = {"resume": {}}
-        send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities})
+        send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities, "_meta":{"steering":{"supported":True}}})
     elif method == "session/new":
         send(id=request_id, result={"sessionId": session_id, **(session_settings() if mode.startswith("settings") else {})})
     elif method == "session/load":
@@ -92,6 +92,13 @@ for line in sys.stdin:
                 "toolCall": {"toolCallId": "fixture-tool", "title": "Test tool"},
                 "options": [{"optionId": "yes", "name": "Allow once", "kind": "allow_once"}],
             })
+    elif method == "_session/steering":
+        assert packet["params"]["_meta"]["steering"]["idleBehavior"] == "promptRequired"
+        assert packet["params"]["prompt"][1]["type"] == "image"
+        send(id=request_id, result={"outcome":"injected"})
+        send(method="session/update", params={"sessionId":session_id,"update":{"sessionUpdate":"usage_update","used":123,"size":1000}})
+        send(method="session/update", params={"sessionId":session_id,"update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"status","description":"Status"}]}})
+        send(id=pending, result={"stopReason":"end_turn"})
     elif method == "session/cancel":
         send(id=pending, result={"stopReason": "cancelled"})
     elif request_id == "permission":

@@ -46,3 +46,7 @@ The existing Core notification handler explicitly handles text, thought, tool an
 - No end-to-end generated conversation or visual screenshot validation was performed in this audit.
 
 Implementation: `AcpConversationScreen.kt`, `AcpSessionSettingsDialog.kt`, `AcpChatMessages.kt` and Core `external_acp.rs`. Adapter reference: [Codex ACP](https://github.com/agentclientprotocol/codex-acp).
+
+## Subsequent composer integration
+
+Settings now use a separate page and the plus panel. Image/file pickers and clipboard attachments send ACP content blocks; command suggestions consume Agent announcements; context usage displays Agent used/size values. During generation, sends queue in FIFO order; long-press Send and queued-message Steer use the extension with host-owned idle fallback. Queue state is local to the open screen. The dedicated plan display and the other extension gaps listed above remain outstanding.

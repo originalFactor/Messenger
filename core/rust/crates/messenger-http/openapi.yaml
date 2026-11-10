@@ -840,12 +840,13 @@ components:
       type: object
       required: [action]
       properties:
-        action: { type: string, enum: [catalog, create, history, setMode, prompt, store, sessionSettings, setSessionConfig] }
+        action: { type: string, enum: [catalog, create, history, setMode, prompt, store, sessionSettings, setSessionConfig, steer] }
         kind: { type: string, enum: [acp, mcp], description: Integration Store category (requires Cloud sign-in). }
         agentId: { type: string }
         projectId: { type: [string, "null"], description: Required when creating an ACP session. }
         sessionId: { type: string }
         before: { type: [string, "null"] }
+        content: { type: array, items: { type: object }, description: ACP content blocks (text, image, embedded resource); prompt or steer only. }
         configId: { type: string, description: Agent-provided configuration ID for setSessionConfig. }
         value: { type: [string, boolean], description: Agent-provided selection ID or boolean value. }
         modeId: { type: string, description: Legacy Agent mode ID (mutually exclusive with configId). }

@@ -147,9 +147,12 @@ enum Command {
         session_id: String,
         writable: bool,
     },
+    Steer { session_id: String, content: Vec<agent_client_protocol::schema::v1::ContentBlock> },
     Prompt {
         session_id: String,
         text: String,
+        #[serde(default)]
+        content: Vec<agent_client_protocol::schema::v1::ContentBlock>,
     },
 }
 
@@ -490,7 +493,13 @@ async fn execute(
             };
             Ok(json!({"type":"Created","sessionId":id}))
         }
-        Command::Prompt { session_id, text } => {
+        Command::Steer { session_id, content } => {
+            let session = state.external.record(&state.store, &session_id)?;
+            scope.workspace(&state, session.project.as_deref())?;
+            state.external.steer(&state, &session_id, content).await
+        }
+        Command::Prompt { session_id, text, mut content } => {
+            if content.is_empty() { content.push(agent_client_protocol::schema::v1::ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text.clone()))); }
             if text.trim().is_empty() || text.len() > 128_000 {
                 return Err(ApiError::BadRequest(
                     "prompt must contain 1–128000 bytes of text".into(),
@@ -503,7 +512,7 @@ async fn execute(
                 }
                 return state
                     .external
-                    .prompt(&state, session_id, text, cancel, permissions, updates)
+                    .prompt(&state, session_id, text, content, cancel, permissions, updates)
                     .await;
             }
             let conversation = conversation(&state, &session_id)?;

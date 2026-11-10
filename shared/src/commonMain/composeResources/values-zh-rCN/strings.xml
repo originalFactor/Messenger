@@ -512,4 +512,9 @@
     <string name="integrations_empty">暂无配置</string>
     <string name="acp_no_session_settings">此 Agent 未提供会话设置。</string>
     <string name="acp_session_mode">模式</string>
+    <string name="acp_add_file">添加文件</string>
+    <string name="acp_paste_attachments">粘贴附件</string>
+    <string name="acp_resume_queue">继续发送队列</string>
+    <string name="acp_steer">转为引导</string>
+    <string name="acp_context_unavailable">上下文用量暂不可用</string>
 </resources>

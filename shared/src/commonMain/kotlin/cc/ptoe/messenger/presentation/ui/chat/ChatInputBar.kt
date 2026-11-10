@@ -16,6 +16,9 @@
 
 package cc.ptoe.messenger.presentation.ui.chat
 
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.input.pointer.pointerInput
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -135,6 +138,11 @@ fun ChatInputBar(
     agentWritable: Boolean? = null,
     onAgentModeChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
+    panelContent: (@Composable () -> Unit)? = null,
+    beforeSend: (@Composable () -> Unit)? = null,
+    onSendLongClick: (() -> Unit)? = null,
+    sendWhileGenerating: Boolean = false,
+    hasAttachments: Boolean = false,
     showFunctionPanel: Boolean = true
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -163,7 +171,7 @@ fun ChatInputBar(
                 true
             } else {
                 // Bare Enter → send, if there's anything to send.
-                if (text.text.isNotBlank() || pendingImages.isNotEmpty()) {
+                if (text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments) {
                     onSendClick()
                 }
                 true
@@ -210,6 +218,7 @@ fun ChatInputBar(
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
             ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                panelContent?.invoke()
                 // 微信「+」面板样式：圆角方块图标 + 下方小字标签，每行固定 4 格
                 Row(
                     modifier = Modifier
@@ -260,7 +269,7 @@ fun ChatInputBar(
                     }
                     functionPanelExpanded = !functionPanelExpanded
                 },
-                enabled = !isGenerating && !isAttachingImage,
+                enabled = (!isGenerating || sendWhileGenerating) && !isAttachingImage,
                 modifier = Modifier
                     .padding(end = 4.dp)
                     .size(44.dp)
@@ -315,12 +324,13 @@ fun ChatInputBar(
                 maxLines = 5,
                 minLines = 1,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                enabled = !isGenerating
+                enabled = !isGenerating || sendWhileGenerating
             )
 
             Spacer(modifier = Modifier.width(4.dp))
 
             // 发送 / 停止 按钮：圆形填充，遵循 Google Messages 视觉
+            beforeSend?.invoke()
             if (isGenerating) {
                 FilledIconButton(
                     onClick = onStopClick,
@@ -337,25 +347,21 @@ fun ChatInputBar(
                         tint = MaterialTheme.colorScheme.onError
                     )
                 }
-            } else {
-                val canSend = text.text.isNotBlank() || pendingImages.isNotEmpty()
-                FilledIconButton(
-                    onClick = onSendClick,
-                    enabled = canSend,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .size(44.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
+            }
+            if (!isGenerating || sendWhileGenerating) {
+                val canSend = text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments
+                Box(
+                    modifier = Modifier.clip(CircleShape).size(44.dp)
+                        .background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .combinedClickable(enabled = canSend, role = androidx.compose.ui.semantics.Role.Button,
+                            onClick = onSendClick, onLongClick = onSendLongClick),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = stringResource(Res.string.action_send),
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp),
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                 }
             }

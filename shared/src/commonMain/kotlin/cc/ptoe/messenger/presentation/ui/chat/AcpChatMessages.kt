@@ -1,6 +1,7 @@
 package cc.ptoe.messenger.presentation.ui.chat
 
 import cc.ptoe.messenger.domain.model.ContentPart
+import cc.ptoe.messenger.domain.model.MessageImage
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
@@ -18,7 +19,10 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
         else -> MessageStatus.SENT
     }
     if (row.text("role") == "user") {
-        listOf(Message(id, sessionId, MessageRole.USER, row.text("text"), timestamp = timestamp, status = status))
+        listOf(Message(id, sessionId, MessageRole.USER, row.text("text"), parts = row.objects("content").filter { it.text("type") == "image" }.map { image ->
+            val uri = "data:${image.text("mimeType")};base64,${image.text("data")}"
+            ContentPart.Image(MessageImage(uri, uri))
+        }, timestamp = timestamp, status = status))
     } else {
         val thought = StringBuilder()
         val tools = linkedMapOf<String, JsonObject>()

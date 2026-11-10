@@ -25,6 +25,7 @@ internal fun acpSettingChoices(options: JsonArray): List<AcpSettingChoice> = opt
     else listOfNotNull(option["value"]?.let { AcpSettingChoice(it, option.text("name"), option.text("description")) })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AcpSessionSettingsDialog(
     settings: JsonObject,
@@ -32,14 +33,12 @@ internal fun AcpSessionSettingsDialog(
     onDismiss: () -> Unit,
     onChange: (JsonObject) -> Unit,
     errorMessage: String? = null,
+    asPage: Boolean = false,
 ) {
     val options = settings.objects("configOptions")
     val modes = settings["modes"] as? JsonObject
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(stringResource(Res.string.conversation_settings_title)) },
-        text = {
-            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val content: @Composable () -> Unit = {
+            Column(Modifier.then(if (asPage) Modifier.fillMaxSize() else Modifier.heightIn(max = 480.dp)).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (!errorMessage.isNullOrBlank()) Text(errorMessage, color = MaterialTheme.colorScheme.error)
                 if (!busy && options.isEmpty() && modes == null) Text(stringResource(Res.string.acp_no_session_settings))
@@ -68,7 +67,15 @@ internal fun AcpSessionSettingsDialog(
                     }
                 }
             }
-        },
+    }
+    if (asPage) {
+        Scaffold(topBar = { androidx.compose.material3.TopAppBar(
+            title = { Text(stringResource(Res.string.conversation_settings_title)) },
+            navigationIcon = { TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_back)) } }) }) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding).padding(16.dp)) { content() }
+        }
+    } else AlertDialog(onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(stringResource(Res.string.conversation_settings_title)) }, text = content,
         confirmButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text(stringResource(Res.string.action_close)) } }
     )
 }
