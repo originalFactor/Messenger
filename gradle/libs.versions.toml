@@ -13,6 +13,8 @@
 # limitations under the License.
 
 [versions]
+typewriterHighlights = "1.1.0"
+typewriterRatex = "0.1.12-1"
 agp = "9.5.0"
 coreKtx = "1.19.0"
 jna = "5.17.0"
@@ -52,6 +54,15 @@ okio = "3.18.0"
 llmTypewriter = "0.2.0"
 
 [libraries]
+typewriter-highlights = { module = "dev.snipme:highlights", version.ref = "typewriterHighlights" }
+typewriter-ratex = { module = "io.github.darriousliu:ratex", version.ref = "typewriterRatex" }
+typewriter-ratex-windows = { module = "io.github.darriousliu:ratex-native-windows-x86-64", version.ref = "typewriterRatex" }
+typewriter-ratex-linux = { module = "io.github.darriousliu:ratex-native-linux-x86-64", version.ref = "typewriterRatex" }
+typewriter-ratex-linuxarm = { module = "io.github.darriousliu:ratex-native-linux-aarch64", version.ref = "typewriterRatex" }
+typewriter-ratex-macos = { module = "io.github.darriousliu:ratex-native-darwin-x86-64", version.ref = "typewriterRatex" }
+typewriter-ratex-macosarm = { module = "io.github.darriousliu:ratex-native-darwin-aarch64", version.ref = "typewriterRatex" }
+coil3-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil3" }
+
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version = "1.3.2" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

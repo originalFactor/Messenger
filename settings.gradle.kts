@@ -55,3 +55,6 @@ project(":core-bindings").projectDir = file("core/bindings")
 // packaged for the JVM instead of Android.
 include(":core-bindings-desktop")
 project(":core-bindings-desktop").projectDir = file("core/bindings-desktop")
+
+include(":llm-typewriter-patched")
+project(":llm-typewriter-patched").projectDir = file("rendering/llm-typewriter")

@@ -19,6 +19,7 @@ on:
     branches:
       - main
     paths:
+      - rendering/**
       - shared/**
       - androidApp/**
       - desktopApp/**
@@ -42,6 +43,7 @@ on:
     branches:
       - main
     paths:
+      - rendering/**
       - shared/**
       - androidApp/**
       - desktopApp/**
