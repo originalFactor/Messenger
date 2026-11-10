@@ -136,6 +136,7 @@ pub fn model_document_to_row(doc: &CloudModelDocument, provider_id: &str) -> Sto
         input_rate: doc.input_rate,
         output_rate: doc.output_rate,
         cache_read_rate: doc.cache_read_rate,
+        cache_write_rate: doc.cache_write_rate,
         input_modalities: doc.input_modalities.clone(),
         output_modalities: doc.output_modalities.clone(),
         supports_tool_calling: doc.supports_tool_calling,
@@ -282,6 +283,7 @@ pub fn provider_row_to_request(row: &StoredProvider, models: &[StoredModel]) -> 
                 input_rate: m.input_rate,
                 output_rate: m.output_rate,
                 cache_read_rate: m.cache_read_rate,
+                cache_write_rate: m.cache_write_rate,
                 input_modalities: m.input_modalities.clone(),
                 output_modalities: m.output_modalities.clone(),
                 supports_tool_calling: m.supports_tool_calling,
@@ -299,6 +301,22 @@ pub fn provider_row_to_request(row: &StoredProvider, models: &[StoredModel]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_model_cache_write_rate_round_trips() {
+        let document: CloudModelDocument = serde_json::from_value(serde_json::json!({
+            "id": "m", "modelId": "cloud-model", "cacheWriteRate": 1.25
+        })).unwrap();
+        let row = model_document_to_row(&document, "p");
+        assert_eq!(row.cache_write_rate, Some(1.25));
+        let provider = StoredProvider {
+            id: "p".into(), name: "Provider".into(), base_url: "http://localhost".into(),
+            api_key: "test".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
+        };
+        let request = provider_row_to_request(&provider, &[row]);
+        assert_eq!(request.models[0].cache_write_rate, Some(1.25));
+        assert_eq!(serde_json::to_value(&request).unwrap()["models"][0]["cacheWriteRate"], 1.25);
+    }
 
     #[test]
     fn agent_document_round_trips_to_row_and_back() {

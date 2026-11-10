@@ -188,6 +188,8 @@ pub struct ModelEntry {
     /// cache (absent = unknown, e.g. a provider with no rate metadata).
     #[serde(rename = "cache_read_rate")]
     pub cache_read_rate: Option<f64>,
+    #[serde(rename = "cache_write_rate")]
+    pub cache_write_rate: Option<f64>,
     /// Optional Messenger extensions and other provider-specific fields.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,

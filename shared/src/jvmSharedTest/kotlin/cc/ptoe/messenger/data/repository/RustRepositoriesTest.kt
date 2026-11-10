@@ -320,6 +320,7 @@ class RustRepositoriesTest {
             modelId = "gpt-4o",
             displayName = "GPT-4o",
             isEnabled = true,
+            cacheWriteRate = 1.25,
             createdAt = 1000L
         )
         repo.insert(model)
@@ -327,6 +328,9 @@ class RustRepositoriesTest {
         val all = repo.getAll().first()
         assertEquals(1, all.size)
         assertEquals("GPT-4o", all[0].displayName)
+        assertEquals(1.25, all[0].cacheWriteRate)
+        repo.update(model.copy(cacheWriteRate = 0.0))
+        assertEquals(0.0, repo.getById(model.id).first()?.cacheWriteRate)
 
         val byProvider = repo.getByProviderId("p1").first()
         assertEquals(1, byProvider.size)

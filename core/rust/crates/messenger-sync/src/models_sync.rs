@@ -89,6 +89,7 @@ impl<'a> SyncEngine<'a> {
                 input_rate: dto.input_rate,
                 output_rate: dto.output_rate,
                 cache_read_rate: dto.cache_read_rate,
+                cache_write_rate: dto.cache_write_rate,
                 input_modalities: metadata.input_modalities.as_ref().map(|values| values.join(","))
                     .unwrap_or_else(|| "text".to_string()),
                 output_modalities: "text".to_string(),
@@ -153,6 +154,7 @@ mod tests {
                 input_rate: None,
                 output_rate: Some(9.0),
                 cache_read_rate: Some(0.15),
+                cache_write_rate: None,
                 input_modalities: "text".into(),
                 output_modalities: "text".into(),
                 supports_tool_calling: false,
@@ -174,7 +176,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
                     {"id": "gpt-4o", "context_window": 128000, "input_rate": 0.5,
-                     "cache_read_rate": 0.05, "display_name": "Cloud GPT",
+                     "cache_read_rate": 0.05, "cache_write_rate": 1.25, "display_name": "Cloud GPT",
                      "input_modalities": ["text", "image"], "reasoning": true,
                      "reasoning_efforts": ["low", "high"], "max_output_tokens": 8192,
                      "supports_temperature": false, "supports_top_p": false, "supports_penalties": false},
@@ -191,6 +193,7 @@ mod tests {
         assert_eq!(gpt4.context_window, 128000);
         assert_eq!(gpt4.input_rate, Some(0.5));
         assert_eq!(gpt4.cache_read_rate, Some(0.05));
+        assert_eq!(gpt4.cache_write_rate, Some(1.25));
         assert_eq!(gpt4.display_name, "Cloud GPT");
         assert_eq!(gpt4.output_rate, None, "removed Cloud rates must not retain local values");
         assert_eq!(gpt4.input_modalities, "text,image");
@@ -242,6 +245,7 @@ mod tests {
                 input_rate: None,
                 output_rate: None,
                 cache_read_rate: None,
+                cache_write_rate: None,
                 input_modalities: "text".into(),
                 output_modalities: "text".into(),
                 supports_tool_calling: false,

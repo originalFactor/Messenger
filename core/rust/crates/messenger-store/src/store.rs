@@ -79,6 +79,7 @@ impl Store {
             conn.execute_batch(crate::schema::ADD_PROJECT_DEVICE_ID_COLUMN)?;
         }
         crate::schema::add_model_metadata_columns(&conn)?;
+        crate::schema::add_model_cache_write_rate_column(&conn)?;
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
@@ -784,7 +785,7 @@ const PROJECT_COLUMNS: &str = "id, name, workspace, deviceId, createdAt, updated
 const PROJECT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6";
 const PROJECT_UPDATES: &str = "name=?2, workspace=?3, deviceId=?4, updatedAt=?6";
 
-const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides";
+const MODEL_COLUMNS: &str = "id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides, cacheWriteRate";
 
 const AGENT_COLUMNS: &str = "id, name, avatar, systemPrompt, description, defaultModelId, temperature, topP, maxTokens, reasoningEffort, isDefault, followDefaultSystemPrompt, followDefaultModel, followDefaultTemperature, followDefaultTopP, followDefaultMaxTokens, followDefaultReasoningEffort, marketAgentId, marketAgentVersion, marketAgentRole, role, toolsEnabled, toolsFollowDefault, toolsConfig, createdAt, updatedAt";
 const AGENT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26";
@@ -843,6 +844,7 @@ fn map_model(row: &rusqlite::Row<'_>) -> Result<StoredModel, rusqlite::Error> {
         input_rate: row.get(6)?,
         output_rate: row.get(7)?,
         cache_read_rate: row.get(8)?,
+        cache_write_rate: row.get(18)?,
         input_modalities: row.get(9)?,
         output_modalities: row.get(10)?,
         supports_tool_calling: row.get::<_, i64>(11)? != 0,
@@ -985,9 +987,9 @@ fn upsert_provider_sql(conn: &Connection, p: &StoredProvider) -> Result<(), rusq
 
 fn upsert_model_sql(conn: &Connection, m: &StoredModel) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
-         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, cacheReadRate=?9, inputModalities=?10, outputModalities=?11, supportsToolCalling=?12, supportsThinking=?13, supportsJsonOutput=?14, supportsTemperature=?15, metadata=CASE WHEN models.providerId=excluded.providerId AND models.modelId=excluded.modelId THEN COALESCE(excluded.metadata, models.metadata) ELSE excluded.metadata END,
+        "INSERT INTO models (id, providerId, modelId, displayName, isEnabled, contextWindow, inputRate, outputRate, cacheReadRate, inputModalities, outputModalities, supportsToolCalling, supportsThinking, supportsJsonOutput, supportsTemperature, createdAt, metadata, metadataOverrides, cacheWriteRate)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+         ON CONFLICT(id) DO UPDATE SET providerId=?2, modelId=?3, displayName=?4, isEnabled=?5, contextWindow=?6, inputRate=?7, outputRate=?8, cacheReadRate=?9, cacheWriteRate=?19, inputModalities=?10, outputModalities=?11, supportsToolCalling=?12, supportsThinking=?13, supportsJsonOutput=?14, supportsTemperature=?15, metadata=CASE WHEN models.providerId=excluded.providerId AND models.modelId=excluded.modelId THEN COALESCE(excluded.metadata, models.metadata) ELSE excluded.metadata END,
          metadataOverrides=CASE WHEN models.providerId=excluded.providerId AND models.modelId=excluded.modelId THEN COALESCE(excluded.metadataOverrides, models.metadataOverrides) ELSE excluded.metadataOverrides END",
         rusqlite::params![
             m.id, m.provider_id, m.model_id, m.display_name, m.is_enabled as i64,
@@ -999,6 +1001,7 @@ fn upsert_model_sql(conn: &Connection, m: &StoredModel) -> Result<(), rusqlite::
                 .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
             m.metadata_overrides.as_ref().map(serde_json::to_string).transpose()
                 .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+            m.cache_write_rate,
         ],
     )?;
     Ok(())

@@ -252,6 +252,7 @@ data class StoredModelDto(
     @SerialName("input_rate") val inputRate: Double? = null,
     @SerialName("output_rate") val outputRate: Double? = null,
     @SerialName("cache_read_rate") val cacheReadRate: Double? = null,
+    @SerialName("cache_write_rate") val cacheWriteRate: Double? = null,
     @SerialName("input_modalities") val inputModalities: String = "text",
     @SerialName("output_modalities") val outputModalities: String = "text",
     @SerialName("supports_tool_calling") val supportsToolCalling: Boolean = false,

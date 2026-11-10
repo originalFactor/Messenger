@@ -495,4 +495,5 @@
     <string name="cloud_dev_searching">正在搜索开发服务器…</string>
     <string name="cloud_dev_none">未找到开发服务器。请运行 pnpm dev，并允许防火墙通过 UDP 53319 和服务器 HTTP 端口。也可手动输入地址。</string>
     <string name="cloud_dev_choose">选择开发服务器</string>
+    <string name="providers_model_rates_cache_write">输入倍率 %1$s，缓存读取倍率 %2$s，缓存写入倍率 %3$s，输出倍率 %4$s</string>
 </resources>

@@ -106,6 +106,7 @@ fn crud_round_trips_all_five_entities() {
         input_rate: Some(0.5),
         output_rate: None,
         cache_read_rate: Some(0.1),
+        cache_write_rate: None,
         input_modalities: "text,image".into(),
         output_modalities: "text".into(),
         supports_tool_calling: true,
@@ -774,4 +775,32 @@ fn v4_projects_table_gains_the_device_id_column() {
     let project = store.get_project("old").unwrap().unwrap();
     assert_eq!(project.device_id, None);
     assert_eq!(project.workspace, "/w");
+}
+
+#[test]
+fn v6_models_gain_cache_write_rate_and_preserve_zero_on_reopen() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v6.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for ddl in crate::schema::CREATE_TABLES {
+            conn.execute_batch(&ddl.replace("cacheWriteRate REAL,", "")).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        conn.execute_batch("INSERT INTO providers (id,name,baseUrl,apiKey,createdAt,updatedAt)
+            VALUES ('p','Provider','http://localhost','key',1,1);
+            INSERT INTO models (id,providerId,modelId,displayName,createdAt)
+            VALUES ('m','p','cloud-model','Cloud model',1);").unwrap();
+    }
+    {
+        let store = Store::open(&path).unwrap();
+        let mut model = store.get_model("m").unwrap().unwrap();
+        assert_eq!(model.cache_write_rate, None);
+        model.cache_write_rate = Some(0.0);
+        store.upsert_model(&model).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get_model("m").unwrap().unwrap().cache_write_rate, Some(0.0));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 7);
 }

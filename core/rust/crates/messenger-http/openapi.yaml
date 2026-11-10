@@ -752,6 +752,9 @@ components:
       additionalProperties: true
       required: [id, provider_id, model_id, display_name, is_enabled, created_at]
       properties:
+        cache_write_rate:
+          type: [number, "null"]
+          description: Cache-write multiplier from Messenger Extended Models Protocol. Null means unknown; zero means free.
         metadata: { $ref: "#/components/schemas/ModelMetadata" }
         metadata_overrides: { $ref: "#/components/schemas/ModelMetadata" }
     ModelMetadata:

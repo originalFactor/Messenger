@@ -71,6 +71,7 @@ class ModelListItemTest {
         inputRate = 0.33,
         outputRate = 0.99,
         cacheReadRate = 4.35,
+        cacheWriteRate = 1.25,
         createdAt = 1
     )
 
@@ -99,16 +100,12 @@ class ModelListItemTest {
         val contextBadge = onNodeWithText("1M", useUnmergedTree = true)
         val rateBadge = onNode(hasText("×0.33", substring = true), useUnmergedTree = true)
         name.assertIsDisplayed()
-        contextBadge.assertIsDisplayed()
+        contextBadge.assertDoesNotExist()
         rateBadge.assertIsDisplayed()
+        onNodeWithText("×0.33 · ×4.35 · ×1.25 · ×0.99", useUnmergedTree = true).assertIsDisplayed()
 
         val nameBounds = name.getUnclippedBoundsInRoot()
-        val contextBounds = contextBadge.getUnclippedBoundsInRoot()
         val rateBounds = rateBadge.getUnclippedBoundsInRoot()
-        assertTrue(
-            contextBounds.top >= nameBounds.bottom,
-            "context badge must start on a new line below the name (name=$nameBounds, badge=$contextBounds)"
-        )
         assertTrue(
             rateBounds.top >= nameBounds.bottom,
             "rate badge must start on a new line below the name (name=$nameBounds, badge=$rateBounds)"

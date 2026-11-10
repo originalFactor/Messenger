@@ -36,6 +36,8 @@ pub struct DiscoveredModel {
     /// Multiplier billed for prompt tokens served from the provider's prompt
     /// cache; `None` = unknown (a provider with no rate metadata).
     pub cache_read_rate: Option<f64>,
+    #[serde(default)]
+    pub cache_write_rate: Option<f64>,
     /// Comma-separated modality codes (`text,image`).
     pub input_modalities: String,
     pub output_modalities: String,
@@ -112,6 +114,7 @@ pub async fn discover_provider_models(
                 input_rate: entry.input_rate,
                 output_rate: entry.output_rate,
                 cache_read_rate: entry.cache_read_rate,
+                cache_write_rate: entry.cache_write_rate,
                 input_modalities: metadata.input_modalities.as_ref().map(|values| values.join(","))
                     .unwrap_or_else(|| "text".to_string()),
                 output_modalities: "text".to_string(),
@@ -188,6 +191,7 @@ pub async fn models_dev_metadata(store: &Store, model_id: &str) -> Option<Discov
             input_rate: None,
             output_rate: None,
             cache_read_rate: None,
+            cache_write_rate: None,
             input_modalities: "text".to_string(),
             output_modalities: "text".to_string(),
             supports_tool_calling: false,
@@ -425,6 +429,7 @@ pub fn discovered_to_stored(
         input_rate: discovered.input_rate,
         output_rate: discovered.output_rate,
         cache_read_rate: discovered.cache_read_rate,
+        cache_write_rate: discovered.cache_write_rate,
         input_modalities: discovered.input_modalities.clone(),
         output_modalities: discovered.output_modalities.clone(),
         supports_tool_calling: discovered.supports_tool_calling,
@@ -454,6 +459,7 @@ mod tests {
             input_rate: None,
             output_rate: None,
             cache_read_rate: None,
+            cache_write_rate: None,
             input_modalities: "text".into(),
             output_modalities: "text".into(),
             supports_tool_calling: false,
@@ -601,6 +607,7 @@ mod tests {
             input_rate: None,
             output_rate: None,
             cache_read_rate: None,
+            cache_write_rate: None,
             input_modalities: "text".into(),
             output_modalities: "text".into(),
             supports_tool_calling: false,

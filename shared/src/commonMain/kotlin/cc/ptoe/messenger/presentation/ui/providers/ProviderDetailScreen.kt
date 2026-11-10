@@ -94,7 +94,6 @@ import cc.ptoe.messenger.presentation.ui.components.MultiSelectTopBar
 import cc.ptoe.messenger.presentation.ui.components.onContextMenu
 import cc.ptoe.messenger.presentation.ui.components.rememberContextMenuState
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
-import cc.ptoe.messenger.presentation.utils.formatContextWindow
 import cc.ptoe.messenger.presentation.utils.formatRate
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ProviderDetailViewModel
@@ -120,11 +119,9 @@ import cc.ptoe.messenger.generated.resources.providers_model_display_name_placeh
 import cc.ptoe.messenger.generated.resources.providers_model_id_empty
 import cc.ptoe.messenger.generated.resources.providers_model_id_label
 import cc.ptoe.messenger.generated.resources.providers_model_id_placeholder
-import cc.ptoe.messenger.generated.resources.providers_model_context_window
 import cc.ptoe.messenger.generated.resources.providers_provider_settings
 import cc.ptoe.messenger.generated.resources.providers_model_disabled
-import cc.ptoe.messenger.generated.resources.providers_model_rates
-import cc.ptoe.messenger.generated.resources.providers_model_rates_cache
+import cc.ptoe.messenger.generated.resources.providers_model_rates_cache_write
 import cc.ptoe.messenger.generated.resources.providers_model_rates_free
 import cc.ptoe.messenger.generated.resources.providers_model_list
 import cc.ptoe.messenger.generated.resources.providers_model_management
@@ -656,10 +653,10 @@ internal fun ModelListItem(
                 )
             }
             ModelMetadataBadges(
-                contextWindow = model.contextWindow,
                 inputRate = model.inputRate,
                 outputRate = model.outputRate,
                 cacheReadRate = model.cacheReadRate,
+                cacheWriteRate = model.cacheWriteRate,
                 isEnabled = model.isEnabled,
                 modifier = Modifier.padding(top = 4.dp)
             )
@@ -697,36 +694,28 @@ internal fun ModelListItem(
 }
 
 /**
- * 模型元数据标签行：上下文窗口 + 倍率。单独占一行、排在模型名称下方，
+ * 模型元数据标签行：四条倍率。单独占一行、排在模型名称下方，
  * 名称因此拿到整行宽度（此前标签与名称同排，窄屏上名称只剩省略号）。
  * 用 FlowRow 让标签在极窄屏上逐个换行，而不是把标签内部文字挤断。
  */
 @Composable
 private fun ModelMetadataBadges(
-    contextWindow: Long,
     inputRate: Double?,
     outputRate: Double?,
     cacheReadRate: Double?,
+    cacheWriteRate: Double?,
     modifier: Modifier = Modifier,
     isEnabled: Boolean = true
 ) {
-    val hasContext = formatContextWindow(contextWindow).isNotEmpty()
     val hasRate = inputRate != null && outputRate != null
-    if (!hasContext && !hasRate && isEnabled) return
+    if (!hasRate && isEnabled) return
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        ContextWindowBadge(contextWindow = contextWindow)
-        RateBadge(
-            inputRate = inputRate,
-            outputRate = outputRate,
-            cacheReadRate = cacheReadRate
-        )
-        if (!isEnabled) {
-            DisabledBadge()
-        }
+        RateBadge(inputRate, outputRate, cacheReadRate, cacheWriteRate)
+        if (!isEnabled) DisabledBadge()
     }
 }
 
@@ -748,56 +737,17 @@ private fun DisabledBadge() {
     }
 }
 
-/**
- * 模型上下文窗口紧凑标签（272K / 1M / 1.5M）。0 = 未知/不限，不显示。
- */
+/** Input / cache read / cache write / output. Missing cache rates stay unknown. */
 @Composable
-private fun ContextWindowBadge(contextWindow: Long) {
-    val label = formatContextWindow(contextWindow)
-    if (label.isEmpty()) return
-    val description = stringResource(Res.string.providers_model_context_window, label)
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier.semantics { contentDescription = description }
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-        )
-    }
-}
-
-/**
- * 模型倍率紧凑标签：依次为输入 / 缓存读取 / 输出（如「×0.33 · ×4.35 · ×0.99」）。
- * 三者均为 0 时显示「免费」；输入/输出任一缺失（服务商未提供元数据）不显示。
- * 标签不带文字前缀（完整含义见无障碍描述），以保持一行、不与模型名抢宽度。
- */
-@Composable
-private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Double?) {
+private fun RateBadge(inputRate: Double?, outputRate: Double?, cacheReadRate: Double?, cacheWriteRate: Double?) {
     if (inputRate == null || outputRate == null) return
-    val isFree = inputRate <= 0.0 && outputRate <= 0.0 && (cacheReadRate == null || cacheReadRate <= 0.0)
-    val label = if (isFree) {
-        stringResource(Res.string.providers_model_rates_free)
-    } else if (cacheReadRate != null) {
-        "×${formatRate(inputRate)} · ×${formatRate(cacheReadRate)} · ×${formatRate(outputRate)}"
-    } else {
-        "×${formatRate(inputRate)} / ×${formatRate(outputRate)}"
-    }
-    val description = if (isFree) {
-        stringResource(Res.string.providers_model_rates_free)
-    } else if (cacheReadRate != null) {
-        stringResource(
-            Res.string.providers_model_rates_cache,
-            formatRate(inputRate),
-            formatRate(cacheReadRate),
-            formatRate(outputRate)
-        )
-    } else {
-        stringResource(Res.string.providers_model_rates, formatRate(inputRate), formatRate(outputRate))
-    }
+    val rates = listOf(inputRate, cacheReadRate, cacheWriteRate, outputRate)
+    val isFree = rates.all { it != null && it == 0.0 }
+    val formatted = rates.map { it?.let { rate -> "×${formatRate(rate)}" } ?: "—" }
+    val label = if (isFree) stringResource(Res.string.providers_model_rates_free)
+        else formatted.joinToString(" · ")
+    val description = if (isFree) stringResource(Res.string.providers_model_rates_free)
+        else stringResource(Res.string.providers_model_rates_cache_write, *formatted.toTypedArray())
     Surface(
         shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.tertiaryContainer,
@@ -910,10 +860,10 @@ private fun SyncModelSelectionDialog(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 ModelMetadataBadges(
-                                    contextWindow = model.contextWindow,
                                     inputRate = model.inputRate,
                                     outputRate = model.outputRate,
                                     cacheReadRate = model.cacheReadRate,
+                                    cacheWriteRate = model.cacheWriteRate,
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
                             }

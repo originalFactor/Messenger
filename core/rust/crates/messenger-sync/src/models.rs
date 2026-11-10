@@ -233,6 +233,8 @@ pub struct CloudModelDocument {
     /// cache. `None` when unknown (a BYOK provider carries no metadata).
     #[serde(rename = "cacheReadRate")]
     pub cache_read_rate: Option<f64>,
+    #[serde(rename = "cacheWriteRate")]
+    pub cache_write_rate: Option<f64>,
     #[serde(rename = "inputModalities")]
     pub input_modalities: String,
     #[serde(rename = "outputModalities")]

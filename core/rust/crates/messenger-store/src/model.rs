@@ -46,6 +46,7 @@ pub struct StoredModel {
     pub input_rate: Option<f64>,
     pub output_rate: Option<f64>,
     pub cache_read_rate: Option<f64>,
+    pub cache_write_rate: Option<f64>,
     #[serde(default = "default_text_modality")]
     pub input_modalities: String,
     #[serde(default = "default_text_modality")]

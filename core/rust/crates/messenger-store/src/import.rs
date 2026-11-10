@@ -172,6 +172,7 @@ fn read_models(legacy: &Connection) -> Result<Vec<StoredModel>, rusqlite::Error>
             // Absent in older Room schemas; models.dev enrichment fills it in
             // later for models that have one.
             cache_read_rate: if has_cache_rate { row.get(15)? } else { None },
+            cache_write_rate: None,
             input_modalities: row.get(8)?,
             output_modalities: row.get(9)?,
             supports_tool_calling: row.get::<_, i64>(10)? != 0,

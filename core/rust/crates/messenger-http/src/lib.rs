@@ -3157,6 +3157,7 @@ mod tests {
                 input_rate: None,
                 output_rate: None,
                 cache_read_rate: None,
+                cache_write_rate: None,
                 input_modalities: "text".into(),
                 output_modalities: "text".into(),
                 supports_tool_calling: false,

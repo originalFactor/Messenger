@@ -1,8 +1,8 @@
-//! DDL for schema version 2. Column names intentionally mirror the legacy
+//! DDL for schema version 7. Column names intentionally mirror the legacy
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -54,6 +54,17 @@ pub fn has_model_cache_read_rate_column(conn: &rusqlite::Connection) -> rusqlite
         }
     }
     Ok(false)
+}
+
+/// v6 → v7: nullable cache-write multiplier; old rows remain unknown.
+pub fn add_model_cache_write_rate_column(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(models)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|name| name == "cacheWriteRate") {
+        conn.execute("ALTER TABLE models ADD COLUMN cacheWriteRate REAL", [])?;
+    }
+    Ok(())
 }
 
 /// v4 → v5: `projects.deviceId` is the device that owns the project's
@@ -112,6 +123,7 @@ pub const CREATE_TABLES: &[&str] = &[
         inputRate REAL,
         outputRate REAL,
         cacheReadRate REAL,
+        cacheWriteRate REAL,
         inputModalities TEXT NOT NULL DEFAULT 'text',
         outputModalities TEXT NOT NULL DEFAULT 'text',
         supportsToolCalling INTEGER NOT NULL DEFAULT 0,
