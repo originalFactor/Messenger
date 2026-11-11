@@ -1,7 +1,7 @@
-llm-typewriter source patch
+llm-typewriter embedded source
 
 Upstream: https://github.com/ECSDevs/llm-typewriter
-Maven: cc.ptoe:llm-typewriter 0.2.0 (version controlled by root version catalog)
+Source revision: 3906043b2372c2f9e30e4142f51d9cad53b29658
 Copyright 2026 ECSDevs; upstream includes work by NadeemIqbal.
 Licensed under Apache License 2.0 (see repository-root LICENSE).
 
@@ -10,4 +10,4 @@ Messenger modifications, Copyright 2026 originalFactor:
 - List markers follow the first content baseline, including tall inline math.
 - Inline math font size compensates for KaTeX/Roboto x-height differences.
 
-All other sources and Android font resources are resolved from the unmodified Maven artifacts.
+Android font resources are included from upstream.

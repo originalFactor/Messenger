@@ -1,21 +1,17 @@
-# llm-typewriter source patch
+# Embedded llm-typewriter
 
-This internal Android/Desktop KMP module rebuilds the **catalog-pinned Maven Central sources**
-of `cc.ptoe:llm-typewriter`; it is not a separate renderer or a published fork. Shared consumes
-this project instead of the upstream binary, preventing duplicate classes.
+This internal Android/Desktop KMP module embeds the Apache-licensed sources and Android fonts
+from https://github.com/ECSDevs/llm-typewriter, at the revision recorded in `NOTICE`. Shared
+consumes this project; do not also add the Maven renderer binary. Keep upstream copyright headers
+and the source attribution when updating it. Upstream JVM sources live in `desktopMain` here.
 
-- `patchTypewriterSources` extracts upstream JVM/common and Android sources plus the original
-  Android AAR's Cascadia font resources. Generated sources belong under `build/`, never commit them.
-- `patches/*.before.kt` are exact upstream sections; their paired `*.after.kt` files replace them.
-  A version upgrade MUST review this patch: the build fails if the before section no longer matches
-  exactly once. Preserve upstream copyright/license headers.
-- The patch measures and paints inline math at the same font size (1.2 × body size to compensate
-  for KaTeX's smaller x-height) and reserves the complete measured height. Never clamp matrices,
-  fractions or descenders to prose line height or clip them to it. Density/font-scale changes must
-  invalidate placeholder sizes. Block math and streaming/parser behavior remain upstream-owned.
-- List markers (bullets, ordered numbers and task checkboxes) align with the content column’s first text baseline. Tall inline math and wrapped/nested items must not detach the marker from the first line.
-- Dependency versions belong in the root catalog. Keep upstream runtime dependencies (including all
-  desktop RaTeX native platforms), Android font resources and the app's Skiko exclusions intact.
-- Verify via `./gradlew-cli :shared:desktopTest --tests '*ChatBubbleContentTest'` plus
-  `:llm-typewriter-patched:compileAndroidMain`; tests in shared exercise the actual chat renderer.
-- Remove this module and restore the binary dependency when an upstream release provides this fix.
+- The local inline-math layout measures and paints at the same font size (1.2 × body size to
+  compensate for KaTeX's smaller x-height) and reserves the complete measured height. Never clamp
+  matrices, fractions or descenders to prose line height or clip them. Density/font-scale changes
+  must invalidate placeholder sizes. List markers align with the content column's first baseline.
+- Preserve upstream parser prefix stability, streaming state behavior, replaceable image loading,
+  Android Cascadia font resources and the common parser tests when updating sources.
+- Dependency versions belong in the root catalog. Keep desktop RaTeX native platforms and the
+  app's Skiko exclusions intact.
+- Verify `./gradlew-cli :llm-typewriter:desktopTest :llm-typewriter:compileAndroidMain` and
+  `./gradlew-cli :shared:desktopTest --tests '*ChatBubbleContentTest'`.

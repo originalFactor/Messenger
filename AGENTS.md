@@ -6,7 +6,7 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 
 | Module | What it is | Details |
 |---|---|---|
-| `rendering/llm-typewriter` | Internal source patch of the Maven-pinned renderer | `rendering/llm-typewriter/AGENTS.md` |
+| `rendering/llm-typewriter` | Embedded Android/Desktop Markdown renderer | `rendering/llm-typewriter/AGENTS.md` |
 | `shared` | KMP library: shared Android/Desktop logic (Clean Architecture data/domain/presentation) | `shared/AGENTS.md` |
 | `androidApp` | Android application shell | `androidApp/AGENTS.md` |
 | `desktopApp` | Desktop (JVM) application shell | `desktopApp/AGENTS.md` |
@@ -49,7 +49,7 @@ The wrapper runs Gradle with `--daemon` but under its own daemon registry (`~/.g
 
 Use the developer's regular Cargo cache for local builds. If sandboxed verification requires a temporary `CARGO_HOME`, pair it with a separate `CARGO_TARGET_DIR` and isolate any configured `CARGO_BUILD_BUILD_DIR` as well. Cargo fingerprints registry source paths, so sharing build artifacts across Cargo homes invalidates the developer's dependency cache.
 
-Prerequisites: JDK 21 for the Gradle daemon (`gradle/gradle-daemon-jvm.properties` pins toolchain 21; Android/Wear CI bootstrap Java 17, Desktop CI Java 21), Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core. `llm-typewriter` sources are resolved from Maven Central and rebuilt by `:llm-typewriter-patched` with the tracked inline-math layout patch (see `rendering/llm-typewriter/AGENTS.md`).
+Prerequisites: JDK 21 for the Gradle daemon (`gradle/gradle-daemon-jvm.properties` pins toolchain 21; Android/Wear CI bootstrap Java 17, Desktop CI Java 21), Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core. `llm-typewriter` sources and Android fonts are embedded in `:llm-typewriter`, including the inline-math and list layout fixes (see `rendering/llm-typewriter/AGENTS.md`).
 
 ## Hard Constraints
 

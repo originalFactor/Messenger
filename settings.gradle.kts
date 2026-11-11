@@ -56,5 +56,5 @@ project(":core-bindings").projectDir = file("core/bindings")
 include(":core-bindings-desktop")
 project(":core-bindings-desktop").projectDir = file("core/bindings-desktop")
 
-include(":llm-typewriter-patched")
-project(":llm-typewriter-patched").projectDir = file("rendering/llm-typewriter")
+include(":llm-typewriter")
+project(":llm-typewriter").projectDir = file("rendering/llm-typewriter")

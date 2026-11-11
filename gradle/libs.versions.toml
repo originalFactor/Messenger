@@ -13,8 +13,8 @@
 # limitations under the License.
 
 [versions]
-typewriterHighlights = "1.1.0"
-typewriterRatex = "0.1.12-1"
+typewriterHighlights = "1.2.0"
+typewriterRatex = "0.1.15"
 agp = "9.5.0"
 coreKtx = "1.19.0"
 jna = "5.17.0"
@@ -42,7 +42,7 @@ transition = "1.7.0"
 exifinterface = "1.3.7"
 
 # Compose Multiplatform / KMP
-composeMultiplatform = "1.12.1"
+composeMultiplatform = "1.12.2"
 jbComposeMaterial3 = "1.12.0-alpha03"
 jbNavigation = "2.9.2"
 jbLifecycle = "2.11.0"
@@ -51,7 +51,6 @@ kotlinxSerializationJson = "1.11.0"
 kotlinxDatetime = "0.7.1"
 sqliteBundled = "2.7.0"
 okio = "3.18.0"
-llmTypewriter = "0.2.0"
 
 [libraries]
 typewriter-highlights = { module = "dev.snipme:highlights", version.ref = "typewriterHighlights" }
@@ -119,7 +118,6 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-datetime = { group = "org.jetbrains.kotlinx", name = "kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
 okio = { group = "com.squareup.okio", name = "okio", version.ref = "okio" }
-llm-typewriter = { module = "cc.ptoe:llm-typewriter", version.ref = "llmTypewriter" }
 
 androidx-transition = { group = "androidx.transition", name = "transition", version.ref = "transition" }
 

@@ -186,7 +186,7 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.android)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.okhttp)
-                implementation(project(":llm-typewriter-patched")) {
+                implementation(project(":llm-typewriter")) {
                     exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
                     exclude(group = "org.jetbrains.skiko", module = "skiko")
                 }
@@ -209,7 +209,7 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
-                implementation(project(":llm-typewriter-patched")) {
+                implementation(project(":llm-typewriter")) {
                     exclude(group = "org.jetbrains.skiko", module = "skiko-awt")
                     exclude(group = "org.jetbrains.skiko", module = "skiko")
                 }
