@@ -327,9 +327,9 @@ private fun buildDesktopToolGroupBlocks(
                     callId = call.callId,
                     name = call.name,
                     arguments = call.arguments,
-                    output = result?.output,
-                    isError = result?.isError ?: false,
-                    isFinalized = result != null
+                    output = result?.first?.output,
+                    isError = result?.first?.isError ?: false,
+                    isFinalized = result?.second == true
                 )
             )
         }
@@ -349,10 +349,9 @@ private fun buildDesktopToolGroupBlocks(
     return blocks
 }
 
-private fun List<Message>.findToolResult(callId: String): ContentPart.ToolResult? {
+private fun List<Message>.findToolResult(callId: String): Pair<ContentPart.ToolResult, Boolean>? {
     return asSequence()
-        .mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
-        .filter { it.callId == callId }
-        .filter { it.output.isNotEmpty() || it.isError }
+        .mapNotNull { message -> message.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull { it.callId == callId }
+            ?.let { it to (message.status != MessageStatus.SENDING) } }
         .firstOrNull()
 }

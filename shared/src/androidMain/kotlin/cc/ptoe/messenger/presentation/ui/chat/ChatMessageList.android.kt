@@ -340,9 +340,9 @@ private fun buildToolGroupBlocks(
                 callId = call.callId,
                 name = call.name,
                 arguments = call.arguments,
-                output = result?.output,
-                isError = result?.isError ?: false,
-                isFinalized = result != null,
+                output = result?.first?.output,
+                isError = result?.first?.isError ?: false,
+                isFinalized = result?.second == true,
             )
         }
     }
@@ -357,9 +357,10 @@ private fun buildToolGroupBlocks(
     return blocks
 }
 
-private fun List<Message>.findToolResult(callId: String): ContentPart.ToolResult? = asSequence()
-    .mapNotNull { it.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull() }
-    .firstOrNull { it.callId == callId && (it.output.isNotEmpty() || it.isError) }
+private fun List<Message>.findToolResult(callId: String): Pair<ContentPart.ToolResult, Boolean>? = asSequence()
+    .mapNotNull { message -> message.parts.filterIsInstance<ContentPart.ToolResult>().firstOrNull { it.callId == callId }
+        ?.let { it to (message.status != MessageStatus.SENDING) } }
+    .firstOrNull()
 
 private fun List<ChatBlock>.plainText(): String = joinToString("\n\n") { block ->
     when (block) {

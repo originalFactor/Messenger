@@ -8,6 +8,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.domain.model.ContentPart
+import cc.ptoe.messenger.domain.model.MessageStatus
 import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +16,45 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class AcpChatMessagesTest {
+    @Test
+    fun textAndIncrementalToolOutputRetainTheirOrderAndStatus() {
+        val row = Json.parseToJsonElement("""{
+            "id":"reply","role":"assistant","text":"BeforeBetweenAfter","timestamp":123,"status":"sending","events":[
+                {"type":"TextDelta","text":"Before"},
+                {"type":"ToolUpdate","update":{"toolCallId":"one","title":"First","status":"completed"}},
+                {"type":"TextDelta","text":"Between"},
+                {"type":"ToolUpdate","update":{"toolCallId":"two","title":"Second","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"Partial output"}}]}},
+                {"type":"TextDelta","text":"After"}
+            ]
+        }""").jsonObject
+        val group = buildChatItems(acpChatMessages("acp:session", listOf(row)))
+            .filterIsInstance<ChatListItem.ToolGroupItem>().single()
+        assertEquals(listOf("Before", "Between"), group.rounds.map { it.content })
+        assertEquals("After", group.finalMessage?.content)
+        assertEquals(listOf(MessageStatus.SENT, MessageStatus.SENDING), group.toolMessages.map { it.status })
+        assertEquals(listOf("", "Partial output"), group.toolMessages.map { it.content })
+    }
+
+    @Test
+    fun toolCardsShowEmptyCompletionAndExpandableOutput() = runComposeUiTest {
+        val rows = Json.parseToJsonElement("""[
+            {"id":"reply","role":"assistant","text":"","timestamp":123,"status":"sent","events":[
+                {"type":"ToolUpdate","update":{"toolCallId":"one","title":"Empty tool","status":"completed"}},
+                {"type":"ToolUpdate","update":{"toolCallId":"two","title":"Output tool","status":"completed","content":[{"type":"content","content":{"type":"text","text":"Tool output"}}]}}
+            ]}
+        ]""").jsonArray.map { it.jsonObject }
+        val items = buildChatItems(acpChatMessages("acp:session", rows))
+        setContent { MaterialTheme {
+            Box(Modifier.size(800.dp, 600.dp)) {
+                ChatMessageList(items, false, null, null, null, null, null, false, "Copied",
+                    {}, {}, {}, {}, {}, allowMessageMutation = false)
+            }
+        } }
+        onAllNodesWithText("Done").assertCountEquals(2)
+        onNodeWithText("Output tool").performClick()
+        onNodeWithText("Tool output").assertExists()
+    }
+
     @Test
     fun incrementalToolUpdatesKeepInputTitleAndThoughtInTheOrdinaryChatModel() {
         val row = Json.parseToJsonElement("""{

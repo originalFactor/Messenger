@@ -73,6 +73,7 @@ for line in sys.stdin:
         text = packet["params"]["prompt"][0]["text"]
         if text == "tools" and mode == "settings":
             update("agent_thought_chunk", "Inspect the file")
+            update("agent_message_chunk", "I will read the file. ")
             send(method="session/update", params={"sessionId": session_id, "update": {
                 "sessionUpdate": "tool_call", "toolCallId": "read-file", "title": "Read file",
                 "status": "in_progress", "rawInput": {"path": "sample.txt"}}})

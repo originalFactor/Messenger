@@ -174,7 +174,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                                     liveId = randomUuid()
                                                     history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", content); put("status", "sent"); put("timestamp", liveTimestamp) }
                                                 }
-                                                "TextDelta" -> partial += event.text("text")
+                                                "TextDelta" -> { partial += event.text("text"); events = events + event }
                                                 "ThoughtDelta", "ToolUpdate" -> events = events + event
                                                 "Permission" -> permission = event
                                                 "Finished" -> terminal = true

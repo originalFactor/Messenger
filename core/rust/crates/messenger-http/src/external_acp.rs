@@ -677,8 +677,13 @@ async fn handle_notification(output: &Mutex<Output>, event: SessionNotification)
         }) {
             let previous = last["text"].as_str().unwrap_or_default();
             last["text"] = json!(format!("{previous}{text}"));
+            if role == "assistant" {
+                if !last["events"].is_array() { last["events"] = json!([]); }
+                last["events"].as_array_mut().unwrap().push(json!({"type":"TextDelta","text":text}));
+            }
         } else {
             let mut row = message(role, text, "sent");
+            if role == "assistant" { row["events"] = json!([{ "type":"TextDelta", "text":text }]); }
             if let Some(id) = message_id {
                 row["id"] = json!(id);
             }
@@ -694,7 +699,7 @@ async fn handle_notification(output: &Mutex<Output>, event: SessionNotification)
             "tool_call" | "tool_call_update" => json!({"type":"ToolUpdate","update":update}),
             _ => return,
         };
-        if kind != "agent_message_chunk" { turn.transcript.lock().unwrap().push(data.clone()); }
+        turn.transcript.lock().unwrap().push(data.clone());
         let updates = turn.updates.clone();
         let cancel = turn.cancel.clone();
         drop(output);
@@ -957,8 +962,10 @@ mod tests {
         let history = state.external.history(&state.store, &session).unwrap();
         let events_saved = history.last().unwrap()["events"].as_array().unwrap();
         assert_eq!(events_saved[0]["type"], "ThoughtDelta");
-        assert_eq!(events_saved[1]["update"]["rawInput"]["path"], "sample.txt");
-        assert_eq!(events_saved[2]["update"]["content"][0]["content"]["text"], "file content");
+        assert_eq!(events_saved[1]["text"], "I will read the file. ");
+        assert_eq!(events_saved[2]["update"]["rawInput"]["path"], "sample.txt");
+        assert_eq!(events_saved[3]["update"]["content"][0]["content"]["text"], "file content");
+        assert_eq!(events_saved[4]["text"], "Read complete");
         let mut settings_update = false;
         while let Ok(event) = events.try_recv() { settings_update |= event["type"] == "SessionSettings"; }
         assert!(settings_update, "agent-side changes must be forwarded while streaming");

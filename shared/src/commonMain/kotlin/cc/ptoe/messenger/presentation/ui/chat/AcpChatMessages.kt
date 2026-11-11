@@ -24,37 +24,54 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
             ContentPart.Image(MessageImage(uri, uri))
         }, timestamp = timestamp, status = status))
     } else {
+        val events = row.objects("events")
+        val orderedText = events.any { it.text("type") == "TextDelta" }
+        val pending = StringBuilder()
         val thought = StringBuilder()
         val tools = linkedMapOf<String, JsonObject>()
-        row.objects("events").forEach { event ->
+        val beforeTool = mutableMapOf<String, String>()
+        fun flushThought() {
+            if (thought.isNotEmpty()) { pending.append("<think>").append(thought).append("</think>\n"); thought.clear() }
+        }
+        events.forEach { event ->
             when (event.text("type")) {
                 "ThoughtDelta" -> thought.append(event.text("text"))
+                "TextDelta" -> { flushThought(); pending.append(event.text("text")) }
                 "ToolUpdate" -> {
                     val update = event["update"] as? JsonObject ?: return@forEach
                     val toolId = update.text("toolCallId")
                     if (toolId.isNotBlank()) {
+                        if (toolId !in tools) {
+                            flushThought()
+                            beforeTool[toolId] = pending.toString()
+                            pending.clear()
+                        }
                         // Tool updates are patches: omitted title/input/content must survive.
                         tools[toolId] = JsonObject(tools[toolId].orEmpty() + update.filterValues { it !is JsonNull })
                     }
                 }
             }
         }
-        val thinking = if (thought.isEmpty()) "" else "<think>$thought</think>\n"
+        flushThought()
+        if (!orderedText) pending.append(row.text("text")) // Transcripts saved before text events were recorded.
         buildList {
             if (tools.isNotEmpty()) {
-                add(Message("$id-tools", sessionId, MessageRole.ASSISTANT, thinking,
-                    parts = tools.map { (toolId, tool) -> ContentPart.ToolCall(toolId, tool.text("title").ifBlank { toolId }, tool["rawInput"]?.toString() ?: "{}") },
-                    timestamp = timestamp, status = MessageStatus.SENT))
-                tools.forEach { (toolId, tool) ->
-                    if (tool.text("status") in listOf("completed", "failed")) {
-                        val output = tool["content"]?.let(::acpContentText).orEmpty().ifBlank { tool["rawOutput"]?.toString().orEmpty() }
+                tools.entries.forEachIndexed { index, (toolId, tool) ->
+                    add(Message("$id-tools-$index", sessionId, MessageRole.ASSISTANT, beforeTool[toolId].orEmpty(),
+                        parts = listOf(ContentPart.ToolCall(toolId, tool.text("title").ifBlank { toolId }, tool["rawInput"]?.toString() ?: "{}")),
+                        timestamp = timestamp, status = MessageStatus.SENT))
+                    val finished = tool.text("status") in listOf("completed", "failed")
+                    val output = tool["content"]?.let(::acpContentText).orEmpty().ifBlank {
+                        tool["rawOutput"]?.let { raw -> acpContentText(raw).ifBlank { raw.toString() } }.orEmpty()
+                    }
+                    if (finished || output.isNotEmpty()) {
                         add(Message("$id-tool-$toolId", sessionId, MessageRole.TOOL, output,
                             parts = listOf(ContentPart.ToolResult(toolId, tool.text("title").ifBlank { toolId }, output, tool.text("status") == "failed")),
-                            timestamp = timestamp, status = MessageStatus.SENT))
+                            timestamp = timestamp, status = if (finished) MessageStatus.SENT else MessageStatus.SENDING))
                     }
                 }
             }
-            add(Message(id, sessionId, MessageRole.ASSISTANT, (if (tools.isEmpty()) thinking else "") + row.text("text"),
+            add(Message(id, sessionId, MessageRole.ASSISTANT, pending.toString(),
                 timestamp = timestamp, status = status, errorMessage = if (status == MessageStatus.ERROR) row.text("text") else null))
         }
     }
