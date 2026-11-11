@@ -123,13 +123,13 @@ internal fun AcpProfileDialog(profile: AcpProfile?, busy: Boolean, onDismiss: ()
     var cwd by remember { mutableStateOf(profile?.cwd.orEmpty()) }
     var error by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(stringResource(if (isNew) Res.string.acp_add else Res.string.acp_edit)) },
-        text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text(stringResource(Res.string.tools_mcp_name)) }, singleLine = true)
-            OutlinedTextField(description, { description = it }, label = { Text(stringResource(Res.string.acp_description)) })
-            OutlinedTextField(command, { command = it }, label = { Text(stringResource(Res.string.tools_mcp_command)) }, singleLine = true)
-            OutlinedTextField(args, { args = it }, label = { Text(stringResource(Res.string.acp_args_json)) })
-            OutlinedTextField(env, { env = it }, label = { Text(stringResource(Res.string.acp_env_json)) })
-            OutlinedTextField(cwd, { cwd = it }, label = { Text(stringResource(Res.string.acp_working_directory)) }, singleLine = true)
+        text = { Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.tools_mcp_name)) }, singleLine = true)
+            OutlinedTextField(description, { description = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_description)) })
+            OutlinedTextField(command, { command = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.tools_mcp_command)) }, singleLine = true)
+            OutlinedTextField(args, { args = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_args_json)) })
+            OutlinedTextField(env, { env = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_env_json)) })
+            OutlinedTextField(cwd, { cwd = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_working_directory)) }, singleLine = true)
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
         } }, confirmButton = { TextButton(enabled = !busy && name.isNotBlank() && command.isNotBlank(), onClick = {
             try {
