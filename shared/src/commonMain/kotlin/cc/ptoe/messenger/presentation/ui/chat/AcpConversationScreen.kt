@@ -218,6 +218,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         val contextMenus = windowSizeClassFor(maxWidth) != WindowSizeClass.Compact
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
                 TopAppBar(
@@ -237,11 +238,11 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                             }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                 )
             },
             bottomBar = {
-                Column(Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding().imePadding()) {
+                Column(Modifier.background(MaterialTheme.colorScheme.surfaceContainer).navigationBarsPadding().imePadding()) {
                     permission?.let { event ->
                         Card(Modifier.fillMaxWidth().padding(12.dp)) { Column(Modifier.padding(12.dp)) {
                             Text(stringResource(Res.string.acp_permission), style = MaterialTheme.typography.titleMedium)
@@ -317,7 +318,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                 }
             }
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.surface)) {
+            Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.surfaceContainer)) {
                 if (messages.isEmpty() && loading) cc.ptoe.messenger.presentation.ui.components.LoadingIndicator(Modifier.align(Alignment.Center))
                 else if (messages.isEmpty()) EmptyChatState(null, agentName, Modifier.align(Alignment.Center))
                 else ChatMessageList(

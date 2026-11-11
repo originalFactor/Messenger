@@ -266,6 +266,7 @@ private fun MessengerChatScreen(
 
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             topBar = {
             TopAppBar(
                 title = {
@@ -318,7 +319,7 @@ private fun MessengerChatScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
                 )
             )
         },
@@ -326,7 +327,7 @@ private fun MessengerChatScreen(
             // Google Messages 风格：底部输入栏与顶栏同色，无分隔线
             Column(
                 modifier = Modifier
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
                     .navigationBarsPadding()
                     .imePadding()
             ) {
@@ -363,12 +364,12 @@ private fun MessengerChatScreen(
             SnackbarHost(hostState = snackbarHostState)
         }
     ) { innerPadding ->
-        // Google Messages 风格：聊天区使用纯净的 surface 背景
+        // Match the surrounding app surface while keeping message bubbles distinct.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.surface)
+                .background(MaterialTheme.colorScheme.surfaceContainer)
         ) {
             if (messages.isEmpty() && isLoadingHistory) {
                 cc.ptoe.messenger.presentation.ui.components.LoadingIndicator(modifier = Modifier.align(Alignment.Center))
