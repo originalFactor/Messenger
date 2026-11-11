@@ -22,11 +22,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import cc.ptoe.llmtypewriter.PlainTypewriterRenderer
+import cc.ptoe.llmtypewriter.LlmTypewriterDefaults
 import cc.ptoe.llmtypewriter.SpeedCurve
 import cc.ptoe.llmtypewriter.StreamingTypewriter
 import cc.ptoe.llmtypewriter.StreamingTypewriterState
 import cc.ptoe.llmtypewriter.rememberMarkdownTypewriterRenderer
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.chat_think_title
+import cc.ptoe.messenger.generated.resources.chat_think_expanded
+import cc.ptoe.messenger.generated.resources.chat_think_collapsed
+import org.jetbrains.compose.resources.stringResource
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 
@@ -36,6 +41,11 @@ internal actual fun ChatMarkdownText(
     isStreaming: Boolean,
     modifier: Modifier,
 ) {
+    val styles = LlmTypewriterDefaults.markdownStyles().copy(
+        thinkBlockTitle = stringResource(Res.string.chat_think_title),
+        thinkBlockExpanded = stringResource(Res.string.chat_think_expanded),
+        thinkBlockCollapsed = stringResource(Res.string.chat_think_collapsed),
+    )
     if (!isStreaming) {
         // The markdown renderer paints the state's token buffer and ignores the
         // `text` argument its TypewriterRenderer receives, so a settled message
@@ -49,12 +59,12 @@ internal actual fun ChatMarkdownText(
                 skipToEnd()
             }
         }
-        rememberMarkdownTypewriterRenderer(staticState).Render(markdown, modifier)
+        rememberMarkdownTypewriterRenderer(staticState, styles).Render(markdown, modifier)
         return
     }
 
     val state = remember { StreamingTypewriterState() }
-    val renderer = rememberMarkdownTypewriterRenderer(state)
+    val renderer = rememberMarkdownTypewriterRenderer(state, styles)
 
     val tokens = remember { Channel<String>(Channel.UNLIMITED) }
     val flow = remember(tokens) { tokens.receiveAsFlow() }

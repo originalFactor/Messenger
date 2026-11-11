@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.chat_think_title
 import cc.ptoe.messenger.generated.resources.tool_card_failed
 import cc.ptoe.messenger.generated.resources.tool_card_result_label
 import cc.ptoe.messenger.generated.resources.tool_card_running
@@ -505,7 +506,7 @@ private fun RenderThinkBlock(block: ChatBlock.Think) {
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (block.isFinalized) "Thought process" else "Thinking...",
+                    text = stringResource(Res.string.chat_think_title),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary
                 )

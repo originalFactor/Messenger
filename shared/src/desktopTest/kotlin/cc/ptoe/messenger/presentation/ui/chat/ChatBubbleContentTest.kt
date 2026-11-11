@@ -24,9 +24,22 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
+import cc.ptoe.llmtypewriter.LlmTypewriterDefaults
+import cc.ptoe.llmtypewriter.StreamingTypewriterState
+import cc.ptoe.llmtypewriter.rememberMarkdownTypewriterRenderer
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.chat_think_title
+import cc.ptoe.messenger.generated.resources.chat_think_expanded
+import cc.ptoe.messenger.generated.resources.chat_think_collapsed
+import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
@@ -69,6 +82,56 @@ class ChatBubbleContentTest {
         }
 
         onNodeWithText("Hello! How can I help you today?", substring = true).assertExists()
+    }
+
+    @Test
+    fun finishedThinkingCardUsesLocalizedLabelAndExpandsFromHeader() = runComposeUiTest {
+        var title = ""
+        var expanded = ""
+        var collapsed = ""
+        setContent {
+            MaterialTheme {
+                title = stringResource(Res.string.chat_think_title)
+                expanded = stringResource(Res.string.chat_think_expanded)
+                collapsed = stringResource(Res.string.chat_think_collapsed)
+                ChatMarkdownText(
+                    markdown = "<think>Reasoning details</think>Answer",
+                    isStreaming = false,
+                    modifier = Modifier.width(400.dp),
+                )
+            }
+        }
+        onNodeWithText(title).assertHasClickAction()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, collapsed))
+        onNodeWithText("Reasoning details").assertDoesNotExist()
+        onNodeWithText(title).performClick()
+        onNodeWithText(title).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, expanded))
+        onNodeWithText("Reasoning details").assertExists()
+        onNodeWithText(title).performClick()
+        onNodeWithText("Reasoning details").assertDoesNotExist()
+    }
+
+    @Test
+    fun streamingThinkingCardCollapsesWhenTheBlockCloses() = runComposeUiTest {
+        val state = StreamingTypewriterState().apply {
+            appendToken("<think>Live reasoning")
+            skipToEnd()
+        }
+        setContent {
+            MaterialTheme {
+                val styles = LlmTypewriterDefaults.markdownStyles().copy(thinkBlockTitle = "Localized heading")
+                rememberMarkdownTypewriterRenderer(state, styles).Render("", Modifier.width(400.dp))
+            }
+        }
+        onNodeWithText("Live reasoning").assertExists()
+        runOnIdle {
+            state.appendToken("</think>")
+            state.skipToEnd()
+        }
+        onNodeWithText("Localized heading").assertHasClickAction()
+        onNodeWithText("Live reasoning").assertDoesNotExist()
+        onNodeWithText("Localized heading").performClick()
+        onNodeWithText("Live reasoning").assertExists()
     }
 
     /**

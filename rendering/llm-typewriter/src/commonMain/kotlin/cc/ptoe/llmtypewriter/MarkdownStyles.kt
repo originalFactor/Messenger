@@ -90,6 +90,10 @@ data class MarkdownStyles(
     val thinkBlockBackground: Color = Color.Unspecified,
     /** Text color for think blocks. */
     val thinkBlockText: Color = Color.Unspecified,
+    /** Localized labels for the expandable thinking card. */
+    val thinkBlockTitle: String = "Thinking process",
+    val thinkBlockExpanded: String = "Expanded",
+    val thinkBlockCollapsed: String = "Collapsed",
     /** Style for superscript footnote references such as `[^1]`. */
     val footnoteReference: SpanStyle = SpanStyle(),
     /** Color for compact footnote definitions rendered below the main content. */
@@ -164,6 +168,9 @@ data class MarkdownStyles(
             thinkBlockStripe == other.thinkBlockStripe &&
             thinkBlockBackground == other.thinkBlockBackground &&
             thinkBlockText == other.thinkBlockText &&
+            thinkBlockTitle == other.thinkBlockTitle &&
+            thinkBlockExpanded == other.thinkBlockExpanded &&
+            thinkBlockCollapsed == other.thinkBlockCollapsed &&
             footnoteReference == other.footnoteReference &&
             footnoteDefinition == other.footnoteDefinition
     }
@@ -192,6 +199,9 @@ data class MarkdownStyles(
         result = 31 * result + thinkBlockStripe.hashCode()
         result = 31 * result + thinkBlockBackground.hashCode()
         result = 31 * result + thinkBlockText.hashCode()
+        result = 31 * result + thinkBlockTitle.hashCode()
+        result = 31 * result + thinkBlockExpanded.hashCode()
+        result = 31 * result + thinkBlockCollapsed.hashCode()
         result = 31 * result + footnoteReference.hashCode()
         result = 31 * result + footnoteDefinition.hashCode()
         return result

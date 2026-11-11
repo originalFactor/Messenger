@@ -19,6 +19,7 @@ package cc.ptoe.llmtypewriter
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -32,17 +33,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,9 +61,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -1334,46 +1340,48 @@ private fun RenderThinkBlock(token: MdToken.ThinkBlock, styles: MarkdownStyles) 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(backgroundColor),
     ) {
+        val headerAction = if (isClosed) {
+            Modifier
+                .clickable(role = Role.Button) { isExpanded = !isExpanded }
+                .semantics {
+                    stateDescription = if (isExpanded) styles.thinkBlockExpanded else styles.thinkBlockCollapsed
+                }
+        } else Modifier
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .then(headerAction)
+                .heightIn(min = 48.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .height(16.dp)
-                        .background(stripeColor, RoundedCornerShape(999.dp))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "思考过程",
-                    style = LocalTextStyle.current.copy(
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = stripeColor,
-                    ),
-                )
-            }
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(16.dp)
+                    .background(stripeColor, MaterialTheme.shapes.extraSmall)
+            )
+            Text(
+                text = styles.thinkBlockTitle,
+                style = MaterialTheme.typography.labelLarge,
+                color = stripeColor,
+                modifier = Modifier.weight(1f),
+            )
             if (isClosed) {
-                Text(
-                    text = if (isExpanded) "▲" else "▼",
-                    style = LocalTextStyle.current.copy(
-                        fontSize = 14.sp,
-                        color = stripeColor,
-                    ),
-                    modifier = Modifier
-                        .width(24.dp)
-                        .height(24.dp)
-                        .wrapContentSize(Alignment.Center)
-                        .clickable { isExpanded = !isExpanded },
-                )
+                Canvas(Modifier.size(18.dp)) {
+                    val left = size.width * 0.22f
+                    val right = size.width * 0.78f
+                    val upper = size.height * 0.38f
+                    val lower = size.height * 0.62f
+                    val startY = if (isExpanded) lower else upper
+                    val endY = if (isExpanded) upper else lower
+                    drawLine(stripeColor, Offset(left, startY), Offset(size.width / 2, endY), 2.dp.toPx(), cap = StrokeCap.Round)
+                    drawLine(stripeColor, Offset(size.width / 2, endY), Offset(right, startY), 2.dp.toPx(), cap = StrokeCap.Round)
+                }
             }
         }
 
@@ -1382,40 +1390,27 @@ private fun RenderThinkBlock(token: MdToken.ThinkBlock, styles: MarkdownStyles) 
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                verticalAlignment = Alignment.Top,
+                    .padding(start = 29.dp, end = 16.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .fillMaxHeight()
-                        .background(stripeColor, RoundedCornerShape(999.dp))
-                )
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 10.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    ProvideTextStyle(LocalTextStyle.current.copy(color = textColor)) {
-                        if (inlineTokens.any { it is MdToken.Image }) {
-                            RenderInlineWithImages(inlineTokens, styles)
-                        } else if (inlineTokens.any { it is MdToken.InlineMath }) {
-                            RenderInlineRunWithMath(buildInlineSegments(inlineTokens, styles), styles)
-                        } else if (inlineTokens.any { it is MdToken.CodeBlock }) {
-                            for (tok in inlineTokens) {
-                                if (tok is MdToken.CodeBlock) {
-                                    RenderCodeBlock(tok, styles)
-                                } else {
-                                    RenderInlineText(listOf(tok), styles)
-                                }
+                ProvideTextStyle(LocalTextStyle.current.copy(color = textColor)) {
+                    if (inlineTokens.any { it is MdToken.Image }) {
+                        RenderInlineWithImages(inlineTokens, styles)
+                    } else if (inlineTokens.any { it is MdToken.InlineMath }) {
+                        RenderInlineRunWithMath(buildInlineSegments(inlineTokens, styles), styles)
+                    } else if (inlineTokens.any { it is MdToken.CodeBlock }) {
+                        for (tok in inlineTokens) {
+                            if (tok is MdToken.CodeBlock) {
+                                RenderCodeBlock(tok, styles)
+                            } else {
+                                RenderInlineText(listOf(tok), styles)
                             }
-                        } else {
-                            RenderInlineText(inlineTokens, styles)
                         }
+                    } else {
+                        RenderInlineText(inlineTokens, styles)
                     }
                 }
             }
