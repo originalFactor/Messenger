@@ -325,7 +325,7 @@
     <string name="tools_settings_title">MCP 服务器</string>
     <string name="tools_mcp_empty">尚未添加任何 MCP 服务器</string>
     <string name="tools_agent_delegation">Agent 互调</string>
-    <string name="tools_agent_delegation_desc">允许 Messenger Agent 将任务交给其他 Agent。调用 ACP Agent 需要本地项目和可写模式。</string>
+    <string name="tools_agent_delegation_desc">允许 Agent 将任务交给其他 Agent。ACP 会话需要支持 MCP SSE 或 HTTP，重启应用后应用更改。调用 ACP Agent 需要本地项目和可写模式。</string>
     <string name="tools_mcp_config_error">MCP 配置无法读取，请检查本地设置后重新保存。</string>
     <string name="tools_mcp_add">添加 MCP 服务器</string>
     <string name="tools_mcp_edit">编辑 MCP 服务器</string>

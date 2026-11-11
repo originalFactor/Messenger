@@ -326,7 +326,7 @@
     <string name="tools_settings_title">MCP Servers</string>
     <string name="tools_mcp_empty">No MCP servers added</string>
     <string name="tools_agent_delegation">Agent delegation</string>
-    <string name="tools_agent_delegation_desc">Allow Messenger agents to delegate tasks. ACP agents require a local project and writable mode.</string>
+    <string name="tools_agent_delegation_desc">Allow agents to delegate tasks. ACP sessions need MCP SSE or HTTP and pick up changes after the app restarts. Calling an ACP agent requires a local project and writable mode.</string>
     <string name="tools_mcp_config_error">MCP configuration could not be loaded. Check the local settings and save them again.</string>
     <string name="tools_mcp_add">Add MCP Server</string>
     <string name="tools_mcp_edit">Edit MCP Server</string>

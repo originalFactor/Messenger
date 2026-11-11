@@ -62,7 +62,7 @@ async fn execute_inner(state: &ApiState, project: Option<&StoredProject>, writab
     let child_cancel = cancel.child_token();
     if let Some(profile) = agent.strip_prefix("acp:") {
         if !writable { return Err("ACP delegation requires writable mode because ACP agents manage their own tools.".into()); }
-        let id = state.external.create(state, profile, project.cloned(), &child_cancel).await.map_err(|e| format!("{e:?}"))?;
+        let id = state.external.create_with_delegation(state, profile, project.cloned(), &child_cancel, false).await.map_err(|e| format!("{e:?}"))?;
         let (choice_tx, choices) = mpsc::channel(1);
         drop(choice_tx); // A delegated agent cannot approve its own permission requests.
         let (updates, mut events) = mpsc::channel::<Value>(32);

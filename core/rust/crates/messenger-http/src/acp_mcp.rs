@@ -1,0 +1,167 @@
+//! Per-worker loopback MCP endpoints for ACP agent delegation.
+use super::*;
+use serde_json::{json, Value};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+
+#[derive(Clone)]
+struct Gateway {
+    state: ApiState,
+    project: Option<StoredProject>,
+    output: Arc<Mutex<external_acp::Output>>,
+    secret: String,
+    outgoing: Arc<Mutex<Option<mpsc::UnboundedSender<Event>>>>,
+    stream_cancel: Arc<Mutex<Option<CancellationToken>>>,
+    calls: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    lifetime: CancellationToken,
+}
+
+pub(crate) async fn start(
+    state: ApiState,
+    project: Option<StoredProject>,
+    output: Arc<Mutex<external_acp::Output>>,
+    lifetime: CancellationToken,
+) -> Result<String, std::io::Error> {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+    let addr = listener.local_addr()?;
+    let secret = Uuid::new_v4().to_string();
+    let gateway = Gateway {
+        state, project, output, secret: secret.clone(), outgoing: Default::default(), stream_cancel: Default::default(),
+        calls: Default::default(), lifetime: lifetime.clone(),
+    };
+    let app = Router::new().route("/:secret/events", get(events))
+        .route("/:secret/messages", post(messages))
+        .route("/:secret/rpc", post(rpc)).with_state(gateway);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).with_graceful_shutdown(lifetime.cancelled_owned()).await;
+    });
+    Ok(format!("http://{addr}/{secret}/events"))
+}
+
+fn authorized(gateway: &Gateway, secret: &str) -> bool {
+    gateway.secret.as_bytes().ct_eq(secret.as_bytes()).into()
+}
+
+async fn events(State(gateway): State<Gateway>, Path(secret): Path<String>) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    if !authorized(&gateway, &secret) { return Err(StatusCode::NOT_FOUND); }
+    let (sender, receiver) = mpsc::unbounded_channel();
+    sender.send(Event::default().event("endpoint").data("messages")).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut outgoing = gateway.outgoing.lock().await;
+    if outgoing.as_ref().is_some_and(|current| !current.is_closed()) { return Err(StatusCode::CONFLICT); }
+    *outgoing = Some(sender);
+    drop(outgoing);
+    let cancel = gateway.lifetime.child_token();
+    if let Some(previous) = gateway.stream_cancel.lock().await.replace(cancel.clone()) { previous.cancel(); }
+    let guard = cancel.drop_guard();
+    let stream = UnboundedReceiverStream::new(receiver).map(move |event| {
+        let _guard = &guard;
+        Ok(event)
+    });
+    Ok(Sse::new(ShutdownStream::new(stream, &gateway.lifetime)).keep_alive(KeepAlive::default()))
+}
+
+async fn messages(State(gateway): State<Gateway>, Path(secret): Path<String>, Json(request): Json<Value>) -> StatusCode {
+    if !authorized(&gateway, &secret) { return StatusCode::NOT_FOUND; }
+    let Some(sender) = gateway.outgoing.lock().await.clone().filter(|sender| !sender.is_closed()) else { return StatusCode::CONFLICT; };
+    let Some(stream_cancel) = gateway.stream_cancel.lock().await.clone() else { return StatusCode::CONFLICT; };
+    tokio::spawn(async move {
+        if let Some(response) = process_request(gateway, request, Some(stream_cancel)).await {
+            let _ = sender.send(Event::default().event("message").data(response.to_string()));
+        }
+    });
+    StatusCode::ACCEPTED
+}
+
+async fn rpc(State(gateway): State<Gateway>, Path(secret): Path<String>, Json(request): Json<Value>) -> Response {
+    if !authorized(&gateway, &secret) { return StatusCode::NOT_FOUND.into_response(); }
+    match process_request(gateway, request, None).await {
+        Some(response) => Json(response).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+async fn process_request(gateway: Gateway, request: Value, stream_cancel: Option<CancellationToken>) -> Option<Value> {
+    let method = request["method"].as_str().unwrap_or_default();
+    if method == "notifications/cancelled" {
+        if let Some(id) = request["params"].get("requestId") {
+            if let Some(cancel) = gateway.calls.lock().await.get(&id.to_string()) { cancel.cancel(); }
+        }
+        return None;
+    }
+    let id = request.get("id").cloned().filter(|id| !id.is_null())?;
+    let params = request["params"].clone();
+    Some(match method {
+            "initialize" => json!({"jsonrpc":"2.0","id":id,"result":{
+                "protocolVersion":params["protocolVersion"].as_str().filter(|version| matches!(*version, "2024-11-05" | "2025-03-26" | "2025-06-18")).unwrap_or("2025-03-26"), "capabilities":{"tools":{}},
+                "serverInfo":{"name":"Messenger Agents","version":messenger_core::version::NAME}
+            }}),
+            "ping" => json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            "tools/list" => {
+                let tool = delegation::tool();
+                let tools = if delegation::enabled(&gateway.state.store) { vec![json!({
+                    "name":tool.name,"description":tool.description,
+                    "inputSchema":serde_json::from_str::<Value>(&tool.parameters_json).unwrap_or_default()
+                })] } else { Vec::new() };
+                json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
+            }
+            "tools/call" if params["name"] == delegation::TOOL_NAME => {
+                let result = if let Some(turn) = external_acp::active_cancel(&gateway.output).await {
+                    let cancel = turn.child_token();
+                    let key = id.to_string();
+                    let registered = {
+                        let mut calls = gateway.calls.lock().await;
+                        if calls.contains_key(&key) || calls.len() >= 32 { false }
+                        else { calls.insert(key.clone(), cancel.clone()); true }
+                    };
+                    if !registered {
+                        ToolExecutionResult { output:"Duplicate request ID or too many concurrent calls".into(), is_error:true }
+                    } else {
+                        let args = params.get("arguments").cloned().unwrap_or_else(|| json!({})).to_string();
+                        let result = tokio::select! {
+                            result = delegation::execute(&gateway.state, gateway.project.as_ref(), true, &args, &cancel) => result,
+                            _ = gateway.lifetime.cancelled() => ToolExecutionResult { output:"ACP session closed".into(), is_error:true },
+                            _ = async { if let Some(token) = &stream_cancel { token.cancelled().await } else { std::future::pending::<()>().await } } => ToolExecutionResult { output:"MCP connection closed".into(), is_error:true },
+                            _ = cancel.cancelled() => ToolExecutionResult { output:"Tool call cancelled".into(), is_error:true },
+                        };
+                        cancel.cancel();
+                        gateway.calls.lock().await.remove(&key);
+                        result
+                    }
+                } else { ToolExecutionResult { output:"No active ACP turn".into(), is_error:true } };
+                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":result.output}],"isError":result.is_error}})
+            }
+            _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use messenger_mcp::{McpClient, McpServerConfig, SseTransport};
+
+    #[tokio::test]
+    async fn gateway_requires_its_capability_and_closes_with_the_session() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap();
+        let lifetime = CancellationToken::new();
+        let url = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone()).await.unwrap();
+        let wrong = url.rsplit_once('/').unwrap().0.rsplit_once('/').unwrap().0.to_string() + "/wrong/events";
+        assert_eq!(reqwest::get(wrong).await.unwrap().status(), StatusCode::NOT_FOUND);
+        let client = McpClient::new(McpServerConfig { name:"test".into(), ..Default::default() },
+            Arc::new(SseTransport::new(url.clone(), Default::default())));
+        assert!(client.connect().await);
+        assert_eq!(client.tools().await[0].tool_name, delegation::TOOL_NAME);
+        let result = client.call_tool(delegation::TOOL_NAME, r#"{"action":"list"}"#).await;
+        assert!(result.is_error);
+        assert!(result.output.contains("No active ACP turn"));
+        lifetime.cancel();
+        client.close().await;
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if reqwest::get(&url).await.is_err() { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await;
+        assert!(closed.is_ok(), "MCP listener must close with its ACP worker");
+        state.shutdown.cancel();
+    }
+}

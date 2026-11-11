@@ -95,6 +95,12 @@ All routes use the per-start local bearer.
   existing workers retain the configuration from their startup. The snapshot
   is held in memory and can contain server credentials. Agents without SSE
   support reject session setup when an enabled SSE server is configured.
+- When Agent delegation is enabled in MCP settings, ACP workers that advertise
+  MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
+  `messenger_agents` tool lists or calls agents during an active turn. Enabling
+  requires restarting the ACP worker; disabling prevents subsequent calls.
+  ACP agents without either transport report an error at session setup. Delegated
+  ACP sessions do not receive the delegation server, preventing recursive calls.
 - Android brokers ACP process stdio through the local `acpProcess` event,
   `GET /api/v1/control/processes/{id}/input` (SSE), and
   `POST /api/v1/control/processes/{id}/output` (a JSON `line`, or an empty

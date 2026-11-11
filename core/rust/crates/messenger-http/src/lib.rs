@@ -65,6 +65,7 @@ mod acp_agent;
 #[cfg(target_os = "android")]
 mod android_acp;
 mod control;
+mod acp_mcp;
 mod delegation;
 mod external_acp;
 

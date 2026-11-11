@@ -133,6 +133,8 @@ pub(crate) struct Record {
     pub updated_at: i64,
     cwd: PathBuf,
     agent_session: SessionId,
+    #[serde(default)]
+    delegated: bool,
     pub messages: Vec<Value>,
 }
 
@@ -161,6 +163,7 @@ struct Prompt {
 
 struct LiveTurn {
     cancel: CancellationToken,
+    tool_cancel: CancellationToken,
     permissions: Arc<Mutex<mpsc::Receiver<String>>>,
     updates: mpsc::Sender<Value>,
     answer: Arc<std::sync::Mutex<String>>,
@@ -168,10 +171,14 @@ struct LiveTurn {
 }
 
 #[derive(Default)]
-struct Output {
+pub(crate) struct Output {
     replay: Option<Vec<Value>>,
     turn: Option<LiveTurn>,
     settings: Value,
+}
+
+pub(crate) async fn active_cancel(output: &Mutex<Output>) -> Option<CancellationToken> {
+    output.lock().await.turn.as_ref().map(|turn| turn.tool_cancel.clone()).filter(|cancel| !cancel.is_cancelled())
 }
 
 #[derive(Default)]
@@ -259,6 +266,13 @@ impl ExternalSessions {
         project: Option<StoredProject>,
         cancel: &CancellationToken,
     ) -> Result<String, ApiError> {
+        self.create_with_delegation(state, profile, project, cancel, true).await
+    }
+
+    pub(crate) async fn create_with_delegation(
+        &self, state: &ApiState, profile: &str, project: Option<StoredProject>,
+        cancel: &CancellationToken, allow_delegation: bool,
+    ) -> Result<String, ApiError> {
         let project = project.ok_or_else(|| ApiError::BadRequest(
             "ACP conversations require a project".into(),
         ))?;
@@ -266,7 +280,7 @@ impl ExternalSessions {
         let cwd = PathBuf::from(&project.workspace);
         let id = format!("acp:{}", Uuid::new_v4());
         let (worker, agent_session, _) =
-            start_worker(state, profile.clone(), cwd.clone(), None, cancel).await?;
+            start_worker(state, profile.clone(), cwd.clone(), None, cancel, Some(project.clone()), allow_delegation).await?;
         self.save(
             &state.store,
             Record {
@@ -277,6 +291,7 @@ impl ExternalSessions {
                 updated_at: 0,
                 cwd,
                 agent_session,
+                delegated: !allow_delegation,
                 messages: Vec::new(),
             },
         )?;
@@ -398,7 +413,8 @@ impl ExternalSessions {
         if let Some(worker) = self.workers.lock().await.get(&record.id).cloned().filter(|worker| !worker.requests.is_closed()) {
             return Ok((worker, None));
         }
-        let (worker, _, replay) = start_worker(state, profile, record.cwd.clone(), Some(record.agent_session.clone()), cancel).await?;
+        let project = crate::control::local_workspace(state, record.project.as_deref())?;
+        let (worker, _, replay) = start_worker(state, profile, record.cwd.clone(), Some(record.agent_session.clone()), cancel, project, !record.delegated).await?;
         self.workers.lock().await.insert(record.id.clone(), worker.clone());
         Ok((worker, replay))
     }
@@ -457,12 +473,28 @@ fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
         .ok_or_else(|| ApiError::not_found("ACP agent profile"))
 }
 
-async fn start_worker(
+fn start_worker<'a>(
+    state: &'a ApiState,
+    profile: Profile,
+    cwd: PathBuf,
+    existing: Option<SessionId>,
+    cancel: &'a CancellationToken,
+    project: Option<StoredProject>,
+    allow_delegation: bool,
+) -> Pin<Box<dyn Future<Output = Result<(Worker, SessionId, Option<Vec<Value>>), ApiError>> + Send + 'a>> {
+    // Delegated ACP calls can start another worker through the MCP gateway.
+    // Erase this future at that boundary to break the recursive future type.
+    Box::pin(start_worker_impl(state, profile, cwd, existing, cancel, project, allow_delegation))
+}
+
+async fn start_worker_impl(
     state: &ApiState,
     profile: Profile,
     cwd: PathBuf,
     existing: Option<SessionId>,
     cancel: &CancellationToken,
+    project: Option<StoredProject>,
+    allow_delegation: bool,
 ) -> Result<(Worker, SessionId, Option<Vec<Value>>), ApiError> {
     let mcp_servers = state.platform_catalog.lock().await.mcp_servers.clone();
     let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
@@ -475,6 +507,9 @@ async fn start_worker(
     let worker = Worker { requests: input, output: output.clone(), lifetime: lifetime.clone() };
     let notify_output = output.clone();
     let permission_output = output.clone();
+    let gateway_output = output.clone();
+    let gateway_state = state.clone();
+    let gateway_lifetime = lifetime.clone();
     tokio::spawn(async move {
         let Process {
             stdin,
@@ -516,7 +551,24 @@ async fn start_worker(
                             "Unsupported ACP protocol version",
                         ));
                     }
-                    let mcp_servers = acp_mcp_servers(&mcp_servers, init.agent_capabilities.mcp_capabilities.sse)?;
+                    let name_conflict = mcp_servers.iter().any(|server| server.is_enabled && server.name == "Messenger Agents");
+                    let mut mcp_servers = acp_mcp_servers(&mcp_servers, init.agent_capabilities.mcp_capabilities.sse)?;
+                    if allow_delegation && crate::delegation::enabled(&gateway_state.store) {
+                        if !init.agent_capabilities.mcp_capabilities.sse && !init.agent_capabilities.mcp_capabilities.http {
+                            return Err(agent_client_protocol::Error::new(-32000, "Agent delegation requires ACP MCP SSE or HTTP support"));
+                        }
+                        if name_conflict {
+                            return Err(agent_client_protocol::Error::new(-32000, "Rename the configured MCP server named Messenger Agents to enable agent delegation"));
+                        }
+                        let url = crate::acp_mcp::start(gateway_state, project, gateway_output, gateway_lifetime)
+                            .await.map_err(|error| agent_client_protocol::Error::new(-32000, error.to_string()))?;
+                        if init.agent_capabilities.mcp_capabilities.sse {
+                            mcp_servers.push(McpServer::Sse(McpServerSse::new("Messenger Agents", url)));
+                        } else {
+                            let rpc_url = format!("{}/rpc", url.rsplit_once('/').unwrap().0);
+                            mcp_servers.push(McpServer::Http(McpServerHttp::new("Messenger Agents", rpc_url)));
+                        }
+                    }
                     output.lock().await.settings = json!({"configOptions":[],"steering": init.meta.as_ref().and_then(|meta| meta.get("steering")).cloned().unwrap_or(Value::Null)});
                     let session = match existing {
                         Some(id) => {
@@ -572,6 +624,7 @@ async fn start_worker(
             result = connection => result.err().map(|err| err.to_string()),
             _ = lifetime.cancelled() => Some("The ACP process was cancelled.".into()),
         };
+        lifetime.cancel();
         let _ = failure.send(error.unwrap_or_else(|| "The ACP agent exited.".into()));
     });
     tokio::select! {
@@ -644,8 +697,11 @@ async fn run_prompt(
         transcript,
         done,
     } = prompt;
+    let tool_cancel = cancel.child_token();
+    let _tool_guard = tool_cancel.clone().drop_guard();
     output.lock().await.turn = Some(LiveTurn {
         cancel: cancel.clone(),
+        tool_cancel,
         permissions: Arc::new(Mutex::new(permissions)),
         updates,
         answer,
@@ -883,9 +939,9 @@ mod tests {
         for mode in ["mcp-load", "mcp-resume"] {
             let mut profile = profile.clone();
             profile.args[1] = mode.into();
-            let (worker, session, _) = start_worker(&state, profile.clone(), cwd.clone(), None, &cancel).await.unwrap();
+            let (worker, session, _) = start_worker(&state, profile.clone(), cwd.clone(), None, &cancel, None, true).await.unwrap();
             worker.lifetime.cancel();
-            let (worker, _, _) = start_worker(&state, profile, cwd.clone(), Some(session), &cancel).await.unwrap();
+            let (worker, _, _) = start_worker(&state, profile, cwd.clone(), Some(session), &cancel, None, true).await.unwrap();
             worker.lifetime.cancel();
         }
         state.shutdown.cancel();
@@ -893,6 +949,7 @@ mod tests {
 
     async fn setup(mode: &str) -> (ApiState, String) {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        if mode.starts_with("agent-mcp") { state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap(); }
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
         let response = router(state.clone())
             .oneshot(
@@ -926,6 +983,34 @@ mod tests {
             .await
             .unwrap();
         (state, session)
+    }
+
+    #[tokio::test]
+    async fn acp_agent_discovers_and_calls_delegation_mcp_tool() {
+        for mode in ["agent-mcp", "agent-mcp-http"] {
+        let (state, session) = setup(mode).await;
+        let (_choices, permissions) = mpsc::channel(1);
+        let (updates, _events) = mpsc::channel(32);
+        let result = tokio::time::timeout(Duration::from_secs(10), state.external.prompt(
+            &state, session.clone(), "list agents".into(), Vec::new(), CancellationToken::new(), permissions, updates,
+        )).await.expect("ACP MCP call timed out").unwrap();
+        assert_eq!(result["type"], "Finished");
+        let rows = state.external.history(&state.store, &session).unwrap();
+        assert_eq!(rows.last().unwrap()["text"], "child reply");
+        let delegated = state.external.sessions(&state.store).unwrap().into_values().find(|record| record.delegated).unwrap();
+        assert_eq!(delegated.messages.last().unwrap()["text"], "child reply");
+        state.shutdown.cancel();
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_when_acp_agent_does_not_support_sse_delegation() {
+        let (state, session) = setup("load").await;
+        state.external.workers.lock().await.remove(&session).unwrap().lifetime.cancel();
+        state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap();
+        let error = state.external.settings(&state, &session, None, &CancellationToken::new()).await.unwrap_err();
+        assert!(format!("{error:?}").contains("requires ACP MCP SSE or HTTP support"));
+        state.shutdown.cancel();
     }
 
     #[tokio::test]
