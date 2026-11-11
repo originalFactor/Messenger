@@ -75,7 +75,7 @@ class MessengerApplication : Application() {
             chatImageStore = AndroidChatImageStore(this)
         )
         restCore.platformTools = container::availableTools
-        restCore.publishPlatformTools(container.mcpManager.activeTools)
+        restCore.publishPlatformTools(container.mcpManager)
         AppContainerHolder.initialize(container)
         container.initializeLocalAndCloudData()
         setupImageLoader(container)

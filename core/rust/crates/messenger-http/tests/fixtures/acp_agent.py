@@ -42,13 +42,20 @@ for line in sys.stdin:
     request_id = packet.get("id")
     method = packet.get("method")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "settings", "settings-hang")}
-        if mode == "resume":
+        capabilities = {"loadSession": mode in ("load", "settings", "settings-hang", "mcp-load")}
+        if mode.startswith("mcp-"):
+            capabilities["mcpCapabilities"] = {"sse": True}
+        if mode in ("resume", "mcp-resume"):
             capabilities["sessionCapabilities"] = {"resume": {}}
         send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities, "_meta":{"steering":{"supported":True}}})
     elif method == "session/new":
+        if mode.startswith("mcp-"):
+            assert packet["params"]["mcpServers"][0]["name"] == "test-mcp"
+            assert packet["params"]["mcpServers"][0]["env"][0]["value"] == "secret"
         send(id=request_id, result={"sessionId": session_id, **(session_settings() if mode.startswith("settings") else {})})
     elif method == "session/load":
+        if mode == "mcp-load":
+            assert packet["params"]["mcpServers"][0]["name"] == "test-mcp"
         update("user_message_chunk", "replayed question")
         update("agent_message_chunk", "replayed answer")
         send(id=request_id, result=session_settings() if mode.startswith("settings") else {})
@@ -67,6 +74,8 @@ for line in sys.stdin:
             "sessionUpdate": "current_mode_update", "currentModeId": current_mode}})
         send(id=request_id, result={})
     elif method == "session/resume":
+        if mode == "mcp-resume":
+            assert packet["params"]["mcpServers"][0]["name"] == "test-mcp"
         send(id=request_id, result={})
     elif method == "session/prompt":
         pending = request_id

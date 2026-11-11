@@ -11,6 +11,60 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 const SESSIONS: &str = "local_acp_sessions";
 
+fn acp_mcp_servers(
+    configs: &[messenger_mcp::McpServerConfig],
+    supports_sse: bool,
+) -> Result<Vec<McpServer>, agent_client_protocol::Error> {
+    configs.iter().filter(|config| config.is_enabled).map(|config| {
+        match config.transport_type {
+            messenger_mcp::McpTransportType::STDIO => Ok(McpServer::Stdio(
+                McpServerStdio::new(&config.name, &config.command)
+                    .args(config.args.clone())
+                    .env(config.env.iter().map(|(name, value)| EnvVariable::new(name, value)).collect()),
+            )),
+            messenger_mcp::McpTransportType::SSE if supports_sse => Ok(McpServer::Sse(
+                McpServerSse::new(&config.name, &config.url)
+                    .headers(config.headers.iter().map(|(name, value)| HttpHeader::new(name, value)).collect()),
+            )),
+            messenger_mcp::McpTransportType::SSE => Err(agent_client_protocol::Error::new(
+                -32000, format!("ACP agent does not support the SSE MCP server: {}", config.name),
+            )),
+        }
+    }).collect()
+}
+
+#[cfg(test)]
+mod mcp_injection_tests {
+    use super::*;
+    use messenger_mcp::{McpServerConfig, McpTransportType};
+
+    #[test]
+    fn enabled_servers_are_forwarded_with_credentials_and_disabled_are_omitted() {
+        let stdio = McpServerConfig {
+            name: "local".into(), command: "server".into(), args: vec!["--stdio".into()],
+            env: [("TOKEN".into(), "secret".into())].into_iter().collect(), ..Default::default()
+        };
+        let sse = McpServerConfig {
+            name: "remote".into(), transport_type: McpTransportType::SSE,
+            url: "https://example.org/sse".into(),
+            headers: [("Authorization".into(), "secret".into())].into_iter().collect(),
+            ..Default::default()
+        };
+        let disabled = McpServerConfig { name: "disabled".into(), is_enabled: false, ..Default::default() };
+        let result = acp_mcp_servers(&[stdio, sse, disabled], true).unwrap();
+        assert_eq!(result.len(), 2);
+        let values = serde_json::to_value(result).unwrap();
+        assert_eq!(values[0]["env"][0]["value"], "secret");
+        assert_eq!(values[1]["headers"][0]["value"], "secret");
+    }
+
+    #[test]
+    fn unsupported_sse_is_reported() {
+        let server = McpServerConfig { name: "remote".into(), transport_type: McpTransportType::SSE, ..Default::default() };
+        assert!(acp_mcp_servers(&[server], false).is_err());
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Profile {
@@ -410,6 +464,7 @@ async fn start_worker(
     existing: Option<SessionId>,
     cancel: &CancellationToken,
 ) -> Result<(Worker, SessionId, Option<Vec<Value>>), ApiError> {
+    let mcp_servers = state.platform_catalog.lock().await.mcp_servers.clone();
     let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
     let (ready, initialized) = oneshot::channel();
     let (failure, mut failed) = oneshot::channel();
@@ -461,6 +516,7 @@ async fn start_worker(
                             "Unsupported ACP protocol version",
                         ));
                     }
+                    let mcp_servers = acp_mcp_servers(&mcp_servers, init.agent_capabilities.mcp_capabilities.sse)?;
                     output.lock().await.settings = json!({"configOptions":[],"steering": init.meta.as_ref().and_then(|meta| meta.get("steering")).cloned().unwrap_or(Value::Null)});
                     let session = match existing {
                         Some(id) => {
@@ -470,11 +526,11 @@ async fn start_worker(
                                 .resume
                                 .is_some()
                             {
-                                let response = connection.send_request(ResumeSessionRequest::new(id.clone(), cwd)).block_task().await?;
+                                let response = connection.send_request(ResumeSessionRequest::new(id.clone(), cwd).mcp_servers(mcp_servers.clone())).block_task().await?;
                                 merge_settings(&mut output.lock().await.settings, serde_json::to_value(response).unwrap_or_default());
                             } else if init.agent_capabilities.load_session {
                                 output.lock().await.replay = Some(Vec::new());
-                                let response = connection.send_request(LoadSessionRequest::new(id.clone(), cwd)).block_task().await?;
+                                let response = connection.send_request(LoadSessionRequest::new(id.clone(), cwd).mcp_servers(mcp_servers.clone())).block_task().await?;
                                 merge_settings(&mut output.lock().await.settings, serde_json::to_value(response).unwrap_or_default());
                             } else {
                                 return Err(agent_client_protocol::Error::new(
@@ -485,7 +541,7 @@ async fn start_worker(
                             id
                         }
                         None => {
-                            let response = connection.send_request(NewSessionRequest::new(cwd)).block_task().await?;
+                            let response = connection.send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers)).block_task().await?;
                             merge_settings(&mut output.lock().await.settings, serde_json::to_value(&response).unwrap_or_default());
                             response.session_id
                         }
@@ -807,6 +863,33 @@ async fn spawn_process(
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn configured_mcp_reaches_new_loaded_and_resumed_acp_sessions() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        state.platform_catalog.lock().await.mcp_servers = vec![messenger_mcp::McpServerConfig {
+            name: "test-mcp".into(), command: "test-server".into(),
+            env: [("TOKEN".into(), "secret".into())].into_iter().collect(),
+            ..Default::default()
+        }];
+        let profile = Profile {
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true,
+            command: "python3".into(),
+            args: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py").to_string_lossy().into_owned(), "mcp-load".into()],
+            env: HashMap::new(), cwd: None,
+        };
+        let cancel = CancellationToken::new();
+        let cwd = std::env::temp_dir();
+        for mode in ["mcp-load", "mcp-resume"] {
+            let mut profile = profile.clone();
+            profile.args[1] = mode.into();
+            let (worker, session, _) = start_worker(&state, profile.clone(), cwd.clone(), None, &cancel).await.unwrap();
+            worker.lifetime.cancel();
+            let (worker, _, _) = start_worker(&state, profile, cwd.clone(), Some(session), &cancel).await.unwrap();
+            worker.lifetime.cancel();
+        }
+        state.shutdown.cancel();
+    }
 
     async fn setup(mode: &str) -> (ApiState, String) {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");

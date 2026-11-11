@@ -1350,6 +1350,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "messenger-core",
+ "messenger-mcp",
  "messenger-remote",
  "messenger-store",
  "messenger-sync",

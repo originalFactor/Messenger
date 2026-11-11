@@ -12,6 +12,8 @@ const GRANT: &str = "device_control_grant";
 pub(crate) struct PlatformCatalog {
     pub workspace_supported: bool,
     pub tools: Vec<ToolSpecRequest>,
+    #[serde(default)]
+    pub mcp_servers: Vec<messenger_mcp::McpServerConfig>,
 }
 
 pub(crate) async fn platform_tools(

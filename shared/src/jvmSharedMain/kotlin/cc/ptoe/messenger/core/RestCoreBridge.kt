@@ -94,6 +94,10 @@ class RestCoreBridge(
     @Volatile
     var platformAcpProcess: (suspend (AcpProcessChannel) -> Unit)? = null
 
+    private var mcpManager: cc.ptoe.messenger.domain.mcp.McpManager? = null
+    private val catalogMutex = kotlinx.coroutines.sync.Mutex()
+    private var catalogInitialized = false
+
     @Volatile
     private var activeConversationId: String? = null
 
@@ -195,32 +199,57 @@ class RestCoreBridge(
         }
     }
 
-    fun publishPlatformTools(tools: kotlinx.coroutines.flow.StateFlow<List<cc.ptoe.messenger.domain.tool.ChatTool>>) {
+    fun publishPlatformTools(
+        manager: cc.ptoe.messenger.domain.mcp.McpManager,
+    ) {
+        mcpManager = manager
         subscriptionScope.launch {
             var previous: String? = null
             while (isActive) {
-                val payload = buildJsonObject {
+                try {
+                    val payload = publishPlatformCatalog(manager, previous)
+                    previous = payload
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The next tick publishes again if the request failed.
+                }
+                delay(1_000)
+            }
+        }
+    }
+
+    private suspend fun publishPlatformCatalog(
+        manager: cc.ptoe.messenger.domain.mcp.McpManager,
+        previous: String? = null,
+    ): String {
+        catalogMutex.lock()
+        try {
+            if (!catalogInitialized) {
+                manager.loadServers()
+                check(!manager.configurationError.value) { "MCP configuration could not be loaded" }
+                catalogInitialized = true
+            }
+            val payload = buildJsonObject {
                     put("workspaceSupported", cc.ptoe.messenger.domain.tool.builtinChatToolsSupported())
-                    put("tools", kotlinx.serialization.json.JsonArray(tools.value.map { tool ->
+                    put("mcpServers", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(cc.ptoe.messenger.domain.mcp.McpServerConfig.serializer()),
+                        manager.servers.value.filter { it.isEnabled },
+                    ))
+                    put("tools", kotlinx.serialization.json.JsonArray(manager.activeTools.value.map { tool ->
                         buildJsonObject {
                             put("name", tool.name)
                             put("description", tool.description)
                             put("parametersJson", tool.parametersJson)
                         }
                     }))
-                }.toString()
-                if (payload != previous) {
-                    try {
-                        putNoContent("/control/platform-tools", payload)
-                        previous = payload
-                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        // The next tick publishes again if the request failed.
-                    }
-                }
-                delay(1_000)
+            }.toString()
+            if (payload != previous) {
+                putNoContent("/control/platform-tools", payload)
             }
+            return payload
+        } finally {
+            catalogMutex.unlock()
         }
     }
 
@@ -232,6 +261,7 @@ class RestCoreBridge(
     }
 
     override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
+        mcpManager?.let { publishPlatformCatalog(it) }
         streamSsePost("/control/commands/${path(requestId)}", command.toString()) {
             onEvent(NetworkClient.json.parseToJsonElement(it).jsonObject)
         }

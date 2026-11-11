@@ -90,7 +90,11 @@ All routes use the per-start local bearer.
   from the current permission event. `POST .../{requestId}/cancel` stops
   the corresponding request. Closing its SSE stream also cancels it.
 - `PUT /api/v1/control/platform-tools` is the authenticated local client's
-  tool availability and MCP declaration snapshot for device-owned turns.
+  tool availability and MCP configuration snapshot for device-owned turns.
+  Enabled configurations are passed to new, resumed and loaded ACP sessions;
+  existing workers retain the configuration from their startup. The snapshot
+  is held in memory and can contain server credentials. Agents without SSE
+  support reject session setup when an enabled SSE server is configured.
 - Android brokers ACP process stdio through the local `acpProcess` event,
   `GET /api/v1/control/processes/{id}/input` (SSE), and
   `POST /api/v1/control/processes/{id}/output` (a JSON `line`, or an empty

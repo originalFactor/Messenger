@@ -119,6 +119,10 @@ paths:
               properties:
                 workspaceSupported: { type: boolean }
                 tools: { type: array, items: { type: object } }
+                mcpServers:
+                  type: array
+                  description: Enabled client MCP configurations, held in memory for ACP session setup. May contain credentials.
+                  items: { type: object }
       responses:
         "204": { description: Platform tool availability updated. }
   /control/commands/{requestId}:
