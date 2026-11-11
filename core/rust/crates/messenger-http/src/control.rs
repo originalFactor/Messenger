@@ -560,6 +560,7 @@ pub(crate) fn text_request(text: String) -> ChatRequest {
         disable_tools: false,
         message_id: None,
         tool_specs: Vec::new(),
+        no_agent_delegation: false,
     }
 }
 

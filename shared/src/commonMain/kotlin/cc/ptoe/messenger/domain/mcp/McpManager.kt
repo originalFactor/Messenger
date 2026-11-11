@@ -44,6 +44,7 @@ class McpManager(
 
     private val scope = CoroutineScope(ioDispatcher + Job())
     private val mutex = Mutex()
+    private val delegationMutex = Mutex()
 
     private val _servers = MutableStateFlow<List<McpServerConfig>>(emptyList())
     val servers: StateFlow<List<McpServerConfig>> = _servers.asStateFlow()
@@ -53,11 +54,23 @@ class McpManager(
     private val clients = mutableMapOf<String, McpClient>()
     private val _activeTools = MutableStateFlow<List<ChatTool>>(emptyList())
     val activeTools: StateFlow<List<ChatTool>> = _activeTools.asStateFlow()
+    private val _agentDelegationEnabled = MutableStateFlow(false)
+    val agentDelegationEnabled: StateFlow<Boolean> = _agentDelegationEnabled.asStateFlow()
 
     init {
         scope.launch {
             loadServers()
+            delegationMutex.withLock {
+                cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.let {
+                    _agentDelegationEnabled.value = it.agentDelegationEnabled()
+                }
+            }
         }
+    }
+
+    suspend fun setAgentDelegationEnabled(enabled: Boolean) = delegationMutex.withLock {
+        requireNotNull(cc.ptoe.messenger.core.CoreBridgeRegistry.bridge).setAgentDelegationEnabled(enabled)
+        _agentDelegationEnabled.value = enabled
     }
 
     suspend fun loadServers(): List<McpServerConfig> = mutex.withLock {

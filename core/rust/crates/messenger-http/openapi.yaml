@@ -106,6 +106,32 @@ paths:
       responses:
         "200": { description: Settings saved. }
         "400": { description: Invalid profile or cloud sign-in required to enable control. }
+  /mcp/agent-delegation:
+    get:
+      operationId: getAgentDelegationSetting
+      responses:
+        "200":
+          description: Device-local delegation setting, disabled by default.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
+    put:
+      operationId: setAgentDelegationSetting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "204": { description: Setting saved. }
   /control/platform-tools:
     put:
       operationId: publishDeviceToolCatalog

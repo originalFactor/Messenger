@@ -65,6 +65,7 @@ mod acp_agent;
 #[cfg(target_os = "android")]
 mod android_acp;
 mod control;
+mod delegation;
 mod external_acp;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
@@ -341,6 +342,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/events", get(core_events))
         .route("/remote/status", get(remote_status))
         .route("/control/platform-tools", put(control::platform_tools))
+        .route("/mcp/agent-delegation", get(delegation::get_setting).put(delegation::set_setting))
         .route("/control/settings", get(control::get_settings).put(control::set_settings))
         .route("/control/commands/:id", post(control::commands).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
         .route("/control/commands/:id/permission", post(control::permission))
@@ -2139,6 +2141,8 @@ pub struct ChatRequest {
     pub message_id: Option<String>,
     #[serde(default)]
     pub tool_specs: Vec<ToolSpecRequest>,
+    #[serde(skip)]
+    no_agent_delegation: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2563,7 +2567,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     let project = conversation.project_id.as_deref()
         .map(|id| state.store.get_project(id))
         .transpose().map_err(ApiError::store)?.flatten();
-    let tools = if request.disable_tools {
+    let mut tools = if request.disable_tools {
         Vec::new()
     } else if detached {
         let catalog = state.platform_catalog.lock().await;
@@ -2571,6 +2575,13 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     } else {
         configured_tools(&agent, conversation.writable, project.is_some(), &request.tool_specs)
     };
+    if !request.disable_tools && !request.no_agent_delegation && agent.tools_enabled
+        && delegation::enabled(&state.store)
+        && serde_json::from_str::<HashMap<String, bool>>(&agent.tools_config)
+            .unwrap_or_default().get(delegation::TOOL_NAME).copied() != Some(false)
+    {
+        tools.push(delegation::tool());
+    }
     let title = state
         .store
         .get_title_agent()
@@ -2607,6 +2618,9 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     };
     let sink = ChannelSink { tx: tx.clone(), terminal: Default::default() };
     let host = RoutedToolHost {
+        state: state.clone(),
+        project: project.clone(),
+        writable: conversation.writable,
         local: RemoteToolHost {
             pending: Arc::clone(&state.pending_tools),
             events: tx,
@@ -2673,6 +2687,9 @@ fn configured_tools(
         .filter(|tool| has_workspace || !tool.workspace_required)
         .collect();
     for spec in requested {
+        // Reserved for the Core-owned tool; a client declaration must not
+        // bypass the setting or re-enable delegation in a child turn.
+        if spec.name == delegation::TOOL_NAME { continue; }
         if config.get(&spec.name).copied() == Some(false) {
             continue;
         }
@@ -2694,6 +2711,9 @@ fn configured_tools(
 /// Sends workspace-bound tools of a remotely owned project to its owner and
 /// everything else (client-provided tools included) to the local client.
 struct RoutedToolHost {
+    state: ApiState,
+    project: Option<StoredProject>,
+    writable: bool,
     local: RemoteToolHost,
     route: ToolRoute,
     platform: Option<(LocalClientExecutor, Option<StoredProject>)>,
@@ -2710,6 +2730,9 @@ impl ToolHost for RoutedToolHost {
         name: &str,
         arguments_json: &str,
     ) -> ToolExecutionResult {
+        if name == delegation::TOOL_NAME {
+            return delegation::execute(&self.state, self.project.as_ref(), self.writable, arguments_json, &self.cancel).await;
+        }
         let ToolRoute::Remote { device_id, project_id } = &self.route else {
             if let Some((executor, project)) = &self.platform {
                 return executor.execute_event(RemoteToolEvent {
@@ -3337,6 +3360,26 @@ mod tests {
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(messages[1].content, "Hello");
         assert_eq!(messages[1].status, "sent");
+    }
+
+    #[tokio::test]
+    async fn delegation_runs_a_messenger_agent_and_returns_its_answer() {
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Delegated answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            )).mount(&provider).await;
+        let state = test_state();
+        seed_text_chat(&state, &provider.uri());
+        state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap();
+        let result = delegation::execute(&state, None, false,
+            r#"{"action":"call","agentId":"a1","task":"hello"}"#,
+            &CancellationToken::new()).await;
+        assert!(!result.is_error, "{}", result.output);
+        assert_eq!(result.output, "Delegated answer");
+        let requests = provider.received_requests().await.unwrap();
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains(delegation::TOOL_NAME));
+        state.shutdown.cancel();
     }
 
     #[tokio::test]

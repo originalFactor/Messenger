@@ -256,6 +256,13 @@ class RestCoreBridge(
     override suspend fun controlSettings(): JsonObject =
         NetworkClient.json.parseToJsonElement(getText("/control/settings")).jsonObject
 
+    override suspend fun agentDelegationEnabled(): Boolean =
+        NetworkClient.json.parseToJsonElement(getText("/mcp/agent-delegation")).jsonObject["enabled"]?.jsonPrimitive?.content == "true"
+
+    override suspend fun setAgentDelegationEnabled(enabled: Boolean) {
+        putNoContent("/mcp/agent-delegation", buildJsonObject { put("enabled", enabled) }.toString())
+    }
+
     override suspend fun saveControlSettings(settings: JsonObject) {
         putNoContent("/control/settings", settings.toString())
     }

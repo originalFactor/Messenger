@@ -173,6 +173,8 @@ interface CoreBridge {
     ) { error("Device control unavailable") }
     suspend fun controlCancel(requestId: String) { error("Device control unavailable") }
     suspend fun controlPermission(requestId: String, optionId: String) { error("Device control unavailable") }
+    suspend fun agentDelegationEnabled(): Boolean = false
+    suspend fun setAgentDelegationEnabled(enabled: Boolean) { error("Agent delegation unavailable") }
 
     suspend fun runTurn(
         config: TurnConfigBridge,

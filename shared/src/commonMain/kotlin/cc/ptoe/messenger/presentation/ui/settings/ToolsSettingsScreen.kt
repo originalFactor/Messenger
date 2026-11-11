@@ -104,6 +104,8 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_type
 import cc.ptoe.messenger.generated.resources.tools_mcp_url
 import cc.ptoe.messenger.generated.resources.tools_mcp_url_hint
 import cc.ptoe.messenger.generated.resources.tools_settings_title
+import cc.ptoe.messenger.generated.resources.tools_agent_delegation
+import cc.ptoe.messenger.generated.resources.tools_agent_delegation_desc
 import kotlinx.coroutines.CancellationException
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -129,6 +131,7 @@ fun ToolsSettingsScreen(
     }
     val mcpServers by mcpManager.servers.collectAsState()
     val mcpConfigurationError by mcpManager.configurationError.collectAsState()
+    val agentDelegationEnabled by mcpManager.agentDelegationEnabled.collectAsState()
 
     var fabExpanded by remember { mutableStateOf(false) }
     var showStore by remember { mutableStateOf(false) }
@@ -174,6 +177,20 @@ fun ToolsSettingsScreen(
                     .fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)
             ) {
+                item {
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                        onClick = { changeServer { mcpManager.setAgentDelegationEnabled(!agentDelegationEnabled) } },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(Res.string.tools_agent_delegation), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(Res.string.tools_agent_delegation_desc), style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = agentDelegationEnabled, onCheckedChange = { enabled ->
+                            changeServer { mcpManager.setAgentDelegationEnabled(enabled) }
+                        })
+                    }
+                }
                 if (mcpConfigurationError) {
                     item {
                         Text(
