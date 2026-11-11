@@ -56,7 +56,9 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 fun ConversationsDualPaneScreen(
     initialConversationId: String?,
-    onOpenConversationSettings: (String) -> Unit,
+    onPickProvider: (String?) -> Unit = {},
+    pickedModelId: String? = null,
+    onPickedModelConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedConversationId by rememberSaveable { mutableStateOf(initialConversationId) }
@@ -107,7 +109,10 @@ fun ConversationsDualPaneScreen(
                     ChatScreen(
                         conversationId = conversationId,
                         onBackClick = { selectedConversationId = null },
-                        onSettingsClick = { onOpenConversationSettings(conversationId) },
+                        settingsInPane = true,
+                        onPickProvider = onPickProvider,
+                        pickedModelId = pickedModelId,
+                        onPickedModelConsumed = onPickedModelConsumed,
                         showBackButton = false,
                         modifier = Modifier.fillMaxSize()
                     )

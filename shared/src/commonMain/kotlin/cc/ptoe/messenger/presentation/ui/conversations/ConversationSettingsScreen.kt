@@ -130,6 +130,7 @@ fun ConversationSettingsScreen(
     pickedModelId: String? = null,
     onPickedModelConsumed: () -> Unit = {},
     viewModel: ConversationSettingsViewModel = viewModel(
+        key = "conversation-settings:$conversationId",
         factory = ConversationSettingsViewModel.provideFactory(
             conversationRepository = AppContainerHolder.instance.conversationRepository,
             agentRepository = AppContainerHolder.instance.agentRepository,
@@ -151,6 +152,7 @@ fun ConversationSettingsScreen(
 
     LaunchedEffect(uiState.isSaved) {
         if (uiState.isSaved) {
+            viewModel.onSavedHandled()
             onSaved()
         }
     }

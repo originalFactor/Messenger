@@ -58,7 +58,6 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 fun AgentsDualPaneScreen(
-    onOpenConversationSettings: (String) -> Unit,
     onMarketClick: () -> Unit,
     onPickProvider: (String?) -> Unit = {},
     pickedModelId: String? = null,
@@ -144,7 +143,10 @@ fun AgentsDualPaneScreen(
                                 ChatScreen(
                                     conversationId = conversationId,
                                     onBackClick = { openConversationId = null },
-                                    onSettingsClick = { onOpenConversationSettings(conversationId) },
+                                    settingsInPane = true,
+                                    onPickProvider = onPickProvider,
+                                    pickedModelId = pickedModelId,
+                                    onPickedModelConsumed = onPickedModelConsumed,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }

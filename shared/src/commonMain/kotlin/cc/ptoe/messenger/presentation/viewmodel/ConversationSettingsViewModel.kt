@@ -245,6 +245,10 @@ class ConversationSettingsViewModel(
         _uiState.value = _uiState.value.copy(overrideToolsConfig = config)
     }
 
+    fun onSavedHandled() {
+        _uiState.value = _uiState.value.copy(isSaved = false)
+    }
+
     fun save() {
         viewModelScope.launch {
             val conv = conversationRepository.getById(conversationId).first() ?: return@launch

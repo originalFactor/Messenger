@@ -90,16 +90,22 @@ fun NavGraph(
         popEnterTransition = navPopEnterTransition(verticalTransitions),
         popExitTransition = navPopExitTransition(verticalTransitions)
     ) {
-        composable(Screen.Conversations.route) {
+        composable(Screen.Conversations.route) { backStackEntry ->
+            val savedStateHandle = backStackEntry.savedStateHandle
+            val pickedModelId by savedStateHandle
+                .getStateFlow<String?>(KEY_PICKED_MODEL_ID, null)
+                .collectAsStateWithLifecycle()
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
                     ConversationsDualPaneScreen(
                         initialConversationId = null,
-                        onOpenConversationSettings = { conversationId ->
-                            navController.navigate(Screen.ConversationSettings.createRoute(conversationId))
-                        }
+                        onPickProvider = { currentProviderId ->
+                            navController.navigate(Screen.ProviderPicker.createRoute(currentProviderId))
+                        },
+                        pickedModelId = pickedModelId,
+                        onPickedModelConsumed = { savedStateHandle[KEY_PICKED_MODEL_ID] = null }
                     )
                 } else {
                     // Phone: single-pane, push Chat route on tap.
@@ -143,9 +149,6 @@ fun NavGraph(
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
                     AgentsDualPaneScreen(
-                        onOpenConversationSettings = { conversationId ->
-                            navController.navigate(Screen.ConversationSettings.createRoute(conversationId))
-                        },
                         onMarketClick = {
                             navController.navigate(Screen.AgentMarket.route)
                         },

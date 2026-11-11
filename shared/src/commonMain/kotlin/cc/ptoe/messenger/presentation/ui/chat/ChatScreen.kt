@@ -110,6 +110,9 @@ import cc.ptoe.messenger.generated.resources.conversation_settings_title
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
+import androidx.compose.runtime.saveable.rememberSaveable
+import cc.ptoe.messenger.presentation.platform.BackHandler
+import cc.ptoe.messenger.presentation.ui.conversations.ConversationSettingsScreen
 
 @Composable
 fun ChatScreen(
@@ -117,14 +120,42 @@ fun ChatScreen(
     onBackClick: () -> Unit,
     onSettingsClick: () -> Unit = {},
     showBackButton: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    settingsInPane: Boolean = false,
+    onPickProvider: (String?) -> Unit = {},
+    pickedModelId: String? = null,
+    onPickedModelConsumed: () -> Unit = {},
 ) {
+    var showSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
     if (conversationId.startsWith("acp:")) {
         androidx.compose.runtime.key(conversationId) {
             AcpConversationScreen(conversationId, onBackClick, showBackButton, modifier)
         }
     } else {
-        MessengerChatScreen(conversationId, onBackClick, onSettingsClick, showBackButton, modifier)
+        BackHandler(enabled = showSettings, onBack = { showSettings = false }) {
+            if (showSettings) {
+                Box(modifier = modifier) {
+                    ConversationSettingsScreen(
+                        conversationId = conversationId,
+                        onBackClick = { showSettings = false },
+                        onSaved = { showSettings = false },
+                        onPickProvider = onPickProvider,
+                        pickedModelId = pickedModelId,
+                        onPickedModelConsumed = onPickedModelConsumed,
+                    )
+                }
+            } else {
+                MessengerChatScreen(
+                    conversationId = conversationId,
+                    onBackClick = onBackClick,
+                    onSettingsClick = {
+                        if (settingsInPane) showSettings = true else onSettingsClick()
+                    },
+                    showBackButton = showBackButton,
+                    modifier = modifier,
+                )
+            }
+        }
     }
 }
 
