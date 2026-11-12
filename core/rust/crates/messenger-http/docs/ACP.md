@@ -105,6 +105,17 @@ All routes use the per-start local bearer.
   the first native MCP catalog ready. Device-owned Messenger turns additionally
   wait until `toolsReady` is true, after enabled servers finish their initial
   connection attempts; ACP setup does not wait for tool discovery.
+- `POST /api/v1/control/agent-relay` starts a loopback-only model relay and
+  returns its base URL and per-start secret; `GET` returns status without the
+  secret and `DELETE` stops it. The catalog exposes enabled models as
+  `messenger/<local-model-id>`, keeping identical upstream model names distinct.
+  The relay authenticates `Authorization: Bearer` or `x-api-key` with that
+  secret, and exposes `/v1/models`, `/v1/chat/completions`, `/v1/responses`,
+  `/v1/messages`, and `/v1/interactions`; streaming and upstream status/body
+  pass through. Stopping it cancels active relay streams.
+  The relay currently forwards only requests whose wire protocol matches the
+  configured provider, and returns `unsupported_format` for other combinations.
+  ACP agent configuration and cross-protocol conversion are not yet connected.
 - When Agent delegation is enabled in MCP settings, ACP workers that advertise
   MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
   `messenger_agents` tool lists or calls agents during an active turn. Enabling

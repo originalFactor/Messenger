@@ -20,6 +20,7 @@ messenger-mcp = { path = "../messenger-mcp" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 subtle = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "process", "io-util", "io-std"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -29,6 +30,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 http-body-util = "0.1"
 wiremock = "0.6"

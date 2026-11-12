@@ -132,6 +132,37 @@ paths:
                 enabled: { type: boolean }
       responses:
         "204": { description: Setting saved. }
+  /control/agent-relay:
+    get:
+      operationId: getAgentRelayStatus
+      responses:
+        "200":
+          description: Running state and loopback base URL; never includes the relay token.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [running]
+                properties:
+                  running: { type: boolean }
+                  baseUrl: { type: string }
+    post:
+      operationId: startAgentRelay
+      responses:
+        "200":
+          description: Running loopback base URL and secret relay token. Requires the local Core bearer token.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [baseUrl, token]
+                properties:
+                  baseUrl: { type: string }
+                  token: { type: string }
+    delete:
+      operationId: stopAgentRelay
+      responses:
+        "204": { description: Relay stopped. }
   /control/platform-tools:
     put:
       operationId: publishDeviceToolCatalog

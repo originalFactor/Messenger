@@ -66,6 +66,7 @@ mod acp_agent;
 mod android_acp;
 mod control;
 mod acp_mcp;
+mod agent_relay;
 mod delegation;
 mod external_acp;
 
@@ -83,6 +84,7 @@ pub struct ApiState {
     /// Cancelled once this process has an authoritative platform catalog.
     platform_catalog_ready: CancellationToken,
     platform_tools_ready: CancellationToken,
+    agent_relay: Arc<Mutex<Option<agent_relay::AgentRelay>>>,
     cloud_sync_gate: Arc<Mutex<()>>,
     external: Arc<external_acp::ExternalSessions>,
     #[cfg(target_os = "android")]
@@ -165,6 +167,7 @@ impl ApiState {
             platform_catalog: Default::default(),
             platform_catalog_ready,
             platform_tools_ready,
+            agent_relay: Default::default(),
             cloud_sync_gate: Default::default(),
             external: Default::default(),
             #[cfg(target_os = "android")]
@@ -371,6 +374,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/events", get(core_events))
         .route("/remote/status", get(remote_status))
         .route("/control/platform-tools", put(control::platform_tools))
+        .route("/control/agent-relay", get(agent_relay::status).post(agent_relay::start).delete(agent_relay::stop))
         .route("/mcp/agent-delegation", get(delegation::get_setting).put(delegation::set_setting))
         .route("/control/settings", get(control::get_settings).put(control::set_settings))
         .route("/control/commands/:id", post(control::commands).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
