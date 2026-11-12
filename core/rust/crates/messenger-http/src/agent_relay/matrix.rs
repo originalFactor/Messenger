@@ -1,5 +1,5 @@
-//! Stateless non-streaming protocol matrix. Stateful/streaming features must
-//! be rejected until their wire events can be preserved.
+//! Stateless request/response protocol matrix. Stream events are projected
+//! by the sibling stream module; stateful features remain unsupported.
 use serde_json::{json, Value};
 use messenger_llm::{formats::{self, ApiFormat}, request::*};
 
@@ -14,7 +14,8 @@ fn text(v: &Value) -> Result<String,String> {
     Ok(out)
 }
 pub fn request(source: &str, target: &str, body: &Value, model: &str) -> Result<Value,String> {
-    if body["stream"].as_bool()==Some(true) { return Err("This protocol combination does not yet support streaming".into()); }
+    if source=="responses" && body["tools"].as_array().is_some_and(|tools|tools.iter().any(|tool|tool["type"]=="custom")) {return Err("Custom tools are only supported for Responses-to-Chat conversion".into());}
+    let streaming=body["stream"].as_bool().unwrap_or(false);
     for key in ["previous_response_id","previous_interaction_id","conversation"] {
         if body.get(key).is_some_and(|v|!v.is_null()) { return Err(format!("Stateful field {key} cannot be converted")); }
     }
@@ -66,7 +67,7 @@ pub fn request(source: &str, target: &str, body: &Value, model: &str) -> Result<
         }
         _=>return Err("Unknown source format".into()),
     };
-    if target=="chat" { let mut chat=chat;chat["model"]=json!(model);return Ok(chat); }
+    if target=="chat" { let mut chat=chat;chat["stream"]=json!(streaming); if streaming {chat["stream_options"]=json!({"include_usage":true});} chat["model"]=json!(model);return Ok(chat); }
     for (key,value) in chat.as_object().ok_or("Expected chat object")? {
         if !value.is_null() && !["model","messages","temperature","top_p","max_tokens","reasoning_effort","tools","stream","stream_options"].contains(&key.as_str()) {return Err(format!("Cannot preserve request field {key} for this target"));}
     }
@@ -80,7 +81,7 @@ pub fn request(source: &str, target: &str, body: &Value, model: &str) -> Result<
     }
     let mut tools=Vec::new();
     if let Some(items)=chat.get("tools") {for tool in array(items)? {let f=&tool["function"];tools.push(ToolSpec{kind:"function".into(),function:ToolSpecFunction{name:f["name"].as_str().ok_or("Missing tool name")?.into(),description:f["description"].as_str().unwrap_or("").into(),parameters:f["parameters"].clone()}});}}
-    Ok(formats::encode_request(ApiFormat::from_store(Some(target)), &ChatCompletionRequest {model:model.into(),messages,temperature:chat["temperature"].as_f64(),top_p:chat["top_p"].as_f64(),max_tokens:chat["max_tokens"].as_i64(),reasoning_effort:chat["reasoning_effort"].as_str().map(str::to_owned),thinking:None,tools:if tools.is_empty(){None}else{Some(tools)},stream:false}))
+    Ok(formats::encode_request(ApiFormat::from_store(Some(target)), &ChatCompletionRequest {model:model.into(),messages,temperature:chat["temperature"].as_f64(),top_p:chat["top_p"].as_f64(),max_tokens:chat["max_tokens"].as_i64(),reasoning_effort:chat["reasoning_effort"].as_str().map(str::to_owned),thinking:None,tools:if tools.is_empty(){None}else{Some(tools)},stream:streaming}))
 }
 
 pub fn response(source: &str, target: &str, payload: &Value, model: &str) -> Result<Value,String> {

@@ -491,7 +491,7 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, op
     let models: Vec<_> = state.store.list_models().map_err(ApiError::store)?.into_iter()
         .filter(|model| model.is_enabled && providers.get(&model.provider_id).is_some_and(|provider| {
             let actual = if provider.api_format == "auto" { "chat" } else { &provider.api_format };
-            actual == format || (profile.id == "codex" && actual == "chat")
+            matches!(actual, "chat" | "responses" | "messages" | "interactions")
         })).collect();
     let preferred = state.store.get_default_agent().map_err(ApiError::store)?
         .and_then(|agent| agent.default_model_id);
@@ -499,8 +499,7 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, op
         .or_else(|| models.iter().find(|model| providers.get(&model.provider_id).is_some_and(|provider| provider.api_format == format)))
         .or_else(|| models.first()).ok_or_else(|| ApiError::Conflict {
             code: "takeover_no_compatible_model".into(),
-            message: if profile.id == "codex" { format!("Provider takeover for {} requires an enabled Responses or Chat model.", profile.name) }
-                else { format!("Provider takeover for {} requires an enabled {format} model.", profile.name) },
+            message: format!("Provider takeover for {} requires an enabled model in a supported API format.", profile.name),
         })?;
     let selected_id = format!("messenger/{}", selected.id);
     // Validate existing inline settings before allocating the relay listener.

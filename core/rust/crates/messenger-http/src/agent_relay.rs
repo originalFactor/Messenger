@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 mod convert;
 mod matrix;
+mod stream;
 
 const MODEL_PREFIX: &str = "messenger/";
 
@@ -154,7 +155,7 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
     let generic = format != requested_format && !(requested_format == "responses" && format == "chat");
     let converted = if generic {
         match matrix::request(requested_format, format, &body, &model.model_id) {
-            Ok(body) => Some(convert::Request {body, stream:false, custom_tools:Default::default()}),
+            Ok(body) => Some(convert::Request {stream:body["stream"].as_bool().unwrap_or(false),body, custom_tools:Default::default()}),
             Err(message) => return error(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_feature", &message),
         }
     } else if requested_format == "responses" && format == "chat" {
@@ -199,7 +200,7 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
                 let is_sse = response.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok())
                     .is_some_and(|v| v.starts_with("text/event-stream"));
                 if !is_sse { return error(StatusCode::BAD_GATEWAY, "invalid_upstream", "Expected an upstream event stream"); }
-                return convert_stream(response, state.shutdown, alias, converted.custom_tools);
+                return convert_stream(response, state.shutdown, alias, converted.custom_tools, format.to_owned(), requested_format.to_owned());
             }
             let mut stream = response.bytes_stream();
             let mut bytes = Vec::new();
@@ -236,7 +237,7 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
     result
 }
 
-fn convert_stream(response: reqwest::Response, shutdown: CancellationToken, model: String, custom_tools: std::collections::HashSet<String>) -> Response {
+fn convert_stream(response: reqwest::Response, shutdown: CancellationToken, model: String, custom_tools: std::collections::HashSet<String>, source:String, target:String) -> Response {
     use axum::body::Bytes;
     async fn send(sender: &mpsc::Sender<Result<Bytes, std::io::Error>>, shutdown: &CancellationToken, value: String) -> bool {
         tokio::select! {
@@ -246,7 +247,7 @@ fn convert_stream(response: reqwest::Response, shutdown: CancellationToken, mode
     }
     let (sender, receiver) = mpsc::channel::<Result<Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
-        let mut converter = convert::Response::new(model, custom_tools);
+        let mut converter = stream::Converter::new(source, target, model, custom_tools);
         if !send(&sender, &shutdown, converter.start()).await { return; }
         let mut upstream = response.bytes_stream();
         let mut buffer = Vec::new();
@@ -317,6 +318,26 @@ mod tests {
             "display_name":"Model", "is_enabled":enabled, "created_at":1,
         })).unwrap();
         store.upsert_model(&model).unwrap();
+    }
+
+    #[tokio::test]
+    async fn chat_stream_uses_messages_provider_endpoint() {
+        let upstream = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/v1/messages"))
+            .and(wiremock::matchers::body_partial_json(json!({"stream":true})))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+                format!("data: {}\n\ndata: {}\n\n",json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"converted"}}),json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}})), "text/event-stream"))
+            .expect(1).mount(&upstream).await;
+        let store = Arc::new(Store::open_memory().unwrap());
+        add_model(&store,"p",&format!("{}/v1",upstream.uri()),"m",true);
+        let mut provider=store.get_provider("p").unwrap().unwrap();
+        provider.api_format="messages".into();store.upsert_provider(&provider).unwrap();
+        let relay=AgentRelay::start(store,&CancellationToken::new()).await.unwrap();
+        let response=reqwest::Client::new().post(format!("{}/chat/completions",relay.base_url)).bearer_auth(&relay.token)
+            .json(&json!({"model":"messenger/m","stream":true,"messages":[{"role":"user","content":"hello"}]})).send().await.unwrap();
+        assert_eq!(response.status(),StatusCode::OK);
+        let output=response.text().await.unwrap();
+        assert!(output.contains("converted") && output.contains("[DONE]"),"{output}");
     }
 
     #[tokio::test]

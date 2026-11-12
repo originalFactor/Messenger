@@ -934,11 +934,11 @@ impl FormatStreamDecoder {
                         .or_else(|| item.get("id").and_then(Value::as_str))
                         .unwrap_or(name)
                         .to_string();
-                    // Prefer the streamed accumulation; fall back to the final item.
-                    let index = record
-                        .get("output_index")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0);
+                    // Match by call ID: final snapshots repeat streamed calls
+                    // and can contain multiple parallel calls.
+                    let index = self.partial.iter().find(|(_, entry)| entry.0 == call_id)
+                        .map(|(index, _)| *index)
+                        .unwrap_or_else(|| self.partial.keys().next_back().map(|index| index + 1).unwrap_or(0));
                     let entry = self.partial.entry(index).or_default();
                     if entry.1.is_empty() {
                         entry.1 = name.to_string();

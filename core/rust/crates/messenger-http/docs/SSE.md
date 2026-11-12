@@ -96,3 +96,12 @@ Native history pages contain complete local rows; Cloud control pages remain
 bounded previews, with `eventsTruncated:true` if an oversized tool trace is omitted.
 
 ACP `SessionSettings` snapshots also include Agent `availableCommands`, `usage` (`used`/`size`) and advertised `steering` metadata. Local control `prompt` accepts ACP content blocks; `steer` forwards `_session/steering` with host-owned `promptRequired` idle fallback and returns `Steering.result.outcome`. Injected inputs persist with the owning transcript. Control request bodies are bounded at 24 MiB.
+
+## Agent model relay streams
+
+The separate authenticated loopback model relay projects Chat, Responses,
+Messages and Interactions SSE into the caller protocol according to the selected
+Provider. Converted streams preserve text increments, reasoning summaries,
+function calls, usage and terminal events. A truncated upstream stream emits
+`response.failed` for Responses clients or `error` for the other protocols.
+Client disconnect and relay shutdown cancel upstream reads and blocked writes.
