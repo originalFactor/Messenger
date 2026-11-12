@@ -15,6 +15,7 @@ data class AcpProfile(
     val env: Map<String, String> = emptyMap(),
     val cwd: String? = null,
     val enabled: Boolean = true,
+    val providerTakeover: Boolean = false,
 )
 
 internal class AcpCommandException(val code: String, message: String) : IllegalStateException(message)

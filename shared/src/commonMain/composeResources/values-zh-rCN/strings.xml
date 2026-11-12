@@ -508,6 +508,8 @@
     <string name="acp_add">添加 ACP Agent</string>
     <string name="acp_edit">编辑 ACP Agent</string>
     <string name="acp_config_note">Agent 在所选项目工作区运行。开始对话前，请先完成对应编程 Agent 的登录。</string>
+    <string name="acp_provider_takeover">使用 Messenger 供应商</string>
+    <string name="acp_provider_takeover_desc">通过本地中转使用 API 格式匹配的已启用模型。新建会话或重启应用后生效。</string>
     <string name="acp_working_directory">工作目录（可选）</string>
     <string name="acp_args_json">参数（JSON 数组）</string>
     <string name="acp_env_json">环境变量（JSON 对象）</string>

@@ -1,5 +1,6 @@
 """Small ACP v1 peer that exercises stdio, replay and permission callbacks."""
 import json
+import os
 import sys
 import urllib.request
 import urllib.parse
@@ -54,6 +55,13 @@ for line in sys.stdin:
             capabilities["sessionCapabilities"] = {"resume": {}}
         send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities, "_meta":{"steering":{"supported":True}}})
     elif method == "session/new":
+        if mode == "provider-env":
+            assert os.environ["ANTHROPIC_MODEL"] == "messenger/message-model"
+            req = urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/v1/models", headers={
+                "x-api-key": os.environ["ANTHROPIC_AUTH_TOKEN"]
+            })
+            catalog = json.load(urllib.request.urlopen(req, timeout=5))
+            assert catalog["data"][0]["id"] == "messenger/message-model"
         if mode.startswith("mcp-"):
             assert packet["params"]["mcpServers"][0]["name"] == "test-mcp"
             assert packet["params"]["mcpServers"][0]["env"][0]["value"] == "secret"

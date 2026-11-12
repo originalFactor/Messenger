@@ -115,7 +115,17 @@ All routes use the per-start local bearer.
   pass through. Stopping it cancels active relay streams.
   The relay currently forwards only requests whose wire protocol matches the
   configured provider, and returns `unsupported_format` for other combinations.
-  ACP agent configuration and cross-protocol conversion are not yet connected.
+  Cross-protocol conversion is not yet implemented.
+- The built-in Codex, Claude Code and OpenCode profiles have an opt-in
+  `providerTakeover` setting (default `false`). For new or restored workers,
+  Core starts the relay and injects per-process configuration without writing
+  the user's Agent configuration files. Until conversion is implemented,
+  Codex requires an enabled Responses model, Claude Code a Messages model,
+  and OpenCode a Chat model; otherwise setup returns
+  `takeover_no_compatible_model`. The default Agent's model is preferred
+  when compatible, otherwise the first enabled compatible model is used.
+  OpenCode's injected configuration uses its V1 provider schema; V2 has not
+  been verified. Existing workers keep their startup configuration.
 - When Agent delegation is enabled in MCP settings, ACP workers that advertise
   MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
   `messenger_agents` tool lists or calls agents during an active turn. Enabling

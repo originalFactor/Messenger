@@ -121,6 +121,7 @@ internal fun AcpProfileDialog(profile: AcpProfile?, busy: Boolean, onDismiss: ()
     var args by remember { mutableStateOf(Json.encodeToString(profile?.args ?: emptyList<String>())) }
     var env by remember { mutableStateOf(Json.encodeToString(profile?.env ?: emptyMap<String, String>())) }
     var cwd by remember { mutableStateOf(profile?.cwd.orEmpty()) }
+    var providerTakeover by remember { mutableStateOf(profile?.providerTakeover ?: false) }
     var error by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(stringResource(if (isNew) Res.string.acp_add else Res.string.acp_edit)) },
         text = { Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -130,11 +131,21 @@ internal fun AcpProfileDialog(profile: AcpProfile?, busy: Boolean, onDismiss: ()
             OutlinedTextField(args, { args = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_args_json)) })
             OutlinedTextField(env, { env = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_env_json)) })
             OutlinedTextField(cwd, { cwd = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_working_directory)) }, singleLine = true)
+            if (!isNew && profile?.id in listOf("codex", "claude-code", "opencode")) {
+                cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow(
+                    title = stringResource(Res.string.acp_provider_takeover),
+                    subtitle = stringResource(Res.string.acp_provider_takeover_desc),
+                    checked = providerTakeover,
+                    onCheckedChange = { providerTakeover = it },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
         } }, confirmButton = { TextButton(enabled = !busy && name.isNotBlank() && command.isNotBlank(), onClick = {
             try {
                 onSave(AcpProfile(profile?.id ?: randomUuid(), name.trim(), description.trim(), command.trim(),
-                    Json.decodeFromString(args), Json.decodeFromString(env), cwd.trim().ifBlank { null }, profile?.enabled ?: true))
+                    Json.decodeFromString(args), Json.decodeFromString(env), cwd.trim().ifBlank { null }, profile?.enabled ?: true, providerTakeover))
             } catch (failure: Exception) { error = failure.message.orEmpty() }
         }) { Text(stringResource(Res.string.action_save)) } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) } })
 }

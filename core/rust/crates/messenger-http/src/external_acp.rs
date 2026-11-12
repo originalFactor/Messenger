@@ -74,6 +74,8 @@ pub(crate) struct Profile {
     pub description: String,
     #[serde(default = "profile_enabled")]
     pub enabled: bool,
+    #[serde(default, rename = "providerTakeover")]
+    pub provider_takeover: bool,
     command: String,
     #[serde(default)]
     args: Vec<String>,
@@ -90,7 +92,7 @@ pub(crate) fn default_profiles() -> Vec<Profile> {
         ("claude-code", "Claude Code", "Claude coding agent via ACP", "pnpm", vec!["dlx", "@agentclientprotocol/claude-agent-acp"]),
         ("opencode", "OpenCode", "OpenCode coding agent via ACP", "opencode", vec!["acp"]),
     ].into_iter().map(|(id, name, description, command, args)| Profile {
-        id: id.into(), name: name.into(), description: description.into(), enabled: false,
+        id: id.into(), name: name.into(), description: description.into(), enabled: false, provider_takeover: false,
         command: command.into(), args: args.into_iter().map(str::to_string).collect(),
         env: HashMap::new(), cwd: None,
     }).collect()
@@ -103,6 +105,7 @@ pub(crate) fn validate_profiles(profiles: &[Profile]) -> Result<(), ApiError> {
             profile.id.is_empty()
                 || profile.id.len() > 80
                 || !ids.insert(&profile.id)
+                || (profile.provider_takeover && !matches!(profile.id.as_str(), "codex" | "claude-code" | "opencode"))
                 || profile.name.trim().is_empty()
                 || profile.name.len() > 120
                 || profile.description.len() > 4000
@@ -473,6 +476,88 @@ fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
         .ok_or_else(|| ApiError::not_found("ACP agent profile"))
 }
 
+/// Configure only the spawned process. Existing user configuration files are
+/// never rewritten, and upstream credentials remain inside the relay.
+async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile) -> Result<(), ApiError> {
+    if !profile.provider_takeover { return Ok(()); }
+    let format = match profile.id.as_str() {
+        "codex" => "responses",
+        "claude-code" => "messages",
+        "opencode" => "chat",
+        _ => return Err(ApiError::BadRequest("Provider takeover is only available for built-in ACP agents".into())),
+    };
+    let providers: HashMap<_, _> = state.store.list_providers().map_err(ApiError::store)?
+        .into_iter().map(|provider| (provider.id.clone(), provider)).collect();
+    let models: Vec<_> = state.store.list_models().map_err(ApiError::store)?.into_iter()
+        .filter(|model| model.is_enabled && providers.get(&model.provider_id).is_some_and(|provider| {
+            let actual = if provider.api_format == "auto" { "chat" } else { &provider.api_format };
+            actual == format
+        })).collect();
+    let preferred = state.store.get_default_agent().map_err(ApiError::store)?
+        .and_then(|agent| agent.default_model_id);
+    let selected = preferred.as_deref().and_then(|id| models.iter().find(|model| model.id == id))
+        .or_else(|| models.first()).ok_or_else(|| ApiError::Conflict {
+            code: "takeover_no_compatible_model".into(),
+            message: format!("Provider takeover for {} requires an enabled {format} model.", profile.name),
+        })?;
+    let selected_id = format!("messenger/{}", selected.id);
+    // Validate existing inline settings before allocating the relay listener.
+    let mut inline = match profile.id.as_str() {
+        "codex" => Some(inline_config(&profile.env, "CODEX_CONFIG")?),
+        "opencode" => Some(inline_config(&profile.env, "OPENCODE_CONFIG_CONTENT")?),
+        _ => None,
+    };
+    if let Some(config) = &inline {
+        let key = if profile.id == "codex" { "model_providers" } else { "provider" };
+        if config.get(key).is_some_and(|value| !value.is_object()) {
+            return Err(ApiError::BadRequest(format!("{key} must be a JSON object")));
+        }
+    }
+    let (base_url, token) = crate::agent_relay::ensure(state).await?;
+    match profile.id.as_str() {
+        "claude-code" => {
+            profile.env.insert("ANTHROPIC_BASE_URL".into(), base_url.trim_end_matches("/v1").into());
+            profile.env.insert("ANTHROPIC_AUTH_TOKEN".into(), token);
+            profile.env.insert("ANTHROPIC_API_KEY".into(), String::new());
+            for key in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"] {
+                profile.env.insert(key.into(), selected_id.clone());
+            }
+        }
+        "codex" => {
+            let mut config = inline.take().expect("Codex inline configuration was checked");
+            config["model_provider"] = json!("messenger");
+            config["model"] = json!(selected_id);
+            if config.get("model_providers").is_none() { config["model_providers"] = json!({}); }
+            let providers = config["model_providers"].as_object_mut().ok_or_else(|| ApiError::BadRequest("CODEX_CONFIG model_providers must be an object".into()))?;
+            providers.insert("messenger".into(), json!({"name":"Messenger","base_url":base_url,"wire_api":"responses","env_key":"MESSENGER_RELAY_TOKEN"}));
+            profile.env.insert("CODEX_CONFIG".into(), config.to_string());
+            profile.env.insert("MODEL_PROVIDER".into(), "messenger".into());
+            profile.env.insert("MESSENGER_RELAY_TOKEN".into(), token);
+        }
+        "opencode" => {
+            let mut config = inline.take().expect("OpenCode inline configuration was checked");
+            if config.get("provider").is_none() { config["provider"] = json!({}); }
+            let providers = config["provider"].as_object_mut().ok_or_else(|| ApiError::BadRequest("OPENCODE_CONFIG_CONTENT provider must be an object".into()))?;
+            let catalog: serde_json::Map<String, Value> = models.iter().map(|model| (
+                format!("messenger/{}", model.id), json!({"name":model.display_name})
+            )).collect();
+            providers.insert("messenger".into(), json!({"name":"Messenger","npm":"@ai-sdk/openai-compatible", "options":{"baseURL":base_url,"apiKey":token},"models":catalog}));
+            config["model"] = json!(format!("messenger/{selected_id}"));
+            profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn inline_config(env: &HashMap<String, String>, key: &str) -> Result<Value, ApiError> {
+    let raw = env.get(key).cloned().or_else(|| std::env::var(key).ok());
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else { return Ok(json!({})); };
+    let config: Value = serde_json::from_str(&raw).map_err(|error| ApiError::BadRequest(format!("Invalid {key}: {error}")))?;
+    if !config.is_object() { return Err(ApiError::BadRequest(format!("{key} must be a JSON object"))); }
+    Ok(config)
+}
+
 fn start_worker<'a>(
     state: &'a ApiState,
     profile: Profile,
@@ -489,7 +574,7 @@ fn start_worker<'a>(
 
 async fn start_worker_impl(
     state: &ApiState,
-    profile: Profile,
+    mut profile: Profile,
     cwd: PathBuf,
     existing: Option<SessionId>,
     cancel: &CancellationToken,
@@ -499,6 +584,7 @@ async fn start_worker_impl(
     // Native clients load MCP settings asynchronously after the loopback server
     // starts. Never mistake their not-yet-published catalog for an empty one.
     wait_for_platform_catalog(state, cancel, false).await?;
+    configure_provider_takeover(state, &mut profile).await?;
     let mcp_servers = state.platform_catalog.lock().await.mcp_servers.clone();
     let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
     let (ready, initialized) = oneshot::channel();
@@ -924,13 +1010,93 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
+    async fn builtin_takeover_uses_process_scoped_relay_configuration() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        for (id, format) in [("chat-model", "chat"), ("response-model", "responses"), ("message-model", "messages")] {
+            state.store.upsert_provider(&StoredProvider {
+                id: id.into(), name: id.into(), base_url: "https://example.invalid/v1".into(),
+                api_key: format!("upstream-secret-{id}"), api_format: format.into(), created_at: 1, updated_at: 1,
+            }).unwrap();
+            let model: StoredModel = serde_json::from_value(json!({
+                "id":id,"provider_id":id,"model_id":"upstream","display_name":id,"is_enabled":true,"created_at":1
+            })).unwrap();
+            state.store.upsert_model(&model).unwrap();
+        }
+        for mut profile in default_profiles() {
+            assert!(!profile.provider_takeover, "takeover must be opt-in");
+            profile.provider_takeover = true;
+            match profile.id.as_str() {
+                "codex" => { profile.env.insert("CODEX_CONFIG".into(), r#"{"approval_policy":"never"}"#.into()); }
+                "opencode" => { profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), r#"{"theme":"test"}"#.into()); }
+                _ => {}
+            }
+            configure_provider_takeover(&state, &mut profile).await.unwrap();
+            let env = serde_json::to_string(&profile.env).unwrap();
+            assert!(!env.contains("upstream-secret-"));
+            match profile.id.as_str() {
+                "codex" => {
+                    let config: Value = serde_json::from_str(&profile.env["CODEX_CONFIG"]).unwrap();
+                    assert_eq!(config["approval_policy"], "never");
+                    assert_eq!(config["model"], "messenger/response-model");
+                    assert_eq!(config["model_providers"]["messenger"]["env_key"], "MESSENGER_RELAY_TOKEN");
+                    assert!(profile.env["MESSENGER_RELAY_TOKEN"].starts_with("messenger-relay-"));
+                }
+                "claude-code" => {
+                    assert_eq!(profile.env["ANTHROPIC_MODEL"], "messenger/message-model");
+                    assert!(profile.env["ANTHROPIC_AUTH_TOKEN"].starts_with("messenger-relay-"));
+                }
+                "opencode" => {
+                    let config: Value = serde_json::from_str(&profile.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+                    assert_eq!(config["theme"], "test");
+                    assert_eq!(config["model"], "messenger/messenger/chat-model");
+                    assert!(config["provider"]["messenger"]["models"]["messenger/chat-model"].is_object());
+                }
+                _ => unreachable!(),
+            }
+        }
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn takeover_rejects_missing_compatible_models_before_starting_relay() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        let mut profile = default_profiles().remove(0);
+        profile.provider_takeover = true;
+        let result = configure_provider_takeover(&state, &mut profile).await;
+        assert!(matches!(result, Err(ApiError::Conflict { code, .. }) if code == "takeover_no_compatible_model"));
+        assert!(state.agent_relay.lock().await.is_none());
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn takeover_starts_relay_before_launching_the_agent() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        state.store.upsert_provider(&StoredProvider {
+            id:"p".into(), name:"provider".into(), base_url:"https://example.invalid/v1".into(),
+            api_key:"upstream-secret".into(), api_format:"messages".into(), created_at:1, updated_at:1,
+        }).unwrap();
+        let model: StoredModel = serde_json::from_value(json!({"id":"message-model","provider_id":"p",
+            "model_id":"upstream","display_name":"Model","is_enabled":true,"created_at":1})).unwrap();
+        state.store.upsert_model(&model).unwrap();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
+        let mut profile = default_profiles().into_iter().find(|profile| profile.id == "claude-code").unwrap();
+        profile.command = "python3".into();
+        profile.args = vec![fixture.to_string_lossy().into_owned(), "provider-env".into()];
+        profile.provider_takeover = true;
+        let (worker, _, _) = start_worker(&state, profile, std::env::temp_dir(), None,
+            &CancellationToken::new(), None, true).await.unwrap();
+        worker.lifetime.cancel();
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
     async fn native_worker_waits_for_the_published_mcp_configuration() {
         let state = ApiState::with_platform_catalog(
             Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true,
         );
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
         let profile = Profile {
-            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true,
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true, provider_takeover: false,
             command: "python3".into(), args: vec![fixture.to_string_lossy().into_owned(), "mcp-load".into()],
             env: HashMap::new(), cwd: None,
         };
@@ -992,7 +1158,7 @@ mod tests {
             ..Default::default()
         }];
         let profile = Profile {
-            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true,
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true, provider_takeover: false,
             command: "python3".into(),
             args: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py").to_string_lossy().into_owned(), "mcp-load".into()],
             env: HashMap::new(), cwd: None,

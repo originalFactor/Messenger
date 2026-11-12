@@ -68,14 +68,19 @@ pub(crate) async fn status(State(state): State<ApiState>) -> Json<Value> {
 }
 
 pub(crate) async fn start(State(state): State<ApiState>) -> Result<impl IntoResponse, ApiError> {
+    let (base_url, token) = ensure(&state).await?;
+    // The control API is bearer protected; the relay token is returned only
+    // here so an authorized client can configure an agent to use the relay.
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(json!({"baseUrl":base_url,"token":token}))))
+}
+
+pub(crate) async fn ensure(state: &ApiState) -> Result<(String, String), ApiError> {
     let mut relay = state.agent_relay.lock().await;
     if relay.is_none() {
         *relay = Some(AgentRelay::start(state.store.clone(), &state.shutdown).await.map_err(ApiError::internal)?);
     }
     let relay = relay.as_ref().expect("relay started");
-    // The control API is bearer protected; the relay token is returned only
-    // here so an authorized client can configure an agent to use the relay.
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(json!({"baseUrl":relay.base_url,"token":relay.token}))))
+    Ok((relay.base_url.clone(), relay.token.clone()))
 }
 
 pub(crate) async fn stop(State(state): State<ApiState>) -> StatusCode {
