@@ -478,7 +478,7 @@ fn profile_for(state: &ApiState, id: &str) -> Result<Profile, ApiError> {
 
 /// Configure only the spawned process. Existing user configuration files are
 /// never rewritten, and upstream credentials remain inside the relay.
-async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile) -> Result<(), ApiError> {
+async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, opencode_major: Option<u64>) -> Result<(), ApiError> {
     if !profile.provider_takeover { return Ok(()); }
     let format = match profile.id.as_str() {
         "codex" => "responses",
@@ -508,7 +508,7 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile) ->
         _ => None,
     };
     if let Some(config) = &inline {
-        let key = if profile.id == "codex" { "model_providers" } else { "provider" };
+        let key = if profile.id == "codex" { "model_providers" } else if opencode_major.unwrap_or(1) >= 2 { "providers" } else { "provider" };
         if config.get(key).is_some_and(|value| !value.is_object()) {
             return Err(ApiError::BadRequest(format!("{key} must be a JSON object")));
         }
@@ -536,18 +536,57 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile) ->
         }
         "opencode" => {
             let mut config = inline.take().expect("OpenCode inline configuration was checked");
-            if config.get("provider").is_none() { config["provider"] = json!({}); }
-            let providers = config["provider"].as_object_mut().ok_or_else(|| ApiError::BadRequest("OPENCODE_CONFIG_CONTENT provider must be an object".into()))?;
+            let v2 = opencode_major.ok_or_else(|| ApiError::BadRequest("OpenCode version was not detected".into()))? >= 2;
+            let key = if v2 { "providers" } else { "provider" };
+            if config.get(key).is_none() { config[key] = json!({}); }
+            let providers = config[key].as_object_mut().expect("provider configuration was checked");
             let catalog: serde_json::Map<String, Value> = models.iter().map(|model| (
-                format!("messenger/{}", model.id), json!({"name":model.display_name})
+                model.id.clone(), if v2 {
+                    json!({"name":model.display_name, "modelID":format!("messenger/{}", model.id)})
+                } else {
+                    json!({"name":model.display_name, "id":format!("messenger/{}", model.id)})
+                }
             )).collect();
-            providers.insert("messenger".into(), json!({"name":"Messenger","npm":"@ai-sdk/openai-compatible", "options":{"baseURL":base_url,"apiKey":token},"models":catalog}));
-            config["model"] = json!(format!("messenger/{selected_id}"));
+            let provider = if v2 {
+                json!({"name":"Messenger","package":"@opencode/ai/providers/openai-compatible", "settings":{"baseURL":base_url,"apiKey":token},"models":catalog})
+            } else {
+                json!({"name":"Messenger","npm":"@ai-sdk/openai-compatible", "options":{"baseURL":base_url,"apiKey":token},"models":catalog})
+            };
+            providers.insert("messenger".into(), provider);
+            config["model"] = json!(selected_id);
             profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
         }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+fn parse_opencode_major(output: &str) -> Result<u64, ApiError> {
+    let version = output.split_whitespace().find(|word| {
+        let mut parts = word.trim_start_matches('v').split('.');
+        parts.next().and_then(|part| part.parse::<u64>().ok()).is_some()
+            && parts.next().and_then(|part| part.parse::<u64>().ok()).is_some()
+            && parts.next().is_some_and(|part| part.split(['-', '+']).next().and_then(|number| number.parse::<u64>().ok()).is_some())
+    }).ok_or_else(|| ApiError::BadRequest("Could not determine OpenCode version from --version".into()))?;
+    let major = version.trim_start_matches('v').split('.').next().and_then(|part| part.parse::<u64>().ok())
+        .filter(|major| matches!(major, 1 | 2)).ok_or_else(|| ApiError::BadRequest("Only OpenCode versions 1 and 2 are supported".into()))?;
+    Ok(major)
+}
+
+async fn detect_opencode_major(state: &ApiState, profile: &Profile, cwd: &std::path::Path, cancel: &CancellationToken) -> Result<u64, ApiError> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    let mut probe = profile.clone();
+    probe.args = vec!["--version".into()];
+    let process = spawn_process(state, &probe, cwd).await?;
+    let mut stdout = BufReader::new(process.stdout.take(4096));
+    let mut output = String::new();
+    tokio::select! {
+        result = stdout.read_line(&mut output) => { result.map_err(ApiError::internal)?; },
+        _ = cancel.cancelled() => return Err(ApiError::BadRequest("OpenCode version detection cancelled".into())),
+        _ = state.shutdown.cancelled() => return Err(ApiError::BadRequest("Core stopped during OpenCode version detection".into())),
+        _ = tokio::time::sleep(Duration::from_secs(10)) => return Err(ApiError::BadRequest("OpenCode --version timed out".into())),
+    }
+    parse_opencode_major(&output)
 }
 
 fn inline_config(env: &HashMap<String, String>, key: &str) -> Result<Value, ApiError> {
@@ -584,7 +623,10 @@ async fn start_worker_impl(
     // Native clients load MCP settings asynchronously after the loopback server
     // starts. Never mistake their not-yet-published catalog for an empty one.
     wait_for_platform_catalog(state, cancel, false).await?;
-    configure_provider_takeover(state, &mut profile).await?;
+    let opencode_major = if profile.provider_takeover && profile.id == "opencode" {
+        Some(detect_opencode_major(state, &profile, &cwd, cancel).await?)
+    } else { None };
+    configure_provider_takeover(state, &mut profile, opencode_major).await?;
     let mcp_servers = state.platform_catalog.lock().await.mcp_servers.clone();
     let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
     let (ready, initialized) = oneshot::channel();
@@ -1030,7 +1072,7 @@ mod tests {
                 "opencode" => { profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), r#"{"theme":"test"}"#.into()); }
                 _ => {}
             }
-            configure_provider_takeover(&state, &mut profile).await.unwrap();
+            configure_provider_takeover(&state, &mut profile, Some(1)).await.unwrap();
             let env = serde_json::to_string(&profile.env).unwrap();
             assert!(!env.contains("upstream-secret-"));
             match profile.id.as_str() {
@@ -1048,8 +1090,8 @@ mod tests {
                 "opencode" => {
                     let config: Value = serde_json::from_str(&profile.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
                     assert_eq!(config["theme"], "test");
-                    assert_eq!(config["model"], "messenger/messenger/chat-model");
-                    assert!(config["provider"]["messenger"]["models"]["messenger/chat-model"].is_object());
+                    assert_eq!(config["model"], "messenger/chat-model");
+                    assert_eq!(config["provider"]["messenger"]["models"]["chat-model"]["id"], "messenger/chat-model");
                 }
                 _ => unreachable!(),
             }
@@ -1062,10 +1104,52 @@ mod tests {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
         let mut profile = default_profiles().remove(0);
         profile.provider_takeover = true;
-        let result = configure_provider_takeover(&state, &mut profile).await;
+        let result = configure_provider_takeover(&state, &mut profile, None).await;
         assert!(matches!(result, Err(ApiError::Conflict { code, .. }) if code == "takeover_no_compatible_model"));
         assert!(state.agent_relay.lock().await.is_none());
         state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn opencode_detects_version_and_injects_v2_provider_configuration() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!("messenger-opencode-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let command = directory.join("opencode");
+        std::fs::write(&command, "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf 'opencode 2.4.1\\n'\n").unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        state.store.upsert_provider(&StoredProvider {
+            id: "p".into(), name: "Provider".into(), base_url: "https://example.invalid/v1".into(),
+            api_key: "upstream-secret".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
+        }).unwrap();
+        let model: StoredModel = serde_json::from_value(json!({"id":"m", "provider_id":"p", "model_id":"upstream",
+            "display_name":"Model", "is_enabled":true, "created_at":1})).unwrap();
+        state.store.upsert_model(&model).unwrap();
+        let mut profile = default_profiles().into_iter().find(|profile| profile.id == "opencode").unwrap();
+        profile.command = command.to_string_lossy().into_owned();
+        profile.provider_takeover = true;
+        profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), r#"{"providers":{"existing":{}}}"#.into());
+        let major = detect_opencode_major(&state, &profile, &directory, &CancellationToken::new()).await.unwrap();
+        assert_eq!(major, 2);
+        configure_provider_takeover(&state, &mut profile, Some(major)).await.unwrap();
+        let config: Value = serde_json::from_str(&profile.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+        assert!(config["providers"]["existing"].is_object());
+        assert_eq!(config["providers"]["messenger"]["package"], "@opencode/ai/providers/openai-compatible");
+        assert!(config["providers"]["messenger"]["settings"]["apiKey"].as_str().unwrap().starts_with("messenger-relay-"));
+        assert_eq!(config["model"], "messenger/m");
+        assert_eq!(config["providers"]["messenger"]["models"]["m"]["modelID"], "messenger/m");
+        assert!(!config.to_string().contains("upstream-secret"));
+        state.shutdown.cancel();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn opencode_versions_are_checked_explicitly() {
+        assert_eq!(parse_opencode_major("1.2.3\n").unwrap(), 1);
+        assert_eq!(parse_opencode_major("opencode v2.3.4-beta+1\n").unwrap(), 2);
+        assert!(parse_opencode_major("not a version").is_err());
+        assert!(parse_opencode_major("3.0.0").is_err());
     }
 
     #[tokio::test]

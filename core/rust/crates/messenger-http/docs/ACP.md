@@ -124,8 +124,11 @@ All routes use the per-start local bearer.
   and OpenCode a Chat model; otherwise setup returns
   `takeover_no_compatible_model`. The default Agent's model is preferred
   when compatible, otherwise the first enabled compatible model is used.
-  OpenCode's injected configuration uses its V1 provider schema; V2 has not
-  been verified. Existing workers keep their startup configuration.
+  OpenCode takeover runs the configured executable with `--version` in the
+  same process host and working directory before startup; versions 1 and 2
+  receive their respective provider configuration schemas. A failed, timed
+  out, or unsupported version check prevents startup. Existing workers keep
+  their startup configuration.
 - When Agent delegation is enabled in MCP settings, ACP workers that advertise
   MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
   `messenger_agents` tool lists or calls agents during an active turn. Enabling
