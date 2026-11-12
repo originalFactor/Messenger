@@ -524,4 +524,12 @@
     <string name="acp_steer">转为引导</string>
     <string name="acp_context_unavailable">上下文用量暂不可用</string>
     <string name="settings_animated_shape_license">圆角动画：Copyright 2024 The Android Open Source Project。采用 Apache License 2.0，移植自 BakaSU manager 中保留 Apache 许可声明的 AnimatedShape.kt（548d1dda）。</string>
+    <string name="settings_github">GitHub</string>
+    <string name="settings_github_desc">查看源码、反馈问题与参与贡献</string>
+    <string name="settings_license_intro">Messenger 以 Apache License 2.0 开源。以下列出 Android 和 Desktop 应用使用的主要开源组件，点击组件可查看其项目与许可证。</string>
+    <string name="settings_license_app">应用与界面</string>
+    <string name="settings_license_rendering">渲染与字体</string>
+    <string name="settings_license_core">Rust Core</string>
+    <string name="settings_license_notices">源码声明</string>
+    <string name="settings_license_link_error">无法打开链接，请检查是否有可用的浏览器。</string>
 </resources>

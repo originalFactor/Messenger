@@ -94,6 +94,7 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 - M3 Expressive (reference: InstallerX-Revived). Theming in `presentation/theme/Theme.kt`: static light/dark + Material You dynamic color, `ExpressiveShapes` (4–32 dp), `ExpressiveTypography`, `MaterialExpressiveTheme` + `MotionScheme.expressive()` (`@OptIn(ExperimentalMaterial3ExpressiveApi::class)` — NOT `ExperimentalMaterial3Api`).
 - UI rules: consume theme tokens (`shapes`/`colorScheme`/`typography`) — no ad-hoc `RoundedCornerShape` for shapes a token covers (one-offs like chat bubble tails excepted); prefer spring motion over linear tweens for spatial transitions; prefer expressive component variants (contained loading indicator, `MaterialShapes`).
 - **Settings entries**: every `ListItem` carries a `title` (feature name only) and a `subtitle` (purpose-only description — no implementation/style detail).
+- **About / open-source attribution**: Settings opens the canonical Messenger GitHub repository in the platform browser. `LicensesScreen` maintains a grouped list of principal Android/Desktop, renderer/font and Rust Core components, with license labels and upstream links; update it when those dependencies change. Preserve the embedded renderer and animated-shape source notices. All explanatory text uses English/Chinese Compose resources; browser failures remain visible.
 
 ## Editing guides
 

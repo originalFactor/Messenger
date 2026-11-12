@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Cloud
@@ -83,6 +84,8 @@ import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.cloud_settings_session_expired
 import cc.ptoe.messenger.generated.resources.action_change_avatar
 import cc.ptoe.messenger.generated.resources.agent_edit_remove_avatar
+import cc.ptoe.messenger.generated.resources.settings_github
+import cc.ptoe.messenger.generated.resources.settings_github_desc
 import cc.ptoe.messenger.generated.resources.settings_about
 import cc.ptoe.messenger.generated.resources.settings_advanced
 import cc.ptoe.messenger.generated.resources.settings_appearance
@@ -140,6 +143,7 @@ fun SettingsScreen(
     val cloudSyncError by viewModel.cloudSyncError.collectAsStateWithLifecycle()
     val cloudSessionExpired by viewModel.cloudSessionExpired.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
+    val openSourceLink = rememberOpenSourceLinkOpener()
 
 
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -374,6 +378,14 @@ fun SettingsScreen(
                             icon = Icons.Default.Info,
                             showArrow = false,
                             onClick = null
+                        )
+                    }
+                    item {
+                        ListItem(
+                            title = stringResource(Res.string.settings_github),
+                            subtitle = stringResource(Res.string.settings_github_desc),
+                            icon = Icons.AutoMirrored.Filled.OpenInNew,
+                            onClick = { openSourceLink(MESSENGER_GITHUB_URL) }
                         )
                     }
                     item {
