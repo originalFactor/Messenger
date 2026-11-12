@@ -15,7 +15,7 @@
 [versions]
 typewriterHighlights = "1.2.0"
 typewriterRatex = "0.1.15"
-agp = "9.5.0"
+agp = "9.5.1"
 coreKtx = "1.19.0"
 jna = "5.17.0"
 junit = "4.13.2"
