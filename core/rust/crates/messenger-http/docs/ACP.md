@@ -95,6 +95,16 @@ All routes use the per-start local bearer.
   existing workers retain the configuration from their startup. The snapshot
   is held in memory and can contain server credentials. Agents without SSE
   support reject session setup when an enabled SSE server is configured.
+  Native Core waits for the first successful catalog publication before
+  starting or restoring ACP workers or admitting device-owned Messenger turns
+  with tools, including remote requests. Cancellation, shutdown, or a timeout
+  (10 seconds for ACP setup, 75 seconds for tool discovery) ends that wait; timeout reports
+  `platform_catalog_unavailable`. Standalone Core does not wait for a native
+  catalog. Publishing only the tool inventory leaves the previous MCP list
+  unchanged; an explicit `mcpServers` array, including an empty array, marks
+  the first native MCP catalog ready. Device-owned Messenger turns additionally
+  wait until `toolsReady` is true, after enabled servers finish their initial
+  connection attempts; ACP setup does not wait for tool discovery.
 - When Agent delegation is enabled in MCP settings, ACP workers that advertise
   MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
   `messenger_agents` tool lists or calls agents during an active turn. Enabling

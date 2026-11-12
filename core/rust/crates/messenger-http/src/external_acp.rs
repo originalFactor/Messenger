@@ -496,6 +496,9 @@ async fn start_worker_impl(
     project: Option<StoredProject>,
     allow_delegation: bool,
 ) -> Result<(Worker, SessionId, Option<Vec<Value>>), ApiError> {
+    // Native clients load MCP settings asynchronously after the loopback server
+    // starts. Never mistake their not-yet-published catalog for an empty one.
+    wait_for_platform_catalog(state, cancel, false).await?;
     let mcp_servers = state.platform_catalog.lock().await.mcp_servers.clone();
     let (input, mut prompts) = mpsc::channel::<WorkerRequest>(1);
     let (ready, initialized) = oneshot::channel();
@@ -919,6 +922,66 @@ async fn spawn_process(
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn native_worker_waits_for_the_published_mcp_configuration() {
+        let state = ApiState::with_platform_catalog(
+            Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true,
+        );
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
+        let profile = Profile {
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true,
+            command: "python3".into(), args: vec![fixture.to_string_lossy().into_owned(), "mcp-load".into()],
+            env: HashMap::new(), cwd: None,
+        };
+        let cancel = CancellationToken::new();
+        let start = start_worker(&state, profile, std::env::temp_dir(), None, &cancel, None, true);
+        tokio::pin!(start);
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut start).await.is_err(),
+            "the ACP worker must wait for the first native catalog");
+        let tools_only: crate::control::PlatformCatalogUpdate = serde_json::from_value(json!({
+            "workspaceSupported":false,"tools":[]
+        })).unwrap();
+        crate::control::platform_tools(State(state.clone()), Json(tools_only)).await;
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut start).await.is_err(),
+            "a tools-only publication must not be mistaken for an MCP configuration");
+        let catalog: crate::control::PlatformCatalogUpdate = serde_json::from_value(json!({
+            "workspaceSupported":false,"tools":[],"mcpServers":[{
+                "id":"test","name":"test-mcp","transportType":"STDIO","command":"test-server",
+                "env":{"TOKEN":"secret"}
+            }]
+        })).unwrap();
+        crate::control::platform_tools(State(state.clone()), Json(catalog)).await;
+        let (worker, _, _) = tokio::time::timeout(Duration::from_secs(3), start).await.unwrap().unwrap();
+        worker.lifetime.cancel();
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn waiting_for_native_catalog_honors_cancellation_and_shutdown() {
+        let state = ApiState::with_platform_catalog(
+            Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true,
+        );
+        let profile = default_profiles().remove(0);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = start_worker(&state, profile.clone(), std::env::temp_dir(), None, &cancel, None, true).await;
+        assert!(matches!(result, Err(ApiError::Internal(message)) if message.contains("cancelled")));
+        state.shutdown.cancel();
+        let result = start_worker(&state, profile, std::env::temp_dir(), None, &CancellationToken::new(), None, true).await;
+        assert!(matches!(result, Err(ApiError::Internal(message)) if message.contains("shutting down")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn missing_native_catalog_returns_a_visible_timeout() {
+        let state = ApiState::with_platform_catalog(
+            Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true,
+        );
+        let result = start_worker(&state, default_profiles().remove(0), std::env::temp_dir(), None,
+            &CancellationToken::new(), None, true).await;
+        assert!(matches!(result, Err(ApiError::Conflict { code, .. }) if code == "platform_catalog_unavailable"));
+        state.shutdown.cancel();
+    }
 
     #[tokio::test]
     async fn configured_mcp_reaches_new_loaded_and_resumed_acp_sessions() {

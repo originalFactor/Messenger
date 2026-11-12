@@ -88,6 +88,7 @@ class RestCoreBridge(
     private val listeners = CopyOnWriteArrayList<(kind: String, ids: List<String>) -> Unit>()
     private val subscriptionStarted = AtomicBoolean(false)
     private val subscriptionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val eventsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     @Volatile
     var platformTools: ((String?) -> List<cc.ptoe.messenger.domain.tool.ChatTool>)? = null
@@ -103,12 +104,16 @@ class RestCoreBridge(
 
     override fun subscribe(listener: (kind: String, ids: List<String>) -> Unit) {
         listeners += listener
+        ensureEventSubscription()
+    }
+
+    private fun ensureEventSubscription() {
         if (subscriptionStarted.compareAndSet(false, true)) {
             subscriptionScope.launch {
                 val calls = mutableMapOf<String, Job>()
                 while (isActive) {
                     try {
-                        streamSse("/events") { data ->
+                        streamSse("/events", onConnected = { eventsReady.complete(Unit) }) { data ->
                             val root = NetworkClient.json.parseToJsonElement(data).jsonObject
                             val processId = root["processId"]?.jsonPrimitive?.contentOrNull
                             if (processId != null) {
@@ -203,6 +208,7 @@ class RestCoreBridge(
         manager: cc.ptoe.messenger.domain.mcp.McpManager,
     ) {
         mcpManager = manager
+        ensureEventSubscription()
         subscriptionScope.launch {
             var previous: String? = null
             while (isActive) {
@@ -226,17 +232,27 @@ class RestCoreBridge(
         catalogMutex.lock()
         try {
             if (!catalogInitialized) {
+                // Remote ACP setup may immediately request an Android Runtime
+                // process after this catalog is accepted by Core.
+                check(kotlinx.coroutines.withTimeoutOrNull(10_000) { eventsReady.await(); true } == true) {
+                    "Core event feed is not connected"
+                }
                 manager.loadServers()
                 check(!manager.configurationError.value) { "MCP configuration could not be loaded" }
                 catalogInitialized = true
             }
+            // Read readiness first: when it is true, activeTools has already
+            // been updated by McpManager for every initial connection.
+            val toolsReady = manager.toolInventoryReady.value
+            val tools = manager.activeTools.value
             val payload = buildJsonObject {
                     put("workspaceSupported", cc.ptoe.messenger.domain.tool.builtinChatToolsSupported())
+                    put("toolsReady", toolsReady)
                     put("mcpServers", kotlinx.serialization.json.Json.encodeToJsonElement(
                         kotlinx.serialization.builtins.ListSerializer(cc.ptoe.messenger.domain.mcp.McpServerConfig.serializer()),
                         manager.servers.value.filter { it.isEnabled },
                     ))
-                    put("tools", kotlinx.serialization.json.JsonArray(manager.activeTools.value.map { tool ->
+                    put("tools", kotlinx.serialization.json.JsonArray(tools.map { tool ->
                         buildJsonObject {
                             put("name", tool.name)
                             put("description", tool.description)
@@ -716,10 +732,11 @@ class RestCoreBridge(
             }
         }
 
-    private suspend fun streamSse(path: String, onData: suspend (String) -> Unit) {
+    private suspend fun streamSse(path: String, onConnected: () -> Unit = {}, onData: suspend (String) -> Unit) {
         client.prepareGet(baseUrl + path) {
             header(HttpHeaders.Authorization, "Bearer $token")
         }.execute { response ->
+            if (response.status.isSuccess()) onConnected()
             readSse(response, onData)
         }
     }

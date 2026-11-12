@@ -145,9 +145,12 @@ paths:
               properties:
                 workspaceSupported: { type: boolean }
                 tools: { type: array, items: { type: object } }
+                toolsReady:
+                  type: boolean
+                  description: True after initial enabled MCP server connection attempts finish and the published tool inventory is current.
                 mcpServers:
                   type: array
-                  description: Enabled client MCP configurations, held in memory for ACP session setup. May contain credentials.
+                  description: Enabled client MCP configurations, held in memory for ACP session setup. May contain credentials. Native ACP startup waits for the first explicit array; omitting this field leaves the prior MCP configuration unchanged.
                   items: { type: object }
       responses:
         "204": { description: Platform tool availability updated. }
@@ -156,7 +159,7 @@ paths:
       - $ref: "#/components/parameters/ControlRequestId"
     post:
       operationId: runDeviceSessionCommand
-      description: Catalog sessions include projectId (nullable) and updatedAt (Unix milliseconds).
+      description: Catalog sessions include projectId (nullable) and updatedAt (Unix milliseconds). Native ACP setup waits up to 10 seconds for the initial MCP configuration; device-owned Messenger turns with tools wait up to 75 seconds for initial tool discovery. Timeout yields a platform_catalog_unavailable stream error.
       requestBody:
         required: true
         content:

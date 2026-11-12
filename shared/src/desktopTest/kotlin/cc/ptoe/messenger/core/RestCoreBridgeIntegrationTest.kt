@@ -16,10 +16,18 @@
 package cc.ptoe.messenger.core
 
 import cc.ptoe.messenger.data.remote.NetworkClient
+import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.domain.mcp.McpManager
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.util.concurrent.Executors
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,11 +37,70 @@ import kotlin.test.fail
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class RestCoreBridgeIntegrationTest {
+    @Test
+    fun platformCatalogWaitsForTheEventFeed() = runBlocking {
+        val eventsEntered = CountDownLatch(1)
+        val allowEvents = CountDownLatch(1)
+        val closeEvents = CountDownLatch(1)
+        val catalogPublished = CountDownLatch(1)
+        val catalogBody = AtomicReference<String>()
+        val executor = Executors.newCachedThreadPool()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/api/v1/events") { exchange ->
+                eventsEntered.countDown()
+                try {
+                    allowEvents.await(5, TimeUnit.SECONDS)
+                    exchange.responseHeaders.add("Content-Type", "text/event-stream")
+                    exchange.sendResponseHeaders(200, 0)
+                    exchange.responseBody.use { output ->
+                        output.write(": connected\n\n".toByteArray())
+                        output.flush()
+                        closeEvents.await(5, TimeUnit.SECONDS)
+                    }
+                } finally {
+                    exchange.close()
+                }
+            }
+            createContext("/api/v1/control/platform-tools") { exchange ->
+                catalogBody.set(exchange.requestBody.bufferedReader().readText())
+                exchange.sendResponseHeaders(204, -1)
+                exchange.close()
+                catalogPublished.countDown()
+            }
+            this.executor = executor
+            start()
+        }
+        val preferences = object : DataStore<Preferences> {
+            override val data = MutableStateFlow<Preferences>(emptyPreferences())
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences {
+                val updated = transform(data.value)
+                data.value = updated
+                return updated
+            }
+        }
+        try {
+            val bridge = RestCoreBridge("127.0.0.1:${server.address.port}", "token")
+            bridge.publishPlatformTools(McpManager(AppPreferences(preferences)))
+            assertTrue(eventsEntered.await(5, TimeUnit.SECONDS), "event feed must connect without a separate listener")
+            assertTrue(!catalogPublished.await(200, TimeUnit.MILLISECONDS), "catalog must wait for the event feed")
+            allowEvents.countDown()
+            assertTrue(catalogPublished.await(5, TimeUnit.SECONDS), "catalog must publish after the event feed connects")
+            assertTrue(NetworkClient.json.parseToJsonElement(catalogBody.get()).jsonObject["mcpServers"]!!.jsonArray.isEmpty())
+            assertEquals("true", NetworkClient.json.parseToJsonElement(catalogBody.get()).jsonObject["toolsReady"]!!.jsonPrimitive.content)
+        } finally {
+            allowEvents.countDown()
+            closeEvents.countDown()
+            server.stop(0)
+            executor.shutdownNow()
+        }
+    }
+
     @Test
     fun crudRoundTripsThroughTheLoopbackServer() = runBlocking {
         val dir = Files.createTempDirectory("messenger-rest-bridge")

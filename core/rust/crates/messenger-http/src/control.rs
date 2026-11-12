@@ -7,20 +7,36 @@ use serde_json::{json, Value};
 const CONFIG: &str = "device_control_config";
 const GRANT: &str = "device_control_grant";
 
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub(crate) struct PlatformCatalog {
     pub workspace_supported: bool,
     pub tools: Vec<ToolSpecRequest>,
-    #[serde(default)]
     pub mcp_servers: Vec<messenger_mcp::McpServerConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PlatformCatalogUpdate {
+    workspace_supported: bool,
+    tools: Vec<ToolSpecRequest>,
+    #[serde(default)]
+    mcp_servers: Option<Vec<messenger_mcp::McpServerConfig>>,
+    #[serde(default)]
+    tools_ready: bool,
 }
 
 pub(crate) async fn platform_tools(
     State(state): State<ApiState>,
-    Json(catalog): Json<PlatformCatalog>,
+    Json(update): Json<PlatformCatalogUpdate>,
 ) -> StatusCode {
-    *state.platform_catalog.lock().await = catalog;
+    let mut catalog = state.platform_catalog.lock().await;
+    catalog.workspace_supported = update.workspace_supported;
+    catalog.tools = update.tools;
+    if let Some(mcp_servers) = update.mcp_servers {
+        catalog.mcp_servers = mcp_servers;
+        state.platform_catalog_ready.cancel();
+        if update.tools_ready { state.platform_tools_ready.cancel(); }
+    }
     StatusCode::NO_CONTENT
 }
 

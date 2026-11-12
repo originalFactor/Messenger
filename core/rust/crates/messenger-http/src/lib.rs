@@ -80,6 +80,9 @@ pub struct ApiState {
     active_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
     control_permissions: Arc<Mutex<HashMap<Uuid, control::CommandHandle>>>,
     platform_catalog: Arc<Mutex<control::PlatformCatalog>>,
+    /// Cancelled once this process has an authoritative platform catalog.
+    platform_catalog_ready: CancellationToken,
+    platform_tools_ready: CancellationToken,
     cloud_sync_gate: Arc<Mutex<()>>,
     external: Arc<external_acp::ExternalSessions>,
     #[cfg(target_os = "android")]
@@ -122,13 +125,20 @@ impl ApiState {
         Self::with_shutdown(store, token, CancellationToken::new())
     }
 
-    /// Builds a state whose long-lived streams close when `shutdown` fires.
-    /// `ServerHandle::start` passes its own graceful-shutdown token here so a
-    /// stop also ends the open `/events` subscriptions.
+    /// Builds a standalone state with its own shutdown token.
     fn with_shutdown(
         store: Arc<Store>,
         token: impl Into<Arc<str>>,
         shutdown: CancellationToken,
+    ) -> Self {
+        Self::with_platform_catalog(store, token, shutdown, false)
+    }
+
+    fn with_platform_catalog(
+        store: Arc<Store>,
+        token: impl Into<Arc<str>>,
+        shutdown: CancellationToken,
+        wait_for_catalog: bool,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let sender = events.clone();
@@ -137,6 +147,12 @@ impl ApiState {
         }));
         let remote = RemoteHub::new(Arc::clone(&store))
             .expect("the device id is persisted in the local store");
+        let platform_catalog_ready = CancellationToken::new();
+        let platform_tools_ready = CancellationToken::new();
+        if !wait_for_catalog {
+            platform_catalog_ready.cancel();
+            platform_tools_ready.cancel();
+        }
         Self {
             _store_feed: Arc::new(StoreFeed {
                 store: Arc::clone(&store),
@@ -147,6 +163,8 @@ impl ApiState {
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             control_permissions: Default::default(),
             platform_catalog: Default::default(),
+            platform_catalog_ready,
+            platform_tools_ready,
             cloud_sync_gate: Default::default(),
             external: Default::default(),
             #[cfg(target_os = "android")]
@@ -270,6 +288,15 @@ impl ServerHandle {
     /// Start on an explicitly selected loopback address. `0` is useful for
     /// tests and lets the OS choose a free port.
     pub async fn start(store: Arc<Store>, bind_addr: SocketAddr) -> Result<Self, std::io::Error> {
+        Self::start_inner(store, bind_addr, false).await
+    }
+
+    /// Native clients publish their MCP configuration after the server starts.
+    pub async fn start_for_native(store: Arc<Store>, bind_addr: SocketAddr) -> Result<Self, std::io::Error> {
+        Self::start_inner(store, bind_addr, true).await
+    }
+
+    async fn start_inner(store: Arc<Store>, bind_addr: SocketAddr, wait_for_catalog: bool) -> Result<Self, std::io::Error> {
         if !bind_addr.ip().is_loopback() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -280,10 +307,11 @@ impl ServerHandle {
         let local_addr = listener.local_addr()?;
         let token = format!("messenger-{}", Uuid::new_v4());
         let shutdown = CancellationToken::new();
-        let state = ApiState::with_shutdown(
+        let state = ApiState::with_platform_catalog(
             store,
             Arc::<str>::from(token.clone()),
             shutdown.clone(),
+            wait_for_catalog,
         );
         tokio::spawn(Arc::clone(&state.remote).run_with_control(
             Arc::new(LocalClientExecutor {
@@ -2146,6 +2174,24 @@ pub struct ChatRequest {
     no_agent_delegation: bool,
 }
 
+async fn wait_for_platform_catalog(state: &ApiState, cancel: &CancellationToken, require_tools: bool) -> Result<(), ApiError> {
+    // SSE endpoint discovery can take 10s, followed by two 30s MCP requests.
+    let timeout = std::time::Duration::from_secs(if require_tools { 75 } else { 10 });
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(ApiError::internal("Request cancelled while waiting for MCP configuration")),
+        _ = state.shutdown.cancelled() => Err(ApiError::internal("Core is shutting down")),
+        _ = async {
+            state.platform_catalog_ready.cancelled().await;
+            if require_tools { state.platform_tools_ready.cancelled().await; }
+        } => Ok(()),
+        _ = tokio::time::sleep(timeout) => Err(ApiError::Conflict {
+            code: "platform_catalog_unavailable".into(),
+            message: "The app has not published its MCP configuration and tool inventory.".into(),
+        }),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSpecRequest {
@@ -2187,6 +2233,25 @@ async fn start_turn(
     cancel: CancellationToken,
     detached: bool,
 ) -> Result<mpsc::UnboundedReceiver<String>, ApiError> {
+    if detached && !request.disable_tools && !state.platform_tools_ready.is_cancelled() {
+        if cancel.is_cancelled() {
+            return Err(ApiError::Conflict { code: "turn_cancelled".into(), message: "the turn was cancelled".into() });
+        }
+        // Preserve the model-required invariant even if the platform never
+        // publishes its catalog. All admission checks run again after waiting.
+        let conversation = state.store.get_conversation(&conversation_id).map_err(ApiError::store)?
+            .ok_or_else(|| ApiError::not_found("conversation"))?;
+        let agent = state.store.get_agent(&conversation.agent_id).map_err(ApiError::store)?
+            .ok_or_else(|| ApiError::not_found("agent"))?;
+        let agent = effective_agent(&state.store, agent, &conversation)?;
+        if conversation.override_model_id.is_none() && agent.default_model_id.is_none() {
+            return Err(ApiError::Conflict {
+                code: "model_required".into(),
+                message: "set a model for this agent before sending a message".into(),
+            });
+        }
+        wait_for_platform_catalog(&state, &cancel, true).await?;
+    }
     // Keep validation, preparation and the initial write under the same
     // reservation. A rejected caller must never change the transcript.
     let mut active = state.active_turns.lock().await;
@@ -3141,6 +3206,93 @@ mod tests {
         let stream = CancelOnDropStream::new(receiver, cancel.clone());
         drop(stream);
         assert!(cancel.is_cancelled());
+    }
+
+    #[cfg(all(unix, not(target_os = "android")))]
+    #[tokio::test]
+    async fn native_http_acp_creation_waits_for_platform_catalog() {
+        let store = Arc::new(Store::open_memory().unwrap());
+        store.upsert_project(&StoredProject {
+            id: "p".into(), name: "Project".into(),
+            workspace: std::env::temp_dir().to_string_lossy().into_owned(),
+            device_id: None, created_at: 1, updated_at: 1,
+        }).unwrap();
+        let server = ServerHandle::start_for_native(store, SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+        let client = reqwest::Client::new();
+        let base = format!("http://{}/api/v1", server.local_addr);
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
+        let settings = serde_json::json!({"agents":[{"id":"fixture","name":"Fixture","command":"python3","args":[fixture,"mcp-load"]}]});
+        assert!(client.put(format!("{base}/control/settings")).bearer_auth(&server.token)
+            .json(&settings).send().await.unwrap().status().is_success());
+        let request = client.post(format!("{base}/control/commands/{}", Uuid::new_v4()))
+            .bearer_auth(&server.token)
+            .json(&serde_json::json!({"action":"create","agentId":"acp:fixture","projectId":"p"}));
+        let result = async { request.send().await.unwrap().text().await.unwrap() };
+        tokio::pin!(result);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), &mut result).await.is_err());
+        let catalog = serde_json::json!({"workspaceSupported":false,"tools":[],"mcpServers":[{
+            "id":"test","name":"test-mcp","transportType":"STDIO","command":"test-server",
+            "env":{"TOKEN":"secret"}
+        }]});
+        assert_eq!(client.put(format!("{base}/control/platform-tools")).bearer_auth(&server.token)
+            .json(&catalog).send().await.unwrap().status(), StatusCode::NO_CONTENT);
+        let body = tokio::time::timeout(std::time::Duration::from_secs(5), result).await.unwrap();
+        assert!(body.contains("\"type\":\"Created\""), "{body}");
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn detached_turn_waits_for_catalog_before_mutating_and_keeps_model_required() {
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            )).mount(&provider).await;
+        let state = ApiState::with_platform_catalog(Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true);
+        seed_text_chat(&state, &provider.uri());
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+        agent.default_model_id = None;
+        state.store.upsert_agent(&agent).unwrap();
+        let missing = start_turn(state.clone(), "c1".into(), control::text_request("hello".into()), CancellationToken::new(), true).await;
+        assert!(matches!(missing, Err(ApiError::Conflict { code, .. }) if code == "model_required"));
+        assert!(state.store.list_messages_by_conversation("c1").unwrap().is_empty());
+        agent.default_model_id = Some("m1".into());
+        state.store.upsert_agent(&agent).unwrap();
+        let cancel = CancellationToken::new();
+        let turn = start_turn(state.clone(), "c1".into(), control::text_request("hello".into()), cancel, true);
+        tokio::pin!(turn);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), &mut turn).await.is_err());
+        assert!(state.store.list_messages_by_conversation("c1").unwrap().is_empty());
+        let update: control::PlatformCatalogUpdate = serde_json::from_value(serde_json::json!({
+            "workspaceSupported": false, "tools": [], "mcpServers": [], "toolsReady": false
+        })).unwrap();
+        control::platform_tools(State(state.clone()), Json(update)).await;
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), &mut turn).await.is_err(),
+            "a published configuration must not imply that tool discovery is finished");
+        assert!(state.store.list_messages_by_conversation("c1").unwrap().is_empty());
+        let update: control::PlatformCatalogUpdate = serde_json::from_value(serde_json::json!({
+            "workspaceSupported": false, "tools": [], "mcpServers": [], "toolsReady": true
+        })).unwrap();
+        control::platform_tools(State(state.clone()), Json(update)).await;
+        let mut events = tokio::time::timeout(std::time::Duration::from_secs(3), turn).await.unwrap().unwrap();
+        let mut finished = false;
+        while let Some(event) = events.recv().await { finished |= event.contains("\"type\":\"Finished\""); }
+        assert!(finished);
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tool_inventory_timeout_does_not_treat_configuration_as_discovery() {
+        let state = ApiState::with_platform_catalog(Arc::new(Store::open_memory().unwrap()), "local", CancellationToken::new(), true);
+        let update: control::PlatformCatalogUpdate = serde_json::from_value(serde_json::json!({
+            "workspaceSupported": false, "tools": [], "mcpServers": [], "toolsReady": false
+        })).unwrap();
+        control::platform_tools(State(state.clone()), Json(update)).await;
+        let started = tokio::time::Instant::now();
+        let result = wait_for_platform_catalog(&state, &CancellationToken::new(), true).await;
+        assert!(matches!(result, Err(ApiError::Conflict { code, .. }) if code == "platform_catalog_unavailable"));
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(75));
+        state.shutdown.cancel();
     }
 
     /// An attached `/events` feed must not keep `stop` from returning: the

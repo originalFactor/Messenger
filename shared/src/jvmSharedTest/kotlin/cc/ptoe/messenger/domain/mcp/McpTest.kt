@@ -21,6 +21,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import cc.ptoe.messenger.data.local.AppPreferences
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -38,6 +46,53 @@ class McpTest {
         ignoreUnknownKeys = true
         encodeDefaults = true
         isLenient = true
+    }
+
+    @Test
+    fun `tool inventory waits for initial server discovery`() = runBlocking {
+        val preferences = object : DataStore<Preferences> {
+            override val data = MutableStateFlow<Preferences>(emptyPreferences())
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences {
+                val updated = transform(data.value)
+                data.value = updated
+                return updated
+            }
+        }
+        val appPreferences = AppPreferences(preferences)
+        val config = McpServerConfig(id = "mock", name = "Mock", transportType = McpTransportType.STDIO, command = "mock")
+        appPreferences.setMcpServersJson(json.encodeToString(ListSerializer(McpServerConfig.serializer()), listOf(config)))
+        val initializeSent = CompletableDeferred<Unit>()
+        val allowInitialize = CompletableDeferred<Unit>()
+        var lineCallback: ((String) -> Unit)? = null
+        val bridge = object : McpProcessBridge {
+            override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean {
+                lineCallback = onLine
+                return true
+            }
+            override suspend fun sendLine(line: String): Boolean {
+                val request = json.decodeFromString<JsonRpcRequest>(line)
+                when (request.method) {
+                    "initialize" -> {
+                        initializeSent.complete(Unit)
+                        CoroutineScope(Dispatchers.Default).launch {
+                            allowInitialize.await()
+                            lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}""")
+                        }
+                    }
+                    "tools/list" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"tools":[{"name":"echo","description":"Echo","inputSchema":{"type":"object"}}]}}""")
+                }
+                return true
+            }
+            override suspend fun close() {}
+        }
+        val manager = McpManager(appPreferences) { bridge }
+        withTimeout(5_000) { initializeSent.await() }
+        assertFalse(manager.toolInventoryReady.value)
+        allowInitialize.complete(Unit)
+        withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+        assertEquals("Mock_echo", manager.activeTools.value.single().name)
+        manager.removeServer("mock")
     }
 
     @Test

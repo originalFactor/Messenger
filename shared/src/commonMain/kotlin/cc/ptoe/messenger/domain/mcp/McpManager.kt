@@ -52,8 +52,12 @@ class McpManager(
     /** True when the persisted MCP configuration could not be decoded. */
     val configurationError: StateFlow<Boolean> = _configurationError.asStateFlow()
     private val clients = mutableMapOf<String, McpClient>()
+    private val pendingClients = mutableSetOf<String>()
     private val _activeTools = MutableStateFlow<List<ChatTool>>(emptyList())
     val activeTools: StateFlow<List<ChatTool>> = _activeTools.asStateFlow()
+    private val _toolInventoryReady = MutableStateFlow(false)
+    /** True after all enabled servers have finished their initial connection attempt. */
+    val toolInventoryReady: StateFlow<Boolean> = _toolInventoryReady.asStateFlow()
     private val _agentDelegationEnabled = MutableStateFlow(false)
     val agentDelegationEnabled: StateFlow<Boolean> = _agentDelegationEnabled.asStateFlow()
 
@@ -131,6 +135,7 @@ class McpManager(
         // Close removed or disabled clients
         val toRemove = clients.keys.filter { it !in activeIds }
         for (id in toRemove) {
+            pendingClients.remove(id)
             clients.remove(id)?.close()
         }
 
@@ -139,16 +144,25 @@ class McpManager(
             if (config.isEnabled && !clients.containsKey(config.id)) {
                 val client = McpClient(config, bridgeFactory)
                 clients[config.id] = client
+                pendingClients.add(config.id)
                 scope.launch {
-                    val connected = client.connect()
-                    if (connected) {
-                        recomputeActiveTools()
+                    try {
+                        client.connect()
+                    } finally {
+                        mutex.withLock {
+                            if (clients[config.id] === client) {
+                                pendingClients.remove(config.id)
+                                recomputeActiveTools()
+                                _toolInventoryReady.value = pendingClients.isEmpty()
+                            }
+                        }
                     }
                 }
             }
         }
 
         recomputeActiveTools()
+        _toolInventoryReady.value = pendingClients.isEmpty()
     }
 
     private fun recomputeActiveTools() {
@@ -159,8 +173,8 @@ class McpManager(
         _activeTools.value = toolsList
     }
 
-    suspend fun getActiveTools(): List<ChatTool> {
+    suspend fun getActiveTools(): List<ChatTool> = mutex.withLock {
         recomputeActiveTools()
-        return _activeTools.value
+        _activeTools.value
     }
 }

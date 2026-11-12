@@ -50,7 +50,7 @@ impl CoreHandle {
     #[uniffi::method(async_runtime = "tokio")]
     pub async fn start_http_server(&self, port: u16) -> Result<Arc<HttpServerHandle>, CoreError> {
         let bind = SocketAddr::from(([127, 0, 0, 1], port));
-        let server = messenger_http::ServerHandle::start(Arc::clone(&self.store), bind)
+        let server = messenger_http::ServerHandle::start_for_native(Arc::clone(&self.store), bind)
             .await
             .map_err(|error| CoreError::Generic {
                 detail: error.to_string(),
