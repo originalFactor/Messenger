@@ -115,8 +115,11 @@ All routes use the per-start local bearer.
   pass through. Stopping it cancels active relay streams.
   The relay forwards matching wire protocols and converts Responses requests
   to Chat Completions, including text, image URLs, function/custom tools,
-  reasoning summaries, usage and streaming events. Other combinations return
-  `unsupported_format`. Features with no equivalent (such as encrypted
+  reasoning summaries, usage and streaming events. Non-streaming requests
+  additionally convert between
+  Chat, Responses, Messages and Interactions according to the Provider format;
+  the additional combinations reject streaming with `unsupported_feature`.
+  Features with no equivalent (such as encrypted
   reasoning and hosted tools) return `unsupported_feature` instead of being
   discarded. A truncated converted stream ends with `response.failed`.
 - The built-in Codex, Claude Code and OpenCode profiles have an opt-in

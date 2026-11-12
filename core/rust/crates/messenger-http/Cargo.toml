@@ -11,6 +11,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 tokio-tungstenite = "0.24"
 async-trait = "0.1"
 futures-core = "0.3"
+messenger-llm = { path = "../messenger-llm" }
 messenger-core = { path = "../messenger-core" }
 messenger-remote = { path = "../messenger-remote" }
 messenger-store = { path = "../messenger-store" }

@@ -9,6 +9,7 @@ use futures_util::StreamExt as FuturesStreamExt;
 use serde_json::{json, Value};
 
 mod convert;
+mod matrix;
 
 const MODEL_PREFIX: &str = "messenger/";
 
@@ -150,7 +151,13 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
     };
     let format = if provider.api_format == "auto" { "chat" } else { provider.api_format.as_str() };
     let alias = format!("{MODEL_PREFIX}{}", model.id);
-    let converted = if requested_format == "responses" && format == "chat" {
+    let generic = format != requested_format && !(requested_format == "responses" && format == "chat");
+    let converted = if generic {
+        match matrix::request(requested_format, format, &body, &model.model_id) {
+            Ok(body) => Some(convert::Request {body, stream:false, custom_tools:Default::default()}),
+            Err(message) => return error(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_feature", &message),
+        }
+    } else if requested_format == "responses" && format == "chat" {
         match convert::request(&body, &model.model_id) {
             Ok(converted) => Some(converted),
             Err(message) => return error(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_feature", &message),
@@ -161,7 +168,7 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
     }
     let path = if let Some(converted) = &converted {
         body = converted.body.clone();
-        "/chat/completions"
+        match format { "responses" => "/responses", "messages" => "/messages", "interactions" => "/interactions", _ => "/chat/completions" }
     } else {
         body["model"] = json!(model.model_id);
         path
@@ -213,7 +220,9 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
                 Ok(value) => value,
                 Err(_) => return error(StatusCode::BAD_GATEWAY, "invalid_upstream", "Upstream response is not valid JSON"),
             };
-            return match convert::nonstream(&payload, alias, converted.custom_tools) {
+            let result = if generic { matrix::response(format, requested_format, &payload, &alias) }
+                else { convert::nonstream(&payload, alias, converted.custom_tools) };
+            return match result {
                 Ok(body) => Json(body).into_response(),
                 Err(message) => error(StatusCode::BAD_GATEWAY, "invalid_upstream", &message),
             };
