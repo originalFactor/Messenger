@@ -578,44 +578,15 @@ private fun RenderMarkdownStream(
  */
 @Composable
 private fun RenderInlineRunWithMath(segments: List<InlineSegment>, styles: MarkdownStyles) {
-    val baseStyle = LocalTextStyle.current
-    val density = LocalDensity.current
-    val resolvedFontSize = baseStyle.fontSize.takeIf { it.value > 0f } ?: 16.sp
-    val mathFontSize = inlineMathFontSize(resolvedFontSize)
-    val mathSizes = mutableListOf<androidx.compose.ui.unit.IntSize>()
-    for (segment in segments) {
-        mathSizes += if (segment is InlineSegment.Math) {
-            measurePlatformMath(segment.content, displayMode = false, mathFontSize)
-        } else {
-            androidx.compose.ui.unit.IntSize.Zero
-        }
-    }
-    val built = remember(segments, styles, mathFontSize, density, mathSizes) {
-        val contents = mutableMapOf<String, InlineTextContent>()
-        val annotated = buildAnnotatedString {
-            for ((index, segment) in segments.withIndex()) {
-                when (segment) {
-                    is InlineSegment.Text -> append(buildAnnotatedFromInline(segment.tokens, styles))
-                    is InlineSegment.Math -> {
-                        val id = "math_$index"
-                        appendInlineContent(id, segment.content)
-                        val size = mathSizes[index]
-                        contents[id] = InlineTextContent(
-                            placeholder = Placeholder(
-                                width = with(density) { size.width.coerceAtLeast(1).toSp() },
-                                height = with(density) { size.height.coerceAtLeast(1).toSp() },
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
-                            ),
-                        ) {
-                            RenderInlineMath(segment.content, styles)
-                        }
-                    }
-                }
+    RenderInlineText(
+        tokens = segments.flatMap { segment ->
+            when (segment) {
+                is InlineSegment.Text -> segment.tokens
+                is InlineSegment.Math -> listOf(MdToken.InlineMath(segment.content, closed = true))
             }
-        }
-        annotated to contents
-    }
-    Text(text = built.first, inlineContent = built.second)
+        },
+        styles = styles,
+    )
 }
 
 /**
@@ -666,7 +637,6 @@ private fun RenderDisplayMath(content: String, styles: MarkdownStyles) {
             displayMode = true,
             textColor = textColor,
             fontSize = displayFontSize,
-            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -975,67 +945,95 @@ private fun RenderInlineText(
     val codePaddingVertical = 1.dp
     val codeBackground = styles.code.background.takeIf { it != Color.Unspecified }
         ?: LocalContentColor.current.copy(alpha = 0.12f)
+    val mathFontSize = inlineMathFontSize(style.fontSize.takeUnless { it == TextUnit.Unspecified } ?: 16.sp)
+    val mathContents = remember(tokens, styles) {
+        buildList {
+            val contents = this
+            buildAnnotatedString {
+                appendInlineTokens(this, tokens, styles, renderSpecial = { token ->
+                    if (token is MdToken.InlineMath) contents.add(token.content)
+                })
+            }
+        }.distinct()
+    }
+    val mathSizes = mutableMapOf<String, androidx.compose.ui.unit.IntSize>()
+    for (content in mathContents) {
+        mathSizes[content] = measurePlatformMath(content, displayMode = false, mathFontSize)
+    }
     // 稳定前缀块（tokens 结构相等，流式下只有尾部块变化）复用已构建的
     // AnnotatedString 与 inline content，跳过整段重建与 inline code 测量。
-    val built = remember(tokens, styles, style, maxInlineCodeWidth) {
+    val built = remember(tokens, styles, style, maxInlineCodeWidth, density, textMeasurer, codeBackground, mathSizes) {
         val inlineContent = mutableMapOf<String, InlineTextContent>()
         val annotated = buildAnnotatedString {
             var codeIndex = 0
-            for (token in tokens) {
-                if (token is MdToken.InlineCode) {
-                    val codeTextStyle = style.copy(
-                        color = styles.code.color.takeIf { it != Color.Unspecified } ?: style.color,
-                        fontFamily = styles.code.fontFamily ?: style.fontFamily,
-                        fontWeight = styles.code.fontWeight ?: style.fontWeight,
-                        fontStyle = styles.code.fontStyle ?: style.fontStyle,
-                        fontSize = styles.code.fontSize.takeUnless { it == TextUnit.Unspecified } ?: style.fontSize,
-                    )
-                    val fontSize = codeTextStyle.fontSize.takeUnless { it == TextUnit.Unspecified } ?: 16.sp
-                    val lineHeight = style.lineHeight.takeUnless { it == TextUnit.Unspecified } ?: fontSize * 1.2f
-                    val codeChunks = maxInlineCodeWidth?.let {
-                        wrapInlineCodeText(
-                            token.text,
-                            codeTextStyle,
-                            (it - codePaddingHorizontal * 2).coerceAtLeast(0.dp),
-                            textMeasurer,
-                            density,
-                        ).split('\n')
-                    } ?: listOf(token.text)
-                    codeChunks.forEachIndexed { chunkIndex, displayText ->
-                        if (chunkIndex > 0) append('\n')
-                        val id = "inline_code_${codeIndex++}"
-                        appendInlineContent(id, displayText)
-                        val measuredWidth = textMeasurer.measure(
-                            text = AnnotatedString(displayText),
-                            style = codeTextStyle,
-                        ).size.width
-                        val width = with(density) {
-                            (measuredWidth.toDp() + codePaddingHorizontal * 2).toSp()
-                        }
-                        val height = with(density) {
-                            (lineHeight.toDp() + codePaddingVertical * 2).toSp()
-                        }
-                        inlineContent[id] = InlineTextContent(
-                            placeholder = Placeholder(
-                                width = width,
-                                height = height,
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
-                            ),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(codeBackground)
-                                    .padding(horizontal = codePaddingHorizontal, vertical = codePaddingVertical),
+            appendInlineTokens(this, tokens, styles, renderSpecial = { token ->
+                when (token) {
+                    is MdToken.InlineCode -> {
+                        val codeTextStyle = style.copy(
+                            color = styles.code.color.takeIf { it != Color.Unspecified } ?: style.color,
+                            fontFamily = styles.code.fontFamily ?: style.fontFamily,
+                            fontWeight = styles.code.fontWeight ?: style.fontWeight,
+                            fontStyle = styles.code.fontStyle ?: style.fontStyle,
+                            fontSize = styles.code.fontSize.takeUnless { it == TextUnit.Unspecified } ?: style.fontSize,
+                        )
+                        val fontSize = codeTextStyle.fontSize.takeUnless { it == TextUnit.Unspecified } ?: 16.sp
+                        val lineHeight = style.lineHeight.takeUnless { it == TextUnit.Unspecified } ?: fontSize * 1.2f
+                        val codeChunks = maxInlineCodeWidth?.let {
+                            wrapInlineCodeText(
+                                token.text,
+                                codeTextStyle,
+                                (it - codePaddingHorizontal * 2).coerceAtLeast(0.dp),
+                                textMeasurer,
+                                density,
+                            ).split('\n')
+                        } ?: listOf(token.text)
+                        codeChunks.forEachIndexed { chunkIndex, displayText ->
+                            if (chunkIndex > 0) append('\n')
+                            val id = "inline_code_${codeIndex++}"
+                            appendInlineContent(id, displayText)
+                            val measuredWidth = textMeasurer.measure(
+                                text = AnnotatedString(displayText),
+                                style = codeTextStyle,
+                            ).size.width
+                            val width = with(density) {
+                                (measuredWidth.toDp() + codePaddingHorizontal * 2).toSp()
+                            }
+                            val height = with(density) {
+                                (lineHeight.toDp() + codePaddingVertical * 2).toSp()
+                            }
+                            inlineContent[id] = InlineTextContent(
+                                placeholder = Placeholder(
+                                    width = width,
+                                    height = height,
+                                    placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                                ),
                             ) {
-                                Text(text = displayText, style = codeTextStyle)
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(codeBackground)
+                                        .padding(horizontal = codePaddingHorizontal, vertical = codePaddingVertical),
+                                ) {
+                                    Text(text = displayText, style = codeTextStyle)
+                                }
                             }
                         }
                     }
-                } else {
-                    append(buildAnnotatedFromInline(listOf(token), styles))
+                    is MdToken.InlineMath -> {
+                        val id = "inline_math_${codeIndex++}"
+                        val size = mathSizes.getValue(token.content)
+                        appendInlineContent(id, token.content)
+                        inlineContent[id] = InlineTextContent(
+                            Placeholder(
+                                width = with(density) { size.width.coerceAtLeast(1).toSp() },
+                                height = with(density) { size.height.coerceAtLeast(1).toSp() },
+                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                            ),
+                        ) { RenderInlineMath(token.content, styles) }
+                    }
+                    else -> error("Unsupported inline content: $token")
                 }
-            }
+            })
         }
         annotated to inlineContent
     }
@@ -1170,13 +1168,14 @@ private fun appendInlineTokens(
     tokens: List<MdToken>,
     styles: MarkdownStyles,
     preserveBoldWeight: Boolean = false,
+    renderSpecial: (AnnotatedString.Builder.(MdToken) -> Unit)? = null,
 ) {
     with(builder) {
         for (tok in tokens) {
             when (tok) {
                 is MdToken.Plain -> append(tok.text)
                 is MdToken.Bold -> withStyle(styles.bold) {
-                    appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight = true)
+                    appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight = true, renderSpecial = renderSpecial)
                 }
                 is MdToken.Italic -> {
                     val italicStyle = if (preserveBoldWeight) {
@@ -1187,17 +1186,20 @@ private fun appendInlineTokens(
                         styles.italic
                     }
                     withStyle(italicStyle) {
-                        appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight)
+                        appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight, renderSpecial)
                     }
                 }
                 is MdToken.BoldItalic -> withStyle(styles.bold) {
                     withStyle(styles.italic.copy(fontWeight = null)) {
-                        appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight = true)
+                        appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, preserveBoldWeight = true, renderSpecial = renderSpecial)
                     }
                 }
-                is MdToken.InlineCode -> withStyle(styles.code) { append(tok.text) }
+                is MdToken.InlineCode -> {
+                    if (renderSpecial != null) renderSpecial(tok)
+                    else withStyle(styles.code) { append(tok.text) }
+                }
                 is MdToken.Strikethrough -> withStyle(styles.strikethrough) {
-                    appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles)
+                    appendInlineTokens(this, parseStreamingMarkdown(tok.text), styles, renderSpecial = renderSpecial)
                 }
                 is MdToken.Link -> withLink(
                     LinkAnnotation.Url(
@@ -1212,13 +1214,15 @@ private fun appendInlineTokens(
                 ) { append("[${tok.label}]") }
                 is MdToken.Image -> append(tok.altText)
                 is MdToken.Heading -> withStyle(styles.heading) {
-                    appendInlineTokens(this, tok.inline, styles)
+                    appendInlineTokens(this, tok.inline, styles, renderSpecial = renderSpecial)
                 }
                 is MdToken.CodeBlock, MdToken.Newline, MdToken.HorizontalRule -> { /* block-level */ }
                 is MdToken.ListItem, is MdToken.BlockQuote, is MdToken.Table, is MdToken.FootnoteDefinition, is MdToken.ThinkBlock -> {
                     /* block-level */
                 }
-                is MdToken.InlineMath -> append(tok.content)
+                is MdToken.InlineMath -> {
+                    if (renderSpecial != null) renderSpecial(tok) else append(tok.content)
+                }
                 is MdToken.DisplayMath -> append(tok.content)
             }
         }

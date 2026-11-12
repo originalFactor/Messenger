@@ -9,6 +9,9 @@ and the source attribution when updating it. Upstream JVM sources live in `deskt
   compensate for KaTeX's smaller x-height) and reserves the complete measured height. Never clamp
   matrices, fractions or descenders to prose line height or clip them. Density/font-scale changes
   must invalidate placeholder sizes. List markers align with the content column's first baseline.
+- Inline code and math share the same inline-content renderer, including code nested in emphasis.
+  Keep code backgrounds rounded in mixed math/prose runs. Display equations use their natural
+  width inside the centered, full-width background; do not stretch the RaTeX child to full width.
 - Preserve upstream parser prefix stability, streaming state behavior, replaceable image loading,
   Android Cascadia font resources and the common parser tests when updating sources.
 - `MarkdownStyles` accepts localized thinking-card title and expanded/collapsed labels; include
