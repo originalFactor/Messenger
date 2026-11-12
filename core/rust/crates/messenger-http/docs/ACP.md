@@ -113,14 +113,17 @@ All routes use the per-start local bearer.
   secret, and exposes `/v1/models`, `/v1/chat/completions`, `/v1/responses`,
   `/v1/messages`, and `/v1/interactions`; streaming and upstream status/body
   pass through. Stopping it cancels active relay streams.
-  The relay currently forwards only requests whose wire protocol matches the
-  configured provider, and returns `unsupported_format` for other combinations.
-  Cross-protocol conversion is not yet implemented.
+  The relay forwards matching wire protocols and converts Responses requests
+  to Chat Completions, including text, image URLs, function/custom tools,
+  reasoning summaries, usage and streaming events. Other combinations return
+  `unsupported_format`. Features with no equivalent (such as encrypted
+  reasoning and hosted tools) return `unsupported_feature` instead of being
+  discarded. A truncated converted stream ends with `response.failed`.
 - The built-in Codex, Claude Code and OpenCode profiles have an opt-in
   `providerTakeover` setting (default `false`). For new or restored workers,
   Core starts the relay and injects per-process configuration without writing
-  the user's Agent configuration files. Until conversion is implemented,
-  Codex requires an enabled Responses model, Claude Code a Messages model,
+  the user's Agent configuration files. Codex requires an enabled Responses
+  or Chat model, Claude Code a Messages model,
   and OpenCode a Chat model; otherwise setup returns
   `takeover_no_compatible_model`. The default Agent's model is preferred
   when compatible, otherwise the first enabled compatible model is used.

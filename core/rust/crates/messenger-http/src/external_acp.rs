@@ -491,14 +491,16 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, op
     let models: Vec<_> = state.store.list_models().map_err(ApiError::store)?.into_iter()
         .filter(|model| model.is_enabled && providers.get(&model.provider_id).is_some_and(|provider| {
             let actual = if provider.api_format == "auto" { "chat" } else { &provider.api_format };
-            actual == format
+            actual == format || (profile.id == "codex" && actual == "chat")
         })).collect();
     let preferred = state.store.get_default_agent().map_err(ApiError::store)?
         .and_then(|agent| agent.default_model_id);
     let selected = preferred.as_deref().and_then(|id| models.iter().find(|model| model.id == id))
+        .or_else(|| models.iter().find(|model| providers.get(&model.provider_id).is_some_and(|provider| provider.api_format == format)))
         .or_else(|| models.first()).ok_or_else(|| ApiError::Conflict {
             code: "takeover_no_compatible_model".into(),
-            message: format!("Provider takeover for {} requires an enabled {format} model.", profile.name),
+            message: if profile.id == "codex" { format!("Provider takeover for {} requires an enabled Responses or Chat model.", profile.name) }
+                else { format!("Provider takeover for {} requires an enabled {format} model.", profile.name) },
         })?;
     let selected_id = format!("messenger/{}", selected.id);
     // Validate existing inline settings before allocating the relay listener.
@@ -1107,6 +1109,24 @@ mod tests {
         let result = configure_provider_takeover(&state, &mut profile, None).await;
         assert!(matches!(result, Err(ApiError::Conflict { code, .. }) if code == "takeover_no_compatible_model"));
         assert!(state.agent_relay.lock().await.is_none());
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn codex_takeover_accepts_chat_models_for_conversion() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
+        state.store.upsert_provider(&StoredProvider {
+            id:"p".into(), name:"provider".into(), base_url:"https://example.invalid/v1".into(),
+            api_key:"secret".into(), api_format:"chat".into(), created_at:1, updated_at:1,
+        }).unwrap();
+        let model: StoredModel = serde_json::from_value(json!({"id":"chat-model","provider_id":"p",
+            "model_id":"upstream","display_name":"Model","is_enabled":true,"created_at":1})).unwrap();
+        state.store.upsert_model(&model).unwrap();
+        let mut profile = default_profiles().remove(0);
+        profile.provider_takeover = true;
+        configure_provider_takeover(&state, &mut profile, None).await.unwrap();
+        let config: Value = serde_json::from_str(&profile.env["CODEX_CONFIG"]).unwrap();
+        assert_eq!(config["model"], "messenger/chat-model");
         state.shutdown.cancel();
     }
 

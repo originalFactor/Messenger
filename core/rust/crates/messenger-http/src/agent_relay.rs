@@ -8,6 +8,8 @@ use axum::{body::Body, extract::DefaultBodyLimit, http::HeaderMap};
 use futures_util::StreamExt as FuturesStreamExt;
 use serde_json::{json, Value};
 
+mod convert;
+
 const MODEL_PREFIX: &str = "messenger/";
 
 #[derive(Clone)]
@@ -147,10 +149,23 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
         Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "store_error", "Could not load provider"),
     };
     let format = if provider.api_format == "auto" { "chat" } else { provider.api_format.as_str() };
-    if format != requested_format {
+    let alias = format!("{MODEL_PREFIX}{}", model.id);
+    let converted = if requested_format == "responses" && format == "chat" {
+        match convert::request(&body, &model.model_id) {
+            Ok(converted) => Some(converted),
+            Err(message) => return error(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_feature", &message),
+        }
+    } else { None };
+    if format != requested_format && converted.is_none() {
         return error(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_format", "The selected provider uses a different API format");
     }
-    body["model"] = json!(model.model_id);
+    let path = if let Some(converted) = &converted {
+        body = converted.body.clone();
+        "/chat/completions"
+    } else {
+        body["model"] = json!(model.model_id);
+        path
+    };
     let mut request = state.http.post(format!("{}{path}", provider.base_url.trim_end_matches('/'))).json(&body);
     if !provider.api_key.is_empty() {
         request = request.bearer_auth(&provider.api_key);
@@ -171,11 +186,110 @@ async fn forward(state: RelayState, headers: HeaderMap, mut body: Value, request
         )),
     };
     let status = response.status();
+    if status.is_success() {
+        if let Some(converted) = converted {
+            if converted.stream {
+                let is_sse = response.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.starts_with("text/event-stream"));
+                if !is_sse { return error(StatusCode::BAD_GATEWAY, "invalid_upstream", "Expected an upstream event stream"); }
+                return convert_stream(response, state.shutdown, alias, converted.custom_tools);
+            }
+            let mut stream = response.bytes_stream();
+            let mut bytes = Vec::new();
+            loop {
+                let chunk = tokio::select! {
+                    result = FuturesStreamExt::next(&mut stream) => result,
+                    _ = state.shutdown.cancelled() => return error(StatusCode::SERVICE_UNAVAILABLE, "relay_stopped", "The relay has stopped"),
+                };
+                match chunk {
+                    None => break,
+                    Some(Err(failure)) => return error(StatusCode::BAD_GATEWAY, "upstream_error", &failure.without_url().to_string()),
+                    Some(Ok(chunk)) if bytes.len().saturating_add(chunk.len()) > 24 * 1024 * 1024 =>
+                        return error(StatusCode::BAD_GATEWAY, "invalid_upstream", "Upstream response is too large"),
+                    Some(Ok(chunk)) => bytes.extend_from_slice(&chunk),
+                }
+            }
+            let payload: Value = match serde_json::from_slice(&bytes) {
+                Ok(value) => value,
+                Err(_) => return error(StatusCode::BAD_GATEWAY, "invalid_upstream", "Upstream response is not valid JSON"),
+            };
+            return match convert::nonstream(&payload, alias, converted.custom_tools) {
+                Ok(body) => Json(body).into_response(),
+                Err(message) => error(StatusCode::BAD_GATEWAY, "invalid_upstream", &message),
+            };
+        }
+    }
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
     let stream = response.bytes_stream().take_until(state.shutdown.clone().cancelled_owned());
     let mut result = Response::new(Body::from_stream(stream));
     *result.status_mut() = status;
     if let Some(content_type) = content_type { result.headers_mut().insert(header::CONTENT_TYPE, content_type); }
+    result
+}
+
+fn convert_stream(response: reqwest::Response, shutdown: CancellationToken, model: String, custom_tools: std::collections::HashSet<String>) -> Response {
+    use axum::body::Bytes;
+    async fn send(sender: &mpsc::Sender<Result<Bytes, std::io::Error>>, shutdown: &CancellationToken, value: String) -> bool {
+        tokio::select! {
+            result = sender.send(Ok(Bytes::from(value))) => result.is_ok(),
+            _ = shutdown.cancelled() => false,
+        }
+    }
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, std::io::Error>>(16);
+    tokio::spawn(async move {
+        let mut converter = convert::Response::new(model, custom_tools);
+        if !send(&sender, &shutdown, converter.start()).await { return; }
+        let mut upstream = response.bytes_stream();
+        let mut buffer = Vec::new();
+        let mut data = Vec::<String>::new();
+        let mut data_len = 0usize;
+        let failure = loop {
+            let chunk = tokio::select! {
+                _ = shutdown.cancelled() => return,
+                _ = sender.closed() => return,
+                chunk = FuturesStreamExt::next(&mut upstream) => chunk,
+            };
+            let chunk = match chunk {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(err)) => break format!("Upstream stream failed: {}", err.without_url()),
+                None => break "Upstream stream ended before its terminal event".to_owned(),
+            };
+            buffer.extend_from_slice(&chunk);
+            if buffer.len() > 8 * 1024 * 1024 { break "Upstream SSE frame is too large".into(); }
+            while let Some(newline) = buffer.iter().position(|&byte| byte == b'\n') {
+                let line: Vec<u8> = buffer.drain(..=newline).collect();
+                let line = match std::str::from_utf8(&line[..line.len()-1]) {
+                    Ok(line) => line.trim_end_matches('\r'),
+                    Err(_) => { send(&sender, &shutdown, converter.failed("Invalid UTF-8 in upstream event")).await; return; },
+                };
+                if line.is_empty() {
+                    if data.is_empty() { continue; }
+                    let payload = data.join("\n");
+                    data.clear();
+                    data_len = 0;
+                    match converter.feed(&payload) {
+                        Ok(out) => {
+                            if !out.is_empty() && !send(&sender, &shutdown, out).await { return; }
+                            if converter.is_finished() { return; }
+                        }
+                        Err(message) => { send(&sender, &shutdown, converter.failed(&message)).await; return; }
+                    }
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    let value = value.strip_prefix(' ').unwrap_or(value);
+                    data_len += value.len() + 1;
+                    if data_len > 8 * 1024 * 1024 {
+                        send(&sender, &shutdown, converter.failed("Upstream SSE frame is too large")).await;
+                        return;
+                    }
+                    data.push(value.to_owned());
+                }
+            }
+        };
+        send(&sender, &shutdown, converter.failed(&failure)).await;
+    });
+    let mut result = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)));
+    result.headers_mut().insert(header::CONTENT_TYPE, header::HeaderValue::from_static("text/event-stream"));
+    result.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-cache"));
     result
 }
 
@@ -194,6 +308,76 @@ mod tests {
             "display_name":"Model", "is_enabled":enabled, "created_at":1,
         })).unwrap();
         store.upsert_model(&model).unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_to_chat_converts_stream_and_tool_round_trip() {
+        let upstream = wiremock::MockServer::start().await;
+        let chunks = [
+            json!({"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":r#"{"path":"#}}]},"finish_reason":null}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":r#""file"}"#}}]},"finish_reason":"tool_calls"}]}),
+            json!({"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}),
+        ];
+        let sse = chunks.iter().map(|chunk| format!("data: {chunk}\n\n")).collect::<String>() + "data: [DONE]\n\n";
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .and(wiremock::matchers::header("authorization", "Bearer secret-p"))
+            .and(wiremock::matchers::body_partial_json(json!({"model":"same-upstream-name","stream":true,
+                "messages":[{"role":"system","content":"Follow instructions"},{"role":"user","content":"Hi"}],
+                "tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object"}}}]})))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+            .expect(1).mount(&upstream).await;
+        let store = Arc::new(Store::open_memory().unwrap());
+        add_model(&store, "p", &format!("{}/v1", upstream.uri()), "m", true);
+        let relay = AgentRelay::start(store, &CancellationToken::new()).await.unwrap();
+        let client = reqwest::Client::new();
+        let response = client.post(format!("{}/responses", relay.base_url)).bearer_auth(&relay.token)
+            .json(&json!({"model":"messenger/m","instructions":"Follow instructions","input":"Hi","stream":true,
+                "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]})).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response.text().await.unwrap();
+        let events: Vec<Value> = text.lines().filter_map(|line| line.strip_prefix("data: "))
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert!(events.iter().any(|event| event["type"] == "response.output_text.delta" && event["delta"] == "Hello "));
+        let final_event = events.last().unwrap();
+        assert_eq!(final_event["type"], "response.completed");
+        assert_eq!(final_event["response"]["model"], "messenger/m");
+        assert_eq!(final_event["response"]["usage"]["total_tokens"], 17);
+        assert_eq!(final_event["response"]["output"][1]["call_id"], "call-1");
+        assert_eq!(final_event["response"]["output"][1]["arguments"], r#"{"path":"file"}"#);
+    }
+
+    #[tokio::test]
+    async fn converted_stream_reports_truncation_and_nonstream_converts_response() {
+        let upstream = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_partial_json(json!({"stream":true})))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n", "text/event-stream"))
+            .expect(1).mount(&upstream).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_partial_json(json!({"stream":false})))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "choices":[{"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+            }))).expect(1).mount(&upstream).await;
+        let store = Arc::new(Store::open_memory().unwrap());
+        add_model(&store, "p", &format!("{}/v1", upstream.uri()), "m", true);
+        let relay = AgentRelay::start(store, &CancellationToken::new()).await.unwrap();
+        let client = reqwest::Client::new();
+        let request = |stream| client.post(format!("{}/responses", relay.base_url)).bearer_auth(&relay.token)
+            .json(&json!({"model":"messenger/m","input":"hi","stream":stream}));
+        let stream = request(true).send().await.unwrap().text().await.unwrap();
+        assert!(stream.contains("response.failed") && stream.contains("terminal event"));
+        assert!(!stream.contains("response.completed"));
+        let response: Value = request(false).send().await.unwrap().json().await.unwrap();
+        assert_eq!(response["output"][0]["content"][0]["text"], "answer");
+        assert_eq!(response["usage"]["total_tokens"], 3);
+        let unsupported = client.post(format!("{}/responses", relay.base_url)).bearer_auth(&relay.token)
+            .json(&json!({"model":"messenger/m","previous_response_id":"resp-old","input":"hi"})).send().await.unwrap();
+        assert_eq!(unsupported.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(unsupported.text().await.unwrap().contains("previous_response_id"));
     }
 
     #[tokio::test]
@@ -326,6 +510,42 @@ mod tests {
         drop(relay);
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), futures_util::StreamExt::next(&mut stream)).await;
         assert!(matches!(result, Ok(None) | Ok(Some(Err(_)))), "relay must close its stream on shutdown");
+        upstream_stop.cancel();
+    }
+
+    #[tokio::test]
+    async fn converted_stream_handles_split_sse_and_stops_with_the_relay() {
+        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream_stop = CancellationToken::new();
+        let upstream_shutdown = upstream_stop.clone();
+        let app = Router::new().route("/v1/chat/completions", post(|| async {
+            let chunks = vec![
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"data: {\"choices\":[{\"delta\":{\"content\":\"spl")),
+                Ok(axum::body::Bytes::from_static(b"it\"},\"finish_reason\":null}]}\r\n\r\n")),
+            ];
+            let stream = futures_util::StreamExt::chain(futures_util::stream::iter(chunks), futures_util::stream::pending());
+            Response::builder().header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(stream)).unwrap()
+        }));
+        tokio::spawn(async move { let _ = axum::serve(listener, app).with_graceful_shutdown(upstream_shutdown.cancelled_owned()).await; });
+        let store = Arc::new(Store::open_memory().unwrap());
+        add_model(&store, "p", &format!("http://{address}/v1"), "m", true);
+        let relay = AgentRelay::start(store, &CancellationToken::new()).await.unwrap();
+        let response = reqwest::Client::new().post(format!("{}/responses", relay.base_url))
+            .bearer_auth(&relay.token).json(&json!({"model":"messenger/m","input":"hi","stream":true})).send().await.unwrap();
+        let mut stream = response.bytes_stream();
+        let mut content = String::new();
+        while !content.contains("response.output_text.delta") {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), futures_util::StreamExt::next(&mut stream)).await.unwrap().unwrap().unwrap();
+            content.push_str(std::str::from_utf8(&chunk).unwrap());
+        }
+        assert!(content.contains("split"));
+        drop(relay);
+        let end = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while let Some(Ok(_)) = futures_util::StreamExt::next(&mut stream).await {}
+        }).await;
+        assert!(end.is_ok(), "converted stream must close when the relay stops");
         upstream_stop.cancel();
     }
 }

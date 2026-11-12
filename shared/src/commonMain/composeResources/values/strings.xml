@@ -510,7 +510,7 @@
     <string name="acp_edit">Edit ACP Agent</string>
     <string name="acp_config_note">Agents run in the selected project workspace. Sign in to the coding agent before starting a conversation.</string>
     <string name="acp_provider_takeover">Use Messenger providers</string>
-    <string name="acp_provider_takeover_desc">Use enabled models with a matching API format through the local relay. Applies to new sessions or after restarting the app.</string>
+    <string name="acp_provider_takeover_desc">Use enabled models with supported API formats through the local relay. Applies to new sessions or after restarting the app.</string>
     <string name="acp_working_directory">Working directory (optional)</string>
     <string name="acp_args_json">Arguments (JSON array)</string>
     <string name="acp_env_json">Environment (JSON object)</string>
