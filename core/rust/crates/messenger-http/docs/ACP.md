@@ -131,7 +131,10 @@ All routes use the per-start local bearer.
   when compatible, otherwise the first enabled compatible model is used.
   OpenCode takeover runs the configured executable with `--version` in the
   same process host and working directory before startup; versions 1 and 2
-  receive their respective provider configuration schemas. A failed, timed
+  receive their respective provider configuration schemas. V2 selects native
+  Chat, Responses, Messages or Interactions adapters per model, so requests
+  use same-format relay passthrough. V1 selects native Chat, Responses and
+  Messages adapters; Interactions models retain Chat-to-Interactions conversion. A failed, timed
   out, or unsupported version check prevents startup. Existing workers keep
   their startup configuration.
 - When Agent delegation is enabled in MCP settings, ACP workers that advertise

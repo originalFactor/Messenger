@@ -540,12 +540,19 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, op
             let v2 = opencode_major.ok_or_else(|| ApiError::BadRequest("OpenCode version was not detected".into()))? >= 2;
             let key = if v2 { "providers" } else { "provider" };
             if config.get(key).is_none() { config[key] = json!({}); }
+            let provider_formats: HashMap<String, String> = providers.iter().map(|(id, provider)| (id.clone(), provider.api_format.clone())).collect();
             let providers = config[key].as_object_mut().expect("provider configuration was checked");
             let catalog: serde_json::Map<String, Value> = models.iter().map(|model| (
-                model.id.clone(), if v2 {
-                    json!({"name":model.display_name, "modelID":format!("messenger/{}", model.id)})
-                } else {
-                    json!({"name":model.display_name, "id":format!("messenger/{}", model.id)})
+                model.id.clone(), {
+                    let format = provider_formats.get(&model.provider_id).map(String::as_str).unwrap_or("chat");
+                    let (native, legacy) = match format {
+                        "responses" => ("@opencode/ai/providers/openai-compatible/responses", "@ai-sdk/openai"),
+                        "messages" => ("@opencode/ai/providers/anthropic-compatible", "@ai-sdk/anthropic"),
+                        "interactions" => ("@opencode/ai/providers/google/interactions", "@ai-sdk/openai-compatible"),
+                        _ => ("@opencode/ai/providers/openai-compatible", "@ai-sdk/openai-compatible"),
+                    };
+                    if v2 { json!({"name":model.display_name, "modelID":format!("messenger/{}", model.id), "package":native}) }
+                    else { json!({"name":model.display_name, "id":format!("messenger/{}", model.id), "npm":legacy}) }
                 }
             )).collect();
             let provider = if v2 {
@@ -554,7 +561,27 @@ async fn configure_provider_takeover(state: &ApiState, profile: &mut Profile, op
                 json!({"name":"Messenger","npm":"@ai-sdk/openai-compatible", "options":{"baseURL":base_url,"apiKey":token},"models":catalog})
             };
             providers.insert("messenger".into(), provider);
-            config["model"] = json!(selected_id);
+            let mut model_reference = selected_id;
+            if !v2 {
+                // V1 chooses its SDK at provider level; per-model npm overrides
+                // are ignored, so each native protocol needs a provider entry.
+                for (format, package) in [("responses", "@ai-sdk/openai"), ("messages", "@ai-sdk/anthropic")] {
+                    let mut catalog = serde_json::Map::new();
+                    for model in &models {
+                        if provider_formats.get(&model.provider_id).map(String::as_str) != Some(format) { continue; }
+                        catalog.insert(model.id.clone(), json!({"name":model.display_name,"id":format!("messenger/{}",model.id)}));
+                        providers["messenger"]["models"].as_object_mut().expect("generated catalog").remove(&model.id);
+                    }
+                    if !catalog.is_empty() {
+                        let id = format!("messenger-{format}");
+                        providers.insert(id.clone(), json!({"name":format!("Messenger {format}"),"npm":package,"options":{"baseURL":base_url,"apiKey":token},"models":catalog}));
+                        if provider_formats.get(&selected.provider_id).map(String::as_str) == Some(format) {
+                            model_reference = format!("{id}/{}",selected.id);
+                        }
+                    }
+                }
+            }
+            config["model"] = json!(model_reference);
             profile.env.insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
         }
         _ => unreachable!(),
@@ -1055,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn builtin_takeover_uses_process_scoped_relay_configuration() {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
-        for (id, format) in [("chat-model", "chat"), ("response-model", "responses"), ("message-model", "messages")] {
+        for (id, format) in [("chat-model", "chat"), ("response-model", "responses"), ("message-model", "messages"), ("interaction-model", "interactions")] {
             state.store.upsert_provider(&StoredProvider {
                 id: id.into(), name: id.into(), base_url: "https://example.invalid/v1".into(),
                 api_key: format!("upstream-secret-{id}"), api_format: format.into(), created_at: 1, updated_at: 1,
@@ -1093,6 +1120,19 @@ mod tests {
                     assert_eq!(config["theme"], "test");
                     assert_eq!(config["model"], "messenger/chat-model");
                     assert_eq!(config["provider"]["messenger"]["models"]["chat-model"]["id"], "messenger/chat-model");
+                    assert_eq!(config["provider"]["messenger-responses"]["npm"], "@ai-sdk/openai");
+                    assert_eq!(config["provider"]["messenger-messages"]["npm"], "@ai-sdk/anthropic");
+                    configure_provider_takeover(&state, &mut profile, Some(2)).await.unwrap();
+                    let config: Value = serde_json::from_str(&profile.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+                    for (id, package) in [
+                        ("chat-model", "@opencode/ai/providers/openai-compatible"),
+                        ("response-model", "@opencode/ai/providers/openai-compatible/responses"),
+                        ("message-model", "@opencode/ai/providers/anthropic-compatible"),
+                        ("interaction-model", "@opencode/ai/providers/google/interactions"),
+                    ] {
+                        assert_eq!(config["providers"]["messenger"]["models"][id]["package"], package);
+                        assert_eq!(config["providers"]["messenger"]["models"][id]["modelID"], format!("messenger/{id}"));
+                    }
                 }
                 _ => unreachable!(),
             }
