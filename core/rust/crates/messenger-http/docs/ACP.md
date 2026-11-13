@@ -137,12 +137,22 @@ All routes use the per-start local bearer.
   Messages adapters; Interactions models retain Chat-to-Interactions conversion. A failed, timed
   out, or unsupported version check prevents startup. Existing workers keep
   their startup configuration.
-- When Agent delegation is enabled in MCP settings, ACP workers that advertise
-  MCP SSE or HTTP support receive a private loopback `Messenger Agents` server. Its
-  `messenger_agents` tool lists or calls agents during an active turn. Enabling
-  requires restarting the ACP worker; disabling prevents subsequent calls.
-  ACP agents without either transport report an error at session setup. Delegated
-  ACP sessions do not receive the delegation server, preventing recursive calls.
+- ACP workers advertising MCP SSE or HTTP receive a private per-worker Core
+  gateway on new/load/resume. Its `messenger_skills` tool reads enabled Skills
+  and bundled text only during that worker's active turn. Each prompt carries
+  current enabled names/descriptions as discovery context; full instructions and
+  resources remain on demand. The local user row keeps the original input.
+  The reader is provisioned even for an empty catalog so installing/enabling
+  Skills works on the next prompt. Disabling/deleting blocks subsequent reads.
+  Workers without either transport report an error when Skills are enabled.
+- When Agent delegation is enabled at worker startup, the same gateway is named
+  `Messenger Agents` and also exposes `messenger_agents`; otherwise it is named
+  `Messenger Skills`. Configured MCP servers must not conflict with that name.
+  Enabling delegation requires restarting the worker; disabling blocks calls.
+  Delegated ACP workers receive the Skills reader but never delegation, including
+  after restoration or global-setting changes. The gateway's random capability
+  URL stays private and its listener closes with the worker. Imported scripts and
+  `allowed-tools` never grant execution or extra permissions.
 - Android brokers ACP process stdio through the local `acpProcess` event,
   `GET /api/v1/control/processes/{id}/input` (SSE), and
   `POST /api/v1/control/processes/{id}/output` (a JSON `line`, or an empty

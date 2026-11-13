@@ -82,7 +82,18 @@ as `binaryFiles` base64 but cannot be read as text by this tool.
 Skill scripts are never executed by import or by the reader. `allowed-tools`
 is informational and cannot change permissions. Client-supplied declarations
 cannot replace this reserved tool. Skill metadata/files are not injected into
-title generation or third-party ACP sessions; packages remain device-local.
+title generation; packages remain device-local.
+
+ACP workers with MCP SSE or HTTP support receive a private Core reader at session
+creation, load and resume, even when the catalog is empty. Each prompt appends
+current enabled discovery metadata to the Agent input without adding that context
+to the stored local user row. Full instructions/resources load only through
+`messenger_skills` during the owning active turn; disabling/deleting a package
+blocks subsequent reads. ACP Agent tool notifications use the existing transcript
+and update events; there are no new SSE types. The gateway closes with the worker
+and is independent of Agent delegation. Delegated workers receive Skills without
+`messenger_agents`. Agents without either transport report a visible error when
+Skills are enabled; installing Skills does not silently leave such sessions unsupported.
 
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 

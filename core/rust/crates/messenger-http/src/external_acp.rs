@@ -143,6 +143,7 @@ pub(crate) struct Record {
 
 #[derive(Clone)]
 struct Worker {
+    skills_available: bool,
     requests: mpsc::Sender<WorkerRequest>,
     lifetime: CancellationToken,
     output: Arc<Mutex<Output>>,
@@ -361,6 +362,14 @@ impl ExternalSessions {
         if cancel.is_cancelled() {
             return Ok(json!({"type":"Cancelled"}));
         }
+        let mut prompt_content = content.clone();
+        if let Some(catalog) = crate::skills::prompt(&state.store)? {
+            if !worker.skills_available {
+                return Err(ApiError::BadRequest("Skills require ACP MCP SSE or HTTP support; restart the ACP session with a compatible agent".into()));
+            }
+            // Ephemeral discovery context: retain only the user's actual input in history.
+            prompt_content.push(ContentBlock::Text(TextContent::new(catalog)));
+        }
         if record.messages.is_empty() {
             record.title = crate::control::short(&text, 80);
         }
@@ -373,7 +382,7 @@ impl ExternalSessions {
         let transcript = Arc::new(std::sync::Mutex::new(Vec::new()));
         let _ = updates.send(json!({"type":"TurnStarted"})).await;
         let job = Prompt {
-            content,
+            content: prompt_content,
             cancel,
             permissions,
             updates,
@@ -663,7 +672,7 @@ async fn start_worker_impl(
     let mut start_guard = Some(lifetime.clone().drop_guard());
     let transport = spawn_process(state, &profile, &cwd).await?;
     let output = Arc::new(Mutex::new(Output::default()));
-    let worker = Worker { requests: input, output: output.clone(), lifetime: lifetime.clone() };
+    let worker = Worker { skills_available: false, requests: input, output: output.clone(), lifetime: lifetime.clone() };
     let notify_output = output.clone();
     let permission_output = output.clone();
     let gateway_output = output.clone();
@@ -710,22 +719,30 @@ async fn start_worker_impl(
                             "Unsupported ACP protocol version",
                         ));
                     }
-                    let name_conflict = mcp_servers.iter().any(|server| server.is_enabled && server.name == "Messenger Agents");
-                    let mut mcp_servers = acp_mcp_servers(&mcp_servers, init.agent_capabilities.mcp_capabilities.sse)?;
-                    if allow_delegation && crate::delegation::enabled(&gateway_state.store) {
-                        if !init.agent_capabilities.mcp_capabilities.sse && !init.agent_capabilities.mcp_capabilities.http {
+                    let delegation_enabled = allow_delegation && crate::delegation::enabled(&gateway_state.store);
+                    let skills_available = init.agent_capabilities.mcp_capabilities.sse || init.agent_capabilities.mcp_capabilities.http;
+                    if !skills_available {
+                        if delegation_enabled {
                             return Err(agent_client_protocol::Error::new(-32000, "Agent delegation requires ACP MCP SSE or HTTP support"));
                         }
-                        if name_conflict {
-                            return Err(agent_client_protocol::Error::new(-32000, "Rename the configured MCP server named Messenger Agents to enable agent delegation"));
+                        if crate::skills::prompt(&gateway_state.store).map_err(|error| agent_client_protocol::Error::new(-32000, format!("{error:?}")))?.is_some() {
+                            return Err(agent_client_protocol::Error::new(-32000, "Skills require ACP MCP SSE or HTTP support"));
                         }
-                        let url = crate::acp_mcp::start(gateway_state, project, gateway_output, gateway_lifetime)
+                    }
+                    let gateway_name = if delegation_enabled { "Messenger Agents" } else { "Messenger Skills" };
+                    let name_conflict = mcp_servers.iter().any(|server| server.is_enabled && server.name == gateway_name);
+                    let mut mcp_servers = acp_mcp_servers(&mcp_servers, init.agent_capabilities.mcp_capabilities.sse)?;
+                    if skills_available {
+                        if name_conflict {
+                            return Err(agent_client_protocol::Error::new(-32000, format!("Rename the configured MCP server named {gateway_name} to use the Core tools")));
+                        }
+                        let url = crate::acp_mcp::start(gateway_state, project, gateway_output, gateway_lifetime, delegation_enabled)
                             .await.map_err(|error| agent_client_protocol::Error::new(-32000, error.to_string()))?;
                         if init.agent_capabilities.mcp_capabilities.sse {
-                            mcp_servers.push(McpServer::Sse(McpServerSse::new("Messenger Agents", url)));
+                            mcp_servers.push(McpServer::Sse(McpServerSse::new(gateway_name, url)));
                         } else {
                             let rpc_url = format!("{}/rpc", url.rsplit_once('/').unwrap().0);
-                            mcp_servers.push(McpServer::Http(McpServerHttp::new("Messenger Agents", rpc_url)));
+                            mcp_servers.push(McpServer::Http(McpServerHttp::new(gateway_name, rpc_url)));
                         }
                     }
                     output.lock().await.settings = json!({"configOptions":[],"steering": init.meta.as_ref().and_then(|meta| meta.get("steering")).cloned().unwrap_or(Value::Null)});
@@ -758,7 +775,7 @@ async fn start_worker_impl(
                         }
                     };
                     let replay = output.lock().await.replay.take();
-                    let _ = ready.send((session.clone(), replay));
+                    let _ = ready.send((session.clone(), replay, skills_available));
                     loop {
                         let prompt = tokio::select! {
                             prompt = prompts.recv() => prompt,
@@ -790,9 +807,9 @@ async fn start_worker_impl(
         biased;
         result = initialized => {
             match result {
-                Ok((id, history)) => {
+                Ok((id, history, skills_available)) => {
                     if let Some(guard) = start_guard.take() { guard.disarm(); }
-                    Ok((worker, id, history))
+                    Ok((Worker { skills_available, ..worker }, id, history))
                 }
                 Err(_) => Err(ApiError::internal((&mut failed).await.unwrap_or_else(|_| "The ACP agent exited.".into()))),
             }
@@ -1355,6 +1372,71 @@ mod tests {
             .await
             .unwrap();
         (state, session)
+    }
+
+    fn fixture_skill(state: &ApiState, enabled: bool) {
+        state.store.kv_set("agent_skill:fixture-skill", &json!({"enabled":enabled,"files":{
+            "SKILL.md":"---\nname: fixture-skill\ndescription: Fixture skill\n---\nPRIVATE SKILL BODY",
+            "references/guide.md":"PRIVATE RESOURCE"
+        }}).to_string()).unwrap();
+    }
+
+    async fn skill_prompt(state: &ApiState, session: &str, text: &str) -> Value {
+        let (_choices, permissions) = mpsc::channel(1);
+        let (updates, _events) = mpsc::channel(32);
+        tokio::time::timeout(Duration::from_secs(10), state.external.prompt(
+            state, session.into(), text.into(), Vec::new(), CancellationToken::new(), permissions, updates,
+        )).await.expect("ACP Skill read timed out").unwrap()
+    }
+
+    #[tokio::test]
+    async fn acp_skills_read_live_catalog_over_both_transports_and_restore_sessions() {
+        for mode in ["skills-sse", "skills-http", "skills-load", "skills-resume"] {
+            // An empty catalog at worker startup must not prevent later installation.
+            let (state, session) = setup(mode).await;
+            fixture_skill(&state, true);
+            assert_eq!(skill_prompt(&state, &session, "read").await["type"], "Finished");
+            let history = state.external.history(&state.store, &session).unwrap();
+            assert_eq!(history.last().unwrap()["text"], "skill read");
+            assert_eq!(history[0]["content"].as_array().unwrap().len(), 1);
+            assert!(!history[0].to_string().contains("Available Agent Skills"));
+            fixture_skill(&state, false);
+            assert_eq!(skill_prompt(&state, &session, "disabled").await["type"], "Finished");
+            assert_eq!(state.external.history(&state.store, &session).unwrap().last().unwrap()["text"], "skill disabled");
+            fixture_skill(&state, true);
+            if matches!(mode, "skills-load" | "skills-resume") {
+                state.external.workers.lock().await.remove(&session).unwrap().lifetime.cancel();
+            }
+            assert_eq!(skill_prompt(&state, &session, "read again").await["type"], "Finished");
+            state.shutdown.cancel();
+        }
+    }
+
+    #[tokio::test]
+    async fn delegated_acp_can_read_skills_without_receiving_delegation() {
+        let (state, _) = setup("skills-http").await;
+        fixture_skill(&state, true);
+        state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap();
+        let project = state.store.get_project("fixture-project").unwrap();
+        let session = state.external.create_with_delegation(&state, "fixture", project, &CancellationToken::new(), false).await.unwrap();
+        assert_eq!(skill_prompt(&state, &session, "read").await["type"], "Finished");
+        assert!(state.external.record(&state.store, &session).unwrap().delegated);
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn acp_without_mcp_reports_skills_instead_of_silently_ignoring_them() {
+        let (state, session) = setup("load").await;
+        fixture_skill(&state, true);
+        let (_choices, permissions) = mpsc::channel(1);
+        let (updates, _events) = mpsc::channel(32);
+        let error = state.external.prompt(&state, session.clone(), "read".into(), Vec::new(), CancellationToken::new(), permissions, updates).await.unwrap_err();
+        assert!(format!("{error:?}").contains("Skills require ACP MCP SSE or HTTP support"));
+        assert!(state.external.history(&state.store, &session).unwrap().is_empty());
+        state.external.workers.lock().await.remove(&session).unwrap().lifetime.cancel();
+        let error = state.external.settings(&state, &session, None, &CancellationToken::new()).await.unwrap_err();
+        assert!(format!("{error:?}").contains("Skills require ACP MCP SSE or HTTP support"));
+        state.shutdown.cancel();
     }
 
     #[tokio::test]

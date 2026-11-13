@@ -1,4 +1,5 @@
 """Small ACP v1 peer that exercises stdio, replay and permission callbacks."""
+from contextlib import contextmanager
 import json
 import os
 import sys
@@ -41,17 +42,51 @@ def update(kind, text):
     })
 
 
+@contextmanager
+def mcp_connection(url):
+    stream = None
+    endpoint = url
+    try:
+        if url.endswith("/events"):
+            stream = urllib.request.urlopen(url, timeout=5)
+            assert stream.readline().decode().strip() == "event: endpoint"
+            endpoint = urllib.parse.urljoin(url, stream.readline().decode().strip().removeprefix("data: "))
+            stream.readline()
+
+        def rpc(method, params):
+            payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+            req = urllib.request.Request(endpoint, data=payload, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                if stream is None:
+                    return json.load(response)["result"]
+            assert stream.readline().decode().strip() == "event: message"
+            result = json.loads(stream.readline().decode().strip().removeprefix("data: "))
+            stream.readline()
+            return result["result"]
+
+        rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}})
+        yield rpc
+    finally:
+        if stream is not None:
+            stream.close()
+
+
 for line in sys.stdin:
     packet = json.loads(line)
     request_id = packet.get("id")
     method = packet.get("method")
+    if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
+        mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
         capabilities = {"loadSession": mode in ("load", "settings", "settings-hang", "mcp-load")}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
             capabilities["mcpCapabilities"] = {"http": True}
-        if mode in ("resume", "mcp-resume"):
+        if mode.startswith("skills-"):
+            capabilities["mcpCapabilities"] = {"http": True} if mode == "skills-http" else {"sse": True}
+            capabilities["loadSession"] = mode == "skills-load"
+        if mode in ("resume", "mcp-resume", "skills-resume"):
             capabilities["sessionCapabilities"] = {"resume": {}}
         send(id=request_id, result={"protocolVersion": 1, "agentCapabilities": capabilities, "_meta":{"steering":{"supported":True}}})
     elif method == "session/new":
@@ -67,7 +102,7 @@ for line in sys.stdin:
             assert packet["params"]["mcpServers"][0]["env"][0]["value"] == "secret"
         if mode in ("agent-mcp", "agent-mcp-http"):
             servers = packet["params"]["mcpServers"]
-            mcp_url = servers[-1]["url"] if servers else None
+            mcp_url = next((server["url"] for server in servers if server["name"] == "Messenger Agents"), None)
         send(id=request_id, result={"sessionId": session_id, **(session_settings() if mode.startswith("settings") else {})})
     elif method == "session/load":
         if mode == "mcp-load":
@@ -100,35 +135,30 @@ for line in sys.stdin:
             update("agent_message_chunk", "child reply")
             send(id=pending, result={"stopReason":"end_turn"})
         elif mode in ("agent-mcp", "agent-mcp-http"):
-            stream = None
-            endpoint = mcp_url
-            if mode == "agent-mcp":
-                stream = urllib.request.urlopen(mcp_url, timeout=5)
-                assert stream.readline().decode().strip() == "event: endpoint"
-                endpoint = urllib.parse.urljoin(mcp_url, stream.readline().decode().strip().removeprefix("data: "))
-                stream.readline()
-            def rpc(method, params):
-                payload = json.dumps({"jsonrpc":"2.0", "id":1, "method":method, "params":params}).encode()
-                req = urllib.request.Request(endpoint, data=payload, headers={"Content-Type":"application/json"})
-                response = urllib.request.urlopen(req, timeout=5)
-                if stream is None:
-                    result = json.load(response)
-                else:
-                    response.close()
-                    assert stream.readline().decode().strip() == "event: message"
-                    result = json.loads(stream.readline().decode().strip().removeprefix("data: "))
-                    stream.readline()
-                return result["result"]
-            rpc("initialize", {"protocolVersion":"2024-11-05", "capabilities":{}, "clientInfo":{"name":"fixture","version":"1"}})
-            tools = rpc("tools/list", {})
-            assert tools["tools"][0]["name"] == "messenger_agents"
-            listed = rpc("tools/call", {"name":"messenger_agents", "arguments":{"action":"list"}})
-            assert any(agent["id"] == "acp:fixture" for agent in json.loads(listed["content"][0]["text"])["agents"])
-            result = rpc("tools/call", {"name":"messenger_agents", "arguments":{"action":"call", "agentId":"acp:fixture", "task":"child task"}})
-            assert result["isError"] is False
-            update("agent_message_chunk", result["content"][0]["text"])
-            if stream is not None:
-                stream.close()
+            with mcp_connection(mcp_url) as rpc:
+                tools = rpc("tools/list", {})
+                assert tools["tools"][0]["name"] == "messenger_agents"
+                listed = rpc("tools/call", {"name":"messenger_agents", "arguments":{"action":"list"}})
+                assert any(agent["id"] == "acp:fixture" for agent in json.loads(listed["content"][0]["text"])["agents"])
+                result = rpc("tools/call", {"name":"messenger_agents", "arguments":{"action":"call", "agentId":"acp:fixture", "task":"child task"}})
+                assert result["isError"] is False
+                update("agent_message_chunk", result["content"][0]["text"])
+            send(id=pending, result={"stopReason":"end_turn"})
+        elif mode.startswith("skills-"):
+            context = "\n".join(block.get("text", "") for block in packet["params"]["prompt"][1:])
+            assert "PRIVATE SKILL BODY" not in context and "PRIVATE RESOURCE" not in context
+            assert ("fixture-skill" in context) == (text != "disabled")
+            with mcp_connection(mcp_url) as rpc:
+                tools = rpc("tools/list", {})["tools"]
+                assert [tool["name"] for tool in tools] == ["messenger_skills"]
+                result = rpc("tools/call", {"name":"messenger_skills", "arguments":{"name":"fixture-skill"}})
+                assert result["isError"] == (text == "disabled")
+                if text != "disabled":
+                    assert "PRIVATE SKILL BODY" in result["content"][0]["text"]
+                    resource = rpc("tools/call", {"name":"messenger_skills", "arguments":{"name":"fixture-skill", "path":"references/guide.md"}})
+                    assert resource["isError"] is False
+                    assert resource["content"][0]["text"] == "PRIVATE RESOURCE"
+            update("agent_message_chunk", "skill disabled" if text == "disabled" else "skill read")
             send(id=pending, result={"stopReason":"end_turn"})
         elif text == "tools" and mode == "settings":
             update("agent_thought_chunk", "Inspect the file")

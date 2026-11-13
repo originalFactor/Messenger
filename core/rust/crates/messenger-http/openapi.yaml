@@ -165,7 +165,10 @@ paths:
         Packages contain at most 128 files, 1 MiB decoded bytes per file and
         4 MiB total decoded bytes. Binary files use standard padded base64.
         Scripts/assets are stored as data; allowed-tools never grants permission.
-        These packages are not synced to Cloud or injected into external ACP agents.
+        These packages are not synced to Cloud. MCP-capable ACP sessions receive
+        enabled discovery metadata per prompt and read text through a private
+        per-worker MCP messenger_skills tool. Reads require an active owning turn;
+        Skills never grant delegation or script execution permissions.
       requestBody:
         required: true
         content:

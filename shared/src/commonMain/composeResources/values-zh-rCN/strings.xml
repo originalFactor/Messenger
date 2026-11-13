@@ -9,7 +9,7 @@
     <!-- Agent Skills -->
     <string name="skills_title">Skills 管理器</string>
     <string name="skills_settings_desc">管理供 Agent 复用的指令与资源</string>
-    <string name="skills_usage_note">Skills 保存在本设备上，开启 Agent 工具后可用于 Messenger 原生对话。附带的脚本不会自动运行。</string>
+    <string name="skills_usage_note">Skills 保存在本设备上，可用于 Messenger 原生对话和 ACP 会话。原生对话需开启 Agent 工具，附带的脚本不会自动运行。</string>
     <string name="skills_create">新建 Skill</string>
     <string name="skills_edit">编辑 Skill</string>
     <string name="skills_import">导入 Skill</string>

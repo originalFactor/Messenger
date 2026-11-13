@@ -9,7 +9,7 @@
     <!-- Agent Skills -->
     <string name="skills_title">Skills</string>
     <string name="skills_settings_desc">Manage reusable instructions and resources for your agents</string>
-    <string name="skills_usage_note">Skills are stored on this device and available in native Messenger chats when agent tools are enabled. Bundled scripts are not run automatically.</string>
+    <string name="skills_usage_note">Skills are stored on this device and available in Messenger chats and ACP sessions. Native chats require agent tools to be enabled. Bundled scripts are not run automatically.</string>
     <string name="skills_create">Create skill</string>
     <string name="skills_edit">Edit skill</string>
     <string name="skills_import">Import skill</string>
