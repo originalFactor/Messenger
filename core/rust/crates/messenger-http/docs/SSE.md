@@ -20,6 +20,11 @@ The feed is endless and shared by every request: it stays subscribed to store
 changes for the server's whole lifetime. It ends only when the server stops
 (`ServerHandle::stop`), which closes it so the graceful shutdown can finish.
 
+Remote Skills discovery and preview (`POST /api/v1/skills/remote/discover` and
+`/skills/remote/preview`) are bounded JSON requests, emit no SSE events and never
+mutate the installed catalog. Discovery returns a pinned commit ref for preview;
+only the existing package PUT persists a skill and produces store changes.
+
 ## Chat (`POST /api/v1/conversations/{id}/messages`)
 
 Event types:

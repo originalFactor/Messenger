@@ -22,6 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 base64 = "0.22"
+gix = { version = "0.90", default-features = false, features = ["sha1"] }
+gix-pack = { version = "0.77", default-features = false, features = ["sha1", "streaming-input"] }
+percent-encoding = "2"
+tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 subtle = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "process", "io-util", "io-std"] }

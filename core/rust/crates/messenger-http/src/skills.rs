@@ -4,6 +4,8 @@ use serde_json::json;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::collections::BTreeMap;
 
+pub(crate) mod remote;
+
 const PREFIX: &str = "agent_skill:";
 pub(crate) const TOOL_NAME: &str = "messenger_skills";
 pub(crate) const BODY_LIMIT: usize = 26 * 1024 * 1024;

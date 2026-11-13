@@ -36,6 +36,8 @@ fun SkillsScreen(
     val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var deleting by remember { mutableStateOf<SkillPackage?>(null) }
+    var remoteImport by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.editing) { if (state.editing != null) remoteImport = false }
     val picker = rememberSkillImportPicker(onPicked = viewModel::importFiles, onError = viewModel::reportError)
     LaunchedEffect(state.error) { state.error?.let { snackbar.showSnackbar(it) } }
 
@@ -91,6 +93,18 @@ fun SkillsScreen(
                                     }
                                 }
                             }
+                            item {
+                                ExpressiveRow(onClick = {
+                                    viewModel.clearRemoteCatalog()
+                                    remoteImport = true
+                                }, enabled = !state.busy && !state.loading) {
+                                    Icon(Icons.Default.Add, null, Modifier.padding(end = 16.dp))
+                                    Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                        Text(stringResource(Res.string.skills_remote_import), style = MaterialTheme.typography.titleMedium)
+                                        Text(stringResource(Res.string.skills_remote_import_desc), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
                         }
                     }
                     if (state.error != null) item {
@@ -133,6 +147,13 @@ fun SkillsScreen(
             }
         }
     }
+    if (remoteImport && editing == null) RemoteSkillImportDialog(
+        catalog = state.remoteCatalog, busy = state.busy, error = state.error,
+        onSourceChanged = viewModel::clearRemoteCatalog,
+        onDiscover = viewModel::discoverRemote,
+        onSelect = viewModel::previewRemote,
+        onDismiss = { remoteImport = false; viewModel.clearRemoteCatalog() },
+    )
     deleting?.let { skill ->
         AlertDialog(
             onDismissRequest = { if (!state.busy) deleting = null },
@@ -291,9 +312,8 @@ private fun SkillEditor(
 
 /** Update only YAML frontmatter; leave instructions and bundled resources untouched. */
 private fun updateFrontmatterName(markdown: String, name: String): String {
-    if (!markdown.startsWith("---\n")) return markdown
-    val end = markdown.indexOf("\n---", startIndex = 4)
-    if (end < 0) return markdown
+    if (!markdown.startsWith("---\n") && !markdown.startsWith("---\r\n")) return markdown
+    val end = Regex("(?m)^---\\r?$").find(markdown, startIndex = 4)?.range?.first ?: return markdown
     val frontmatter = markdown.substring(0, end)
-    return frontmatter.replace(Regex("(?m)^name:.*$")) { "name: $name" } + markdown.substring(end)
+    return frontmatter.replace(Regex("(?m)^name:[^\\r\\n]*")) { "name: $name" } + markdown.substring(end)
 }

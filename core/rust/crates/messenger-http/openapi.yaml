@@ -28,6 +28,87 @@ paths:
                 required: [items]
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/SkillSummary' } }
+  /skills/remote/discover:
+    post:
+      operationId: discoverRemoteSkills
+      description: |
+        Discover public GitHub owner/repo, repository/tree/blob SKILL.md links,
+        GitHub git@github.com SSH shorthand (normalized to HTTPS), or arbitrary
+        Git smart-HTTPS repositories. No credentials, redirects, Git executable,
+        checkout, hooks, submodules or scripts. GitHub branch names containing
+        slashes resolve by the longest advertised ref. Optional path overrides
+        the URL subtree; optional ref overrides its revision. Empty path is the
+        repository root. Returns canonical source and immutable commit ref to
+        pass unchanged with a candidate path to remote preview. Does not save.
+        Fails visibly for no skills, unsupported schemes, private repositories,
+        truncated/oversized trees, timeouts or network errors. Invalid candidate
+        metadata is returned in warnings while valid siblings remain selectable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: &remoteSkillRequest
+              type: object
+              additionalProperties: false
+              required: [source]
+              properties:
+                source: { type: string, maxLength: 2048 }
+                path: { type: string, maxLength: 512 }
+                ref: { type: string, maxLength: 512 }
+      responses:
+        "200":
+          description: At most 128 skill candidates beneath the selected subtree.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, ref, items, warnings]
+                properties:
+                  source: { type: string }
+                  warnings:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, message]
+                      properties:
+                        path: { type: string }
+                        message: { type: string }
+                  ref: { type: string, pattern: '^[0-9a-f]{40}$' }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, name, description]
+                      properties:
+                        path: { type: string }
+                        name: { type: string }
+                        description: { type: string }
+        "400": { description: Unsupported, invalid, oversized, inaccessible or timed-out remote source. }
+  /skills/remote/preview:
+    post:
+      operationId: previewRemoteSkill
+      description: |
+        Fetch one discovered skill using canonical source, pinned ref and path.
+        Returns the existing validated package preview without writing catalog
+        state. UTF-8 and base64 binary assets are preserved; symlinks/submodules
+        fail explicitly, .git data and nested skill packages are excluded.
+        Limits: 128 files, 1 MiB/file, 4 MiB/package, tree depth 32, 20000 tree
+        entries/pack objects, 32 MiB Git wire response, 8 MiB GitHub tree,
+        90 seconds overall; GitHub resolves selected directories before fetching
+        their recursive tree, then downloads only selected package blobs.
+        Save requires the existing PUT /skills/{name} operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: *remoteSkillRequest
+      responses:
+        "200":
+          description: Validated editable package; no persistence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SkillDetail' }
+        "400": { description: Invalid selection/package, unsupported resources, network failure or limit exceeded. }
   /skills/validate:
     post:
       operationId: validateSkill

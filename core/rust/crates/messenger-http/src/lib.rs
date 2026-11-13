@@ -378,6 +378,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/control/agent-relay", get(agent_relay::status).post(agent_relay::start).delete(agent_relay::stop))
         .route("/mcp/agent-delegation", get(delegation::get_setting).put(delegation::set_setting))
         .route("/skills", get(skills::list))
+        .route("/skills/remote/discover", post(skills::remote::discover))
+        .route("/skills/remote/preview", post(skills::remote::preview))
         .route("/skills/:name", get(skills::get).put(skills::put).delete(skills::delete).post(skills::preview)
             .layer(axum::extract::DefaultBodyLimit::max(skills::BODY_LIMIT)))
         .route("/control/settings", get(control::get_settings).put(control::set_settings))

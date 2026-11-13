@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.domain.model.SkillPackage
+import cc.ptoe.messenger.domain.model.RemoteSkillCandidate
+import cc.ptoe.messenger.domain.model.RemoteSkillCatalog
+import cc.ptoe.messenger.domain.model.RemoteSkillRequest
 import cc.ptoe.messenger.presentation.platform.SkillImportBundle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +33,7 @@ data class SkillsUiState(
     val editing: SkillPackage? = null,
     val draftFiles: Map<String, String> = emptyMap(),
     val imported: Boolean = false,
+    val remoteCatalog: RemoteSkillCatalog? = null,
 )
 
 class SkillsViewModel(private val core: CoreBridge) : ViewModel() {
@@ -105,6 +109,29 @@ class SkillsViewModel(private val core: CoreBridge) : ViewModel() {
     fun importFiles(bundle: SkillImportBundle) = request {
         val skill = json.decodeFromString<SkillPackage>(core.validateSkill(json.encodeToString(SkillWrite(bundle.files, true, bundle.binaryFiles))))
         mutableState.value = mutableState.value.copy(editing = skill, draftFiles = skill.files, imported = true)
+    }
+
+    fun discoverRemote(source: String, revision: String = "", path: String = "") = request {
+        val request = RemoteSkillRequest(source.trim(), path.trim().ifEmpty { null }, revision.trim().ifEmpty { null })
+        mutableState.value = mutableState.value.copy(remoteCatalog = null)
+        val catalog = json.decodeFromString<RemoteSkillCatalog>(core.discoverRemoteSkills(json.encodeToString(request)))
+        mutableState.value = mutableState.value.copy(remoteCatalog = catalog)
+    }
+
+    fun previewRemote(candidate: RemoteSkillCandidate) {
+        val catalog = mutableState.value.remoteCatalog ?: return
+        if (candidate !in catalog.items) return
+        request {
+            val request = RemoteSkillRequest(catalog.source, candidate.path, catalog.revision)
+            val skill = json.decodeFromString<SkillPackage>(core.previewRemoteSkill(json.encodeToString(request)))
+            mutableState.value = mutableState.value.copy(
+                editing = skill, draftFiles = skill.files, imported = true, remoteCatalog = null,
+            )
+        }
+    }
+
+    fun clearRemoteCatalog() {
+        if (!mutableState.value.busy) mutableState.value = mutableState.value.copy(remoteCatalog = null, error = null)
     }
 
     /** Keep resource drafts in the ViewModel across Activity recreation, outside saved-state Bundles. */

@@ -24,6 +24,67 @@ class SkillsViewModelTest {
             handler(method.name, args ?: emptyArray())
         } as CoreBridge
 
+    @Test fun remoteSelectionPinsDiscoveredCommitAndPreservesPreviewWithoutInstalling() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            var discoveryRequest: JsonObject? = null
+            var previewRequest: JsonObject? = null
+            val revision = "a".repeat(40)
+            val core = bridge { method, args -> when (method) {
+                "listSkills" -> """{"items":[$summary]}"""
+                "discoverRemoteSkills" -> {
+                    discoveryRequest = Json.parseToJsonElement(args[0] as String).jsonObject
+                    """{"source":"https://github.com/owner/repo.git","ref":"$revision","items":[{"name":"test-skill","description":"Test","path":"skills/test-skill"}],"warnings":[{"path":"skills/invalid","message":"description exceeds 1024 characters"}]}"""
+                }
+                "previewRemoteSkill" -> { previewRequest = Json.parseToJsonElement(args[0] as String).jsonObject; detail }
+                else -> error("Unexpected bridge call: $method")
+            } }
+            val vm = SkillsViewModel(core)
+            advanceUntilIdle()
+            vm.discoverRemote(" owner/repo ", " feature/skills ", " skills ")
+            advanceUntilIdle()
+            assertEquals("owner/repo", discoveryRequest?.get("source")?.jsonPrimitive?.content)
+            assertEquals("feature/skills", discoveryRequest?.get("ref")?.jsonPrimitive?.content)
+            assertEquals("skills", discoveryRequest?.get("path")?.jsonPrimitive?.content)
+            assertNull(vm.state.value.editing)
+            val catalog = assertNotNull(vm.state.value.remoteCatalog)
+            assertEquals("skills/invalid", catalog.warnings.single().path)
+            assertContains(catalog.warnings.single().message, "1024")
+            vm.previewRemote(catalog.items.single())
+            advanceUntilIdle()
+            assertEquals(revision, previewRequest?.get("ref")?.jsonPrimitive?.content)
+            assertEquals(catalog.source, previewRequest?.get("source")?.jsonPrimitive?.content)
+            assertEquals("skills/test-skill", previewRequest?.get("path")?.jsonPrimitive?.content)
+            assertTrue(vm.state.value.imported)
+            assertEquals("/wAB", vm.state.value.editing?.binaryFiles?.get("assets/icon.png"))
+            assertEquals("instructions", vm.state.value.draftFiles["SKILL.md"])
+            assertNull(vm.state.value.remoteCatalog)
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun remoteFailureRemainsVisibleWithoutRetryAndSourceChangeClearsResults() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            var attempts = 0
+            val core = bridge { method, _ -> when (method) {
+                "listSkills" -> """{"items":[]}"""
+                "discoverRemoteSkills" -> { attempts++; error("HTTP 502: repository unavailable") }
+                else -> error("Unexpected bridge call: $method")
+            } }
+            val vm = SkillsViewModel(core)
+            advanceUntilIdle()
+            vm.discoverRemote("owner/repo")
+            advanceUntilIdle()
+            assertEquals(1, attempts)
+            assertContains(assertNotNull(vm.state.value.error), "repository unavailable")
+            assertFalse(vm.state.value.busy)
+            assertNull(vm.state.value.editing)
+            vm.clearRemoteCatalog()
+            assertNull(vm.state.value.remoteCatalog)
+            assertNull(vm.state.value.error)
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun toggleFetchesCompletePackageAndPreservesEveryResource() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

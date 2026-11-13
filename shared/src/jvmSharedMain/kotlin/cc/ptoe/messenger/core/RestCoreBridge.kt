@@ -278,6 +278,10 @@ class RestCoreBridge(
 
     override suspend fun validateSkill(filesJson: String): String = postText("/skills/validate", filesJson)
 
+    override suspend fun discoverRemoteSkills(requestJson: String): String = postText("/skills/remote/discover", requestJson)
+
+    override suspend fun previewRemoteSkill(requestJson: String): String = postText("/skills/remote/preview", requestJson)
+
     override suspend fun saveSkill(name: String, packageJson: String) {
         putNoContent("/skills/${path(name)}", packageJson)
     }

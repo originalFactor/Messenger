@@ -177,6 +177,8 @@ interface CoreBridge {
     suspend fun listSkills(): String = error("Skills unavailable")
     suspend fun getSkill(name: String): String = error("Skills unavailable")
     suspend fun validateSkill(filesJson: String): String = error("Skills unavailable")
+    suspend fun discoverRemoteSkills(requestJson: String): String = error("Remote Skills unavailable")
+    suspend fun previewRemoteSkill(requestJson: String): String = error("Remote Skills unavailable")
     suspend fun saveSkill(name: String, packageJson: String) { error("Skills unavailable") }
     suspend fun deleteSkill(name: String) { error("Skills unavailable") }
 
