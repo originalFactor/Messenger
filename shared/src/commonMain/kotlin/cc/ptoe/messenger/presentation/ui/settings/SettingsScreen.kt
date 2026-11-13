@@ -120,6 +120,8 @@ import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.acp_settings_desc
 import cc.ptoe.messenger.generated.resources.acp_settings
+import cc.ptoe.messenger.generated.resources.skills_title
+import cc.ptoe.messenger.generated.resources.skills_settings_desc
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -127,6 +129,7 @@ fun SettingsScreen(
     onProvidersClick: () -> Unit,
     onToolsClick: () -> Unit = {},
     onAcpSettingsClick: () -> Unit = {},
+    onSkillsClick: () -> Unit = {},
     onLicensesClick: () -> Unit,
     onCloudSettingsClick: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
@@ -323,6 +326,14 @@ fun SettingsScreen(
                             subtitle = stringResource(Res.string.acp_settings_desc),
                             icon = Icons.Default.Build,
                             onClick = onAcpSettingsClick,
+                        )
+                    }
+                    item {
+                        ListItem(
+                            title = stringResource(Res.string.skills_title),
+                            subtitle = stringResource(Res.string.skills_settings_desc),
+                            icon = Icons.Default.Code,
+                            onClick = onSkillsClick,
                         )
                     }
                     item {

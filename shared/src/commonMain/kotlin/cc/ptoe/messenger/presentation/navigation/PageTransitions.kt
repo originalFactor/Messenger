@@ -67,6 +67,7 @@ private val RouteOrders: Map<String, Int> = mapOf(
     Screen.CloudSettings.route to 21,
     Screen.ToolsSettings.route to 21,
     Screen.AcpSettings.route to 21,
+    Screen.Skills.route to 21,
     Screen.Licenses.route to 21,
     Screen.Providers.route to 21,
     Screen.ProviderDetail.route to 22,

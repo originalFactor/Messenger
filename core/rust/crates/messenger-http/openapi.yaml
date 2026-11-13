@@ -14,6 +14,95 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /skills:
+    get:
+      operationId: listSkills
+      description: Device-local Agent Skills catalog, sorted by name; no bundled file content.
+      responses:
+        "200":
+          description: Skill discovery metadata, including disabled packages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SkillSummary' } }
+  /skills/validate:
+    post:
+      operationId: validateSkill
+      description: |
+        Validate an import without writing it. Infer name from SKILL.md when name
+        is absent; a supplied name must match. enabled defaults to true here.
+        This path also supports the normal GET/PUT/DELETE package operations
+        for a skill whose literal name is validate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [files]
+              properties:
+                files: { type: object, additionalProperties: { type: string } }
+                binaryFiles: { type: object, additionalProperties: { type: string, contentEncoding: base64 }, default: {} }
+                enabled: { type: boolean, default: true }
+                name: { type: string }
+      responses:
+        "200":
+          description: Valid package preview; no persistence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SkillDetail' }
+        "400": { description: Invalid frontmatter, package, name or paths. }
+        "413": { description: JSON request exceeds 26 MiB. }
+  /skills/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64 }
+    get:
+      operationId: getSkill
+      responses:
+        "200":
+          description: Skill metadata and all bundled text and binary files.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SkillDetail' }
+        "404": { description: Skill not found. }
+    put:
+      operationId: putSkill
+      description: |
+        Create or fully replace one device-local package. SKILL.md must be text
+        with YAML frontmatter containing matching name and description. Names
+        use lowercase ASCII letters, digits and single internal hyphens.
+        Relative paths use /, cannot have empty, dot or dot-dot components,
+        backslashes, colons, control characters, or file/directory collisions,
+        and are at most 512 UTF-8 bytes. Text/binary path collisions are rejected.
+        Packages contain at most 128 files, 1 MiB decoded bytes per file and
+        4 MiB total decoded bytes. Binary files use standard padded base64.
+        Scripts/assets are stored as data; allowed-tools never grants permission.
+        These packages are not synced to Cloud or injected into external ACP agents.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkillPackage' }
+      responses:
+        "200":
+          description: Saved package detail, including validated metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SkillDetail' }
+        "400": { description: Invalid frontmatter, package, name or paths. }
+        "413": { description: JSON request exceeds 26 MiB. }
+    delete:
+      operationId: deleteSkill
+      responses:
+        "204": { description: Skill deleted. }
+        "404": { description: Skill not found. }
   /health:
     get:
       security: []
@@ -808,6 +897,33 @@ components:
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
   schemas:
+    SkillPackage:
+      type: object
+      additionalProperties: false
+      required: [files, enabled]
+      properties:
+        files: { type: object, additionalProperties: { type: string } }
+        binaryFiles: { type: object, additionalProperties: { type: string, contentEncoding: base64 }, default: {} }
+        enabled: { type: boolean }
+    SkillSummary:
+      type: object
+      required: [name, description, enabled]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+        description: { type: string, minLength: 1, maxLength: 1024 }
+        enabled: { type: boolean }
+        compatibility: { type: string, minLength: 1, maxLength: 500 }
+        license: { type: string }
+        metadata: { type: object, additionalProperties: { type: string } }
+        allowedTools: { type: string, description: 'YAML allowed-tools, informational only; never permission.' }
+    SkillDetail:
+      allOf:
+        - $ref: '#/components/schemas/SkillSummary'
+        - type: object
+          required: [files, binaryFiles]
+          properties:
+            files: { type: object, additionalProperties: { type: string } }
+            binaryFiles: { type: object, additionalProperties: { type: string, contentEncoding: base64 } }
     Provider:
       type: object
       additionalProperties: true

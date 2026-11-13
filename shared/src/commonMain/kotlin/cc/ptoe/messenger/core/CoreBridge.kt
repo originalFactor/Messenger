@@ -173,6 +173,13 @@ interface CoreBridge {
     ) { error("Device control unavailable") }
     suspend fun controlCancel(requestId: String) { error("Device control unavailable") }
     suspend fun controlPermission(requestId: String, optionId: String) { error("Device control unavailable") }
+    // Device-local Agent Skills packages. YAML validation and tool policy belong to Core.
+    suspend fun listSkills(): String = error("Skills unavailable")
+    suspend fun getSkill(name: String): String = error("Skills unavailable")
+    suspend fun validateSkill(filesJson: String): String = error("Skills unavailable")
+    suspend fun saveSkill(name: String, packageJson: String) { error("Skills unavailable") }
+    suspend fun deleteSkill(name: String) { error("Skills unavailable") }
+
     suspend fun agentDelegationEnabled(): Boolean = false
     suspend fun setAgentDelegationEnabled(enabled: Boolean) { error("Agent delegation unavailable") }
 

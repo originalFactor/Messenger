@@ -31,6 +31,7 @@ sealed class Screen(val route: String) {
     data object CloudSettings : Screen("cloud_settings")
     data object AcpSettings : Screen("acp_settings")
     data object ToolsSettings : Screen("tools_settings")
+    data object Skills : Screen("skills")
 
     data object ProviderEdit : Screen("provider_edit?providerId={providerId}") {
         fun createRoute(providerId: String? = null) =

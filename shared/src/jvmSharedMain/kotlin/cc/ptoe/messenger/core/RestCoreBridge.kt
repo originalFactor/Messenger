@@ -272,6 +272,20 @@ class RestCoreBridge(
     override suspend fun controlSettings(): JsonObject =
         NetworkClient.json.parseToJsonElement(getText("/control/settings")).jsonObject
 
+    override suspend fun listSkills(): String = getText("/skills")
+
+    override suspend fun getSkill(name: String): String = getText("/skills/${path(name)}")
+
+    override suspend fun validateSkill(filesJson: String): String = postText("/skills/validate", filesJson)
+
+    override suspend fun saveSkill(name: String, packageJson: String) {
+        putNoContent("/skills/${path(name)}", packageJson)
+    }
+
+    override suspend fun deleteSkill(name: String) {
+        deleteNoContent("/skills/${path(name)}")
+    }
+
     override suspend fun agentDelegationEnabled(): Boolean =
         NetworkClient.json.parseToJsonElement(getText("/mcp/agent-delegation")).jsonObject["enabled"]?.jsonPrimitive?.content == "true"
 

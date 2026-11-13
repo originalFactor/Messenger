@@ -68,6 +68,7 @@ mod control;
 mod acp_mcp;
 mod agent_relay;
 mod delegation;
+mod skills;
 mod external_acp;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
@@ -376,6 +377,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/control/platform-tools", put(control::platform_tools))
         .route("/control/agent-relay", get(agent_relay::status).post(agent_relay::start).delete(agent_relay::stop))
         .route("/mcp/agent-delegation", get(delegation::get_setting).put(delegation::set_setting))
+        .route("/skills", get(skills::list))
+        .route("/skills/:name", get(skills::get).put(skills::put).delete(skills::delete).post(skills::preview)
+            .layer(axum::extract::DefaultBodyLimit::max(skills::BODY_LIMIT)))
         .route("/control/settings", get(control::get_settings).put(control::set_settings))
         .route("/control/commands/:id", post(control::commands).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
         .route("/control/commands/:id/permission", post(control::permission))
@@ -2652,6 +2656,14 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     {
         tools.push(delegation::tool());
     }
+    let skills_allowed = skills::allowed(&agent, request.disable_tools);
+    let mut system_prompt = agent.system_prompt.clone();
+    if skills_allowed {
+        if let Some(catalog) = skills::prompt(&state.store)? {
+            system_prompt.push_str(&catalog);
+            tools.push(skills::tool());
+        }
+    }
     let title = state
         .store
         .get_title_agent()
@@ -2672,7 +2684,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         base_url: provider.base_url,
         api_key: provider.api_key,
         api_format: ApiFormat::from_store(Some(provider.api_format.as_str())),
-        system_prompt: agent.system_prompt,
+        system_prompt,
         temperature: conversation.override_temperature.or(agent.temperature),
         top_p: conversation.override_top_p.or(agent.top_p),
         max_tokens: conversation.override_max_tokens.or(agent.max_tokens),
@@ -2689,6 +2701,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     let sink = ChannelSink { tx: tx.clone(), terminal: Default::default() };
     let host = RoutedToolHost {
         state: state.clone(),
+        skills_allowed,
         project: project.clone(),
         writable: conversation.writable,
         local: RemoteToolHost {
@@ -2759,7 +2772,7 @@ fn configured_tools(
     for spec in requested {
         // Reserved for the Core-owned tool; a client declaration must not
         // bypass the setting or re-enable delegation in a child turn.
-        if spec.name == delegation::TOOL_NAME { continue; }
+        if spec.name == delegation::TOOL_NAME || spec.name == skills::TOOL_NAME { continue; }
         if config.get(&spec.name).copied() == Some(false) {
             continue;
         }
@@ -2782,6 +2795,7 @@ fn configured_tools(
 /// everything else (client-provided tools included) to the local client.
 struct RoutedToolHost {
     state: ApiState,
+    skills_allowed: bool,
     project: Option<StoredProject>,
     writable: bool,
     local: RemoteToolHost,
@@ -2800,6 +2814,9 @@ impl ToolHost for RoutedToolHost {
         name: &str,
         arguments_json: &str,
     ) -> ToolExecutionResult {
+        if name == skills::TOOL_NAME {
+            return skills::execute(&self.state.store, self.skills_allowed, arguments_json);
+        }
         if name == delegation::TOOL_NAME {
             return delegation::execute(&self.state, self.project.as_ref(), self.writable, arguments_json, &self.cancel).await;
         }
@@ -3422,6 +3439,122 @@ mod tests {
                 context_tokens_at: 0,
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn skills_native_and_control_turns_read_on_demand_and_respect_effective_policy() {
+        use serde_json::{json, Value};
+        for (detached, tools_enabled, disable_tools, tool_disabled, conversation_override) in [
+            (false, true, false, false, None),
+            (true, true, false, false, None),
+            (false, false, false, false, None),
+            (false, true, true, false, None),
+            (true, true, false, true, None),
+            (true, true, false, false, Some(false)),
+            (false, false, false, false, Some(true)),
+        ] {
+            let provider = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .respond_with(|req: &wiremock::Request| {
+                    let body: Value = serde_json::from_slice(&req.body).unwrap();
+                    let read = body["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+                    let has_tool = body["tools"].as_array().is_some_and(|tools| tools.iter().any(|t| t["function"]["name"] == skills::TOOL_NAME));
+                    let chunk = if has_tool && !read {
+                        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"skill-call","type":"function","function":{"name":skills::TOOL_NAME,"arguments":"{\"name\":\"review\"}"}}]},"finish_reason":"tool_calls"}]})
+                    } else {
+                        json!({"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]})
+                    };
+                    wiremock::ResponseTemplate::new(200).set_body_string(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                }).mount(&provider).await;
+            let state = test_state();
+            seed_text_chat(&state, &provider.uri());
+            let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+            agent.tools_enabled = tools_enabled;
+            if tool_disabled { agent.tools_config = json!({skills::TOOL_NAME:false}).to_string(); }
+            state.store.upsert_agent(&agent).unwrap();
+            let mut conversation = state.store.get_conversation("c1").unwrap().unwrap();
+            conversation.override_tools_enabled = conversation_override;
+            state.store.upsert_conversation(&conversation).unwrap();
+            state.store.kv_set("agent_skill:review", &json!({"enabled":true,"files":{"SKILL.md":"---\nname: review\ndescription: Review text\n---\nPRIVATE SKILL BODY","scripts/run.sh":"NEVER EXECUTED"}}).to_string()).unwrap();
+            let request: ChatRequest = serde_json::from_value(json!({"content":"hello","disableTools":disable_tools,
+                "toolSpecs":[{"name":skills::TOOL_NAME,"description":"client spoof","parametersJson":"{}"}]})).unwrap();
+            let mut events = start_turn(state.clone(), "c1".into(), request, CancellationToken::new(), detached).await.unwrap();
+            let mut transcript = String::new();
+            while let Some(event) = events.recv().await { transcript.push_str(&event); }
+            assert!(transcript.contains("\"type\":\"Finished\""), "{transcript}");
+            assert!(!transcript.contains("ToolCallRequested"), "Core must read skills without client tool execution");
+            let expected = conversation_override.unwrap_or(tools_enabled) && !disable_tools && !tool_disabled;
+            let requests = provider.received_requests().await.unwrap();
+            let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+            let system = first["messages"][0]["content"].to_string();
+            assert_eq!(system.contains("Available Agent Skills"), expected);
+            assert!(!system.contains("PRIVATE SKILL BODY"));
+            assert!(!system.contains("NEVER EXECUTED"));
+            assert!(!String::from_utf8_lossy(&requests[0].body).contains("client spoof"));
+            if expected {
+                assert_eq!(requests.len(), 2);
+                let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+                assert!(second["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool" && m["content"].as_str().is_some_and(|s| s.contains("PRIVATE SKILL BODY"))));
+                assert!(transcript.contains("ToolCallFinished"));
+            } else { assert_eq!(requests.len(), 1); }
+            state.shutdown.cancel();
+        }
+    }
+
+    #[tokio::test]
+    async fn skills_do_not_enter_title_generation() {
+        use serde_json::{json, Value};
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state();
+        seed_text_chat(&state, &provider.uri());
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+        agent.tools_enabled = true;
+        state.store.upsert_agent(&agent).unwrap();
+        agent.id = "title-agent".into();
+        agent.role = "title".into();
+        agent.is_default = false;
+        agent.system_prompt = "TITLE ONLY".into();
+        state.store.upsert_agent(&agent).unwrap();
+        let mut conversation = state.store.get_conversation("c1").unwrap().unwrap();
+        conversation.title = "New Chat".into();
+        state.store.upsert_conversation(&conversation).unwrap();
+        state.store.kv_set("agent_skill:review", &json!({"enabled":true,"files":{"SKILL.md":"---\nname: review\ndescription: Review text\n---\nPRIVATE"}}).to_string()).unwrap();
+        let mut events = start_turn(state.clone(), "c1".into(), control::text_request("hello".into()), CancellationToken::new(), false).await.unwrap();
+        while events.recv().await.is_some() {}
+        let requests = provider.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let title: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(title["messages"][0]["content"], "TITLE ONLY");
+        assert!(!String::from_utf8_lossy(&requests[1].body).contains("Available Agent Skills"));
+        assert!(!String::from_utf8_lossy(&requests[1].body).contains(skills::TOOL_NAME));
+        state.shutdown.cancel();
+    }
+
+    #[test]
+    fn skills_policy_uses_inherited_defaults_and_conversation_tool_config() {
+        let state = test_state();
+        seed_text_chat(&state, "http://localhost");
+        let mut default = state.store.get_agent("a1").unwrap().unwrap();
+        default.tools_enabled = true;
+        default.tools_config = serde_json::json!({skills::TOOL_NAME:false}).to_string();
+        state.store.upsert_agent(&default).unwrap();
+        let mut child = default;
+        child.id = "child".into();
+        child.is_default = false;
+        child.tools_enabled = true;
+        child.tools_config.clear();
+        child.tools_follow_default = true;
+        let mut conversation = state.store.get_conversation("c1").unwrap().unwrap();
+        assert!(!skills::allowed(&effective_agent(&state.store, child.clone(), &conversation).unwrap(), false));
+        conversation.override_tools_config = Some("{}".into());
+        assert!(skills::allowed(&effective_agent(&state.store, child.clone(), &conversation).unwrap(), false));
+        conversation.override_tools_enabled = Some(false);
+        assert!(!skills::allowed(&effective_agent(&state.store, child, &conversation).unwrap(), false));
+        state.shutdown.cancel();
     }
 
     #[tokio::test]

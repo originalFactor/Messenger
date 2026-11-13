@@ -6,6 +6,38 @@
     <string name="bottom_nav_agents">Agent</string>
     <string name="bottom_nav_settings">设置</string>
 
+    <!-- Agent Skills -->
+    <string name="skills_title">Skills 管理器</string>
+    <string name="skills_settings_desc">管理供 Agent 复用的指令与资源</string>
+    <string name="skills_usage_note">Skills 保存在本设备上，开启 Agent 工具后可用于 Messenger 原生对话。附带的脚本不会自动运行。</string>
+    <string name="skills_create">新建 Skill</string>
+    <string name="skills_edit">编辑 Skill</string>
+    <string name="skills_import">导入 Skill</string>
+    <string name="skills_import_desc">选择 .zip 技能包或 SKILL.md，预览后保存</string>
+    <string name="skills_empty">还没有 Skill。新建一个或导入技能包。</string>
+    <string name="skills_enabled">启用</string>
+    <string name="skills_name">Skill 名称</string>
+    <string name="skills_name_hint">使用小写字母、数字和单个连字符，最多 64 个字符，且须与 YAML 中的 name 一致。</string>
+    <string name="skills_editor_note">SKILL.md 以包含 name 和 description 的 YAML 前置信息开头，之后是指令正文。可在其中编辑 license、compatibility、metadata 和 allowed-tools 等可选字段。资源路径相对于技能目录。文本文件使用 UTF-8，导入的二进制资源会完整保留。</string>
+    <string name="skills_files">技能包文件</string>
+    <string name="skills_binary_files">附带的二进制资源</string>
+    <string name="skills_binary_files_note">这些资源在此处只读，保存时会完整保留。</string>
+    <string name="skills_file_path">新文件路径</string>
+    <string name="skills_file_path_hint">例如 references/guide.md 或 scripts/helper.py</string>
+    <string name="skills_add_file">添加文件</string>
+    <string name="skills_remove_file">移除 %1$s</string>
+    <string name="skills_discard_title">放弃修改？</string>
+    <string name="skills_discard_message">对此 Skill 尚未保存的修改将丢失。</string>
+    <string name="skills_discard">放弃修改</string>
+    <string name="skills_delete_title">删除 Skill？</string>
+    <string name="skills_delete_message">从本设备删除「%1$s」及其所有附带文件？</string>
+    <string name="skills_replace_warning">已安装同名 Skill。请检查所有文件后再替换，或改用其他名称。</string>
+    <string name="skills_replace_title">替换已安装的 Skill？</string>
+    <string name="skills_replace_message">保存将使用此技能包替换「%1$s」及其所有附带文件。</string>
+    <string name="skills_license">许可证：%1$s</string>
+    <string name="skills_compatibility">兼容性：%1$s</string>
+    <string name="skills_allowed_tools">允许的工具：%1$s</string>
+
     <!-- Common Actions -->
     <string name="action_save">保存</string>
     <string name="action_cancel">取消</string>

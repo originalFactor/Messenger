@@ -543,6 +543,15 @@ impl Store {
         })
     }
 
+    /// Device-local catalogs use literal prefixes (not SQL LIKE patterns).
+    pub fn kv_list_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>, rusqlite::Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached("SELECT key, value FROM kv WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key")?;
+            let rows = stmt.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect()
+        })
+    }
+
     pub fn kv_set(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
         self.with_conn(|conn| {
             conn.execute(

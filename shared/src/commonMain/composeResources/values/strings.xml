@@ -6,6 +6,38 @@
     <string name="bottom_nav_agents">Agents</string>
     <string name="bottom_nav_settings">Settings</string>
 
+    <!-- Agent Skills -->
+    <string name="skills_title">Skills</string>
+    <string name="skills_settings_desc">Manage reusable instructions and resources for your agents</string>
+    <string name="skills_usage_note">Skills are stored on this device and available in native Messenger chats when agent tools are enabled. Bundled scripts are not run automatically.</string>
+    <string name="skills_create">Create skill</string>
+    <string name="skills_edit">Edit skill</string>
+    <string name="skills_import">Import skill</string>
+    <string name="skills_import_desc">Choose a .zip package or SKILL.md to review before saving</string>
+    <string name="skills_empty">No skills yet. Create one or import a skill package.</string>
+    <string name="skills_enabled">Enabled</string>
+    <string name="skills_name">Skill name</string>
+    <string name="skills_name_hint">Use lowercase letters, numbers and single hyphens, up to 64 characters. The name must match the YAML name.</string>
+    <string name="skills_editor_note">SKILL.md contains YAML frontmatter with a name and description, followed by instructions. Edit optional license, compatibility, metadata and allowed-tools fields there. Resource paths are relative to the skill folder. Text files use UTF-8; imported binary resources are preserved.</string>
+    <string name="skills_files">Package files</string>
+    <string name="skills_binary_files">Bundled binary resources</string>
+    <string name="skills_binary_files_note">These resources are read-only here and are preserved when you save.</string>
+    <string name="skills_file_path">New file path</string>
+    <string name="skills_file_path_hint">For example references/guide.md or scripts/helper.py</string>
+    <string name="skills_add_file">Add file</string>
+    <string name="skills_remove_file">Remove %1$s</string>
+    <string name="skills_discard_title">Discard changes?</string>
+    <string name="skills_discard_message">Your unsaved changes to this skill will be lost.</string>
+    <string name="skills_discard">Discard</string>
+    <string name="skills_delete_title">Delete skill?</string>
+    <string name="skills_delete_message">Delete “%1$s” and all of its bundled files from this device?</string>
+    <string name="skills_replace_warning">A skill with this name is already installed. Review all files before replacing it, or choose another name.</string>
+    <string name="skills_replace_title">Replace installed skill?</string>
+    <string name="skills_replace_message">Saving will replace “%1$s” and all of its bundled files with this package.</string>
+    <string name="skills_license">License: %1$s</string>
+    <string name="skills_compatibility">Compatibility: %1$s</string>
+    <string name="skills_allowed_tools">Allowed tools: %1$s</string>
+
     <!-- Common Actions -->
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>

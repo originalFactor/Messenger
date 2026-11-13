@@ -40,7 +40,7 @@ import cc.ptoe.messenger.presentation.ui.acp.AcpSettingsScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersSinglePaneScreen
 import org.jetbrains.compose.resources.stringResource
 
-private enum class SettingsDetailPane { Empty, Cloud, Tools, Acp, Providers, Licenses }
+private enum class SettingsDetailPane { Empty, Cloud, Tools, Acp, Skills, Providers, Licenses }
 
 @Composable
 fun SettingsDualPaneScreen(
@@ -59,6 +59,7 @@ fun SettingsDualPaneScreen(
                 onProvidersClick = { pane = SettingsDetailPane.Providers },
                 onToolsClick = { pane = SettingsDetailPane.Tools },
                 onAcpSettingsClick = { pane = SettingsDetailPane.Acp },
+                onSkillsClick = { pane = SettingsDetailPane.Skills },
                 onCloudSettingsClick = { pane = SettingsDetailPane.Cloud },
                 onLicensesClick = { pane = SettingsDetailPane.Licenses }
             )
@@ -89,6 +90,10 @@ fun SettingsDualPaneScreen(
                 )
 
                 SettingsDetailPane.Acp -> AcpSettingsScreen(onBackClick = { pane = SettingsDetailPane.Empty })
+
+                SettingsDetailPane.Skills -> cc.ptoe.messenger.presentation.ui.skills.SkillsScreen(
+                    onBackClick = { pane = SettingsDetailPane.Empty }
+                )
 
                 SettingsDetailPane.Tools -> ToolsSettingsScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty },

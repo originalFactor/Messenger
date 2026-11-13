@@ -215,6 +215,7 @@ fun NavGraph(
                         },
                         onToolsClick = { navController.navigate(Screen.ToolsSettings.route) },
                         onAcpSettingsClick = { navController.navigate(Screen.AcpSettings.route) },
+                        onSkillsClick = { navController.navigate(Screen.Skills.route) },
                         onLicensesClick = {
                             navController.navigate(Screen.Licenses.route)
                         },
@@ -252,6 +253,9 @@ fun NavGraph(
                 onBackClick = { navController.popBackStack() },
                 cloudSyncRepository = AppContainerHolder.instance.cloud
             )
+        }
+        composable(Screen.Skills.route) {
+            cc.ptoe.messenger.presentation.ui.skills.SkillsScreen(onBackClick = { navController.popBackStack() })
         }
         composable(Screen.AcpSettings.route) {
             AcpSettingsScreen(onBackClick = { navController.popBackStack() })

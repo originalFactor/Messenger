@@ -57,6 +57,28 @@ For `ToolCallRequested`, the client executes the tool and posts the result to
 `{ "output": string, "isError": boolean }`. Dropping the SSE connection cancels
 the turn and wakes any pending tool host with a cancellation result.
 
+## Agent Skills (device-local Messenger turns)
+
+`PUT /api/v1/skills/{name}` stores packages; `POST /api/v1/skills/validate`
+previews imports without writes. Mutations emit the existing `change` feed with
+`kind: "Other"` and `ids: ["agent_skill:<name>"]`; re-query `/skills` or the detail.
+There are no new SSE event types.
+
+Native chat and device-control Messenger turns share progressive disclosure:
+when effective agent/conversation tool settings permit `messenger_skills` and
+`disableTools` is false, the system prompt includes enabled skill names and
+descriptions as escaped JSON metadata. The Core-owned `messenger_skills` tool
+accepts `{name, path?}` (`path` defaults to `SKILL.md`) and returns bundled text.
+It emits `ToolCallStarted` / `ToolCallFinished`, without `ToolCallRequested` or
+platform execution. Disabled/deleted skills and invalid/missing/binary paths
+produce an `isError` result. Binary assets remain preserved in package detail
+as `binaryFiles` base64 but cannot be read as text by this tool.
+
+Skill scripts are never executed by import or by the reader. `allowed-tools`
+is informational and cannot change permissions. Client-supplied declarations
+cannot replace this reserved tool. Skill metadata/files are not injected into
+title generation or third-party ACP sessions; packages remain device-local.
+
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 
 Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode`, `Store`, `SessionSettings` or

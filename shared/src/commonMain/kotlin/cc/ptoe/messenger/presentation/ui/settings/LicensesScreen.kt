@@ -91,6 +91,7 @@ private val coreComponents = listOf(
     OpenSourceComponent("Axum", "MIT", "https://github.com/tokio-rs/axum"),
     OpenSourceComponent("Tokio / tokio-util / tokio-stream", "MIT", "https://github.com/tokio-rs/tokio"),
     OpenSourceComponent("Serde / serde_json", "MIT OR Apache-2.0", "https://github.com/serde-rs/serde"),
+    OpenSourceComponent("serde_yaml_ng", "MIT", "https://github.com/acatton/serde-yaml-ng"),
     OpenSourceComponent("reqwest", "MIT OR Apache-2.0", "https://github.com/seanmonstar/reqwest"),
     OpenSourceComponent("rustls", "Apache-2.0 OR ISC OR MIT", "https://github.com/rustls/rustls"),
     OpenSourceComponent("rusqlite", "MIT", "https://github.com/rusqlite/rusqlite"),
