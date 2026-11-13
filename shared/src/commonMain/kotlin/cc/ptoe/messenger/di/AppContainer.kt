@@ -229,7 +229,8 @@ class AppContainer(
             val defaultAgent = Agent(
                 id = randomUuid(),
                 name = Agent.DEFAULT_AGENT_NAME,
-                systemPrompt = "You are a helpful assistant.",
+                systemPrompt = Agent.DEFAULT_AGENT_PROMPT,
+                description = Agent.DEFAULT_AGENT_DESCRIPTION,
                 defaultModelId = null,
                 temperature = 0.7f,
                 topP = 1.0f,

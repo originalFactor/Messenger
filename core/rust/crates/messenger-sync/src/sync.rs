@@ -999,7 +999,11 @@ impl<'a> SyncEngine<'a> {
             .into_iter()
             .filter(|a| a.id != BUILTIN_TITLE_AGENT_ID && a.role != ROLE_TITLE)
             .any(|a| {
-                !a.description.trim().is_empty()
+                let has_seed_description = a.is_default
+                    && matches!(a.name.as_str(), "默认 Agent" | "Default Agent" | "Default")
+                    && a.description == messenger_store::DEFAULT_AGENT_DESCRIPTION
+                    && a.system_prompt.trim() == messenger_store::DEFAULT_AGENT_PROMPT.trim();
+                (!a.description.trim().is_empty() && !has_seed_description)
                     || a.default_model_id.is_some()
                     || a.market_agent_id.is_some()
                     || a.follow_default_model

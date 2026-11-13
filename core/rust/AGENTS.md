@@ -45,6 +45,10 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - `:core-bindings-desktop` (`core/bindings-desktop`) generates the same surface and packages the host cdylib from profile `bindgen` as a JNA resource. This profile is shipped on Desktop: `strip = "none"`, LTO off, 16 codegen units. Keep metadata symbols intact for UniFFI on ELF; it cannot generate bindings from a stripped release library.
 - Both binding modules share the Cargo workspace, with Gradle task ordering to avoid concurrent host-output mutation. Maintain their generated-source and native-resource wiring when changing build tasks.
 
+## Default Agent preset
+
+`messenger-store::DEFAULT_AGENT_DESCRIPTION` / `DEFAULT_AGENT_PROMPT` (`src/default_agent_prompt.txt`) hold the creation-only preset shared by the standalone Core seed and login local-data baseline. Keep the text aligned with Kotlin `Agent.DEFAULT_AGENT_DESCRIPTION` / `DEFAULT_AGENT_PROMPT` and Cloud `lib/default-agent.ts`. Seeding never overwrites an existing default, binds a model or enables tools. The exact unmodified preset does not count as local user data at login; edited descriptions/prompts, renamed Agents and model bindings retain the existing local-data detection.
+
 ## Testing / CI
 
 - `cargo test --workspace` is the workspace verification; `cargo test -p messenger-http` runs the API contract suite.

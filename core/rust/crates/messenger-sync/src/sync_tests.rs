@@ -42,6 +42,42 @@ fn signed_in_engine<'a>(store: &'a Store, _server: &wiremock::MockServer) -> Syn
     engine
 }
 
+#[test]
+fn default_agent_preset_does_not_count_as_local_user_data() {
+    let store = Store::open_memory().unwrap();
+    let engine = SyncEngine::new(&store, Session::default());
+    let mut agent = StoredAgent {
+        is_default: true,
+        description: messenger_store::DEFAULT_AGENT_DESCRIPTION.into(),
+        system_prompt: messenger_store::DEFAULT_AGENT_PROMPT.trim().into(),
+        ..seed_agent_base("default")
+    };
+    for name in ["默认 Agent", "Default Agent", "Default"] {
+        agent.name = name.into();
+        store.upsert_agent(&agent).unwrap();
+        assert!(!engine.has_local_data().unwrap(), "seed name: {name}");
+    }
+
+    agent.description = "My custom assistant".into();
+    store.upsert_agent(&agent).unwrap();
+    assert!(engine.has_local_data().unwrap());
+
+    agent.description = messenger_store::DEFAULT_AGENT_DESCRIPTION.into();
+    agent.system_prompt = "My custom prompt".into();
+    store.upsert_agent(&agent).unwrap();
+    assert!(engine.has_local_data().unwrap());
+
+    agent.system_prompt = messenger_store::DEFAULT_AGENT_PROMPT.trim().into();
+    agent.default_model_id = Some("chosen-model".into());
+    store.upsert_agent(&agent).unwrap();
+    assert!(engine.has_local_data().unwrap());
+
+    agent.default_model_id = None;
+    agent.name = "My renamed assistant".into();
+    store.upsert_agent(&agent).unwrap();
+    assert!(engine.has_local_data().unwrap());
+}
+
 fn delta_body() -> serde_json::Value {
     serde_json::json!({
         "agents": [

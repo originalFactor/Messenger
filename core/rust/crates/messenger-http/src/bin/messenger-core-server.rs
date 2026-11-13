@@ -99,11 +99,37 @@ fn ensure_default_agent(store: &Store) -> Result<(), Box<dyn std::error::Error>>
     let agent = serde_json::from_value::<StoredAgent>(serde_json::json!({
         "id": Uuid::new_v4().to_string(),
         "name": "Default",
-        "system_prompt": "",
+        "system_prompt": messenger_store::DEFAULT_AGENT_PROMPT.trim(),
+        "description": messenger_store::DEFAULT_AGENT_DESCRIPTION,
         "is_default": true,
         "created_at": now,
         "updated_at": now,
     }))?;
     store.upsert_agent(&agent)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_agent_seed_is_complete_and_preserves_existing_edits() {
+        let store = Store::open_memory().unwrap();
+        ensure_default_agent(&store).unwrap();
+        let mut agent = store.get_default_agent().unwrap().unwrap();
+        assert_eq!(agent.description, messenger_store::DEFAULT_AGENT_DESCRIPTION);
+        assert_eq!(
+            agent.system_prompt,
+            messenger_store::DEFAULT_AGENT_PROMPT.trim()
+        );
+        assert!(agent.default_model_id.is_none());
+        assert!(!agent.tools_enabled);
+
+        agent.description = "My assistant".into();
+        agent.system_prompt = "My custom prompt".into();
+        store.upsert_agent(&agent).unwrap();
+        ensure_default_agent(&store).unwrap();
+        assert_eq!(store.list_agents().unwrap(), vec![agent]);
+    }
 }
