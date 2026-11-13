@@ -1,4 +1,4 @@
-﻿# Copyright 2026 originalFactor
+# Copyright 2026 originalFactor
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,99 +21,56 @@ jobs:
   build-desktop:
     name: Build Desktop (${{ matrix.artifact }})
     runs-on: ${{ matrix.os }}
-
     strategy:
-      # Each entry is an independent release asset: one failing platform must not
-      # cancel the others, so every result stays visible in a single run.
       fail-fast: false
       matrix:
         include:
-          # --- Windows x86_64: MSI installer -------------------------------
-          # jpackage's MSI bundler needs the WiX toolset, which windows-latest
-          # ships (windows-11-arm does not).
           - os: windows-latest
             artifact: desktop-windows-x86_64
             task: packageReleaseMsi
             upload: desktopApp/build/compose/binaries/main-release/msi/*.msi
             gradlew: .\gradlew.bat
-            pack: false
-            # Use the image's own WiX instead of the plugin's 34 MB download.
-            wix: preinstalled
-
-          # --- Windows ARM64: zipped app image ------------------------------
-          # Deliberately NOT an MSI: jpackage cannot emit a native ARM64 MSI
-          # (openjdk JDK-8361207 is still open) and the windows-11-arm image
-          # ships no WiX, so that path would fail for two independent reasons.
-          # The distributable (app image + bundled arm64 runtime) is the
-          # shippable artifact: unzip and run Messenger.exe.
-#          - os: windows-11-arm
-#            artifact: desktop-windows-arm64
-#            task: createReleaseDistributable
-#            upload: Messenger-*-windows-arm64.zip
-#            gradlew: .\gradlew.bat
-#            pack: true
-#            # An app image never invokes candle/light, but the Compose plugin
-#            # still requires the `wixToolsetDir` property on Windows. Pointing
-#            # WIX_PATH at an empty directory satisfies it and skips the 34 MB
-#            # WiX 3.11 download (whose bundled tools are x86 anyway).
-#            wix: empty
-
-          # --- Linux x86_64 / ARM64: .deb ----------------------------------
-          # jpackage's deb bundler needs dpkg + fakeroot, both preinstalled on
-          # the Ubuntu images; nothing else is required.
-#          - os: ubuntu-latest
-#            artifact: desktop-linux-x86_64
-#            task: packageReleaseDeb
-#            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-#            gradlew: ./gradlew
-#            pack: false
-#            wix: none
-#          - os: ubuntu-24.04-arm
-#            artifact: desktop-linux-arm64
-#            task: packageReleaseDeb
-#            upload: desktopApp/build/compose/binaries/main-release/deb/*.deb
-#            gradlew: ./gradlew
-#            pack: false
-#            wix: none
+          - os: ubuntu-24.04
+            artifact: desktop-linux-x86_64
+            task: packageReleaseDeb
+            upload: desktopApp/build/compose/binaries/main-release/deb/*
+            gradlew: ./gradlew
+          # macos-15 is an Apple Silicon runner; the native Core and JRE are arm64.
+          - os: macos-15
+            artifact: desktop-macos-arm64
+            task: packageReleaseDmg
+            upload: desktopApp/build/compose/binaries/main-release/dmg/*.dmg
+            gradlew: ./gradlew
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # Version codes depend on the complete commit count. The server
+          # submodule is not an input to any native client.
           fetch-depth: 0
-          submodules: recursive
 
-      # bash on every runner (Git Bash on Windows) so one script serves all four
-      # platforms; the build step itself uses each platform's native shell.
-      - name: Resolve version (semantic name from VERSION, code from commit count)
+      - name: Resolve version
         shell: bash
         run: |
           echo "VERSION_CODE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
-          echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($(git rev-list --count HEAD))"
+          echo "Building Messenger $(tr -d '[:space:]' < VERSION)"
 
-      # Must be 21: gradle/gradle-daemon-jvm.properties pins toolchainVersion=21.
-      # The images do not preinstall a matching JDK on every architecture, so
-      # without this Gradle tries to download one through the Foojay resolver 鈥?
-      # and that file's hardcoded per-platform package IDs now answer
-      # "Package id not found" (400), failing the build at configuration time.
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      # Every Gradle invocation CONFIGURES the Android modules too, so AGP needs
-      # an SDK location even though nothing Android is built here 鈥?but it never
-      # needs a package: no Android task is in this graph. Pointing the env vars
-      # at an empty directory is enough, and it avoids downloading the command
-      # line tools on the ARM64 runners (where Google ships no native binaries).
-      #
-      # :runtime is the exception that used to break this: AGP resolves its NDK
-      # at CONFIGURATION time because of its `externalNativeBuild` block, so the
-      # whole build died with "NDK not configured" before any task ran. The
-      # build script now only declares that block when the native build is
-      # requested; this flag turns it off, which is correct here because no
-      # Android artifact is produced by this job.
+      - name: Verify Apple Silicon toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          java -XshowSettings:properties -version 2>&1 | grep -E 'os.arch = aarch64'
+
+      # AGP configures Android modules even for JVM builds. No SDK/NDK
+      # packages are needed when runtime's externalNativeBuild is disabled.
       - name: Provide an Android SDK location for AGP configuration
         shell: bash
         run: |
@@ -121,25 +78,18 @@ jobs:
           echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
 
-      # :core-bindings-desktop shells out to `cargo build --profile bindgen
-      # -p messenger-ffi` in core/rust and feeds the resulting host cdylib to
-      # uniffi-bindgen, so EVERY :desktopApp task needs cargo on PATH. The
-      # runner images do ship one, but pinning it here matches build-android /
-      # the other build jobs and stops a future image update from silently
-      # changing the Rust version under us. No `targets:` needed: the host
-      # triple is the runner's own and nothing is cross-compiled.
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Without this the whole workspace (rusqlite's bundled SQLite C build,
-      # reqwest+rustls, tokio, syntect) recompiles from scratch on every run:
-      # cargoBuildHost is a plain Exec task, so Gradle's build cache can't
-      # cover it, and core/rust/target is gitignored.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core/rust
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          # Separate host architectures and refresh workspace artifacts when
+          # source changes; dependency caches remain available as fallbacks.
+          key: desktop-${{ runner.arch }}-${{ hashFiles('core/rust/crates/**', 'VERSION') }}
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -147,22 +97,9 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           gradle-home-cache-cleanup: true
 
-      - name: Cache Kotlin/Native compiler
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.konan
-          key: ${{ runner.os }}-${{ runner.arch }}-konan-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-konan-
-
-      # The Compose plugin reads WIX_PATH with System.getenv() and, when it is
-      # unset, downloads its own WiX 3.11 zip (~34 MB, x86-only tools). Pointing
-      # it at the image's own toolset skips that download; if none of the known
-      # paths exist the variable stays unset and the plugin falls back to its own
-      # download, so a newer runner image cannot break the build.
+      # All client targets are JVM/Android; none use Kotlin/Native (~/.konan).
       - name: Point WIX_PATH at the preinstalled WiX toolset
-        if: matrix.wix == 'preinstalled'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $candidates = @(
@@ -173,40 +110,23 @@ jobs:
           $wix = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if ($wix) {
             "WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            Write-Host "Using preinstalled WiX at $wix"
           } else {
-            Write-Host "::warning::No preinstalled WiX found; the Compose plugin will download its own."
+            Write-Host "::warning::No preinstalled WiX found; Compose will download it."
           }
 
-      # See the windows-11-arm matrix entry: the plugin insists on a
-      # `wixToolsetDir` on Windows, and an app image never runs WiX.
-      - name: Provide an empty WIX_PATH (app image needs no WiX)
-        if: matrix.wix == 'empty'
-        shell: pwsh
-        run: |
-          $wix = Join-Path $env:RUNNER_TEMP "wix-empty"
-          New-Item -ItemType Directory -Force -Path $wix | Out-Null
-          "WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      # No `shell:` here on purpose: step `shell` is one of the keys that does
-      # NOT accept expressions (matrix.shell is a workflow-validation error), and
-      # the runner defaults already do the right thing 鈥?pwsh on Windows, bash on
-      # Linux 鈥?for the platform-specific wrapper in matrix.gradlew.
+      # One release build per OS. Arch packaging below reuses the Deb payload,
+      # including its bundled JRE, launchers and ProGuard-processed jars.
       - name: Build Desktop distribution
-        # The -P argument MUST be quoted: PowerShell (the default shell on the
-        # Windows runners) drops the leading `-P` of an unquoted token and Gradle
-        # then reads it as a task name (".buildRuntimeNative=false").
         run: ${{ matrix.gradlew }} :desktopApp:${{ matrix.task }} "-Pmessenger.buildRuntimeNative=false"
 
-      # An app image is a directory, so it has to be packed before it can be
-      # uploaded or attached to a release.
-      - name: Pack the Windows ARM64 app image
-        if: matrix.pack
-        shell: pwsh
+      - name: Package Arch Linux from the existing distribution
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          Compress-Archive -Path "desktopApp/build/compose/binaries/main-release/app/*" `
-            -DestinationPath "Messenger-$version-windows-arm64.zip"
+          shopt -s nullglob
+          packages=(desktopApp/build/compose/binaries/main-release/deb/*.deb)
+          test "${#packages[@]}" -eq 1
+          bash .github/scripts/package-arch.sh "${packages[0]}"
 
       - name: Upload Desktop artifact
         uses: actions/upload-artifact@v4
@@ -214,4 +134,5 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.upload }}
           if-no-files-found: error
-
+          # Installers are already compressed; avoid recompressing them.
+          compression-level: 0

@@ -39,6 +39,7 @@ on:
       - gradlew-cli
       - gradlew-cli.bat
       - .github/workflows/**
+      - .github/scripts/**
   pull_request:
     branches:
       - main
@@ -61,6 +62,12 @@ on:
       - gradlew-cli
       - gradlew-cli.bat
       - .github/workflows/**
+      - .github/scripts/**
+
+# Superseded branch/PR builds need not keep compiling every native target.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-all:

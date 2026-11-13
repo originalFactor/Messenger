@@ -39,7 +39,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
       - name: Resolve version (semantic name from VERSION, code from commit count)
         shell: bash
@@ -47,10 +46,10 @@ jobs:
           echo "VERSION_CODE=$(git rev-list --count HEAD)" >> $GITHUB_ENV
           echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($(git rev-list --count HEAD))"
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
       - name: Setup Android SDK
@@ -80,22 +79,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core/rust
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          key: android-arm64-${{ hashFiles('core/rust/crates/**', 'VERSION') }}
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           gradle-home-cache-cleanup: true
-
-      - name: Cache Kotlin/Native compiler
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.konan
-          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-konan-
 
       - name: Grant execute permission for gradlew
         shell: bash
@@ -127,6 +119,7 @@ jobs:
         with:
           name: androidApp-release
           path: androidApp/build/outputs/apk/release/*.apk
+          compression-level: 0
           if-no-files-found: error
 
       - name: Upload runtime release artifacts
@@ -134,4 +127,5 @@ jobs:
         with:
           name: runtime-release
           path: runtime/build/outputs/apk/release/*.apk
+          compression-level: 0
           if-no-files-found: error

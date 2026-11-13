@@ -36,7 +36,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
       - name: Resolve version (semantic name from VERSION, code from commit count)
         shell: bash
@@ -44,10 +43,10 @@ jobs:
           echo "VERSION_CODE=$(git rev-list --count HEAD)" >> $GITHUB_ENV
           echo "Building Messenger $(tr -d '[:space:]' < VERSION) ($(git rev-list --count HEAD))"
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
       - name: Setup Android SDK
@@ -60,15 +59,6 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           gradle-home-cache-cleanup: true
-
-      - name: Cache Kotlin/Native compiler
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.konan
-          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-konan-
 
       - name: Grant execute permission for gradlew
         shell: bash
@@ -101,4 +91,5 @@ jobs:
           # No ABI splits any more: the watch release APK is a single
           # wear-release.apk with armeabi-v7a natives (see wear/build.gradle.kts).
           path: wear/build/outputs/apk/release/*.apk
+          compression-level: 0
           if-no-files-found: error

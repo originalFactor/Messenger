@@ -1,0 +1,18 @@
+# Repackage the release Deb payload. Kotlin/Rust/ProGuard and jlink have
+# already run; keep the bundled runtime and all native libraries intact.
+pkgname=messenger
+pkgver=${MESSENGER_PACKAGE_VERSION:?Set the native package version from the Deb}
+pkgrel=1
+pkgdesc='Open source BYOK LLM chat client'
+arch=('x86_64')
+url='https://github.com/originalFactor/Messenger'
+license=('Apache-2.0')
+depends=('glibc' 'gcc-libs' 'alsa-lib' 'fontconfig' 'freetype2' 'libx11'
+         'libxext' 'libxi' 'libxrender' 'libxtst' 'zlib')
+# The JRE and Rust library are already processed. Stripping them again can
+# destroy native metadata; debug package generation is also unnecessary.
+options=('!strip' '!debug')
+
+package() {
+    cp -a --no-preserve=ownership "$startdir/payload/." "$pkgdir/"
+}

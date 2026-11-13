@@ -20,75 +20,12 @@ on:
       - 'v*'
 
 jobs:
-  build-all:
-    name: Build All
-    uses: ./.github/workflows/build-all.yml
-    secrets: inherit
-
-  release:
-    name: Create GitHub Release
-    needs: build-all
+  validate-version:
+    name: Validate release version before compiling
     runs-on: ubuntu-latest
-
     steps:
-      # Only the VERSION file is needed here (the tag check below), but the job
-      # has to check the tree out for it: nothing else in this job reads the
-      # repository, so without this step `tr < VERSION` fails with
-      # "No such file or directory" and the whole release is aborted. Checking
-      # out the triggering ref means VERSION is read from the TAGGED commit —
-      # which is exactly what the check is about.
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # --- Android (arm64-v8a; wear is the armeabi-v7a exception) ---------
-      - name: Download androidApp release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: androidApp-release
-          path: artifacts/androidApp
-
-      - name: Download runtime release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: runtime-release
-          path: artifacts/runtime
-
-      - name: Download wear release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wear-release
-          path: artifacts/wear
-
-      # --- Desktop (Windows x86_64/ARM64, Linux x86_64/ARM64) -------------
-      - name: Download Desktop artifact (Windows x86_64)
-        uses: actions/download-artifact@v4
-        with:
-          name: desktop-windows-x86_64
-          path: artifacts/desktop/windows-x86_64
-
-#      - name: Download Desktop artifact (Windows ARM64)
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: desktop-windows-arm64
-#          path: artifacts/desktop/windows-arm64
-
-#      - name: Download Desktop artifact (Linux x86_64)
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: desktop-linux-x86_64
-#          path: artifacts/desktop/linux-x86_64
-#
-#      - name: Download Desktop artifact (Linux ARM64)
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: desktop-linux-arm64
-#          path: artifacts/desktop/linux-arm64
-
-      # --- Release metadata ---------------------------------------------
-      - name: Get version from tag
-        id: get_version
-        shell: bash
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       # The tag is the published identity of a release, so it must agree with
       # the VERSION file the artifacts were built from: a `v1.0.1` tag on a
@@ -110,17 +47,64 @@ jobs:
           fi
           echo "Tag '$tag' matches VERSION '$file'."
 
+  build-all:
+    name: Build All
+    needs: validate-version
+    uses: ./.github/workflows/build-all.yml
+    secrets: inherit
+
+  release:
+    name: Create GitHub Release
+    permissions:
+      contents: write
+    needs: build-all
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- Android (arm64-v8a; wear is the armeabi-v7a exception) ---------
+      - name: Download androidApp release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: androidApp-release
+          path: artifacts/androidApp
+
+      - name: Download runtime release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-release
+          path: artifacts/runtime
+
+      - name: Download wear release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wear-release
+          path: artifacts/wear
+
+      # Download the installers already built by the reusable Desktop workflow.
+      - name: Download Desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: artifacts/desktop
+
+      # --- Release metadata ---------------------------------------------
+      - name: Get version from tag
+        id: get_version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.VERSION }}
           name: Release ${{ steps.get_version.outputs.VERSION }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             artifacts/androidApp/**/*.apk
             artifacts/runtime/**/*.apk
             artifacts/wear/*.apk
-            artifacts/desktop/windows-x86_64/*.msi
-            artifacts/desktop/windows-arm64/*.zip
-            artifacts/desktop/linux-x86_64/*.deb
-            artifacts/desktop/linux-arm64/*.deb
+            artifacts/desktop/desktop-windows-x86_64/*.msi
+            artifacts/desktop/desktop-linux-x86_64/*.deb
+            artifacts/desktop/desktop-linux-x86_64/*.pkg.tar.zst
+            artifacts/desktop/desktop-macos-arm64/*.dmg
