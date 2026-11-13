@@ -42,6 +42,8 @@ pub enum ContentPart {
         name: String,
         output: String,
         is_error: bool,
+        /// Render-time resource references; not replayed as model input.
+        structured_content: Option<serde_json::Value>,
     },
 }
 

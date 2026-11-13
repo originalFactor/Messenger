@@ -26,6 +26,8 @@ struct StoredContentPart {
     output: Option<String>,
     #[serde(rename = "isError")]
     is_error: bool,
+    #[serde(rename = "structuredContent", skip_serializing_if = "Option::is_none")]
+    structured_content: Option<serde_json::Value>,
 }
 
 fn to_stored(part: &ContentPart) -> StoredContentPart {
@@ -57,12 +59,14 @@ fn to_stored(part: &ContentPart) -> StoredContentPart {
             name,
             output,
             is_error,
+            structured_content,
         } => StoredContentPart {
             kind: "tool_result".into(),
             call_id: Some(call_id.clone()),
             name: Some(name.clone()),
             output: Some(output.clone()),
             is_error: *is_error,
+            structured_content: structured_content.clone(),
             ..Default::default()
         },
     }
@@ -91,7 +95,7 @@ fn to_domain(stored: StoredContentPart) -> Option<ContentPart> {
                 call_id,
                 name,
                 output: stored.output.unwrap_or_default(),
-                is_error: stored.is_error,
+                is_error: stored.is_error, structured_content: stored.structured_content,
             })
         }
         _ => None,
@@ -155,17 +159,29 @@ mod tests {
                 call_id: "call_1".into(),
                 name: "terminal".into(),
                 output: "file.txt".into(),
-                is_error: false,
+                is_error: false, structured_content: None,
             },
             ContentPart::ToolResult {
                 call_id: "call_2".into(),
                 name: "terminal".into(),
                 output: "boom".into(),
-                is_error: true,
+                is_error: true, structured_content: None,
             },
         ];
         let encoded = encode_parts(&parts).unwrap();
         assert_eq!(decode_parts(Some(&encoded)), parts);
+    }
+
+    #[test]
+    fn preserves_unknown_structured_results_and_accepts_legacy_text_results() {
+        let payload = r#"[{"type":"tool_result","callId":"c1","name":"future_tool","output":"Saved reference","structuredContent":{"version":93,"type":"future","refs":[{"id":"local:1"}],"unknown":{"nested":true}}}]"#;
+        let decoded = decode_parts(Some(payload));
+        let encoded = encode_parts(&decoded).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(value[0]["structuredContent"], serde_json::from_str::<serde_json::Value>(payload).unwrap()[0]["structuredContent"]);
+        let legacy = decode_parts(Some(r#"[{"type":"tool_result","callId":"c0","name":"read","output":"plain text"}]"#));
+        assert!(matches!(&legacy[0], ContentPart::ToolResult { structured_content: None, .. }));
+        assert!(!encode_parts(&legacy).unwrap().contains("structuredContent"));
     }
 
     #[test]

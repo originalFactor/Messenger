@@ -35,6 +35,9 @@ import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.chat_think_title
+import org.jetbrains.compose.resources.stringResource
 
 /** Exercise pointer hit testing, not the semantics-only performClick action. */
 @OptIn(ExperimentalTestApi::class)
@@ -48,8 +51,10 @@ class ChatDocumentLongInteractionTest {
             add(ChatBlock.Think(1000, "Unique expanded thought", true))
             add(ChatBlock.ToolCall(1001, "call", "unique_tool", "", "Unique tool output", false, true))
         }
+        var thoughtLabel = ""
         setContent {
             MaterialTheme {
+                thoughtLabel = stringResource(Res.string.chat_think_title)
                 // As in the chat screen, the bottom of a long item is visible first.
                 LazyColumn(modifier = Modifier.size(600.dp, 500.dp), reverseLayout = true) {
                     item {
@@ -91,7 +96,7 @@ class ChatDocumentLongInteractionTest {
         tool.performMouseInput { click() }
         onNodeWithText("Unique tool output").assertExists()
 
-        val thought = onNodeWithText("Thought process")
+        val thought = onNodeWithText(thoughtLabel)
         assertHover(thought)
         thought.performMouseInput { click() }
         onNodeWithText("Unique expanded thought").assertExists()

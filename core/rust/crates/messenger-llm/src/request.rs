@@ -160,7 +160,7 @@ pub fn build_request_messages(
     if let Some(prompt) = system_prompt.filter(|p| !p.is_empty()) {
         result.push(WireMessage::text("system", prompt));
     }
-    for message in messages {
+    for (message_index, message) in messages.iter().enumerate() {
         let role = match message.role {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
@@ -171,18 +171,26 @@ pub fn build_request_messages(
         if role == "tool" {
             let tool_result = message.parts.iter().find_map(|p| match p {
                 ContentPart::ToolResult {
-                    call_id, output, ..
-                } => Some((call_id.as_str(), output.as_str())),
+                    call_id, name, output, is_error, structured_content,
+                } => {
+                    // Source fetched for a previous user turn remains durable,
+                    // but a new prompt only needs its resource reference.
+                    let historical = messages[message_index + 1..].iter().any(|later| later.role == MessageRole::User);
+                    let summary = if historical && name == "messenger_artifacts" && !is_error {
+                        structured_content.as_ref().and_then(artifact_reference).map(|reference| format!("Artifact {} revision {} is stored. Use messenger_artifacts get to read its source when needed.", reference["id"], reference["revision"]))
+                    } else { None };
+                    Some((call_id.as_str(), summary.unwrap_or_else(|| output.clone())))
+                },
                 _ => None,
             });
             result.push(WireMessage {
                 role: "tool".to_string(),
                 content: Value::String(
-                    tool_result.map_or_else(|| message.content.clone(), |(_, output)| output.to_string()),
+                    tool_result.as_ref().map_or_else(|| message.content.clone(), |(_, output)| output.to_string()),
                 ),
                 reasoning_content: None,
                 tool_calls: None,
-                tool_call_id: Some(tool_result.map(|(id, _)| id.to_string()).unwrap_or_default()),
+                tool_call_id: Some(tool_result.as_ref().map(|(id, _)| id.to_string()).unwrap_or_default()),
             });
             continue;
         }
@@ -226,7 +234,7 @@ pub fn build_request_messages(
                         kind: "function".to_string(),
                         function: WireToolCallFunction {
                             name: name.clone(),
-                            arguments: arguments.clone(),
+                            arguments: compact_artifact_arguments(call_id, name, arguments, &messages[message_index + 1..]),
                         },
                     }),
                     _ => None,
@@ -269,6 +277,26 @@ pub fn build_request_messages(
         }
     }
     result
+}
+
+fn artifact_reference(value: &Value) -> Option<&Value> {
+    (value["type"] == "artifact" && value["id"].as_str().is_some_and(|id| !id.is_empty())
+        && value["revision"].as_u64().is_some_and(|revision| revision > 0)).then_some(value)
+}
+
+/// Compact only successfully committed artifact writes. Failed submissions keep
+/// their original input so the model can repair them; stored history is untouched.
+fn compact_artifact_arguments(call_id: &str, name: &str, arguments: &str, following: &[Message]) -> String {
+    if name != "messenger_artifacts" { return arguments.into(); }
+    let Ok(input) = serde_json::from_str::<Value>(arguments) else { return arguments.into(); };
+    if !matches!(input["action"].as_str(), Some("create" | "update")) { return arguments.into(); }
+    let reference = following.iter().flat_map(|message| &message.parts).find_map(|part| match part {
+        ContentPart::ToolResult { call_id: id, name, is_error: false, structured_content: Some(value), .. }
+            if id == call_id && name == "messenger_artifacts" => artifact_reference(value),
+        _ => None,
+    });
+    reference.map(|reference| serde_json::json!({"action":input["action"],"id":reference["id"],
+        "revision":reference["revision"],"contentStored":true}).to_string()).unwrap_or_else(|| arguments.into())
 }
 
 fn has_tool_calls(message: &Message) -> bool {
@@ -377,6 +405,33 @@ mod tests {
     }
 
     #[test]
+    fn completed_artifact_source_is_compacted_in_model_history_only() {
+        let source = "<html>source remains in persisted parts</html>";
+        let arguments = serde_json::json!({"action":"create","title":"Demo","files":{"index.html":source}}).to_string();
+        let mut assistant = text_message("a", MessageRole::Assistant, "");
+        assistant.parts = vec![ContentPart::ToolCall { call_id:"c".into(), name:"messenger_artifacts".into(), arguments:arguments.clone() }];
+        let mut result = text_message("r", MessageRole::Tool, "");
+        result.parts = vec![ContentPart::ToolResult { call_id:"c".into(),name:"messenger_artifacts".into(),output:"Created artifact demo".into(),is_error:false,
+            structured_content:Some(serde_json::json!({"version":1,"type":"artifact","id":"demo","revision":2})) }];
+        let original = vec![assistant, result];
+        let wire = build_request_messages(&original, None, None);
+        let projected = &wire[0].tool_calls.as_ref().unwrap()[0].function.arguments;
+        assert!(!projected.contains(source));
+        assert!(projected.contains("demo"));
+        assert!(matches!(&original[0].parts[0], ContentPart::ToolCall { arguments:stored, .. } if stored == &arguments));
+        let mut failed = original.clone();
+        if let ContentPart::ToolResult { is_error, .. } = &mut failed[1].parts[0] { *is_error = true; }
+        let wire = build_request_messages(&failed, None, None);
+        assert_eq!(wire[0].tool_calls.as_ref().unwrap()[0].function.arguments, arguments);
+        // A freshly requested get remains readable until a subsequent user turn.
+        let mut read = original[1].clone();
+        if let ContentPart::ToolResult { output, .. } = &mut read.parts[0] { *output = source.into(); }
+        assert_eq!(build_request_messages(&[read.clone()], None, None)[0].content, Value::String(source.into()));
+        let wire = build_request_messages(&[read, text_message("u", MessageRole::User, "Next task")], None, None);
+        assert!(!wire[0].content.to_string().contains(source));
+    }
+
+    #[test]
     fn tool_message_round_trips_call_id_and_output() {
         let mut msg = text_message("1", MessageRole::Tool, "fallback");
         msg.parts = vec![ContentPart::ToolResult {
@@ -384,6 +439,7 @@ mod tests {
             name: "terminal".to_string(),
             output: "ls output".to_string(),
             is_error: false,
+            structured_content: Some(serde_json::json!({"version":1,"type":"future","privateUiData":"not model context"})),
         }];
         let wire = build_request_messages(&[msg], None, None);
         assert_eq!(wire[0].role, "tool");

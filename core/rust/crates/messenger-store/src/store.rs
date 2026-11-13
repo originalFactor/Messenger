@@ -36,7 +36,7 @@ type Listener = Box<dyn Fn(&StoreEvent) + Send + Sync>;
 /// SQLite-backed store. Sync consumers (UI repositories over FFI) subscribe
 /// to [`Store::subscribe`] and re-query on notifications.
 pub struct Store {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
     listeners: Mutex<Vec<Listener>>,
 }
 
@@ -49,6 +49,13 @@ impl Store {
         Self::init(conn)
     }
 
+
+    /// Directory containing the SQLite file, absent for in-memory stores.
+    pub fn data_dir(&self) -> Option<std::path::PathBuf> {
+        let conn = self.conn.lock().unwrap();
+        conn.path().filter(|p| !p.is_empty()).and_then(|p| Path::new(p).parent())
+            .map(Path::to_path_buf)
+    }
 
     /// In-memory store for tests.
     pub fn open_memory() -> Result<Self, rusqlite::Error> {
@@ -81,6 +88,8 @@ impl Store {
         crate::schema::add_model_metadata_columns(&conn)?;
         crate::schema::add_model_cache_write_rate_column(&conn)?;
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
+        // v7 -> v8: independent local learning library; no chat cascading FKs.
+        conn.execute_batch(crate::learning::CREATE_LEARNING_TABLES)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self {
             conn: Mutex::new(conn),

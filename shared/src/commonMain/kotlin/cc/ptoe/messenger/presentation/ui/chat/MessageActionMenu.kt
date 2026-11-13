@@ -41,6 +41,7 @@ import cc.ptoe.messenger.presentation.ui.components.ContextMenuState
 import cc.ptoe.messenger.presentation.ui.components.CursorDropdownMenu
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.learning_save_source
 import cc.ptoe.messenger.generated.resources.action_copy
 import cc.ptoe.messenger.generated.resources.action_delete
 import cc.ptoe.messenger.generated.resources.action_regenerate
@@ -56,7 +57,8 @@ fun MessageActionMenu(
     onRegenerateClick: () -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier,
-    allowMessageMutation: Boolean = true
+    allowMessageMutation: Boolean = true,
+    onSaveToLearning: (() -> Unit)? = null,
 ) {
     if (!isVisible) return
 
@@ -88,6 +90,15 @@ fun MessageActionMenu(
                     }
                 }
             )
+            onSaveToLearning?.let { save ->
+                ListItem(
+                    headlineContent = { Text(stringResource(Res.string.learning_save_source)) },
+                    modifier = Modifier.clickable {
+                        save()
+                        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+                    },
+                )
+            }
             if (allowMessageMutation && messageRole == MessageRole.ASSISTANT) {
                 ListItem(
                     headlineContent = { Text(stringResource(Res.string.action_regenerate)) },
@@ -133,7 +144,8 @@ fun MessageContextMenu(
     onRegenerateClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onDismiss: () -> Unit,
-    allowMessageMutation: Boolean = true
+    allowMessageMutation: Boolean = true,
+    onSaveToLearning: (() -> Unit)? = null,
 ) {
     CursorDropdownMenu(state = state, onDismiss = onDismiss) {
         DropdownMenuItem(
@@ -149,6 +161,9 @@ fun MessageContextMenu(
                 onCopyClick()
             }
         )
+        onSaveToLearning?.let { save ->
+            DropdownMenuItem(text = { Text(stringResource(Res.string.learning_save_source)) }, onClick = { state.hide(); save() })
+        }
         if (allowMessageMutation && messageRole == MessageRole.ASSISTANT) {
             DropdownMenuItem(
                 text = { Text(stringResource(Res.string.action_regenerate)) },

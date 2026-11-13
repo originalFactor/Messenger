@@ -27,6 +27,12 @@ import kotlinx.serialization.Serializable
 interface CoreBridge {
     fun subscribe(listener: (kind: String, ids: List<String>) -> Unit)
 
+    /** Authenticated local learning/media API; never exposed to generated JavaScript. */
+    suspend fun learningRequest(method: String, path: String, body: String? = null): String =
+        error("Learning API is unavailable in this Core bridge")
+
+    suspend fun learningAsset(id: String): ByteArray = error("Asset API is unavailable")
+
     // Store CRUD
     fun listProvidersJson(): String
     fun getProviderJson(id: String): String?

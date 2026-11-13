@@ -69,6 +69,7 @@ internal actual fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    onSaveToLearning: (Message) -> Unit,
     allowMessageMutation: Boolean,
     hasOlderMessages: Boolean,
     isLoadingHistory: Boolean,
@@ -160,6 +161,7 @@ internal actual fun ChatMessageList(
                 allowMessageMutation = allowMessageMutation,
                                         state = contextMenuState,
                                         messageRole = anchor.role,
+                onSaveToLearning = { onSaveToLearning(anchor) },
                                         onCopyClick = {
                                             val copyText = if (anchor.content.isNotBlank()) anchor.content else {
                                                 blocks.joinToString("\n\n") { block ->
@@ -250,6 +252,7 @@ internal actual fun ChatMessageList(
                 allowMessageMutation = allowMessageMutation,
                                         state = contextMenuState,
                                         messageRole = message.role,
+                onSaveToLearning = { onSaveToLearning(message) },
                                         onCopyClick = {
                                             onCopyClick(message.content)
                                             showPlatformToast(copiedToastText)
@@ -305,6 +308,7 @@ private fun buildDesktopToolGroupBlocks(
                     name = result.name,
                     arguments = "",
                     output = result.output,
+                    structuredContent = result.structuredContent,
                     isError = result.isError,
                     isFinalized = true
                 )
@@ -328,6 +332,7 @@ private fun buildDesktopToolGroupBlocks(
                     name = call.name,
                     arguments = call.arguments,
                     output = result?.first?.output,
+                    structuredContent = result?.first?.structuredContent,
                     isError = result?.first?.isError ?: false,
                     isFinalized = result?.second == true
                 )

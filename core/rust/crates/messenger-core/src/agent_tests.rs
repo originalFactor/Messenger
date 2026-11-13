@@ -50,12 +50,30 @@ impl ToolHost for StaticToolHost {
             ToolExecutionResult {
                 output: "file-a\nfile-b".into(),
                 is_error: false,
+                structured_content: Some(serde_json::json!({"version":1,"type":"futureResource","id":"r1"})),
             }
         } else {
             ToolExecutionResult {
                 output: format!("Unknown tool: {name}"),
-                is_error: true,
+                is_error: true, structured_content: None,
             }
+        }
+    }
+}
+
+struct ImageToolHost {
+    failure: Option<&'static str>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ToolHost for ImageToolHost {
+    async fn execute(&self, _: &str, _: &str, _: &str) -> ToolExecutionResult {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ToolExecutionResult {
+            output: self.failure.unwrap_or("Generated image asset image-1").into(),
+            is_error: self.failure.is_some(),
+            structured_content: Some(serde_json::json!({"version":1,"type":"imageGenerationJob","jobId":"job-1","status":if self.failure.is_some() {"unknown"} else {"succeeded"}})),
         }
     }
 }
@@ -218,6 +236,55 @@ fn turn_request(base_url: &str) -> TurnRequest {
 }
 
 #[tokio::test]
+async fn image_generation_failure_is_visible_and_stops_before_another_model_round() {
+    for detail in ["Provider HTTP 429: quota exhausted", "Provider disconnected: outcome unknown and may have been charged"] {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(tool_call_stream("messenger_generate_image", "image-1")))
+            .expect(1).mount(&server).await;
+        let store = seeded_store();
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let host = ImageToolHost { failure:Some(detail), calls:Default::default() };
+        let mut request = turn_request(&server.uri());
+        let mut tool = messenger_tools::BuiltinTool::terminal(false);
+        tool.name = "messenger_generate_image".into();
+        request.tools = vec![tool];
+        run_chat_turn(&store, &host, &sink, &request, tokio_util::sync::CancellationToken::new()).await.unwrap();
+        assert_eq!(host.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        let rows = store.list_messages_by_conversation("c1").unwrap();
+        let failed = rows.iter().find(|row| row.role == "assistant" && row.status == "error").unwrap();
+        assert!(failed.error_message.as_deref().unwrap().contains(detail));
+        assert!(failed.content.contains(detail));
+        assert!(!rows.iter().any(|row| row.status == "sending"));
+        let events = sink.0.lock();
+        assert!(matches!(events.last(), Some(AgentEvent::Error { code, message }) if code == "image_generation_failed" && message.contains(detail)));
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCallFinished { is_error:true, structured_content:Some(_), .. })));
+    }
+}
+
+#[tokio::test]
+async fn successful_image_generation_can_continue_to_another_image_and_final_reply() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ScriptedResponder { bodies:Mutex::new(VecDeque::from(vec![
+            tool_call_stream("messenger_generate_image", "image-1"),
+            tool_call_stream("messenger_generate_image", "image-2"),
+            text_stream("Both images are ready."),
+        ])) }).expect(3).mount(&server).await;
+    let store = seeded_store();
+    let sink = RecordingSink(Mutex::new(Vec::new()));
+    let host = ImageToolHost { failure:None, calls:Default::default() };
+    let mut request = turn_request(&server.uri());
+    let mut tool = messenger_tools::BuiltinTool::terminal(false);
+    tool.name = "messenger_generate_image".into(); request.tools = vec![tool];
+    run_chat_turn(&store, &host, &sink, &request, tokio_util::sync::CancellationToken::new()).await.unwrap();
+    assert_eq!(host.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(matches!(sink.0.lock().last(), Some(AgentEvent::Finished { .. })));
+    assert!(!store.list_messages_by_conversation("c1").unwrap().iter().any(|row| row.status == "error"));
+}
+
+#[tokio::test]
 async fn full_tool_round_persists_rows_and_finishes() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -260,10 +327,11 @@ async fn full_tool_round_persists_rows_and_finishes() {
     assert_eq!(tool_row.status, "sent");
     let tool_parts = decode_parts(tool_row.parts_json.as_deref());
     match &tool_parts[0] {
-        messenger_llm::domain::ContentPart::ToolResult { call_id, output, is_error, .. } => {
+        messenger_llm::domain::ContentPart::ToolResult { call_id, output, is_error, structured_content, .. } => {
             assert_eq!(call_id, "call_1");
             assert_eq!(output, "file-a\nfile-b");
             assert!(!is_error);
+            assert_eq!(structured_content, &Some(serde_json::json!({"version":1,"type":"futureResource","id":"r1"})));
         }
         other => panic!("expected tool result part, got {other:?}"),
     }
@@ -284,8 +352,8 @@ async fn full_tool_round_persists_rows_and_finishes() {
     ));
     assert!(events
         .iter()
-        .any(|e| matches!(e, AgentEvent::ToolCallFinished { call_id, output, is_error, .. }
-            if call_id == "call_1" && output == "file-a\nfile-b" && !is_error)));
+        .any(|e| matches!(e, AgentEvent::ToolCallFinished { call_id, output, is_error, structured_content, .. }
+            if call_id == "call_1" && output == "file-a\nfile-b" && !is_error && structured_content.is_some())));
 }
 
 #[tokio::test]

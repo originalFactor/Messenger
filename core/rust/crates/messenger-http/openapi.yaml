@@ -14,6 +14,1064 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  "/learning/settings":
+    "get":
+      "operationId": "getLearningCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+    "put":
+      "operationId": "setLearningCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/WorkbenchCapability"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "description": "Invalid local bearer credential."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/settings":
+    "get":
+      "operationId": "getArtifactCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+    "put":
+      "operationId": "setArtifactCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/WorkbenchCapability"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "description": "Invalid local bearer credential."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/image-generation/capability":
+    "get":
+      "operationId": "getImageGenerationCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+    "put":
+      "operationId": "setImageGenerationCapability"
+      "description": "Explicit device-local feature capability, initially disabled. Ordinary authenticated user CRUD remains available; Agent tools also require effective turn/Agent policy."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/WorkbenchCapability"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/WorkbenchCapability"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "description": "Invalid local bearer credential."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/overview":
+    "get":
+      "operationId": "learningOverview"
+      "description": "Fact counts from the device-local library; never inferred mastery."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningOverview"
+  "/learning/records/{kind}":
+    "parameters":
+      - "name": "kind"
+        "in": "path"
+        "required": true
+        "schema":
+          "$ref": "#/components/schemas/LearningKind"
+      - "name": "courseId"
+        "in": "query"
+        "schema":
+          "type": "string"
+      - "name": "knowledgePointId"
+        "in": "query"
+        "schema":
+          "type": "string"
+      - "name": "tag"
+        "in": "query"
+        "schema":
+          "type": "string"
+      - "name": "search"
+        "in": "query"
+        "schema":
+          "type": "string"
+      - "name": "archived"
+        "in": "query"
+        "schema":
+          "type": "boolean"
+      - "name": "dueBefore"
+        "in": "query"
+        "schema":
+          "type": "integer"
+          "format": "int64"
+          "description": "UTC milliseconds; filters unpaused, unarchived cards and sorts earliest due first."
+      - "name": "offset"
+        "in": "query"
+        "schema":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "default": 0
+      - "name": "limit"
+        "in": "query"
+        "schema":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 1
+          "maximum": 200
+          "default": 50
+    "get":
+      "operationId": "listLearningRecords"
+      "description": "Filter and paginate typed records. Tasks and knowledge points sort by saved position then ID before pagination; other lists sort newest update first, and due reviews sort earliest due first. Source snapshots survive chat deletion; missing normal chat/message hints detach on read."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningPage"
+  "/learning/records/{kind}/{id}":
+    "parameters":
+      - "name": "kind"
+        "in": "path"
+        "required": true
+        "schema":
+          "$ref": "#/components/schemas/LearningKind"
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getLearningRecord"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningRecord"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+    "put":
+      "operationId": "putLearningRecord"
+      "description": "Path id/kind must match payload. Version zero creates; current version updates. Maximum record JSON 1 MiB. Typed references and knowledge-point cycles validate in the same transaction."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/LearningRecord"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningRecord"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+    "delete":
+      "operationId": "deleteLearningRecord"
+      "description": "Delete only after dependents are removed; archive referenced records instead. Deletes the record and its own content revisions and atomically releases its asset owners. Other owners and resources required by immutable review-attempt snapshots remain; otherwise unreferenced resources enter the 24-hour GC grace period."
+      "responses":
+        "204":
+          "description": "Completed."
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+      "parameters":
+        - "name": "version"
+          "in": "query"
+          "required": true
+          "schema":
+            "type": "integer"
+            "format": "int64"
+  "/learning/reviews/{id}/state":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getLearningReviewState"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ReviewState"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/reviews/{id}/submit":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "submitLearningReview"
+      "description": "Explicit user feedback only. again/hard/good/easy map to SM-2 quality 1/3/4/5. Snapshot, attempt and schedule update atomically. Globally idempotent submissionId; identical repeats return the original attempt, different input conflicts. Check itemVersion and stateVersion; paused/archived cards reject new attempts. No Agent tool or webpage can auto-grade."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ReviewSubmission"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ReviewAttempt"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/reviews/{id}/attempts":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+      - "name": "offset"
+        "in": "query"
+        "schema":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "default": 0
+      - "name": "limit"
+        "in": "query"
+        "schema":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 1
+          "maximum": 200
+          "default": 50
+    "get":
+      "operationId": "listLearningReviewAttempts"
+      "description": "Immutable history, newest first; missing/deleted cards may still have attempts."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "items":
+                    "type": "array"
+                    "items":
+                      "$ref": "#/components/schemas/ReviewAttempt"
+                "required": ["items"]
+  "/learning/export":
+    "get":
+      "operationId": "exportLearningMetadata"
+      "description": "Metadata only: records, immutable revisions, states and attempts. External asset/artifact bytes are explicitly omitted. Use /learning/package/export for complete resources."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningPackage"
+  "/learning/import/preview":
+    "post":
+      "operationId": "previewLearningMetadata"
+      "description": "Validate all records/relations/revisions/states/attempts; preview rolls back exactly the same transaction as commit. Preserve IDs and reject collisions. Referenced asset bytes and artifacts must already exist locally; complete package imports supply missing resources. Limits: 16 MiB JSON, 10000 records/states, 50000 revisions/attempts. No credentials, permissions or external resource bytes."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/LearningPackage"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningImportPreview"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/import":
+    "post":
+      "operationId": "importLearningMetadata"
+      "description": "Validate all records/relations/revisions/states/attempts; preview rolls back exactly the same transaction as commit. Preserve IDs and reject collisions. Referenced asset bytes and artifacts must already exist locally; complete package imports supply missing resources. Limits: 16 MiB JSON, 10000 records/states, 50000 revisions/attempts. No credentials, permissions or external resource bytes."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/LearningPackage"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningImportPreview"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets":
+    "get":
+      "operationId": "listAssets"
+      "description": "Device-local owned content manifest, no paths or credentials."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Asset"
+  "/assets/import":
+    "post":
+      "operationId": "importAsset"
+      "description": "Decode, validate and atomically persist independent asset bytes before committing ownership metadata. SHA-256 deduplication. Maximum 20 MiB per file, 29 MiB JSON; PNG/JPEG/WebP require matching decoded MIME and bounded dimensions."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AssetImport"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Asset"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/download":
+    "post":
+      "operationId": "downloadAsset"
+      "description": "Public HTTPS only; DNS/address pinning and every redirect are checked. Maximum 20 MiB, 60 seconds, three redirects; no ambient proxy or retries."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AssetDownload"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Asset"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/{id}":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getAsset"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Asset"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/{id}/provenance":
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      operationId: getAssetGenerationProvenance
+      description: Portable generated-image provenance only; no provider credentials, endpoints, profiles or runnable jobs.
+      responses:
+        "200":
+          description: At most 128 provenance entries for the owned asset.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ImageProvenance' } }
+        "404": { description: Asset not found. }
+  "/assets/{id}/content":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getAssetContent"
+      "description": "Authenticated binary download. Content-Disposition attachment, X-Content-Type-Options nosniff, Cache-Control private/no-store. Generated webpages must not receive Core credentials."
+      "responses":
+        "200":
+          "description": "Asset bytes with recorded MIME."
+          "content":
+            "application/octet-stream":
+              "schema":
+                "type": "string"
+                "format": "binary"
+        "404":
+          "description": "Asset not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/{id}/references":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "addAssetReference"
+      "description": "Explicit ownership mutation; release rejects a still-bound material, artifact, or active/result-owning image job. Unreferenced bytes have a 24-hour GC grace period."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AssetReference"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Asset"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/{id}/unreference":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "releaseAssetReference"
+      "description": "Explicit ownership mutation; release rejects a still-bound material, artifact, or active/result-owning image job. Unreferenced bytes have a 24-hour GC grace period."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AssetReference"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Asset"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/assets/gc":
+    "post":
+      "operationId": "collectUnreferencedAssets"
+      "description": "Explicit GC of unreferenced assets after 24 hours and old hash-named orphan files. Referenced assets remain."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "removed":
+                    "type": "integer"
+                    "format": "int64"
+                "required": ["removed"]
+  "/image-generation/profiles":
+    "get":
+      "operationId": "listImageGenerationProfiles"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/ImageGenerationProfile"
+  "/image-generation/profiles/{id}":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "put":
+      "operationId": "putImageGenerationProfile"
+      "description": "Path/payload IDs must match. Explicit BYOK OpenAI-compatible Images API adapter; no capability inferred from chat protocols/modalities. Built-in Cloud provider remains ineligible without explicit generation support."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ImageGenerationProfile"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ImageGenerationProfile"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+    "delete":
+      "operationId": "deleteImageGenerationProfile"
+      "description": "Remove profile while retaining jobs and result assets."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "deleted":
+                    "const": true
+                "required": ["deleted"]
+  "/image-generation/jobs":
+    "get":
+      "operationId": "listImageGenerationJobs"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/ImageGenerationJob"
+    "post":
+      "operationId": "submitImageGeneration"
+      "description": "Capability and valid profile/provider/key/model are required before creating a potentially paid job. Identical requestId/content returns existing job even after profile deletion. Different input with same ID conflicts. One request, no automatic retries, alternate endpoint or provider fallback; unknown outcomes require a new user retry ID."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/GenerateImageRequest"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ImageGenerationJob"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/image-generation/jobs/{id}":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getImageGenerationJob"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ImageGenerationJob"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/image-generation/jobs/{id}/cancel":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "cancelImageGenerationJob"
+      "description": "Abort locally. Provider may already have generated/charged. Cancelled/unknown work is never automatically resubmitted."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ImageGenerationJob"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts":
+    "get":
+      "operationId": "listArtifacts"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "items":
+                    "type": "array"
+                    "items":
+                      "$ref": "#/components/schemas/ArtifactSummary"
+                "required": ["items"]
+    "post":
+      "operationId": "createArtifact"
+      "description": "Omit id and submit complete HTML/CSS/JavaScript file set; expectedRevision defaults to zero. Maximum 128 text files, 1 MiB/file, 4 MiB/revision, 64 referenced assets and 32 revisions. Safe relative paths (ASCII letters/digits and _./- only) and existing owned assets only; HTML entry required. Partial files never execute."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ArtifactSubmission"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Artifact"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/{id}":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "get":
+      "operationId": "getArtifact"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Artifact"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+    "put":
+      "operationId": "updateArtifact"
+      "description": "Commit complete next immutable revision only when expectedRevision matches. Validation failure retains the prior revision. State format changes reset incompatible state. Retain only network domains still declared."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ArtifactSubmission"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Artifact"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "409":
+          "description": "Version, request ID, or relation conflict."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/{id}/authorize-run":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "authorizeArtifactExecution"
+      "description": "Explicit trusted native user action grants execution on this device. Imported artifacts always require this fresh authorization. Generated pages cannot grant it themselves."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "authorized":
+                    "const": true
+                "required": ["authorized"]
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/{id}/state":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "setArtifactState"
+      "description": "Trusted host writes only this artifact state after checking stateVersion. Maximum encoded request 64 KiB. No automatic Agent turns, grading, or paid generation."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ArtifactState"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ArtifactState"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/{id}/grants":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "setArtifactNetworkGrants"
+      "description": "Explicit exact lower-case requested HTTPS domains only; replace grant list to revoke access. Imported grants are cleared."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ArtifactGrants"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ArtifactGrants"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/artifacts/{id}/fetch":
+    "parameters":
+      - "$ref": "#/components/parameters/Id"
+    "post":
+      "operationId": "fetchForArtifact"
+      "description": "Trusted host proxy only. Exact approved public HTTPS domain on port 443, DNS validation/address pinning, no proxies or redirects. GET/POST, 64 KiB body, 1 MiB UTF-8 response, 20-second request timeout. No Provider credentials or Core bearer forwarded upstream."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ArtifactFetch"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ArtifactFetchResult"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "404":
+          "description": "Resource not found."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "500":
+          "description": "Storage or service error."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/package/export":
+    "get":
+      "operationId": "exportLearningBundle"
+      "description": "Complete device-local learning metadata plus owned asset bytes and artifact revisions/state. Maximum 96 MiB JSON and 64 MiB decoded asset bytes. Does not include Provider credentials, image generation profiles/jobs, bearer tokens, absolute paths, execution trust or network grants."
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningBundle"
+  "/learning/package/preview":
+    "post":
+      "operationId": "previewLearningBundle"
+      "description": "Validate hashes, MIME/dimensions, safe paths, sizes, complete references/revisions, state formats and destination ID conflicts without persisting. Existing matching hash assets merge owners; learning/artifact IDs reject collisions. Imported execution/network grants reset."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/LearningBundle"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/LearningBundlePreview"
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+  "/learning/package/import":
+    "post":
+      "operationId": "importLearningBundle"
+      "description": "Revalidate preview constraints, stage verified bytes, and atomically commit learning and restricted asset/artifact metadata. Failure removes newly staged files and rolls back all metadata. Same limits as export/preview; explicit user action only."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/LearningBundle"
+      "responses":
+        "200":
+          "description": "Authoritative local JSON state."
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "properties":
+                  "imported":
+                    "const": true
+                  "preview":
+                    "$ref": "#/components/schemas/LearningBundlePreview"
+                "required": ["imported","preview"]
+        "400":
+          "description": "Invalid input or rejected import."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "description": "Request exceeds bounded JSON limit."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
   /skills:
     get:
       operationId: listSkills
@@ -683,6 +1741,7 @@ paths:
               properties:
                 output: { type: string }
                 isError: { type: boolean }
+                structuredContent: { $ref: "#/components/schemas/StructuredToolContent" }
       responses: { "202": { description: Result delivered }, "404": { $ref: "#/components/responses/NotFound" } }
   /messages/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
@@ -981,6 +2040,769 @@ components:
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
   schemas:
+    "WorkbenchCapability":
+      "type": "object"
+      "properties":
+        "enabled":
+          "type": "boolean"
+          "default": false
+      "required": ["enabled"]
+      "additionalProperties": false
+    "LearningKind":
+      "type": "string"
+      "enum": ["course","knowledgePoint","item","material","plan","task","reviewCard"]
+    "LearningSource":
+      "type": "object"
+      "properties":
+        "kind":
+          "type": "string"
+          "enum": ["chat","acp","manual","import"]
+        "conversationId":
+          "anyOf":
+            - "type": "string"
+            - "type": "null"
+        "messageIds":
+          "type": "array"
+          "items":
+            "type": "string"
+        "snapshot":
+          "type": "string"
+        "assetIds":
+          "type": "array"
+          "items":
+            "type": "string"
+      "required": ["kind","snapshot"]
+      "additionalProperties": false
+    "LearningContent":
+      "discriminator":
+        "propertyName": "kind"
+      "oneOf":
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "course"
+            "description":
+              "type": "string"
+          "required": ["kind"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "knowledgePoint"
+            "parentId":
+              "anyOf":
+                - "type": "string"
+                - "type": "null"
+            "description":
+              "type": "string"
+            "position":
+              "type": "integer"
+              "format": "int64"
+          "required": ["kind"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "item"
+            "itemKind":
+              "type": "string"
+              "enum": ["mistake","note","exercise"]
+            "question":
+              "type": "string"
+            "originalAnswer":
+              "type": "string"
+            "correctAnswer":
+              "type": "string"
+            "explanation":
+              "type": "string"
+            "errorReason":
+              "type": "string"
+          "required": ["kind","itemKind"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "material"
+            "materialKind":
+              "type": "string"
+              "enum": ["text","image","file","link","artifact"]
+            "text":
+              "type": "string"
+            "url":
+              "anyOf":
+                - "type": "string"
+                - "type": "null"
+            "assetId":
+              "anyOf":
+                - "type": "string"
+                - "type": "null"
+            "artifactId":
+              "anyOf":
+                - "type": "string"
+                - "type": "null"
+          "required": ["kind","materialKind"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "plan"
+            "goal":
+              "type": "string"
+            "targetAt":
+              "anyOf":
+                - "type": "integer"
+                  "format": "int64"
+                - "type": "null"
+          "required": ["kind"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "task"
+            "planId":
+              "type": "string"
+            "itemId":
+              "anyOf":
+                - "type": "string"
+                - "type": "null"
+            "status":
+              "type": "string"
+              "enum": ["pending","inProgress","completed"]
+            "position":
+              "type": "integer"
+              "format": "int64"
+            "dueAt":
+              "anyOf":
+                - "type": "integer"
+                  "format": "int64"
+                - "type": "null"
+          "required": ["kind","planId","status"]
+          "additionalProperties": false
+        - "type": "object"
+          "properties":
+            "kind":
+              "const": "reviewCard"
+            "itemId":
+              "type": "string"
+            "paused":
+              "type": "boolean"
+              "default": false
+          "required": ["kind","itemId"]
+          "additionalProperties": false
+    "LearningRecord":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 128
+        "version":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "default": 0
+          "description": "Zero creates; updates carry the current version. Server increments it."
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+          "description": "UTC milliseconds; server-owned on ordinary writes."
+        "updatedAt":
+          "type": "integer"
+          "format": "int64"
+        "title":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 1024
+        "courseId":
+          "anyOf":
+            - "type": "string"
+            - "type": "null"
+        "knowledgePointIds":
+          "type": "array"
+          "items":
+            "type": "string"
+        "tags":
+          "type": "array"
+          "items":
+            "type": "string"
+        "archived":
+          "type": "boolean"
+          "default": false
+        "source":
+          "anyOf":
+            - "$ref": "#/components/schemas/LearningSource"
+            - "type": "null"
+        "content":
+          "$ref": "#/components/schemas/LearningContent"
+      "required": ["id","title","content"]
+      "additionalProperties": false
+    "LearningPage":
+      "type": "object"
+      "properties":
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/LearningRecord"
+        "total":
+          "type": "integer"
+          "format": "int64"
+        "offset":
+          "type": "integer"
+          "format": "int64"
+        "limit":
+          "type": "integer"
+          "format": "int64"
+      "required": ["items","total","offset","limit"]
+    "LearningOverview":
+      "type": "object"
+      "properties":
+        "courses":
+          "type": "integer"
+          "format": "int64"
+        "items":
+          "type": "integer"
+          "format": "int64"
+        "materials":
+          "type": "integer"
+          "format": "int64"
+        "dueReviews":
+          "type": "integer"
+          "format": "int64"
+        "pendingTasks":
+          "type": "integer"
+          "format": "int64"
+        "completedTasks":
+          "type": "integer"
+          "format": "int64"
+        "attempts":
+          "type": "integer"
+          "format": "int64"
+        "localOnly":
+          "const": true
+      "required": ["courses","items","materials","dueReviews","pendingTasks","completedTasks","attempts","localOnly"]
+    "ReviewState":
+      "type": "object"
+      "properties":
+        "cardId":
+          "type": "string"
+        "version":
+          "type": "integer"
+          "format": "int64"
+        "intervalDays":
+          "type": "integer"
+          "format": "int64"
+        "repetitions":
+          "type": "integer"
+          "format": "int64"
+        "ease":
+          "type": "number"
+          "minimum": 1.3
+        "dueAt":
+          "type": "integer"
+          "format": "int64"
+        "lastReviewedAt":
+          "anyOf":
+            - "type": "integer"
+              "format": "int64"
+            - "type": "null"
+        "algorithm":
+          "const": "sm2-v1"
+      "required": ["cardId","version","intervalDays","repetitions","ease","dueAt","lastReviewedAt","algorithm"]
+    "ReviewSubmission":
+      "type": "object"
+      "properties":
+        "submissionId":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 128
+        "cardId":
+          "type": "string"
+        "itemVersion":
+          "type": "integer"
+          "format": "int64"
+        "stateVersion":
+          "type": "integer"
+          "format": "int64"
+        "answer":
+          "type": "string"
+        "rating":
+          "type": "string"
+          "enum": ["again","hard","good","easy"]
+      "required": ["submissionId","cardId","itemVersion","stateVersion","answer","rating"]
+      "additionalProperties": false
+    "ReviewAttempt":
+      "type": "object"
+      "properties":
+        "submission":
+          "$ref": "#/components/schemas/ReviewSubmission"
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+        "itemSnapshot":
+          "$ref": "#/components/schemas/LearningRecord"
+        "state":
+          "$ref": "#/components/schemas/ReviewState"
+      "required": ["submission","createdAt","itemSnapshot","state"]
+    "LearningPackage":
+      "type": "object"
+      "properties":
+        "formatVersion":
+          "const": 1
+        "records":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/LearningRecord"
+        "revisions":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/LearningRecord"
+        "reviewStates":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/ReviewState"
+        "attempts":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/ReviewAttempt"
+        "externalResourcesIncluded":
+          "const": false
+      "required": ["formatVersion","records","revisions","reviewStates","attempts","externalResourcesIncluded"]
+      "additionalProperties": false
+    "LearningImportPreview":
+      "type": "object"
+      "properties":
+        "records":
+          "type": "integer"
+          "format": "int64"
+        "revisions":
+          "type": "integer"
+          "format": "int64"
+        "attempts":
+          "type": "integer"
+          "format": "int64"
+        "externalResourcesIncluded":
+          "const": false
+        "warnings":
+          "type": "array"
+          "items":
+            "type": "string"
+      "required": ["records","revisions","attempts","externalResourcesIncluded","warnings"]
+    "AssetReference":
+      "type": "object"
+      "properties":
+        "ownerType":
+          "type": "string"
+        "ownerId":
+          "type": "string"
+      "required": ["ownerType","ownerId"]
+      "additionalProperties": false
+    "Asset":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+          "pattern": "^[0-9a-f]{64}$"
+        "sha256":
+          "type": "string"
+          "pattern": "^[0-9a-f]{64}$"
+        "mimeType":
+          "type": "string"
+        "size":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 1
+          "maximum": 20971520
+        "width":
+          "anyOf":
+            - "type": "integer"
+              "format": "int64"
+            - "type": "null"
+        "height":
+          "anyOf":
+            - "type": "integer"
+              "format": "int64"
+            - "type": "null"
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+        "references":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/AssetReference"
+        "unreferencedAt":
+          "anyOf":
+            - "type": "integer"
+              "format": "int64"
+            - "type": "null"
+      "required": ["id","sha256","mimeType","size","width","height","createdAt","references"]
+    "AssetImport":
+      "type": "object"
+      "properties":
+        "dataBase64":
+          "type": "string"
+          "contentEncoding": "base64"
+        "mimeType":
+          "type": "string"
+        "owner":
+          "$ref": "#/components/schemas/AssetReference"
+      "required": ["dataBase64","mimeType","owner"]
+      "additionalProperties": false
+    "AssetDownload":
+      "type": "object"
+      "properties":
+        "url":
+          "type": "string"
+          "format": "uri"
+          "description": "Public HTTPS port 443; every resolved address and redirect is checked."
+        "owner":
+          "$ref": "#/components/schemas/AssetReference"
+      "required": ["url","owner"]
+      "additionalProperties": false
+    "ArtifactSubmission":
+      "type": "object"
+      "properties":
+        "id":
+          "anyOf":
+            - "type": "string"
+            - "type": "null"
+        "title":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 240
+        "description":
+          "type": "string"
+          "maxLength": 4000
+        "files":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+          "minProperties": 1
+          "maxProperties": 128
+        "assets":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+          "maxProperties": 64
+          "description": "Map safe relative paths to existing asset SHA-256 IDs."
+        "entry":
+          "type": "string"
+          "default": "index.html"
+        "expectedRevision":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "default": 0
+        "stateVersion":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "default": 0
+        "requestedDomains":
+          "type": "array"
+          "items":
+            "type": "string"
+          "maxItems": 16
+      "required": ["title","files"]
+      "additionalProperties": false
+    "ArtifactRevision":
+      "type": "object"
+      "properties":
+        "revision":
+          "type": "integer"
+          "format": "int64"
+        "files":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+        "assets":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+        "entry":
+          "type": "string"
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+        "stateVersion":
+          "type": "integer"
+          "format": "int64"
+      "required": ["revision","files","entry","createdAt"]
+    "Artifact":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+          "format": "uuid"
+        "title":
+          "type": "string"
+        "description":
+          "type": "string"
+        "revisions":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/ArtifactRevision"
+          "maxItems": 32
+        "requestedDomains":
+          "type": "array"
+          "items":
+            "type": "string"
+        "approvedDomains":
+          "type": "array"
+          "items":
+            "type": "string"
+        "state": {}
+        "stateVersion":
+          "type": "integer"
+          "format": "int64"
+        "trustedOnDevice":
+          "type": "boolean"
+          "default": false
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+        "updatedAt":
+          "type": "integer"
+          "format": "int64"
+      "required": ["id","title","revisions","createdAt","updatedAt"]
+    "ArtifactSummary":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "title":
+          "type": "string"
+        "description":
+          "type": "string"
+        "revision":
+          "anyOf":
+            - "type": "integer"
+              "format": "int64"
+            - "type": "null"
+        "updatedAt":
+          "type": "integer"
+          "format": "int64"
+      "required": ["id","title","description","revision","updatedAt"]
+    "ArtifactState":
+      "type": "object"
+      "properties":
+        "stateVersion":
+          "type": "integer"
+          "format": "int64"
+        "state": {}
+        "revision":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 1
+          "description": "Optional on submission; if present must match latest revision."
+      "required": ["stateVersion","state"]
+    "ArtifactGrants":
+      "type": "object"
+      "properties":
+        "domains":
+          "type": "array"
+          "items":
+            "type": "string"
+      "required": ["domains"]
+    "ArtifactFetch":
+      "type": "object"
+      "properties":
+        "url":
+          "type": "string"
+        "method":
+          "type": "string"
+          "enum": ["GET","POST"]
+          "default": "GET"
+        "body":
+          "anyOf":
+            - "type": "string"
+              "maxLength": 65536
+            - "type": "null"
+        "contentType":
+          "anyOf":
+            - "type": "string"
+              "enum": ["application/json","text/plain","application/x-www-form-urlencoded"]
+            - "type": "null"
+      "required": ["url"]
+      "additionalProperties": false
+    "ArtifactFetchResult":
+      "type": "object"
+      "properties":
+        "status":
+          "type": "integer"
+          "format": "int64"
+        "body":
+          "type": "string"
+          "description": "UTF-8 response, maximum 1 MiB."
+      "required": ["status","body"]
+    "ImageGenerationProfile":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "name":
+          "type": "string"
+        "providerId":
+          "type": "string"
+        "modelId":
+          "type": "string"
+          "description": "Explicit remote generation model, independent of chat model rows."
+        "adapter":
+          "type": "string"
+          "const": "openai_images"
+          "default": "openai_images"
+        "enabled":
+          "type": "boolean"
+          "default": false
+        "supportedParameters":
+          "type": "array"
+          "items":
+            "type": "string"
+            "enum": ["n","size","quality","style","response_format","background","output_format","output_compression","moderation"]
+        "defaults":
+          "type": "object"
+      "required": ["id","name","providerId","modelId"]
+      "additionalProperties": false
+    "GenerateImageRequest":
+      "type": "object"
+      "properties":
+        "requestId":
+          "type": "string"
+        "profileId":
+          "type": "string"
+        "prompt":
+          "type": "string"
+        "parameters":
+          "type": "object"
+      "required": ["requestId","profileId","prompt"]
+      "additionalProperties": false
+    "ImageGenerationJob":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "request":
+          "$ref": "#/components/schemas/GenerateImageRequest"
+        "profile":
+          "$ref": "#/components/schemas/ImageGenerationProfile"
+        "parameters":
+          "type": "object"
+        "status":
+          "type": "string"
+          "enum": ["queued","running","succeeded","failed","cancelled","unknown"]
+        "createdAt":
+          "type": "integer"
+          "format": "int64"
+        "updatedAt":
+          "type": "integer"
+          "format": "int64"
+        "assetIds":
+          "type": "array"
+          "items":
+            "type": "string"
+        "error":
+          "anyOf":
+            - "type": "string"
+            - "type": "null"
+        "usage": {}
+        "revisedPrompts":
+          "type": "array"
+          "items":
+            "anyOf":
+              - "type": "string"
+              - "type": "null"
+      "required": ["id","request","profile","parameters","status","createdAt","updatedAt","assetIds","error","usage"]
+    ImageProvenance:
+      type: object
+      additionalProperties: false
+      required: [prompt, modelId, parameters, createdAt, completedAt]
+      description: Sanitized portable generation facts; parameters use the Images API allowlist. At most 128 entries per asset. Times are nonnegative UTC milliseconds and completedAt must not precede createdAt.
+      properties:
+        prompt: { type: string, minLength: 1, maxLength: 32000 }
+        modelId: { type: string, minLength: 1, maxLength: 256 }
+        parameters: { type: object }
+        revisedPrompt: { type: [string, "null"], maxLength: 32000 }
+        createdAt: { type: integer, format: int64, minimum: 0 }
+        completedAt: { type: integer, format: int64, minimum: 0 }
+        usage:
+          type: [object, number, "null"]
+          description: Numeric counters only. Nested objects depth at most 4, at most 64 keys per object, ASCII alphanumeric/underscore keys up to 64 bytes, maximum 8192 encoded bytes. No strings, arrays, credentials or provider URLs.
+    "LearningBundleAsset":
+      "type": "object"
+      "properties":
+        "metadata":
+          "$ref": "#/components/schemas/Asset"
+        "dataBase64":
+          "type": "string"
+          "contentEncoding": "base64"
+      "required": ["metadata","dataBase64"]
+      "additionalProperties": false
+    "LearningBundle":
+      "type": "object"
+      "properties":
+        "formatVersion":
+          "const": 1
+        "learning":
+          "$ref": "#/components/schemas/LearningPackage"
+        "assets":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/LearningBundleAsset"
+          "maxItems": 10000
+        "artifacts":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/Artifact"
+          "maxItems": 1000
+        generationProvenance:
+          type: object
+          default: {}
+          description: Optional asset SHA-256 to sanitized provenance map. Keys must identify included assets; matching entries merge with existing local provenance.
+          additionalProperties:
+            type: array
+            maxItems: 128
+            items: { $ref: '#/components/schemas/ImageProvenance' }
+      "required": ["formatVersion","learning","assets","artifacts"]
+      "additionalProperties": false
+    "LearningBundlePreview":
+      "type": "object"
+      "properties":
+        "formatVersion":
+          "const": 1
+        "records":
+          "type": "integer"
+          "format": "int64"
+        "revisions":
+          "type": "integer"
+          "format": "int64"
+        "attempts":
+          "type": "integer"
+          "format": "int64"
+        "assetCount":
+          "type": "integer"
+          "format": "int64"
+        "assetBytes":
+          "type": "integer"
+          "format": "int64"
+        "artifactCount":
+          "type": "integer"
+          "format": "int64"
+        "externalResourcesIncluded":
+          "const": true
+        "warnings":
+          "type": "array"
+          "items":
+            "type": "string"
+      "required": ["formatVersion","records","revisions","attempts","assetCount","assetBytes","artifactCount","externalResourcesIncluded","warnings"]
+    "StructuredToolContent":
+      "type": "object"
+      "additionalProperties": true
+      "description": "Optional persistent render references. Known v1 types: learningRecord {id,kind,recordVersion}, artifact {id,title,revision,description}, imageGenerationJob {jobId,assetIds,status}. Preserve unknown versions and fields as raw JSON; render readable output as fallback. Provider model context does not receive this render metadata."
+      "properties":
+        "version":
+          "type": "integer"
+          "format": "int64"
+        "type":
+          "type": "string"
     SkillPackage:
       type: object
       additionalProperties: false

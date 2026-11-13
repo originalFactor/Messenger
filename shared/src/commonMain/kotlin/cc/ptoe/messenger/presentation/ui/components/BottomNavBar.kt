@@ -19,8 +19,11 @@ package cc.ptoe.messenger.presentation.ui.components
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.School
+import cc.ptoe.messenger.generated.resources.learning_title
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.TooltipAnchorPosition
@@ -69,6 +72,12 @@ sealed class BottomNavItem(
         icon = Icons.Filled.SmartToy
     )
 
+    data object Learning : BottomNavItem(
+        screen = Screen.Learning,
+        labelRes = Res.string.learning_title,
+        icon = Icons.Filled.School
+    )
+
     data object Settings : BottomNavItem(
         screen = Screen.Settings,
         labelRes = Res.string.bottom_nav_settings,
@@ -76,7 +85,7 @@ sealed class BottomNavItem(
     )
 
     companion object {
-        val items = listOf(Conversations, Agents, Settings)
+        val items = listOf(Conversations, Agents, Learning, Settings)
     }
 }
 
@@ -88,7 +97,9 @@ fun BottomNavBar(
     modifier: Modifier = Modifier
 ) {
     ShortNavigationBar(
-        modifier = modifier,
+        // M3 constrains each item's width against the bar's incoming minimum width.
+        // Relax that minimum so fillMaxWidth does not push later destinations offscreen.
+        modifier = modifier.wrapContentWidth(),
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         windowInsets = WindowInsets(0, 0, 0, 0)
     ) {
@@ -137,6 +148,7 @@ fun NavigationRailBar(
             val tooltipText = when (item) {
                 BottomNavItem.Conversations -> stringResource(Res.string.tooltip_nav_conversations)
                 BottomNavItem.Agents -> stringResource(Res.string.tooltip_nav_agents)
+                BottomNavItem.Learning -> stringResource(Res.string.learning_title)
                 BottomNavItem.Settings -> stringResource(Res.string.tooltip_nav_settings)
             }
             TooltipBox(

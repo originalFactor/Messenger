@@ -15,3 +15,21 @@ Messenger changes its package for Kotlin Multiplatform. The original copyright,
 license header and animation implementation are retained. The other BakaSU manager
 settings widgets are not copied; Messenger's layout, interaction and grouping
 components are implemented locally.
+
+## Interactive artifact system-webview helper
+
+`desktopApp/webview` links Tao (Apache-2.0) and, on Windows/macOS, Wry
+(Apache-2.0 OR MIT). The Linux adapter uses webkit2gtk-rs (MIT), gtk-rs
+(MIT), and the system WebKitGTK/GTK libraries. WebKit uses BSD and LGPL
+licenses; its licensing details are available at https://webkit.org/licensing-webkit/.
+The helper does not bundle a modified WebKit or Chromium engine. Linux
+installations provide WebKitGTK, macOS provides WKWebView, and Windows
+requires the installed Microsoft WebView2 Runtime under its own terms.
+
+Upstream sources and licenses:
+
+- https://github.com/tauri-apps/tao (Apache-2.0)
+- https://github.com/tauri-apps/wry (Apache-2.0 OR MIT)
+- https://github.com/tauri-apps/webkit2gtk-rs (MIT)
+- https://github.com/gtk-rs/gtk3-rs (MIT)
+- https://webkit.org/licensing-webkit/

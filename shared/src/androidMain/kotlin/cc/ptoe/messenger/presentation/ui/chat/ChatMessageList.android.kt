@@ -68,6 +68,7 @@ internal actual fun ChatMessageList(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    onSaveToLearning: (Message) -> Unit,
     allowMessageMutation: Boolean,
     hasOlderMessages: Boolean,
     isLoadingHistory: Boolean,
@@ -118,6 +119,7 @@ internal actual fun ChatMessageList(
                         onCopyClick = onCopyClick,
                         onRegenerateClick = onRegenerateClick,
                         onDeleteClick = onDeleteClick,
+                        onSaveToLearning = onSaveToLearning,
                         allowMessageMutation = allowMessageMutation,
                     )
                     is ChatListItem.MessageItem -> MessageRow(
@@ -134,6 +136,7 @@ internal actual fun ChatMessageList(
                         onCopyClick = onCopyClick,
                         onRegenerateClick = onRegenerateClick,
                         onDeleteClick = onDeleteClick,
+                        onSaveToLearning = onSaveToLearning,
                         allowMessageMutation = allowMessageMutation,
                     )
                 }
@@ -163,6 +166,7 @@ private fun ToolGroupRow(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    onSaveToLearning: (Message) -> Unit,
     allowMessageMutation: Boolean,
 ) {
     val anchor = item.finalMessage ?: item.rounds.lastOrNull()
@@ -209,6 +213,7 @@ private fun ToolGroupRow(
                 allowMessageMutation = allowMessageMutation,
                 state = contextMenuState,
                 messageRole = anchor.role,
+                onSaveToLearning = { onSaveToLearning(anchor) },
                 onCopyClick = {
                     onCopyClick(anchor.content.ifBlank { blocks.plainText() })
                     showPlatformToast(copiedToastText)
@@ -237,6 +242,7 @@ private fun MessageRow(
     onCopyClick: (String) -> Unit,
     onRegenerateClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
+    onSaveToLearning: (Message) -> Unit,
     allowMessageMutation: Boolean,
 ) {
     val message = item.message
@@ -286,6 +292,7 @@ private fun MessageRow(
                 allowMessageMutation = allowMessageMutation,
                 state = contextMenuState,
                 messageRole = message.role,
+                onSaveToLearning = { onSaveToLearning(message) },
                 onCopyClick = {
                     onCopyClick(message.content)
                     showPlatformToast(copiedToastText)
@@ -321,6 +328,7 @@ private fun buildToolGroupBlocks(
                     name = result.name,
                     arguments = "",
                     output = result.output,
+                    structuredContent = result.structuredContent,
                     isError = result.isError,
                     isFinalized = true,
                 )
@@ -341,6 +349,7 @@ private fun buildToolGroupBlocks(
                 name = call.name,
                 arguments = call.arguments,
                 output = result?.first?.output,
+                structuredContent = result?.first?.structuredContent,
                 isError = result?.first?.isError ?: false,
                 isFinalized = result?.second == true,
             )

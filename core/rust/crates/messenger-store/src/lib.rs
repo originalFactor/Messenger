@@ -3,6 +3,7 @@
 
 pub mod import;
 pub mod model;
+pub mod learning;
 pub mod schema;
 #[cfg(test)]
 mod tests;

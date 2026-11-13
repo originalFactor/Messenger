@@ -6,10 +6,14 @@ use serde_json::Value;
 
 /// Result of executing one tool call. Tools never throw for invalid
 /// arguments — they return `is_error = true` so the model can recover.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolExecutionResult {
+    /// Compact model-facing summary. Large source documents belong in the
+    /// resource store, referenced by structured_content.
     pub output: String,
     pub is_error: bool,
+    /// Optional versioned resource references; preserve unknown schemas verbatim.
+    pub structured_content: Option<Value>,
 }
 
 /// One declarable tool: everything the request `tools` entry and the agent

@@ -138,7 +138,7 @@ pub struct RemoteHub {
 }
 
 fn error_result(message: impl Into<String>) -> ToolExecutionResult {
-    ToolExecutionResult { output: message.into(), is_error: true }
+    ToolExecutionResult { output: message.into(), is_error: true, structured_content: None }
 }
 
 impl RemoteHub {
@@ -383,7 +383,7 @@ impl RemoteHub {
                     if let Some(pending) = pending {
                         let _ = pending.sender.send(ToolExecutionResult {
                             output: result.output,
-                            is_error: result.is_error,
+                            is_error: result.is_error, structured_content: None,
                         });
                     }
                 }

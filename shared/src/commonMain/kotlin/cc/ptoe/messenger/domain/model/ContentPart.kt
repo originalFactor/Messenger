@@ -46,7 +46,8 @@ sealed class ContentPart {
         val callId: String,
         val name: String,
         val output: String,
-        val isError: Boolean = false
+        val isError: Boolean = false,
+        val structuredContent: kotlinx.serialization.json.JsonElement? = null
     ) : ContentPart()
 }
 

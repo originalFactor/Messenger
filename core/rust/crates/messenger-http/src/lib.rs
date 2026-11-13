@@ -48,6 +48,7 @@ use messenger_sync::{
 };
 use messenger_tools::{apply_writable_mode, ToolExecutionResult};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
@@ -70,6 +71,11 @@ mod agent_relay;
 mod delegation;
 mod skills;
 mod external_acp;
+mod learning;
+mod learning_bundle;
+mod assets;
+mod image_generation;
+mod artifacts;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
@@ -79,6 +85,8 @@ pub const API_PREFIX: &str = "/api/v1";
 pub struct ApiState {
     pub store: Arc<Store>,
     pub token: Arc<str>,
+    assets: Arc<assets::AssetService>,
+    images: Arc<image_generation::ImageGenerationService>,
     active_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
     control_permissions: Arc<Mutex<HashMap<Uuid, control::CommandHandle>>>,
     platform_catalog: Arc<Mutex<control::PlatformCatalog>>,
@@ -143,6 +151,13 @@ impl ApiState {
         shutdown: CancellationToken,
         wait_for_catalog: bool,
     ) -> Self {
+        let asset_root = store.data_dir().map(|dir| dir.join("assets")).unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("messenger-assets-{}", Uuid::new_v4()))
+        });
+        let assets = Arc::new(assets::AssetService::new(store.clone(), asset_root)
+            .expect("the local asset store must be available"));
+        let images = Arc::new(image_generation::ImageGenerationService::new(store.clone(), assets.clone())
+            .expect("the local image generation service must be available"));
         let (events, _) = broadcast::channel(256);
         let sender = events.clone();
         let listener_id = store.subscribe(Box::new(move |event| {
@@ -163,6 +178,8 @@ impl ApiState {
             }),
             store,
             token: token.into(),
+            assets,
+            images,
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             control_permissions: Default::default(),
             platform_catalog: Default::default(),
@@ -261,7 +278,7 @@ impl LocalToolExecutor for LocalClientExecutor {
 
 impl LocalClientExecutor {
     async fn execute_event(&self, event: RemoteToolEvent, cancel: CancellationToken) -> ToolExecutionResult {
-        let error = |message: &str| ToolExecutionResult { output: message.into(), is_error: true };
+        let error = |message: &str| ToolExecutionResult { output: message.into(), is_error: true, structured_content: None };
         let key = event.call_id.clone();
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().await.insert(key.clone(), sender);
@@ -370,6 +387,12 @@ pub fn router(state: ApiState) -> Router {
     #[cfg(not(target_os = "android"))]
     let protected = protected.route("/acp", get(acp_agent::upgrade));
     let protected = protected
+        .merge(learning::routes())
+        .merge(learning_bundle::routes())
+        .merge(assets::routes())
+        .merge(image_generation::routes())
+        .merge(artifacts::routes())
+        .route("/tools/core", get(core_tool_catalog))
         .route("/health", get(health))
         .route("/meta", get(meta))
         .route("/events", get(core_events))
@@ -2002,6 +2025,11 @@ async fn cloud_clear_market_links(State(state): State<ApiState>) -> Result<Statu
 }
 
 async fn clear_local_data(State(state): State<ApiState>) -> Result<StatusCode, ApiError> {
+    for cancel in state.active_turns.lock().await.values() { cancel.cancel(); }
+    state.images.clear().await?;
+    state.assets.clear().await?;
+    state.store.clear_learning().map_err(ApiError::store)?;
+    artifacts::clear(&state.store)?;
     for provider in state.store.list_providers().map_err(ApiError::store)? {
         state
             .store
@@ -2538,6 +2566,8 @@ async fn start_turn(
 struct ToolResultBody {
     output: String,
     #[serde(default)]
+    structured_content: Option<Value>,
+    #[serde(default)]
     is_error: bool,
 }
 
@@ -2555,7 +2585,7 @@ async fn resolve_tool_call(
     sender
         .send(ToolExecutionResult {
             output: body.output,
-            is_error: body.is_error,
+            is_error: body.is_error, structured_content: body.structured_content,
         })
         .map_err(|_| ApiError::Conflict {
             code: "tool_call_closed".into(),
@@ -2666,6 +2696,9 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
             tools.push(skills::tool());
         }
     }
+    tools.extend(configured_core_tools(&state.store, &agent, request.disable_tools, request.no_agent_delegation)?);
+    let permitted_core_tools: Vec<String> = tools.iter().filter(|tool| is_core_tool(&tool.name)).map(|tool| tool.name.clone()).collect();
+    let agent_id = agent.id.clone();
     let title = state
         .store
         .get_title_agent()
@@ -2704,6 +2737,8 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     let host = RoutedToolHost {
         state: state.clone(),
         skills_allowed,
+        permitted_core_tools,
+        agent_id,
         project: project.clone(),
         writable: conversation.writable,
         local: RemoteToolHost {
@@ -2755,6 +2790,54 @@ fn effective_agent(
     Ok(agent)
 }
 
+/// Core-owned capabilities are independent of workspace/platform tool discovery.
+fn is_core_tool(name: &str) -> bool {
+    matches!(name, learning::TOOL_NAME | artifacts::TOOL_NAME | image_generation::TOOL_NAME)
+}
+
+fn is_reserved_tool(name: &str) -> bool {
+    is_core_tool(name) || matches!(name, skills::TOOL_NAME | delegation::TOOL_NAME)
+}
+
+fn core_tools(store: &Store) -> Result<Vec<messenger_tools::BuiltinTool>, ApiError> {
+    let mut tools = Vec::new();
+    if learning::enabled(store) { tools.push(learning::tool()); }
+    if artifacts::enabled(store) { tools.push(artifacts::tool()); }
+    if image_generation::enabled(store)? { tools.push(image_generation::tool()); }
+    Ok(tools)
+}
+
+fn configured_core_tools(store: &Store, agent: &StoredAgent, disable_tools: bool, delegated: bool) -> Result<Vec<messenger_tools::BuiltinTool>, ApiError> {
+    if disable_tools || delegated || !agent.tools_enabled { return Ok(Vec::new()); }
+    let config = serde_json::from_str::<HashMap<String, bool>>(&agent.tools_config).unwrap_or_default();
+    Ok(core_tools(store)?.into_iter().filter(|tool| config.get(&tool.name).copied() != Some(false)).collect())
+}
+
+async fn core_tool_catalog(State(state): State<ApiState>) -> Result<Json<Value>, ApiError> {
+    let enabled = core_tools(&state.store)?;
+    let tools = [skills::tool(), delegation::tool(), learning::tool(), artifacts::tool(), image_generation::tool()];
+    Ok(Json(serde_json::json!({"tools":tools.into_iter().map(|tool| {
+        let available = if tool.name == skills::TOOL_NAME { true }
+            else if tool.name == delegation::TOOL_NAME { delegation::enabled(&state.store) }
+            else { enabled.iter().any(|item| item.name == tool.name) };
+        serde_json::json!({"name":tool.name,"description":tool.description,"parametersJson":tool.parameters_json,
+            "enabled":available,"workspaceRequired":false})
+    }).collect::<Vec<_>>()})))
+}
+
+async fn execute_core_tool(state: &ApiState, name: &str, permitted: bool, arguments: &str, cancel: CancellationToken) -> ToolExecutionResult {
+    if !permitted || cancel.is_cancelled() {
+        return ToolExecutionResult { output: "Core tool is disabled for this turn".into(), is_error: true, ..Default::default() };
+    }
+    // Each domain service rechecks its live global opt-in at execution time.
+    match name {
+        learning::TOOL_NAME => learning::execute_tool(state, arguments).await,
+        artifacts::TOOL_NAME if artifacts::enabled(&state.store) => artifacts::execute_tool(state, arguments, cancel).await,
+        image_generation::TOOL_NAME => image_generation::execute(state, permitted, arguments, cancel).await,
+        _ => ToolExecutionResult { output: "Core tool is disabled or unavailable".into(), is_error: true, ..Default::default() },
+    }
+}
+
 fn configured_tools(
     agent: &StoredAgent,
     writable: bool,
@@ -2774,7 +2857,7 @@ fn configured_tools(
     for spec in requested {
         // Reserved for the Core-owned tool; a client declaration must not
         // bypass the setting or re-enable delegation in a child turn.
-        if spec.name == delegation::TOOL_NAME || spec.name == skills::TOOL_NAME { continue; }
+        if is_reserved_tool(&spec.name) { continue; }
         if config.get(&spec.name).copied() == Some(false) {
             continue;
         }
@@ -2798,6 +2881,8 @@ fn configured_tools(
 struct RoutedToolHost {
     state: ApiState,
     skills_allowed: bool,
+    permitted_core_tools: Vec<String>,
+    agent_id: String,
     project: Option<StoredProject>,
     writable: bool,
     local: RemoteToolHost,
@@ -2816,6 +2901,15 @@ impl ToolHost for RoutedToolHost {
         name: &str,
         arguments_json: &str,
     ) -> ToolExecutionResult {
+        if is_core_tool(name) {
+            let permitted = self.permitted_core_tools.iter().any(|allowed| allowed == name)
+                && self.state.store.get_agent(&self.agent_id).ok().flatten().zip(
+                    self.state.store.get_conversation(&self.conversation_id).ok().flatten()
+                ).and_then(|(agent, conversation)| effective_agent(&self.state.store, agent, &conversation).ok())
+                    .is_some_and(|agent| agent.tools_enabled && serde_json::from_str::<HashMap<String, bool>>(&agent.tools_config)
+                        .unwrap_or_default().get(name).copied() != Some(false));
+            return execute_core_tool(&self.state, name, permitted, arguments_json, self.cancel.clone()).await;
+        }
         if name == skills::TOOL_NAME {
             return skills::execute(&self.state.store, self.skills_allowed, arguments_json);
         }
@@ -2889,19 +2983,19 @@ impl ToolHost for RemoteToolHost {
             self.pending.lock().await.remove(call_id);
             return ToolExecutionResult {
                 output: "chat stream closed before tool execution".into(),
-                is_error: true,
+                is_error: true, structured_content: None,
             };
         }
         tokio::select! {
             result = receiver => result.unwrap_or(ToolExecutionResult {
                 output: "tool execution was cancelled".into(),
-                is_error: true,
+                is_error: true, structured_content: None,
             }),
             _ = self.cancel.cancelled() => {
                 self.pending.lock().await.remove(call_id);
                 ToolExecutionResult {
                     output: "tool execution was cancelled".into(),
-                    is_error: true,
+                    is_error: true, structured_content: None,
                 }
             }
         }
@@ -2932,7 +3026,7 @@ fn event_json(event: AgentEvent) -> String {
         AgentEvent::RoundPersisted { round, message_id } => serde_json::json!({"type":"RoundPersisted","round":round,"messageId":message_id}).to_string(),
         AgentEvent::FinalMessagePersisted { message_id, content } => serde_json::json!({"type":"FinalMessagePersisted","messageId":message_id,"content":content}).to_string(),
         AgentEvent::ToolCallStarted { call_id, name } => serde_json::json!({"type":"ToolCallStarted","callId":call_id,"name":name}).to_string(),
-        AgentEvent::ToolCallFinished { call_id, name, output, is_error } => serde_json::json!({"type":"ToolCallFinished","callId":call_id,"name":name,"output":output,"isError":is_error}).to_string(),
+        AgentEvent::ToolCallFinished { call_id, name, output, is_error, structured_content } => serde_json::json!({"type":"ToolCallFinished","callId":call_id,"name":name,"output":output,"isError":is_error,"structuredContent":structured_content}).to_string(),
         AgentEvent::UsageRecorded { prompt_tokens, completion_tokens, cached_tokens } => serde_json::json!({"type":"UsageRecorded","promptTokens":prompt_tokens,"completionTokens":completion_tokens,"cachedTokens":cached_tokens}).to_string(),
         AgentEvent::TitleGenerated { title } => serde_json::json!({"type":"TitleGenerated","title":title}).to_string(),
         AgentEvent::TitleFailed { code } => serde_json::json!({"type":"TitleFailed","code":code}).to_string(),
@@ -3205,6 +3299,94 @@ mod tests {
             seen.push_str(&String::from_utf8_lossy(&chunk.expect("the feed must stay open")));
         }
         server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn projectless_core_tool_persists_structured_result_without_platform_execution() {
+        let provider = wiremock::MockServer::start().await;
+        let arguments = serde_json::json!({"action":"create","title":"Demo","files":{"index.html":"<p>independent artifact</p>"}}).to_string();
+        let call = serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"artifact-call","type":"function","function":{"name":artifacts::TOOL_NAME,"arguments":arguments}}]},"finish_reason":"tool_calls"}]}).to_string();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(format!("data: {call}\n\ndata: [DONE]\n\n")))
+            .up_to_n_times(1).mount(&provider).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"Created.\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state(); seed_text_chat(&state, &provider.uri());
+        let mut model = state.store.get_model("m1").unwrap().unwrap(); model.supports_tool_calling = true;
+        state.store.upsert_model(&model).unwrap();
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true;
+        state.store.upsert_agent(&agent).unwrap();
+        state.store.kv_set("artifact_tools_enabled", "true").unwrap();
+        let response = router(state.clone()).oneshot(request(axum::http::Method::POST, "/api/v1/conversations/c1/messages", Some(r#"{"content":"Create a demo"}"#))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let sse = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(sse.contains("structuredContent"), "{sse}");
+        assert!(!sse.contains("ToolCallRequested"), "{sse}");
+        assert!(sse.contains("\"type\":\"Finished\""), "{sse}");
+        let rows = state.store.list_messages_by_conversation("c1").unwrap();
+        let tool = rows.iter().find(|row| row.role == "tool").unwrap();
+        let parts = messenger_core::parts::decode_parts(tool.parts_json.as_deref());
+        assert!(matches!(&parts[0], messenger_core::parts::ContentPart::ToolResult { structured_content:Some(_), is_error:false, .. }));
+        assert!(!tool.content.contains("<p>independent"));
+        let calls = provider.received_requests().await.unwrap();
+        let first: Value = serde_json::from_slice(&calls[0].body).unwrap();
+        assert!(first["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == artifacts::TOOL_NAME));
+    }
+
+    #[test]
+    fn core_tools_require_explicit_opt_in_and_effective_turn_permission() {
+        let state = test_state();
+        seed_text_chat(&state, "http://localhost:1");
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+        agent.tools_enabled = true;
+        assert!(configured_core_tools(&state.store, &agent, false, false).unwrap().is_empty());
+        for key in ["learning_tools_enabled", "artifact_tools_enabled", "image_generation_enabled"] {
+            state.store.kv_set(key, "true").unwrap();
+        }
+        let declared = configured_core_tools(&state.store, &agent, false, false).unwrap();
+        assert_eq!(declared.len(), 3);
+        assert!(declared.iter().all(|tool| !tool.workspace_required && !tool.write_access));
+        assert!(configured_core_tools(&state.store, &agent, true, false).unwrap().is_empty());
+        assert!(configured_core_tools(&state.store, &agent, false, true).unwrap().is_empty());
+        agent.tools_enabled = false;
+        assert!(configured_core_tools(&state.store, &agent, false, false).unwrap().is_empty());
+        agent.tools_enabled = true;
+        agent.tools_config = serde_json::json!({learning::TOOL_NAME:false,artifacts::TOOL_NAME:false,image_generation::TOOL_NAME:false}).to_string();
+        assert!(configured_core_tools(&state.store, &agent, false, false).unwrap().is_empty());
+        agent.tools_config = "{}".into();
+        let spoofed: Vec<_> = declared.iter().map(|tool| ToolSpecRequest {
+            name:tool.name.clone(), description:"spoofed".into(), parameters_json:"{}".into()
+        }).collect();
+        assert!(configured_tools(&agent, false, false, &spoofed).is_empty());
+    }
+
+    #[tokio::test]
+    async fn core_tool_execution_rechecks_live_opt_in_and_cancellation() {
+        let state = test_state();
+        state.store.kv_set("learning_tools_enabled", "true").unwrap();
+        let denied = execute_core_tool(&state, learning::TOOL_NAME, false, r#"{"action":"overview"}"#, CancellationToken::new()).await;
+        assert!(denied.is_error);
+        let cancel = CancellationToken::new(); cancel.cancel();
+        assert!(execute_core_tool(&state, learning::TOOL_NAME, true, r#"{"action":"overview"}"#, cancel).await.is_error);
+        state.store.kv_set("learning_tools_enabled", "false").unwrap();
+        assert!(execute_core_tool(&state, learning::TOOL_NAME, true, r#"{"action":"overview"}"#, CancellationToken::new()).await.is_error);
+    }
+
+    #[test]
+    fn structured_tool_result_body_and_sse_preserve_unknown_json() {
+        let structured = serde_json::json!({"version":17,"type":"futureResource","refs":[{"id":"abc"}]});
+        let body: ToolResultBody = serde_json::from_value(serde_json::json!({"output":"Saved abc","structuredContent":structured})).unwrap();
+        assert_eq!(body.structured_content, Some(structured.clone()));
+        let event: Value = serde_json::from_str(&event_json(AgentEvent::ToolCallFinished {
+            call_id:"c".into(), name:"future".into(), output:body.output, is_error:body.is_error,
+            structured_content:body.structured_content,
+        })).unwrap();
+        assert_eq!(event["structuredContent"], structured);
+        assert_eq!(event["output"], "Saved abc");
+        let legacy: ToolResultBody = serde_json::from_value(serde_json::json!({"output":"legacy"})).unwrap();
+        assert_eq!(legacy.structured_content, None);
     }
 
     fn test_agent() -> serde_json::Value {
@@ -3754,7 +3936,7 @@ mod tests {
             .unwrap()
             .send(ToolExecutionResult {
                 output: "ok".into(),
-                is_error: false,
+                is_error: false, structured_content: None,
             })
             .unwrap();
         let result = task.await.unwrap();

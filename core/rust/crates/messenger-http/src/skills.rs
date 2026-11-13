@@ -213,8 +213,8 @@ pub(crate) fn execute(store: &Store, permitted: bool, args: &str) -> ToolExecuti
         package.files.get(path).cloned().ok_or_else(|| ApiError::not_found("skill file"))
     })();
     match result {
-        Ok(output) => ToolExecutionResult { output, is_error: false },
-        Err(error) => ToolExecutionResult { output: format!("{error:?}"), is_error: true },
+        Ok(output) => ToolExecutionResult { output, is_error: false, structured_content: None },
+        Err(error) => ToolExecutionResult { output: format!("{error:?}"), is_error: true, structured_content: None },
     }
 }
 

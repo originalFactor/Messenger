@@ -445,6 +445,7 @@ async fn execute(
                     .into_iter().map(|message| json!({
                         "id":message.id,"role":message.role,
                         "text":if let Some(error) = &message.error_message { error } else { &message.content },
+                        "partsJson":message.parts_json,
                         "status":message.status
                     })).collect()
             };

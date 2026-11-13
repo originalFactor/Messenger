@@ -61,12 +61,16 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
                         parts = listOf(ContentPart.ToolCall(toolId, tool.text("title").ifBlank { toolId }, tool["rawInput"]?.toString() ?: "{}")),
                         timestamp = timestamp, status = MessageStatus.SENT))
                     val finished = tool.text("status") in listOf("completed", "failed")
+                    val rawOutput = tool["rawOutput"] as? JsonObject
                     val output = tool["content"]?.let(::acpContentText).orEmpty().ifBlank {
-                        tool["rawOutput"]?.let { raw -> acpContentText(raw).ifBlank { raw.toString() } }.orEmpty()
+                        rawOutput?.get("output")?.jsonPrimitive?.contentOrNull
+                            ?: tool["rawOutput"]?.let { raw -> acpContentText(raw).ifBlank { raw.toString() } }.orEmpty()
                     }
                     if (finished || output.isNotEmpty()) {
                         add(Message("$id-tool-$toolId", sessionId, MessageRole.TOOL, output,
-                            parts = listOf(ContentPart.ToolResult(toolId, tool.text("title").ifBlank { toolId }, output, tool.text("status") == "failed")),
+                            parts = listOf(ContentPart.ToolResult(toolId, tool.text("title").ifBlank { toolId }, output,
+                                tool.text("status") == "failed" || rawOutput?.get("isError")?.jsonPrimitive?.booleanOrNull == true,
+                                structuredContent = rawOutput?.get("structuredContent")?.takeUnless { it is JsonNull })),
                             timestamp = timestamp, status = if (finished) MessageStatus.SENT else MessageStatus.SENDING))
                     }
                 }

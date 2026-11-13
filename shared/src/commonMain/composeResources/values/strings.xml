@@ -480,6 +480,19 @@
     <!-- Built-in tools (terminal) -->
     <string name="tool_interrupted_result">Execution was interrupted.</string>
     <string name="tool_unknown_tool">Unknown tool: %1$s</string>
+    <string name="tool_name_learning">Learning library</string>
+    <string name="tool_name_artifacts">Interactive applications</string>
+    <string name="tool_name_generate_image">Image generation</string>
+    <string name="tool_name_skills">Agent Skills</string>
+    <string name="tool_name_agents">Agent delegation</string>
+    <string name="tool_desc_learning">Find learning content and save editable drafts</string>
+    <string name="tool_desc_artifacts">Create and update interactive explanations</string>
+    <string name="tool_desc_generate_image">Generate images with a configured paid image model</string>
+    <string name="tool_desc_skills">Read installed Skills and their resources on demand</string>
+    <string name="tool_desc_agents">Ask another Agent to complete a separate task</string>
+    <string name="tool_capability_disabled">This capability is disabled on this device.</string>
+    <string name="tool_catalog_loading">Loading device tool capabilities…</string>
+    <string name="tool_catalog_error">Could not load device tools: %1$s</string>
     <string name="tool_name_terminal">Terminal</string>
     <string name="tool_card_running">Running…</string>
     <string name="tool_card_success">Done</string>

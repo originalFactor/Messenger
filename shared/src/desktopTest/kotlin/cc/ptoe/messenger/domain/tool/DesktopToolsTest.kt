@@ -101,7 +101,7 @@ class DesktopToolsTest {
     fun terminalTimeoutTerminatesTheProcess() = runBlocking {
         val start = System.currentTimeMillis()
         val result = executeShellCommand(
-            command = "Start-Sleep -Seconds 30",
+            command = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "Start-Sleep -Seconds 30" else "sleep 30",
             timeoutMs = 1_000,
             workingDir = null,
             onOutput = null

@@ -201,6 +201,7 @@ private fun MessengerChatScreen(
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
+    var learningMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var showActionMenu by remember { mutableStateOf(false) }
     var selectedMessageRole by remember { mutableStateOf(MessageRole.USER) }
@@ -397,6 +398,7 @@ private fun MessengerChatScreen(
                             selectedMessageRole = message.role
                             showActionMenu = true
                         },
+                        onSaveToLearning = { message -> learningMessageId = message.id },
                         onCopyClick = { text -> viewModel.copyMessage(text) },
                         onRegenerateClick = { messageId -> viewModel.regenerateMessage(messageId) },
                         onDeleteClick = { messageId -> viewModel.deleteMessage(messageId) },
@@ -418,6 +420,7 @@ private fun MessengerChatScreen(
                 selectedMessageId = null
             },
             messageRole = selectedMessageRole,
+            onSaveToLearning = { learningMessageId = selectedMessageId },
             onCopyClick = {
                 val currentMessages = messages
                 val chatItems = buildChatItems(currentMessages)
@@ -457,6 +460,13 @@ private fun MessengerChatScreen(
         )
     }
 
+    learningMessageId?.let { targetId ->
+        val candidates = messages.filter { it.role != MessageRole.TOOL }
+        if (candidates.isNotEmpty()) cc.ptoe.messenger.presentation.ui.learning.LearningCaptureDialog(
+            messages = candidates, initialMessageId = targetId,
+            onDismiss = { learningMessageId = null }, onError = viewModel::learningCaptureError,
+        )
+    }
     if (needsModelSetup) {
         AlertDialog(
             onDismissRequest = { viewModel.dismissModelSetupPrompt() },

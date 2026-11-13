@@ -180,6 +180,7 @@ kotlin {
             dependencies {
                 implementation(project(":core-bindings"))
                 implementation(libs.androidx.recyclerview)
+                implementation(libs.androidx.webkit)
                 implementation(compose.preview)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.core.ktx)

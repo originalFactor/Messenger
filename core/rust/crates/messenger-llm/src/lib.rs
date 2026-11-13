@@ -9,6 +9,7 @@ pub mod domain;
 pub mod dto;
 pub mod events;
 pub mod formats;
+pub mod image_generation;
 pub mod parser;
 pub mod request;
 pub mod think;

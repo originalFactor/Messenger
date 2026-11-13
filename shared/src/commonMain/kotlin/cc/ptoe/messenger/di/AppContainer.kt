@@ -46,6 +46,7 @@ import cc.ptoe.messenger.domain.mcp.McpManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import cc.ptoe.messenger.presentation.platform.defaultWorkspaceRoot
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -105,14 +106,16 @@ class AppContainer(
         builtinTools(workspaceRoot) + mcpManager.activeTools.value
 
     /**
-     * The platform's whole tool inventory (built-in + active MCP), used by the
-     * Agent tool-config and conversation-override screens. They are about
+     * The settings inventory (Core descriptors + built-in + active MCP), used by
+     * Agent tool-config and conversation-override screens. Core descriptors
+     * never enter availableTools or the platform execution catalog. These screens are about
      * WHICH tools can be toggled, not about one conversation's workspace, so
      * workspace-bound tools are listed even though they only run inside a
      * project.
      */
     fun allTools(): List<ChatTool> =
-        createBuiltinChatTools(defaultWorkspaceRoot()) + mcpManager.activeTools.value
+        (coreToolCatalog.state.value.tools + createBuiltinChatTools(defaultWorkspaceRoot()) +
+            mcpManager.activeTools.value).distinctBy { it.name }
 
     /**
      * The Rust core every repository delegates to. Non-null by construction:
@@ -141,6 +144,15 @@ class AppContainer(
             current?.let { cloud.requestLocalChange("agent", it.id) }
                 ?: previous?.let { cloud.requestLocalChange("agent", it.id, deleted = true) }
         }
+    }
+
+    val coreToolCatalog = cc.ptoe.messenger.data.repository.RustCoreToolCatalog {
+        coreBridge.learningRequest("GET", "/tools/core")
+    }
+
+    val learningRepository = cc.ptoe.messenger.data.repository.RustLearningRepository(coreBridge)
+    val learningRevision = kotlinx.coroutines.flow.MutableStateFlow(0L).also { revision ->
+        coreBridge.subscribe { kind, _ -> if (kind == "Other") revision.value += 1 }
     }
 
     val providerRepository: ProviderRepository = RustProviderRepository(coreBridge) { id, deleted ->
@@ -175,6 +187,18 @@ class AppContainer(
         RustCurrentAgentRepository(coreBridge, agentRepository)
 
     private val applicationScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+
+    init {
+        applicationScope.launch {
+            // StateFlow's first value loads once at startup. Core's Other changes
+            // include capability settings, so subsequent changes refresh readiness.
+            learningRevision.collect { coreToolCatalog.refresh() }
+        }
+    }
+
+    fun refreshCoreToolCatalog() {
+        applicationScope.launch { coreToolCatalog.refresh() }
+    }
 
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */
     fun initializeLocalAndCloudData() {

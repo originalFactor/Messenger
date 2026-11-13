@@ -182,6 +182,11 @@ import cc.ptoe.messenger.generated.resources.agent_edit_tools_title
 import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import cc.ptoe.messenger.generated.resources.tool_terminal_desc
 import org.jetbrains.compose.resources.stringResource
+import androidx.compose.runtime.collectAsState
+import cc.ptoe.messenger.data.repository.CoreToolCatalogState
+import cc.ptoe.messenger.presentation.ui.components.CoreToolCatalogStatus
+import cc.ptoe.messenger.presentation.ui.components.toolDisplayName
+import cc.ptoe.messenger.presentation.ui.components.toolDescription
 import cc.ptoe.messenger.di.AppContainerHolder
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -241,7 +246,11 @@ fun AgentEditScreen(
     var showToolsPage by remember { mutableStateOf(false) }
 
     // 平台注册的可用工具（内置 + MCP）；每工具开关在工具配置子页中维护
-    val tools = remember { AppContainerHolder.instance.allTools() }
+    val container = AppContainerHolder.instance
+    val coreCatalog by container.coreToolCatalog.state.collectAsState()
+    val mcpTools by container.mcpManager.activeTools.collectAsState()
+    val tools = remember(coreCatalog.tools, mcpTools) { container.allTools() }
+
 
     val strPublishedSuccess = stringResource(Res.string.agent_edit_published_success)
     val strPublishFailed = stringResource(Res.string.agent_edit_publish_failed)
@@ -697,6 +706,8 @@ fun AgentEditScreen(
                 AgentToolsPage(
                     state = uiState,
                     tools = tools,
+                    catalogState = coreCatalog,
+                    onRefreshCatalog = container::refreshCoreToolCatalog,
                     onBack = { showToolsPage = false },
                     onToolsEnabledChange = viewModel::onToolsEnabledChange,
                     onToolsFollowDefaultChange = viewModel::onToolsFollowDefaultChange,
@@ -987,6 +998,8 @@ private fun ReasoningEffortDropdown(
 internal fun AgentToolsPage(
     state: AgentEditUiState,
     tools: List<ChatTool>,
+    catalogState: CoreToolCatalogState = CoreToolCatalogState(ready = true),
+    onRefreshCatalog: () -> Unit = {},
     onBack: () -> Unit,
     onToolsEnabledChange: (Boolean) -> Unit,
     onToolsFollowDefaultChange: (Boolean) -> Unit,
@@ -1023,6 +1036,7 @@ internal fun AgentToolsPage(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
+            CoreToolCatalogStatus(catalogState, onRefreshCatalog)
             // 跟随默认 Agent 采用与模型/参数一致的左右滑动接管交互：
             // 右滑接管默认 Agent 的工具配置（蒙层只读），左滑恢复自定义。
             // 默认 Agent 自身与标题生成角色没有可跟随的对象，手势关闭。
@@ -1072,13 +1086,9 @@ internal fun AgentToolsPage(
                                 state.toolsConfig[tool.name] ?: true
                             }
                             ToolToggleCard(
-                                title = tool.name,
+                                title = toolDisplayName(tool.name),
                                 // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
-                                subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
-                                    stringResource(Res.string.tool_terminal_desc)
-                                } else {
-                                    tool.description
-                                },
+                                subtitle = toolDescription(tool),
                                 checked = checked,
                                 enabled = state.toolsEnabled && !following,
                                 icon = toolIcon(tool.name),

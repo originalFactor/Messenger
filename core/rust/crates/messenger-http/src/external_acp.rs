@@ -166,8 +166,10 @@ struct Prompt {
 }
 
 struct LiveTurn {
+    id: Uuid,
     cancel: CancellationToken,
     tool_cancel: CancellationToken,
+    image_generation_failed: bool,
     permissions: Arc<Mutex<mpsc::Receiver<String>>>,
     updates: mpsc::Sender<Value>,
     answer: Arc<std::sync::Mutex<String>>,
@@ -181,8 +183,44 @@ pub(crate) struct Output {
     settings: Value,
 }
 
-pub(crate) async fn active_cancel(output: &Mutex<Output>) -> Option<CancellationToken> {
-    output.lock().await.turn.as_ref().map(|turn| turn.tool_cancel.clone()).filter(|cancel| !cancel.is_cancelled())
+pub(crate) async fn active_cancel(output: &Mutex<Output>) -> Option<(Uuid, CancellationToken)> {
+    output.lock().await.turn.as_ref().filter(|turn| !turn.tool_cancel.is_cancelled())
+        .map(|turn| (turn.id, turn.tool_cancel.clone()))
+}
+
+pub(crate) async fn image_generation_allowed(output: &Mutex<Output>, owner: Uuid) -> bool {
+    output.lock().await.turn.as_ref().is_some_and(|turn| {
+        turn.id == owner && !turn.image_generation_failed && !turn.tool_cancel.is_cancelled()
+    })
+}
+
+pub(crate) async fn core_tool_started(output: &Mutex<Output>, owner: Uuid, id: &str, name: &str, arguments: &str) {
+    publish_core_tool(output, owner, json!({"sessionUpdate":"tool_call","toolCallId":id,"title":name,"kind":"other",
+        "status":"in_progress","rawInput":serde_json::from_str::<Value>(arguments).unwrap_or(Value::Null)})).await;
+}
+
+pub(crate) async fn core_tool_finished(output: &Mutex<Output>, owner: Uuid, id: &str, name: &str, result: &ToolExecutionResult) {
+    if name == image_generation::TOOL_NAME && result.is_error {
+        if let Some(turn) = output.lock().await.turn.as_mut().filter(|turn| turn.id == owner) {
+            turn.image_generation_failed = true;
+        }
+    }
+    publish_core_tool(output, owner, json!({"sessionUpdate":"tool_call_update","toolCallId":id,"title":name,"kind":"other",
+        "status":if result.is_error {"failed"} else {"completed"},
+        "content":[{"type":"content","content":{"type":"text","text":result.output}}],
+        "rawOutput":{"output":result.output,"isError":result.is_error,"structuredContent":result.structured_content}})).await;
+}
+
+async fn publish_core_tool(output: &Mutex<Output>, owner: Uuid, update: Value) {
+    let output = output.lock().await;
+    if let Some(turn) = output.turn.as_ref().filter(|turn| turn.id == owner) {
+        let data = json!({"type":"ToolUpdate","update":update});
+        turn.transcript.lock().unwrap().push(data.clone());
+        let updates = turn.updates.clone();
+        let cancel = turn.cancel.clone();
+        drop(output);
+        tokio::select! { _ = updates.send(data) => {}, _ = cancel.cancelled() => {} }
+    }
 }
 
 #[derive(Default)]
@@ -361,6 +399,9 @@ impl ExternalSessions {
         if let Some(replay) = replay { record.messages = replay; }
         if cancel.is_cancelled() {
             return Ok(json!({"type":"Cancelled"}));
+        }
+        if !record.delegated && !worker.skills_available && !crate::core_tools(&state.store)?.is_empty() {
+            return Err(ApiError::BadRequest("Core learning, artifact and image tools require ACP MCP SSE or HTTP support; restart with a compatible agent".into()));
         }
         let mut prompt_content = content.clone();
         if let Some(catalog) = crate::skills::prompt(&state.store)? {
@@ -720,8 +761,16 @@ async fn start_worker_impl(
                         ));
                     }
                     let delegation_enabled = allow_delegation && crate::delegation::enabled(&gateway_state.store);
+                    let core_tool_scope: Vec<String> = if allow_delegation {
+                        crate::core_tools(&gateway_state.store)
+                            .map_err(|error| agent_client_protocol::Error::new(-32000, format!("{error:?}")))?
+                            .into_iter().map(|tool| tool.name).collect()
+                    } else { Vec::new() };
                     let skills_available = init.agent_capabilities.mcp_capabilities.sse || init.agent_capabilities.mcp_capabilities.http;
                     if !skills_available {
+                        if !core_tool_scope.is_empty() {
+                            return Err(agent_client_protocol::Error::new(-32000, "Core learning, artifact and image tools require ACP MCP SSE or HTTP support"));
+                        }
                         if delegation_enabled {
                             return Err(agent_client_protocol::Error::new(-32000, "Agent delegation requires ACP MCP SSE or HTTP support"));
                         }
@@ -736,7 +785,7 @@ async fn start_worker_impl(
                         if name_conflict {
                             return Err(agent_client_protocol::Error::new(-32000, format!("Rename the configured MCP server named {gateway_name} to use the Core tools")));
                         }
-                        let url = crate::acp_mcp::start(gateway_state, project, gateway_output, gateway_lifetime, delegation_enabled)
+                        let url = crate::acp_mcp::start(gateway_state, project, gateway_output, gateway_lifetime, delegation_enabled, core_tool_scope)
                             .await.map_err(|error| agent_client_protocol::Error::new(-32000, error.to_string()))?;
                         if init.agent_capabilities.mcp_capabilities.sse {
                             mcp_servers.push(McpServer::Sse(McpServerSse::new(gateway_name, url)));
@@ -876,8 +925,10 @@ async fn run_prompt(
     let tool_cancel = cancel.child_token();
     let _tool_guard = tool_cancel.clone().drop_guard();
     output.lock().await.turn = Some(LiveTurn {
+        id: Uuid::new_v4(),
         cancel: cancel.clone(),
         tool_cancel,
+        image_generation_failed: false,
         permissions: Arc::new(Mutex::new(permissions)),
         updates,
         answer,
@@ -1095,6 +1146,76 @@ async fn spawn_process(
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn image_gateway_failure_requires_a_new_user_turn_before_another_request() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        state.store.kv_set("image_generation_enabled", "true").unwrap();
+        let output = Arc::new(Mutex::new(Output::default()));
+        let (updates, _receiver) = mpsc::channel(32);
+        let (_permissions, permission_receiver) = mpsc::channel(1);
+        output.lock().await.turn = Some(LiveTurn {
+            id:Uuid::new_v4(), cancel:CancellationToken::new(), tool_cancel:CancellationToken::new(), image_generation_failed:false,
+            permissions:Arc::new(Mutex::new(permission_receiver)), updates,
+            answer:Default::default(), transcript:Default::default(),
+        });
+        let (owner, _) = active_cancel(&output).await.unwrap();
+        // Successful results leave the turn open for more images.
+        core_tool_finished(&output, owner, "success", image_generation::TOOL_NAME, &ToolExecutionResult::default()).await;
+        assert!(image_generation_allowed(&output, owner).await);
+        let lifetime = CancellationToken::new();
+        let url = crate::acp_mcp::start(state.clone(), None, output.clone(), lifetime.clone(), false, vec![image_generation::TOOL_NAME.into()]).await.unwrap();
+        let rpc = format!("{}/rpc", url.rsplit_once('/').unwrap().0);
+        let client = reqwest::Client::new();
+        for request_id in ["first", "different-request-id", "new-prompt"] {
+            if request_id == "new-prompt" {
+                let mut current = output.lock().await;
+                let turn = current.turn.as_mut().unwrap();
+                turn.id = Uuid::new_v4();
+                turn.image_generation_failed = false;
+            }
+            let response: Value = client.post(&rpc).json(&json!({"jsonrpc":"2.0","id":request_id,"method":"tools/call",
+                "params":{"name":image_generation::TOOL_NAME,"arguments":{"requestId":request_id,"profileId":"missing","prompt":"Draw an illustration"}}}))
+                .send().await.unwrap().json().await.unwrap();
+            assert_eq!(response["result"]["isError"], true);
+            let text = response["result"]["content"][0]["text"].as_str().unwrap();
+            if request_id == "different-request-id" {
+                assert!(text.contains("previous image generation request failed"), "{text}");
+            } else {
+                assert!(!text.contains("previous image generation request failed"), "{text}");
+            }
+        }
+        lifetime.cancel(); state.shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn gateway_tool_results_are_projected_without_agent_echo_and_persist_in_transcript() {
+        let output = Mutex::new(Output::default());
+        let transcript = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (updates, mut receiver) = mpsc::channel(8);
+        let (_permission_sender, permissions) = mpsc::channel(1);
+        output.lock().await.turn = Some(LiveTurn {
+        id: Uuid::new_v4(),
+            cancel:CancellationToken::new(), tool_cancel:CancellationToken::new(), image_generation_failed:false,
+            permissions:Arc::new(Mutex::new(permissions)), updates,
+            answer:Default::default(), transcript:transcript.clone(),
+        });
+        let structured = json!({"version":1,"type":"artifact","id":"a","revision":1});
+        let owner = output.lock().await.turn.as_ref().unwrap().id;
+        core_tool_started(&output, owner, "core:1", "messenger_artifacts", "{}").await;
+        core_tool_finished(&output, owner, "core:1", "messenger_artifacts", &ToolExecutionResult {
+            output:"Created a revision 1".into(), structured_content:Some(structured.clone()), ..Default::default()
+        }).await;
+        assert_eq!(receiver.recv().await.unwrap()["update"]["status"], "in_progress");
+        let event = receiver.recv().await.unwrap();
+        assert_eq!(event["update"]["rawOutput"]["structuredContent"], structured);
+        assert_eq!(event["update"]["content"][0]["content"]["text"], "Created a revision 1");
+        assert_eq!(transcript.lock().unwrap().last().unwrap(), &event);
+        // A late completion cannot attach a reference to a different turn.
+        core_tool_finished(&output, Uuid::new_v4(), "late", "messenger_artifacts", &ToolExecutionResult::default()).await;
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(transcript.lock().unwrap().len(), 2);
+    }
 
     #[tokio::test]
     async fn builtin_takeover_uses_process_scoped_relay_configuration() {

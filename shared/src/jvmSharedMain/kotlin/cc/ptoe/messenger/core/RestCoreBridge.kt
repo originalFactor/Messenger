@@ -36,6 +36,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readLine
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
 import java.net.URLEncoder
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
@@ -271,6 +273,29 @@ class RestCoreBridge(
 
     override suspend fun controlSettings(): JsonObject =
         NetworkClient.json.parseToJsonElement(getText("/control/settings")).jsonObject
+
+    override suspend fun learningRequest(method: String, path: String, body: String?): String {
+        require(path.startsWith("/learning/") || path == "/learning" ||
+            path.startsWith("/artifacts") || path.startsWith("/assets") ||
+            path.startsWith("/image-generation") || path == "/tools/core")
+        require(!path.substringBefore('?').contains("..") && !path.contains('#') && !path.contains('\\'))
+        val verb = when (method.uppercase()) {
+            "GET" -> HttpMethod.Get
+            "POST" -> HttpMethod.Post
+            "PUT" -> HttpMethod.Put
+            "DELETE" -> HttpMethod.Delete
+            else -> error("Unsupported learning API method")
+        }
+        val response = request(verb, path, body)
+        return if (response.status == HttpStatusCode.NoContent) "{}" else response.requireText()
+    }
+
+    override suspend fun learningAsset(id: String): ByteArray {
+        require(id.length == 64 && id.all { it in '0'..'9' || it in 'a'..'f' })
+        val response = request(HttpMethod.Get, "/assets/$id/content")
+        if (!response.status.isSuccess()) error(response.errorMessage())
+        return response.bodyAsChannel().readRemaining().readByteArray()
+    }
 
     override suspend fun listSkills(): String = getText("/skills")
 

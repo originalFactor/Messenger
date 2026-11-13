@@ -198,12 +198,14 @@ impl McpClient {
             return crate::ToolExecutionResultShape {
                 output: "Tool call failed: server timeout or disconnected.".into(),
                 is_error: true,
+                structured_content: None,
             };
         };
         if let Some(error) = &response.error {
             return crate::ToolExecutionResultShape {
                 output: format!("MCP error ({}): {}", error.code, error.message),
                 is_error: true,
+                structured_content: None,
             };
         }
         if let Some(result) = response.result.take() {
@@ -221,6 +223,7 @@ impl McpClient {
                         text_output
                     },
                     is_error: call_result.is_error,
+                    structured_content: call_result.structured_content,
                 };
             }
         }
@@ -231,6 +234,7 @@ impl McpClient {
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "(no result)".to_string()),
             is_error: false,
+            structured_content: None,
         }
     }
 
@@ -382,7 +386,7 @@ mod tests {
         let client = mock_client(vec![
             r#"{"jsonrpc":"2.0","result":{}}"#.into(), // initialize
             r#"{"jsonrpc":"2.0","result":{"tools":[]}}"#.into(), // tools/list
-            r#"{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}],"isError":false}}"#.into(),
+            r#"{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}],"isError":false,"structuredContent":{"version":5,"type":"future","id":"r"}}}"#.into(),
             r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"method not found"}}"#.into(),
         ]);
         assert!(client.connect().await);
@@ -390,6 +394,7 @@ mod tests {
         let ok = client.call_tool("echo", r#"{"message":"hi"}"#).await;
         assert_eq!(ok.output, "hello\nworld");
         assert!(!ok.is_error);
+        assert_eq!(ok.structured_content, Some(serde_json::json!({"version":5,"type":"future","id":"r"})));
 
         let err = client.call_tool("echo", "{}").await;
         assert!(err.is_error);

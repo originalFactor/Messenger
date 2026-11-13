@@ -14,6 +14,7 @@ pub mod transport;
 pub struct ToolExecutionResultShape {
     pub output: String,
     pub is_error: bool,
+    pub structured_content: Option<serde_json::Value>,
 }
 
 pub use client::McpClient;

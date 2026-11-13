@@ -77,6 +77,10 @@ private val appComponents = listOf(
     OpenSourceComponent("uCrop", "Apache-2.0", "https://github.com/Yalantis/uCrop"),
     OpenSourceComponent("JNA", "Apache-2.0 OR LGPL-2.1-or-later", "https://github.com/java-native-access/jna"),
     OpenSourceComponent("Skiko", "Apache-2.0", "https://github.com/JetBrains/skiko"),
+    OpenSourceComponent("Wry", "Apache-2.0 OR MIT", "https://github.com/tauri-apps/wry"),
+    OpenSourceComponent("Tao", "Apache-2.0", "https://github.com/tauri-apps/tao"),
+    OpenSourceComponent("webkit2gtk-rs", "MIT", "https://github.com/tauri-apps/webkit2gtk-rs"),
+    OpenSourceComponent("WebKit / WebKitGTK / WKWebView", "BSD / LGPL · System webview", "https://webkit.org/licensing-webkit/"),
 )
 
 private val renderingComponents = listOf(

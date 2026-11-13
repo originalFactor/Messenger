@@ -118,6 +118,11 @@ import cc.ptoe.messenger.generated.resources.conversation_settings_title_label
 import cc.ptoe.messenger.generated.resources.provider_model_picker_label
 import cc.ptoe.messenger.generated.resources.tool_terminal_desc
 import org.jetbrains.compose.resources.stringResource
+import androidx.compose.runtime.collectAsState
+import cc.ptoe.messenger.data.repository.CoreToolCatalogState
+import cc.ptoe.messenger.presentation.ui.components.CoreToolCatalogStatus
+import cc.ptoe.messenger.presentation.ui.components.toolDisplayName
+import cc.ptoe.messenger.presentation.ui.components.toolDescription
 import cc.ptoe.messenger.di.AppContainerHolder
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -148,7 +153,11 @@ fun ConversationSettingsScreen(
     var showToolsPage by remember { mutableStateOf(false) }
 
     // 平台注册的可用工具（内置 + MCP）；会话级每工具开关在工具配置子页中维护
-    val tools = remember { AppContainerHolder.instance.allTools() }
+    val container = AppContainerHolder.instance
+    val coreCatalog by container.coreToolCatalog.state.collectAsState()
+    val mcpTools by container.mcpManager.activeTools.collectAsState()
+    val tools = remember(coreCatalog.tools, mcpTools) { container.allTools() }
+
 
     LaunchedEffect(uiState.isSaved) {
         if (uiState.isSaved) {
@@ -393,6 +402,8 @@ fun ConversationSettingsScreen(
                     masterValue = uiState.overrideToolsValue,
                     config = uiState.overrideToolsConfig,
                     tools = tools,
+                    catalogState = coreCatalog,
+                    onRefreshCatalog = container::refreshCoreToolCatalog,
                     onBack = { showToolsPage = false },
                     onMasterChange = viewModel::onToolsValueChange,
                     onToolEnabledChange = viewModel::onToolEnabledChange
@@ -545,6 +556,8 @@ private fun ConversationToolsPage(
     masterValue: Boolean,
     config: Map<String, Boolean>,
     tools: List<ChatTool>,
+    catalogState: CoreToolCatalogState = CoreToolCatalogState(ready = true),
+    onRefreshCatalog: () -> Unit = {},
     onBack: () -> Unit,
     onMasterChange: (Boolean) -> Unit,
     onToolEnabledChange: (String, Boolean) -> Unit,
@@ -578,6 +591,7 @@ private fun ConversationToolsPage(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
+            CoreToolCatalogStatus(catalogState, onRefreshCatalog)
             ToolToggleCard(
                 title = stringResource(Res.string.agent_edit_enable_tools),
                 subtitle = null,
@@ -601,13 +615,9 @@ private fun ConversationToolsPage(
             } else {
                 tools.forEach { tool ->
                     ToolToggleCard(
-                        title = tool.name,
+                        title = toolDisplayName(tool.name),
                         // 内置终端工具展示本地化说明；其余工具直接展示其模型侧描述
-                        subtitle = if (tool.name == TerminalTool.TOOL_NAME) {
-                            stringResource(Res.string.tool_terminal_desc)
-                        } else {
-                            tool.description
-                        },
+                        subtitle = toolDescription(tool),
                         checked = config[tool.name] ?: true,
                         icon = toolIcon(tool.name),
                         onCheckedChange = { onToolEnabledChange(tool.name, it) }

@@ -11,6 +11,7 @@ pub use messenger_llm::ApiFormat;
 mod agent_tests;
 pub mod context;
 pub mod conversation;
+pub mod learning;
 pub mod parts;
 pub mod title;
 pub mod version;

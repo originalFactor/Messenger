@@ -37,7 +37,7 @@ Event types:
 - `FinalMessagePersisted { messageId, content }`
 - `ToolCallStarted { callId, name }`
 - `ToolCallRequested { callId, name, argumentsJson }`
-- `ToolCallFinished { callId, name, output, isError }`
+- `ToolCallFinished { callId, name, output, isError, structuredContent? }`
 - `UsageRecorded { promptTokens, completionTokens, cachedTokens }`
 - `TitleGenerated { title }`
 - `TitleFailed { code }`
@@ -53,14 +53,75 @@ finishes with an `isError` result the model can read.
 A turn ends with exactly one of `Finished`, `Cancelled`, or `Error`. If the HTTP
 stream closes without one, clients emit a local `stream_ended` error.
 
+A failed `messenger_generate_image` result is followed by terminal
+`Error { code: "image_generation_failed", message }` and a persisted assistant
+ERROR row. The loop must not ask the model for another round or automatically
+resubmit a potentially billable request. Explicit cancellation remains
+`Cancelled`. ACP gateways likewise reject further image-generation attempts in
+the failed owning turn until the user sends a new prompt.
+
 After receiving a terminal event, the TUI can upload the persisted conversation
 through `POST /api/v1/cloud/conversations/push`. Upload errors are separate from
 the chat stream.
 
 For `ToolCallRequested`, the client executes the tool and posts the result to
 `POST /api/v1/turns/tools/{callId}/result` with
-`{ "output": string, "isError": boolean }`. Dropping the SSE connection cancels
+`{ "output": string, "isError": boolean, "structuredContent"?: object }`.
+The optional structured value is persisted with the tool-result part and returned
+by history/codec routes; it is render metadata rather than Provider model input.
+Unknown versions/types/fields must survive round trips unchanged and fall back to
+readable `output`. Dropping the SSE connection cancels
 the turn and wakes any pending tool host with a cancellation result.
+
+## Local learning, assets, applications and image generation
+
+These services reuse `change` with `kind: "Other"`; there are no new event types
+or unbounded job streams. Treat events as invalidation hints and GET authoritative
+state after reconnect, history restoration, or `resync`:
+
+| Changed data | `ids` entries | Re-query |
+|---|---|---|
+| Learning record, review schedule/attempt | `learning:<recordId>` | `/learning/records/{kind}/{id}`, `/learning/reviews/{id}/state`, `/attempts`, `/learning/overview` |
+| Learning import/clear | `learning:*` | Learning lists, overview, due queue and histories |
+| Owned asset metadata | `local_asset:<sha256>` | `/assets/{id}` or `/assets` |
+| Generated image provenance | `provenance:<sha256>` | `/assets/{id}/provenance` |
+| Application revisions/state/grants | `artifact:<uuid>` | `/artifacts/{id}` |
+| Image profiles/jobs | `local_image_profile:<id>`, `local_image_job:<id>` | `/image-generation/profiles`, `/image-generation/jobs/{id}` |
+| Feature switches | `learning_tools_enabled`, `artifact_tools_enabled`, `image_generation_enabled` | Respective settings/capability routes |
+
+Mutation notifications follow commit. An image submission initially returns a
+queued durable job, then KV changes invalidate it as it runs and reaches
+`succeeded`, `failed`, `cancelled`, or `unknown`. Polling the job also works;
+interruptions never cause an automatic paid resubmission. Complete learning bundle
+imports commit learning rows and resource metadata together after staging and
+validating bytes; import previews emit no changes.
+
+The reserved workspace-free Core tools `messenger_learning`, `messenger_artifacts`
+and `messenger_generate_image` emit normal `ToolCallStarted`/`ToolCallFinished`
+without platform `ToolCallRequested`. Each requires its initially disabled global
+capability plus effective Agent/turn policy, including `disableTools`, delegate
+scope and cancellation. Structured references use version 1:
+
+- Learning: `{version:1,type:"learningRecord",kind,id,recordVersion}`.
+- Application: `{version:1,type:"artifact",id,title,revision,description}`.
+- Image generation: `{version:1,type:"imageGenerationJob",jobId,assetIds,status}`.
+
+Read the persistent reference from history first, then subscribe/re-query by ID;
+a UI must not depend on seeing one transient finish event. Application revision
+commits are immediately discoverable from store changes while the Agent continues
+its turn. Validate and commit a complete revision before the host runs it; an
+invalid update leaves the previous revision intact. Imported applications require
+fresh device execution authorization and explicit network grants. Agent tools and
+page-reported interactions cannot submit formal review ratings; those use the
+explicit user `/learning/reviews/{id}/submit` endpoint.
+
+MCP-capable ACP workers expose the same Core tools through their per-worker active
+turn gateway. MCP results include `structuredContent` beside readable text, and
+Core projects its own tool updates into the native ACP transcript so rendering
+does not depend on the external Agent echoing JSON. Worker startup capability,
+live global switches, turn ownership, cancellation and delegated scope continue
+to apply. Unsupported transports fail visibly. No gateway URL, bearer credential,
+network permission or Provider secret belongs in an export or generated page.
 
 ## Agent Skills (device-local Messenger turns)
 

@@ -15,4 +15,6 @@ Thin `com.android.application` shell over `shared` (AGP 9 built-in Kotlin + `kot
 ./gradlew-cli :androidApp:lintDebug
 ```
 
+- Interactive learning applications use the `shared` Android WebView host and origin-restricted AndroidX WebKit message listener. Keep the generated sandbox separate from the trusted wrapper; no broad JavaScript interface or Core credentials. The host blocks direct network/navigation and destroys WebViews on disposal. Learning packages and image exports use system document pickers; do not request broad storage access.
+
 - For third-party ACP Agents, the main app bridges Core's local ACP process streams to `IShellService` in the Runtime companion. The main app does not launch Runtime-installed executables in its own UID.

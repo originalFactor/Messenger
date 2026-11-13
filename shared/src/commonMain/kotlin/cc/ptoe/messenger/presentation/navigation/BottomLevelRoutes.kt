@@ -20,6 +20,7 @@ object BottomLevelRoutes {
     val routes = setOf(
         Screen.Conversations.route,
         Screen.Agents.route,
+        Screen.Learning.route,
         Screen.Settings.route
     )
 }

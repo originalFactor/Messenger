@@ -37,8 +37,8 @@ pub(crate) async fn set_setting(State(state): State<ApiState>, Json(setting): Js
 pub(crate) async fn execute(state: &ApiState, project: Option<&StoredProject>, writable: bool, args: &str, cancel: &CancellationToken) -> ToolExecutionResult {
     let result = execute_inner(state, project, writable, args, cancel).await;
     match result {
-        Ok(output) => ToolExecutionResult { output, is_error: false },
-        Err(error) => ToolExecutionResult { output: error, is_error: true },
+        Ok(output) => ToolExecutionResult { output, is_error: false, structured_content: None },
+        Err(error) => ToolExecutionResult { output: error, is_error: true, structured_content: None },
     }
 }
 

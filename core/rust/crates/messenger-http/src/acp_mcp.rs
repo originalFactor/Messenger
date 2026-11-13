@@ -14,6 +14,7 @@ struct Gateway {
     calls: Arc<Mutex<HashMap<String, CancellationToken>>>,
     lifetime: CancellationToken,
     allow_delegation: bool,
+    core_tool_scope: Vec<String>,
 }
 
 pub(crate) async fn start(
@@ -22,13 +23,14 @@ pub(crate) async fn start(
     output: Arc<Mutex<external_acp::Output>>,
     lifetime: CancellationToken,
     allow_delegation: bool,
+    core_tool_scope: Vec<String>,
 ) -> Result<String, std::io::Error> {
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
     let addr = listener.local_addr()?;
     let secret = Uuid::new_v4().to_string();
     let gateway = Gateway {
         state, project, output, secret: secret.clone(), outgoing: Default::default(), stream_cancel: Default::default(),
-        calls: Default::default(), lifetime: lifetime.clone(), allow_delegation,
+        calls: Default::default(), lifetime: lifetime.clone(), allow_delegation, core_tool_scope,
     };
     let app = Router::new().route("/:secret/events", get(events))
         .route("/:secret/messages", post(messages))
@@ -103,14 +105,18 @@ async fn process_request(gateway: Gateway, request: Value, stream_cancel: Option
                 // Keep the reader available even for an empty catalog, so enabling or
                 // installing a Skill takes effect on the next prompt without a restart.
                 declared.push(skills::tool());
+                match core_tools(&gateway.state.store) {
+                    Ok(tools) => declared.extend(tools.into_iter().filter(|tool| gateway.core_tool_scope.contains(&tool.name))),
+                    Err(error) => return Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("{error:?}")}})),
+                }
                 let tools: Vec<_> = declared.into_iter().map(|tool| json!({
                     "name":tool.name,"description":tool.description,
                     "inputSchema":serde_json::from_str::<Value>(&tool.parameters_json).unwrap_or_default()
                 })).collect();
                 json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
             }
-            "tools/call" if params["name"] == skills::TOOL_NAME || (params["name"] == delegation::TOOL_NAME && gateway.allow_delegation) => {
-                let result = if let Some(turn) = external_acp::active_cancel(&gateway.output).await {
+            "tools/call" if params["name"] == skills::TOOL_NAME || (params["name"] == delegation::TOOL_NAME && gateway.allow_delegation) || params["name"].as_str().is_some_and(|name| gateway.core_tool_scope.iter().any(|allowed| allowed == name)) => {
+                let result = if let Some((owner, turn)) = external_acp::active_cancel(&gateway.output).await {
                     let cancel = turn.child_token();
                     let key = id.to_string();
                     let registered = {
@@ -119,24 +125,34 @@ async fn process_request(gateway: Gateway, request: Value, stream_cancel: Option
                         else { calls.insert(key.clone(), cancel.clone()); true }
                     };
                     if !registered {
-                        ToolExecutionResult { output:"Duplicate request ID or too many concurrent calls".into(), is_error:true }
+                        ToolExecutionResult { output:"Duplicate request ID or too many concurrent calls".into(), is_error:true, structured_content: None }
                     } else {
                         let args = params.get("arguments").cloned().unwrap_or_else(|| json!({})).to_string();
+                        let name = params["name"].as_str().unwrap_or_default();
+                        let projected_id = format!("core:{}", Uuid::new_v4());
+                        if is_core_tool(name) { external_acp::core_tool_started(&gateway.output, owner, &projected_id, name, &args).await; }
                         let result = tokio::select! {
                             result = async {
                                 if params["name"] == skills::TOOL_NAME { skills::execute(&gateway.state.store, true, &args) }
+                                else if name == image_generation::TOOL_NAME && !external_acp::image_generation_allowed(&gateway.output, owner).await {
+                                    ToolExecutionResult { output:"A previous image generation request failed in this turn. Ask the user to start a new prompt before generating again; do not retry automatically.".into(), is_error:true, ..Default::default() }
+                                }
+                                else if is_core_tool(name) { execute_core_tool(&gateway.state, name, true, &args, cancel.clone()).await }
                                 else { delegation::execute(&gateway.state, gateway.project.as_ref(), true, &args, &cancel).await }
                             } => result,
-                            _ = gateway.lifetime.cancelled() => ToolExecutionResult { output:"ACP session closed".into(), is_error:true },
-                            _ = async { if let Some(token) = &stream_cancel { token.cancelled().await } else { std::future::pending::<()>().await } } => ToolExecutionResult { output:"MCP connection closed".into(), is_error:true },
-                            _ = cancel.cancelled() => ToolExecutionResult { output:"Tool call cancelled".into(), is_error:true },
+                            _ = gateway.lifetime.cancelled() => ToolExecutionResult { output:"ACP session closed".into(), is_error:true, structured_content: None },
+                            _ = async { if let Some(token) = &stream_cancel { token.cancelled().await } else { std::future::pending::<()>().await } } => ToolExecutionResult { output:"MCP connection closed".into(), is_error:true, structured_content: None },
+                            _ = cancel.cancelled() => ToolExecutionResult { output:"Tool call cancelled".into(), is_error:true, structured_content: None },
                         };
+                        if is_core_tool(name) { external_acp::core_tool_finished(&gateway.output, owner, &projected_id, name, &result).await; }
                         cancel.cancel();
                         gateway.calls.lock().await.remove(&key);
                         result
                     }
-                } else { ToolExecutionResult { output:"No active ACP turn".into(), is_error:true } };
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":result.output}],"isError":result.is_error}})
+                } else { ToolExecutionResult { output:"No active ACP turn".into(), is_error:true, structured_content: None } };
+                let mut body = json!({"content":[{"type":"text","text":result.output}],"isError":result.is_error});
+                if let Some(structured) = result.structured_content { body["structuredContent"] = structured; }
+                json!({"jsonrpc":"2.0","id":id,"result":body})
             }
             _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
         })
@@ -148,10 +164,33 @@ mod tests {
     use messenger_mcp::{McpClient, McpServerConfig, SseTransport};
 
     #[tokio::test]
+    async fn core_gateway_scope_is_frozen_and_live_opt_out_removes_tools() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        let lifetime = CancellationToken::new();
+        let no_scope = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), false, Vec::new()).await.unwrap();
+        let scoped = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), false, vec![learning::TOOL_NAME.into()]).await.unwrap();
+        let client = reqwest::Client::new();
+        for enabled in [true, false, true] {
+            state.store.kv_set("learning_tools_enabled", if enabled { "true" } else { "false" }).unwrap();
+            state.store.kv_set("artifact_tools_enabled", "true").unwrap();
+            state.store.kv_set("image_generation_enabled", "true").unwrap();
+            for (url, expected) in [(&no_scope, 1), (&scoped, if enabled { 2 } else { 1 })] {
+                let rpc = format!("{}/rpc", url.rsplit_once('/').unwrap().0);
+                let result: Value = client.post(&rpc).json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).send().await.unwrap().json().await.unwrap();
+                assert_eq!(result["result"]["tools"].as_array().unwrap().len(), expected);
+                let result: Value = client.post(&rpc).json(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":artifacts::TOOL_NAME}})).send().await.unwrap().json().await.unwrap();
+                assert_eq!(result["error"]["code"], -32601, "unscoped tools stay inaccessible");
+            }
+        }
+        lifetime.cancel();
+        state.shutdown.cancel();
+    }
+
+    #[tokio::test]
     async fn skills_gateway_does_not_acquire_delegation_when_the_setting_changes() {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
         let lifetime = CancellationToken::new();
-        let url = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), false).await.unwrap();
+        let url = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), false, Vec::new()).await.unwrap();
         let rpc = format!("{}/rpc", url.rsplit_once('/').unwrap().0);
         let client = reqwest::Client::new();
         for enabled in [true, false, true] {
@@ -177,7 +216,7 @@ mod tests {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
         state.store.kv_set("mcp_agent_delegation_enabled", "true").unwrap();
         let lifetime = CancellationToken::new();
-        let url = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), true).await.unwrap();
+        let url = start(state.clone(), None, Arc::new(Mutex::new(external_acp::Output::default())), lifetime.clone(), true, Vec::new()).await.unwrap();
         let wrong = url.rsplit_once('/').unwrap().0.rsplit_once('/').unwrap().0.to_string() + "/wrong/events";
         assert_eq!(reqwest::get(wrong).await.unwrap().status(), StatusCode::NOT_FOUND);
         let client = McpClient::new(McpServerConfig { name:"test".into(), ..Default::default() },

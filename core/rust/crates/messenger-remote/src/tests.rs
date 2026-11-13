@@ -21,7 +21,7 @@ struct RecordingExecutor {
 impl LocalToolExecutor for RecordingExecutor {
     async fn execute(&self, call: &InboundToolCall, _cancel: CancellationToken) -> ToolExecutionResult {
         self.calls.lock().unwrap().push(call.clone());
-        ToolExecutionResult { output: format!("ran {}", call.name), is_error: false }
+        ToolExecutionResult { output: format!("ran {}", call.name), is_error: false, structured_content: None }
     }
 }
 
@@ -132,7 +132,7 @@ async fn a_relayed_call_resolves_with_the_owners_result() {
         &exec,
     );
     let result = waiting.await.unwrap();
-    assert_eq!(result, ToolExecutionResult { output: "3 matches".into(), is_error: false });
+    assert_eq!(result, ToolExecutionResult { output: "3 matches".into(), is_error: false, structured_content: None });
 }
 
 /// Test helper: pretend the relay connection is up.

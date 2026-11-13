@@ -67,6 +67,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<JsonObject?>(null) }
     var permission by remember { mutableStateOf<JsonObject?>(null) }
+    var learningMessage by remember { mutableStateOf<Message?>(null) }
     var selectedMessage by remember { mutableStateOf<Message?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var settingsBusy by remember { mutableStateOf(false) }
@@ -175,7 +176,16 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                                     history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", content); put("status", "sent"); put("timestamp", liveTimestamp) }
                                                 }
                                                 "TextDelta" -> { partial += event.text("text"); events = events + event }
-                                                "ThoughtDelta", "ToolUpdate" -> events = events + event
+                                                "ThoughtDelta" -> events = events + event
+                                                "ToolUpdate" -> {
+                                                    events = events + event
+                                                    val update = event["update"] as? JsonObject
+                                                    if (update?.text("title") == "messenger_generate_image" && update.text("status") == "failed") {
+                                                        queuePaused = true
+                                                        val output = update["rawOutput"] as? JsonObject
+                                                        report(output?.text("output").orEmpty().ifBlank { update.text("status") })
+                                                    }
+                                                }
                                                 "Permission" -> permission = event
                                                 "Finished" -> terminal = true
                                                 "Cancelled" -> { terminal = true; queuePaused = true }
@@ -325,6 +335,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                     chatItems = chatItems, isGenerating = active.isNotEmpty(), streamingContent = liveContent, streamingMessageId = liveId, streamingDiff = null,
                     agent = agent, userAvatar = userAvatar, enableContextMenu = contextMenus, copiedToastText = copied,
                     onRetryClick = {}, onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false,
+                    onSaveToLearning = { learningMessage = it },
                     onCopyClick = ::copyTextToClipboard, onMessageLongClick = { selectedMessage = it },
                     hasOlderMessages = before.isNotEmpty(), isLoadingHistory = loading,
                     onLoadOlderMessages = {
@@ -339,8 +350,15 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         if (!contextMenus) MessageActionMenu(
             isVisible = selectedMessage != null, onDismiss = { selectedMessage = null }, messageRole = selectedMessage?.role ?: MessageRole.USER,
             onCopyClick = { selectedMessage?.content?.let { copyTextToClipboard(it); showPlatformToast(copied) } },
-            onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false
+            onRegenerateClick = {}, onDeleteClick = {}, allowMessageMutation = false,
+            onSaveToLearning = { learningMessage = selectedMessage },
         )
+        learningMessage?.let { target ->
+            cc.ptoe.messenger.presentation.ui.learning.LearningCaptureDialog(
+                messages = messages.filter { it.role != MessageRole.TOOL }, initialMessageId = target.id,
+                onDismiss = { learningMessage = null }, onError = ::report,
+            )
+        }
         cc.ptoe.messenger.presentation.platform.BackHandler(enabled = showSettings, onBack = { showSettings = false }) {}
         if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
     }

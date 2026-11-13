@@ -25,6 +25,20 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Web
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import cc.ptoe.messenger.data.repository.CoreToolCatalogState
+import cc.ptoe.messenger.data.repository.CoreToolDescriptor
+import cc.ptoe.messenger.domain.tool.ChatTool
+import cc.ptoe.messenger.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.domain.tool.WorkspaceTool
@@ -41,5 +55,50 @@ fun toolIcon(name: String): ImageVector = when (name) {
     WorkspaceTool.READ -> Icons.Default.Description
     WorkspaceTool.EDIT -> Icons.Default.Edit
     WorkspaceTool.CREATE -> Icons.AutoMirrored.Filled.NoteAdd
+    "messenger_learning" -> Icons.Default.School
+    "messenger_artifacts" -> Icons.Default.Web
+    "messenger_generate_image" -> Icons.Default.Image
+    "messenger_skills" -> Icons.Default.MenuBook
+    "messenger_agents" -> Icons.Default.Group
     else -> Icons.Default.Extension
+}
+
+@Composable
+fun toolDisplayName(name: String): String = when (name) {
+    TerminalTool.TOOL_NAME -> stringResource(Res.string.tool_name_terminal)
+    "messenger_learning" -> stringResource(Res.string.tool_name_learning)
+    "messenger_artifacts" -> stringResource(Res.string.tool_name_artifacts)
+    "messenger_generate_image" -> stringResource(Res.string.tool_name_generate_image)
+    "messenger_skills" -> stringResource(Res.string.tool_name_skills)
+    "messenger_agents" -> stringResource(Res.string.tool_name_agents)
+    else -> name
+}
+
+@Composable
+fun toolDescription(tool: ChatTool): String {
+    val description = when (tool.name) {
+        TerminalTool.TOOL_NAME -> stringResource(Res.string.tool_terminal_desc)
+        "messenger_learning" -> stringResource(Res.string.tool_desc_learning)
+        "messenger_artifacts" -> stringResource(Res.string.tool_desc_artifacts)
+        "messenger_generate_image" -> stringResource(Res.string.tool_desc_generate_image)
+        "messenger_skills" -> stringResource(Res.string.tool_desc_skills)
+        "messenger_agents" -> stringResource(Res.string.tool_desc_agents)
+        else -> tool.description
+    }
+    return if (tool is CoreToolDescriptor && !tool.capabilityEnabled) {
+        description + "\n" + stringResource(Res.string.tool_capability_disabled)
+    } else description
+}
+
+@Composable
+fun CoreToolCatalogStatus(state: CoreToolCatalogState, onRetry: () -> Unit) {
+    val error = state.error
+    if (error != null) {
+        Text(stringResource(Res.string.tool_catalog_error, error), color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+    } else if (!state.ready) {
+        Text(stringResource(Res.string.tool_catalog_loading), color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium)
+    }
 }

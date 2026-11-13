@@ -214,6 +214,7 @@ fn replay(row: StoredMessage) -> Vec<SessionUpdate> {
                 call_id,
                 output,
                 is_error,
+                structured_content,
                 ..
             } => {
                 let fields = ToolCallUpdateFields::new()
@@ -223,8 +224,9 @@ fn replay(row: StoredMessage) -> Vec<SessionUpdate> {
                         ToolCallStatus::Completed
                     })
                     .content(vec![ToolCallContent::from(ContentBlock::Text(
-                        TextContent::new(output),
-                    ))]);
+                        TextContent::new(output.clone()),
+                    ))])
+                    .raw_output(serde_json::json!({"output":output,"isError":is_error,"structuredContent":structured_content}));
                 Some(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                     ToolCallId::new(call_id),
                     fields,
@@ -371,7 +373,8 @@ async fn forward_turn(
                     ToolCallStatus::Failed
                 } else {
                     ToolCallStatus::Completed
-                }),
+                }).content(vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(string("output"))))])
+                    .raw_output(serde_json::json!({"output":event["output"],"isError":event["isError"],"structuredContent":event["structuredContent"]})),
             )),
             _ => continue,
         };

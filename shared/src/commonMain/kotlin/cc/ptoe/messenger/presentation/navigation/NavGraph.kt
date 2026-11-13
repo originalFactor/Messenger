@@ -201,6 +201,11 @@ fun NavGraph(
                 }
             }
         }
+        composable(Screen.Learning.route) {
+            cc.ptoe.messenger.presentation.ui.learning.LearningScreen(
+                onOpenConversation = { navController.navigate(Screen.Chat.createRoute(it)) },
+            )
+        }
         composable(Screen.Settings.route) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)

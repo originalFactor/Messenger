@@ -42,7 +42,7 @@ pub enum AgentEvent {
     RoundPersisted { round: u32, message_id: String },
     FinalMessagePersisted { message_id: String, content: String },
     ToolCallStarted { call_id: String, name: String },
-    ToolCallFinished { call_id: String, name: String, output: String, is_error: bool },
+    ToolCallFinished { call_id: String, name: String, output: String, is_error: bool, structured_content: Option<serde_json::Value> },
     /// Token totals for the WHOLE turn, summed over its rounds. `cached_tokens`
     /// is how much of `prompt_tokens` the provider served from its prompt
     /// cache (0 when it does not report a breakdown).
@@ -379,7 +379,7 @@ pub async fn run_chat_turn(
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                     output: String::new(),
-                    is_error: false,
+                    is_error: false, structured_content: None,
                 }]),
                 timestamp: next_timestamp(store, &request.conversation_id)?,
                 status: "sending".into(),
@@ -395,7 +395,7 @@ pub async fn run_chat_turn(
                 // Unknown names return an error result for self-correction.
                 ToolExecutionResult {
                     output: format!("Unknown tool: {}", call.name),
-                    is_error: true,
+                    is_error: true, structured_content: None,
                 }
             };
             // Persist the result even when cancelled mid-run.
@@ -408,7 +408,7 @@ pub async fn run_chat_turn(
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                     output: result.output.clone(),
-                    is_error: result.is_error,
+                    is_error: result.is_error, structured_content: result.structured_content.clone(),
                 }]),
                 timestamp: running.timestamp,
                 status: "sent".into(),
@@ -419,8 +419,25 @@ pub async fn run_chat_turn(
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
                 output: result.output.clone(),
-                is_error: result.is_error,
+                is_error: result.is_error, structured_content: result.structured_content.clone(),
             });
+            if call.name == "messenger_generate_image" && result.is_error {
+                if cancel.is_cancelled() {
+                    return finalize_cancellation(store, sink, &placeholder_id).await;
+                }
+                // A failed/unknown paid request must be shown to the user before
+                // another model round can decide to submit a new billable job.
+                let message = format!("Image generation failed: {}", result.output);
+                let mut failed = placeholder.clone();
+                failed.content = message.clone();
+                failed.parts_json = encode_parts(&[ContentPart::Text { text: message.clone() }]);
+                failed.status = "error".into();
+                failed.error_message = Some(message.clone());
+                failed.timestamp = next_timestamp(store, &request.conversation_id)?;
+                store.upsert_message(&failed).map_err(|error| error.to_string())?;
+                sink.on_event(&AgentEvent::Error { code: "image_generation_failed".into(), message });
+                return Ok(());
+            }
         }
     }
 }

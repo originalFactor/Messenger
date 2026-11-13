@@ -8,7 +8,7 @@ arch=('x86_64')
 url='https://github.com/originalFactor/Messenger'
 license=('Apache-2.0')
 depends=('glibc' 'gcc-libs' 'alsa-lib' 'fontconfig' 'freetype2' 'libx11'
-         'libxext' 'libxi' 'libxrender' 'libxtst' 'zlib')
+         'libxext' 'libxi' 'libxrender' 'libxtst' 'zlib' 'webkit2gtk-4.1' 'gtk3')
 # The JRE and Rust library are already processed. Stripping them again can
 # destroy native metadata; debug package generation is also unnecessary.
 options=('!strip' '!debug')

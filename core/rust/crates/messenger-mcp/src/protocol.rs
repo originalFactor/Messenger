@@ -102,6 +102,8 @@ pub struct McpToolsListResult {
 pub struct McpCallToolResult {
     #[serde(default)]
     pub content: Vec<McpContentPart>,
+    #[serde(rename = "structuredContent", default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     #[serde(rename = "isError", default)]
     pub is_error: bool,
 }

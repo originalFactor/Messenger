@@ -479,6 +479,19 @@
     <!-- 内置工具（终端） -->
     <string name="tool_interrupted_result">执行已被中断。</string>
     <string name="tool_unknown_tool">未知工具：%1$s</string>
+    <string name="tool_name_learning">学习库</string>
+    <string name="tool_name_artifacts">交互应用</string>
+    <string name="tool_name_generate_image">图片生成</string>
+    <string name="tool_name_skills">Agent Skills</string>
+    <string name="tool_name_agents">Agent 委派</string>
+    <string name="tool_desc_learning">查询学习内容并保存可编辑草稿</string>
+    <string name="tool_desc_artifacts">创建和更新交互讲解</string>
+    <string name="tool_desc_generate_image">使用已配置的付费生图模型生成图片</string>
+    <string name="tool_desc_skills">按需读取已安装的 Skills 及资源</string>
+    <string name="tool_desc_agents">让其他 Agent 完成独立任务</string>
+    <string name="tool_capability_disabled">此功能在当前设备上尚未开启。</string>
+    <string name="tool_catalog_loading">正在加载设备工具功能…</string>
+    <string name="tool_catalog_error">无法加载设备工具：%1$s</string>
     <string name="tool_name_terminal">终端</string>
     <string name="tool_card_running">运行中…</string>
     <string name="tool_card_success">已完成</string>

@@ -1,8 +1,8 @@
-//! DDL for schema version 7. Column names intentionally mirror the legacy
+//! DDL for schema version 8. Column names intentionally mirror the legacy
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it

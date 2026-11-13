@@ -628,6 +628,16 @@ class ChatViewModel(
         }
     }
 
+    fun learningCaptureError(message: String) {
+        setError(message)
+        val convId = _conversationId.value ?: return
+        viewModelScope.launch {
+            messageRepository.insert(Message(id = randomUuid(), conversationId = convId,
+                role = MessageRole.ASSISTANT, content = message, timestamp = currentTimeMillis(),
+                status = MessageStatus.ERROR, errorMessage = message))
+        }
+    }
+
     fun copyMessage(text: String) {
         copyTextToClipboard(text)
     }

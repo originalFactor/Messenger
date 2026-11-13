@@ -144,7 +144,8 @@ sealed class ChatBlock {
         val arguments: String,
         val output: String?,
         val isError: Boolean,
-        override val isFinalized: Boolean
+        override val isFinalized: Boolean,
+        val structuredContent: kotlinx.serialization.json.JsonElement? = null
     ) : ChatBlock()
 
     data class Quote(
@@ -533,6 +534,9 @@ private fun RenderThinkBlock(block: ChatBlock.Think) {
 
 @Composable
 private fun RenderToolCall(block: ChatBlock.ToolCall) {
+    block.structuredContent?.let { content ->
+        cc.ptoe.messenger.presentation.ui.learning.LearningResultCard(content)
+    }
     var expanded by remember(block.id) { mutableStateOf(false) }
     val isRunning = !block.isFinalized
     val command = remember(block.arguments) {
@@ -657,10 +661,8 @@ private fun RenderToolCall(block: ChatBlock.ToolCall) {
 }
 
 @Composable
-private fun toolDisplayName(name: String): String = when (name) {
-    TerminalTool.TOOL_NAME -> stringResource(Res.string.tool_name_terminal)
-    else -> name
-}
+private fun toolDisplayName(name: String): String =
+    cc.ptoe.messenger.presentation.ui.components.toolDisplayName(name)
 
 /** Inline spans → AnnotatedString, shared by paragraph and blockquote rendering. */
 private fun buildInlineAnnotatedString(inlines: List<ChatInline>, plainText: String): AnnotatedString =

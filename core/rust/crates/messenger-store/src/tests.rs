@@ -802,5 +802,5 @@ fn v6_models_gain_cache_write_rate_and_preserve_zero_on_reopen() {
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get_model("m").unwrap().unwrap().cache_write_rate, Some(0.0));
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 7);
+    assert_eq!(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), crate::schema::SCHEMA_VERSION);
 }

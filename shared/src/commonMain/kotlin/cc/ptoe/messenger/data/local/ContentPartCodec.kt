@@ -77,7 +77,8 @@ object ContentPartCodec {
             callId = callId,
             name = name,
             output = output,
-            isError = isError
+            isError = isError,
+            structuredContent = structuredContent
         )
     }
 
@@ -93,7 +94,7 @@ object ContentPartCodec {
         }
         "tool_result" -> {
             if (callId.isNullOrEmpty() || name.isNullOrEmpty()) null
-            else ContentPart.ToolResult(callId = callId, name = name, output = output ?: "", isError = isError)
+            else ContentPart.ToolResult(callId = callId, name = name, output = output ?: "", isError = isError, structuredContent = structuredContent)
         }
         else -> null
     }
@@ -113,6 +114,7 @@ object ContentPartCodec {
         val name: String? = null,
         val arguments: String? = null,
         val output: String? = null,
-        val isError: Boolean = false
+        val isError: Boolean = false,
+        val structuredContent: kotlinx.serialization.json.JsonElement? = null
     )
 }

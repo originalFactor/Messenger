@@ -15,6 +15,7 @@
  */
 
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -35,6 +36,43 @@ dependencies {
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
     implementation(libs.ktor.client.core)
+}
+
+// The interactive-artifact host is an independent system-webview process. It
+// carries no Core credentials and never embeds a browser into either AWT backend.
+val artifactHostOs = System.getProperty("os.name").lowercase()
+val artifactHostArch = System.getProperty("os.arch").lowercase()
+val artifactHostPlatform = when {
+    artifactHostOs.contains("linux") && artifactHostArch in listOf("amd64", "x86_64") -> "linux-x86_64"
+    artifactHostOs.contains("windows") && artifactHostArch in listOf("amd64", "x86_64") -> "windows-x86_64"
+    artifactHostOs.contains("mac") && artifactHostArch in listOf("aarch64", "arm64") -> "macos-aarch64"
+    else -> error("Unsupported Artifact host platform: $artifactHostOs/$artifactHostArch")
+}
+val artifactHostName = "messenger-artifact-webview" + if (artifactHostOs.contains("windows")) ".exe" else ""
+val artifactHostRelease = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+val artifactHostTarget = layout.buildDirectory.dir("webview-target")
+val artifactHostBinary = artifactHostTarget.map { it.file("${if (artifactHostRelease) "release" else "debug"}/$artifactHostName") }
+val buildArtifactWebview = tasks.register<Exec>("buildArtifactWebview") {
+    inputs.files(fileTree("webview") { include("Cargo.toml", "Cargo.lock", "src/**") })
+    inputs.property("profile", if (artifactHostRelease) "release" else "dev")
+    inputs.property("platform", artifactHostPlatform)
+    outputs.file(artifactHostBinary)
+    commandLine("cargo", "build", "--locked", "--manifest-path", file("webview/Cargo.toml").absolutePath,
+        "--target-dir", artifactHostTarget.get().asFile.absolutePath,
+        "--profile", if (artifactHostRelease) "release" else "dev")
+}
+val stageArtifactWebview = tasks.register<Copy>("stageArtifactWebview") {
+    dependsOn(buildArtifactWebview)
+    from(artifactHostBinary)
+    into(layout.buildDirectory.dir("generated/artifactHostResources/artifact-webview/$artifactHostPlatform"))
+}
+sourceSets.main { resources.srcDir(layout.buildDirectory.dir("generated/artifactHostResources")) }
+tasks.named("processResources") { dependsOn(stageArtifactWebview) }
+// The helper sits inside a resource jar, so jpackage cannot infer its ELF deps.
+tasks.withType<AbstractJPackageTask>().configureEach {
+    if (targetFormat == TargetFormat.Deb) {
+        freeArgs.addAll("--linux-package-deps", "libwebkit2gtk-4.1-0,libgtk-3-0")
+    }
 }
 
 compose.desktop {
@@ -86,6 +124,7 @@ compose.desktop {
                 // jpackage requires an ICNS icon for macOS bundles.
                 iconFile.set(project.file("src/main/resources/icon.icns"))
                 bundleID = "cc.ptoe.messenger"
+                minimumSystemVersion = "14.0"
             }
             linux {
                 // Deb packaging wants a single square PNG (512x512).
