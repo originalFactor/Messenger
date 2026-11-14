@@ -11,7 +11,11 @@
   <img src="logo.svg" alt="Messenger" width="80" height="80">
   <h1>Messenger</h1>
   <p>Your AI chat and learning companion.</p>
-  <p>[Download](https://github.com/originalFactor/Messenger/releases/latest) · [Report an issue](https://github.com/originalFactor/Messenger/issues)</p>
+  <p>
+    <a href="https://github.com/originalFactor/Messenger/releases/latest">Download</a>
+    ·
+    <a href="https://github.com/originalFactor/Messenger/issues">Report an issue</a>
+  </p>
 </div>
 
 [About](#about-the-project) · [Screenshots](#screenshots) · [Getting started](#getting-started) · [Usage](#usage) · [Contributing](#contributing)

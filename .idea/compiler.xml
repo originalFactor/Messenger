@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="CompilerConfiguration">
-    <bytecodeTargetLevel target="11" />
+    <bytecodeTargetLevel target="11">
+      <module name="Messenger.llm-typewriter-patched" target="21" />
+      <module name="Messenger.llm-typewriter-patched.desktopMain" target="21" />
+      <module name="Messenger.llm-typewriter-patched.desktopTest" target="21" />
+    </bytecodeTargetLevel>
   </component>
 </project>

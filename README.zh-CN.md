@@ -11,7 +11,11 @@
   <img src="logo.svg" alt="Messenger" width="80" height="80">
   <h1>Messenger</h1>
   <p>你的 AI 聊天与学习助手。</p>
-  <p>[下载应用](https://github.com/originalFactor/Messenger/releases/latest) · [反馈问题](https://github.com/originalFactor/Messenger/issues)</p>
+  <p>
+    <a href="https://github.com/originalFactor/Messenger/releases/latest">下载</a>
+    ·
+    <a href="https://github.com/originalFactor/Messenger/issues">反馈</a>
+  </p>
 </div>
 
 [项目介绍](#about) · [界面预览](#screenshots) · [开始使用](#getting-started) · [使用方法](#usage) · [参与贡献](#contributing)
