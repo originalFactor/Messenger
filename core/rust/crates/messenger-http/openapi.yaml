@@ -2834,6 +2834,11 @@ components:
       type: object
       additionalProperties: true
       required: [id, name, base_url, api_key, api_format, created_at, updated_at]
+      properties:
+        native_web_search:
+          type: boolean
+          default: false
+          description: Device-local opt-in for provider-hosted web search. Supports Responses and Messages; other protocols fail visibly before sending. Not cloud-synced. Does not enable search for title generation or summarization.
     Model:
       type: object
       additionalProperties: true

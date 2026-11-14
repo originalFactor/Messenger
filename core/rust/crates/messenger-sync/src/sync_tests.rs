@@ -228,6 +228,10 @@ async fn pull_applies_delta_with_guards() {
 
     let store = Store::open_memory().unwrap();
     seed_title_holder(&store);
+    let mut local_provider = crate::documents::provider_document_to_row(
+        &serde_json::from_value(delta_body()["providers"][0].clone()).unwrap());
+    local_provider.native_web_search = true;
+    store.upsert_provider(&local_provider).unwrap();
     let engine = signed_in_engine(&store, &server);
 
     let result = engine.sync_internal(None, false, None).await.unwrap();
@@ -265,6 +269,7 @@ async fn pull_applies_delta_with_guards() {
         "messages"
     );
     assert_eq!(store.list_models_by_provider("p1").unwrap().len(), 1);
+    assert!(store.get_provider("p1").unwrap().unwrap().native_web_search);
 
     // Builtin seeding: provider from the signed-in user's AI key, title agent
     // NOT re-seeded (a2 holds the role now).

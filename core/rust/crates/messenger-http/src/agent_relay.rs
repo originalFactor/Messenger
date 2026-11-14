@@ -310,6 +310,7 @@ mod tests {
 
     fn add_model(store: &Store, provider_id: &str, base_url: &str, id: &str, enabled: bool) {
         store.upsert_provider(&StoredProvider {
+            native_web_search: false,
             id: provider_id.into(), name: provider_id.into(), base_url: base_url.into(),
             api_key: format!("secret-{provider_id}"), api_format: "chat".into(), created_at: 1, updated_at: 1,
         }).unwrap();

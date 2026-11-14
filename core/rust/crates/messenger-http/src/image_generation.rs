@@ -638,6 +638,7 @@ mod tests {
         let store = Arc::new(Store::open(&dir.path().join("store.db")).unwrap());
         store
             .upsert_provider(&messenger_store::StoredProvider {
+                native_web_search: false,
                 id: "provider".into(),
                 name: "Test".into(),
                 base_url: server.uri(),

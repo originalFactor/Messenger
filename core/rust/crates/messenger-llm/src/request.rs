@@ -83,6 +83,8 @@ pub struct ToolSpecFunction {
 /// The chat completions request body.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChatCompletionRequest {
+    #[serde(skip)]
+    pub native_web_search: bool,
     pub model: String,
     pub messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -539,6 +541,7 @@ mod tests {
     #[test]
     fn request_serialization_omits_absent_fields() {
         let request = ChatCompletionRequest {
+            native_web_search: false,
             model: "m".into(),
             messages: vec![WireMessage::text("user", "hi")],
             temperature: None,

@@ -31,7 +31,12 @@ Event types:
 
 - `TurnStarted`
 - `StreamingStarted { messageId }`
-- `TextDelta { round, text }`
+- `TextDelta { round, text }` — provider-hosted web-search citations are projected
+  into clickable Markdown links and persisted with assistant text. Hosted search
+  runs on the provider; it never emits platform `ToolCallRequested` events.
+  Search errors in HTTP-200 Messages payloads and `pause_turn` produce terminal
+  `Error { code: "api", message }` with an assistant ERROR row; no automatic retry
+  or paused-turn continuation is performed.
 - `ReasoningFormatDetected { format }`
 - `RoundPersisted { round, messageId }`
 - `FinalMessagePersisted { messageId, content }`

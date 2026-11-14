@@ -81,7 +81,7 @@ pub fn request(source: &str, target: &str, body: &Value, model: &str) -> Result<
     }
     let mut tools=Vec::new();
     if let Some(items)=chat.get("tools") {for tool in array(items)? {let f=&tool["function"];tools.push(ToolSpec{kind:"function".into(),function:ToolSpecFunction{name:f["name"].as_str().ok_or("Missing tool name")?.into(),description:f["description"].as_str().unwrap_or("").into(),parameters:f["parameters"].clone()}});}}
-    Ok(formats::encode_request(ApiFormat::from_store(Some(target)), &ChatCompletionRequest {model:model.into(),messages,temperature:chat["temperature"].as_f64(),top_p:chat["top_p"].as_f64(),max_tokens:chat["max_tokens"].as_i64(),reasoning_effort:chat["reasoning_effort"].as_str().map(str::to_owned),thinking:None,tools:if tools.is_empty(){None}else{Some(tools)},stream:streaming}))
+    Ok(formats::encode_request(ApiFormat::from_store(Some(target)), &ChatCompletionRequest {native_web_search:false,model:model.into(),messages,temperature:chat["temperature"].as_f64(),top_p:chat["top_p"].as_f64(),max_tokens:chat["max_tokens"].as_i64(),reasoning_effort:chat["reasoning_effort"].as_str().map(str::to_owned),thinking:None,tools:if tools.is_empty(){None}else{Some(tools)},stream:streaming}))
 }
 
 pub fn response(source: &str, target: &str, payload: &Value, model: &str) -> Result<Value,String> {

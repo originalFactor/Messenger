@@ -1222,6 +1222,7 @@ mod tests {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
         for (id, format) in [("chat-model", "chat"), ("response-model", "responses"), ("message-model", "messages"), ("interaction-model", "interactions")] {
             state.store.upsert_provider(&StoredProvider {
+                native_web_search: false,
                 id: id.into(), name: id.into(), base_url: "https://example.invalid/v1".into(),
                 api_key: format!("upstream-secret-{id}"), api_format: format.into(), created_at: 1, updated_at: 1,
             }).unwrap();
@@ -1293,6 +1294,7 @@ mod tests {
     async fn codex_takeover_accepts_chat_models_for_conversion() {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
         state.store.upsert_provider(&StoredProvider {
+            native_web_search: false,
             id:"p".into(), name:"provider".into(), base_url:"https://example.invalid/v1".into(),
             api_key:"secret".into(), api_format:"chat".into(), created_at:1, updated_at:1,
         }).unwrap();
@@ -1317,6 +1319,7 @@ mod tests {
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
         state.store.upsert_provider(&StoredProvider {
+            native_web_search: false,
             id: "p".into(), name: "Provider".into(), base_url: "https://example.invalid/v1".into(),
             api_key: "upstream-secret".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
         }).unwrap();
@@ -1353,6 +1356,7 @@ mod tests {
     async fn takeover_starts_relay_before_launching_the_agent() {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "local");
         state.store.upsert_provider(&StoredProvider {
+            native_web_search: false,
             id:"p".into(), name:"provider".into(), base_url:"https://example.invalid/v1".into(),
             api_key:"upstream-secret".into(), api_format:"messages".into(), created_at:1, updated_at:1,
         }).unwrap();

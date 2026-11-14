@@ -7,7 +7,7 @@
 - `messenger-core` — agent loop (`run_chat_turn`), parts codec, context math, title helpers and conversation policy.
 - `messenger-llm` — four wire protocols (`chat`/`responses`/`messages`/`interactions`), streaming parser, tool-call accumulation, usage stashing, request builder and explicit OpenAI-compatible Images generation adapter.
 - `messenger-tools` — built-in terminal/workspace declarations and per-tool policy.
-- `messenger-store` — SQLite schema v8 (v7 cache-write rates; v8 independent local learning library), typed CRUD, store events, sync/kv bookkeeping and legacy Room import.
+- `messenger-store` — SQLite schema v9 (v7 cache-write rates; v8 independent local learning library; v9 native search opt-in), typed CRUD, store events, sync/kv bookkeeping and legacy Room import.
 - `messenger-sync` — paged delta sync, cloud auth/session handling, avatar caching, market/card APIs and model discovery.
 - `messenger-mcp` — JSON-RPC MCP client, configuration codec, pluggable stdio / SSE+HTTP transports and tool lifecycle. Kotlin also retains its platform MCP manager; do not assume this crate replaces the native UI inventory.
 - `messenger-remote` — cross-device project routing: `RemoteHub` holds the per-device cloud relay SSE connection (`/api/remote/*`), tracks which devices are online, forwards workspace tool calls to the project's owner and validates/executes inbound ones. Contract: `crates/messenger-http/docs/REMOTE.md`.
@@ -27,6 +27,13 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.
 - **`ApiState` is `Clone`, so its cleanup cannot be in `Drop`**: axum clones the state per request, and the first dropped clone used to `unsubscribe` the store listener, silently killing the change feed for every later subscriber. The registration lives in `StoreFeed`, held through an `Arc`, so it ends with the last clone.
 - Contracts: `crates/messenger-http/openapi.yaml` and `crates/messenger-http/docs/SSE.md`.
+
+## Provider-hosted web search
+
+- `StoredProvider.native_web_search` / SQLite `providers.nativeWebSearch` is a device-local opt-in, default false for new, migrated and cloud-imported Providers. Delta sync preserves the existing device value; cloud restore starts it off. It is deliberately omitted from Cloud documents/requests.
+- Native chat turns carry the Provider opt-in separately from client function tools. Responses adds `{"type":"web_search"}`; Messages adds the basic `web_search_20250305` tool with `max_uses: 5`. Other protocols fail before network access; never silently change protocols. Search runs independently of platform/MCP tool availability. Title generation and context summarization keep hosted search off.
+- Streaming/non-streaming citations become clickable Markdown in assistant text; provider search calls/results are not dispatched to a ToolHost. Hosted Messages errors inside HTTP 200 and `pause_turn` fail visibly without retry/automatic continuation. Provider-native encrypted search blocks are not persisted/replayed; subsequent turns carry the answer text and links. External ACP/Agent Relay tool configuration remains owned by the calling Agent.
+- API references: [OpenAI Web search](https://developers.openai.com/api/docs/guides/tools-web-search), [Anthropic Web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool).
 
 ## Remote projects
 

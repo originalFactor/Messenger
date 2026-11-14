@@ -94,6 +94,7 @@ pub struct TurnRequest {
     pub api_key: String,
     /// Wire protocol the provider speaks (`Provider.apiFormat`).
     pub api_format: messenger_llm::ApiFormat,
+    pub native_web_search: bool,
     pub system_prompt: String,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -206,6 +207,7 @@ pub async fn run_chat_turn(
         let sent_context_estimate = estimate_context_tokens(&context_state, &sent, Some(&request.system_prompt));
 
         let params = ChatTurnParams {
+            native_web_search: request.native_web_search,
             temperature: request.temperature,
             top_p: request.top_p,
             max_tokens: request.max_tokens,
@@ -507,6 +509,7 @@ async fn maybe_summarize_context(
 
     let client = OpenAiClient::with_format(&request.base_url, &request.api_key, request.api_format);
     let params = ChatTurnParams {
+        native_web_search: false,
         temperature: Some(0.3),
         top_p: Some(1.0),
         max_tokens: None,
@@ -731,6 +734,7 @@ async fn generate_title_if_needed(
 
     let transcript = build_title_transcript(&first_user.content, &first_assistant.content);
     let params = ChatTurnParams {
+        native_web_search: false,
         temperature: title_config.temperature,
         top_p: title_config.top_p,
         max_tokens: title_config.max_tokens,

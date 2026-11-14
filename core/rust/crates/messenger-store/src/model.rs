@@ -16,6 +16,9 @@ pub struct StoredProvider {
     /// turn resolves it to `chat` (the client is the one picking the format).
     #[serde(default = "default_api_format")]
     pub api_format: String,
+    /// Device-local opt-in for provider-hosted web search.
+    #[serde(default)]
+    pub native_web_search: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }

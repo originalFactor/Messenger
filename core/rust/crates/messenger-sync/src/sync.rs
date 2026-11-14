@@ -771,7 +771,10 @@ impl<'a> SyncEngine<'a> {
                     ids: vec![remote.id.clone()],
                 });
             } else {
-                let row = provider_document_to_row(remote);
+                let mut row = provider_document_to_row(remote);
+                // Cloud documents do not grant device-local hosted-search access.
+                row.native_web_search = self.store.get_provider(&row.id)
+                    .map_err(|e| e.to_string())?.is_some_and(|p| p.native_web_search);
                 self.store
                     .with_tx(|tx| {
                         tx.delete_models_by_provider_n(&remote.id)?;
@@ -925,6 +928,7 @@ impl<'a> SyncEngine<'a> {
                 ..existing
             },
             None => StoredProvider {
+                native_web_search: false,
                 id: BUILTIN_PROVIDER_ID.to_string(),
                 name: BUILTIN_PROVIDER_NAME.to_string(),
                 base_url,

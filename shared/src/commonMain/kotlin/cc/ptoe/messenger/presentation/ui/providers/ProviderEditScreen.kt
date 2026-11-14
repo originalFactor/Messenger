@@ -60,6 +60,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.domain.model.ApiFormat
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow
+import cc.ptoe.messenger.generated.resources.providers_native_search_title
+import cc.ptoe.messenger.generated.resources.providers_native_search_description
 import cc.ptoe.messenger.presentation.viewmodel.ProviderEditViewModel
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
@@ -223,6 +226,13 @@ fun ProviderEditScreen(
                 ApiFormatDropdown(
                     selected = uiState.apiFormat,
                     onSelect = viewModel::onApiFormatChange
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                ExpressiveSwitchRow(
+                    title = stringResource(Res.string.providers_native_search_title),
+                    subtitle = stringResource(Res.string.providers_native_search_description),
+                    checked = uiState.nativeWebSearch,
+                    onCheckedChange = viewModel::onNativeWebSearchChange
                 )
             }
         }

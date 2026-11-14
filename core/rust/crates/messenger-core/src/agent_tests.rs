@@ -136,6 +136,7 @@ fn seeded_store() -> Store {
     let store = Store::open_memory().unwrap();
     store
         .upsert_provider(&StoredProvider {
+            native_web_search: false,
             id: "p1".into(),
             name: "test".into(),
             base_url: "unused".into(),
@@ -217,6 +218,7 @@ fn seeded_store() -> Store {
 
 fn turn_request(base_url: &str) -> TurnRequest {
     TurnRequest {
+        native_web_search: false,
         conversation_id: "c1".into(),
         model_id: "test-model".into(),
         base_url: base_url.to_string(),
@@ -693,4 +695,47 @@ async fn turn_runs_against_a_messages_protocol_upstream() {
             .iter()
             .any(|event| matches!(event, AgentEvent::ReasoningFormatDetected { format } if format == "reasoning_summary"))
     );
+}
+
+
+#[tokio::test]
+async fn native_search_persists_citations_and_surfaces_hosted_errors_without_retry() {
+    for failure in [false, true] {
+        let server = wiremock::MockServer::start().await;
+        let records = if failure {
+            vec![serde_json::json!({"type":"content_block_start","index":1,"content_block":{
+                "type":"web_search_tool_result","content":{"type":"web_search_tool_result_error","error_code":"search_unavailable"}
+            }})]
+        } else {
+            vec![
+                serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Latest news."}}),
+                serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"url":"https://example.com/news","title":"News"}}}),
+                serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+            ]
+        };
+        let stream: String = records.iter().map(|r| format!("data: {r}\n\n")).collect();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/messages"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(stream))
+            .expect(1).mount(&server).await;
+        let store = seeded_store();
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let mut request = turn_request(&server.uri());
+        request.api_format = messenger_llm::ApiFormat::Messages;
+        request.native_web_search = true;
+        request.tools.clear();
+        run_chat_turn(&store, &StaticToolHost, &sink, &request, tokio_util::sync::CancellationToken::new()).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let sent: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(sent["tools"][0]["type"], "web_search_20250305");
+        let rows = store.list_messages_by_conversation("c1").unwrap();
+        if failure {
+            assert!(rows.iter().any(|r| r.status == "error" && r.error_message.as_deref().unwrap_or("").contains("search_unavailable")));
+            assert!(matches!(sink.0.lock().last(), Some(AgentEvent::Error { message, .. }) if message.contains("search_unavailable")));
+        } else {
+            assert!(rows.iter().any(|r| r.role == "assistant" && r.status == "sent" && r.content.contains("[News](<https://example.com/news>)")));
+            assert!(matches!(sink.0.lock().last(), Some(AgentEvent::Finished { .. })));
+        }
+    }
 }

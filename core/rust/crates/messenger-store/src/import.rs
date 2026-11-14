@@ -130,6 +130,7 @@ fn read_providers(legacy: &Connection) -> Result<Vec<StoredProvider>, rusqlite::
     let mut stmt = legacy.prepare("SELECT id, name, baseUrl, apiKey, createdAt, updatedAt FROM providers")?;
     let rows = stmt.query_map([], |row| {
         Ok(StoredProvider {
+            native_web_search: false,
             id: row.get(0)?,
             name: row.get(1)?,
             base_url: row.get(2)?,

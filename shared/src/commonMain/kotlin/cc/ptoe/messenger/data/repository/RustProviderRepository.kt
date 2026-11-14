@@ -84,6 +84,7 @@ class RustProviderRepository(
         baseUrl = baseUrl,
         apiKey = apiKey,
         apiFormat = ApiFormat.fromWireName(apiFormat),
+        nativeWebSearch = nativeWebSearch,
         createdAt = createdAt,
         updatedAt = updatedAt
     )
@@ -94,6 +95,7 @@ class RustProviderRepository(
         baseUrl = baseUrl,
         apiKey = apiKey,
         apiFormat = apiFormat.wireName,
+        nativeWebSearch = nativeWebSearch,
         createdAt = createdAt,
         updatedAt = updatedAt
     )

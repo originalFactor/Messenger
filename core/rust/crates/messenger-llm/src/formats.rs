@@ -73,14 +73,24 @@ impl ApiFormat {
 /// Encode the request for [format]. The `ChatCompletionRequest` carries the
 /// assembled messages/params; each protocol re-projects it.
 pub fn encode_request(format: ApiFormat, request: &ChatCompletionRequest) -> Value {
-    match format {
+    let mut body = match format {
         ApiFormat::Responses => encode_responses_request(request),
         ApiFormat::Messages => encode_messages_request(request),
         ApiFormat::Interactions => encode_interactions_request(request),
         ApiFormat::Chat => {
             serde_json::to_value(request).unwrap_or_else(|_| Value::Object(Map::new()))
         }
+    };
+    if request.native_web_search {
+        let tool = match format {
+            ApiFormat::Responses => json!({"type":"web_search"}),
+            ApiFormat::Messages => json!({"type":"web_search_20250305", "name":"web_search", "max_uses":5}),
+            _ => return body, // The transport rejects unsupported formats before sending.
+        };
+        body.as_object_mut().unwrap().entry("tools").or_insert_with(|| json!([]))
+            .as_array_mut().unwrap().push(tool);
     }
+    body
 }
 
 fn system_text(messages: &[WireMessage]) -> String {
@@ -537,6 +547,29 @@ fn decode_chat_response(payload: &Value) -> DecodedResponse {
     }
 }
 
+fn citation_link(citation: &Value) -> Option<String> {
+    let url = citation.get("url")?.as_str()?;
+    if !url.starts_with("https://") && !url.starts_with("http://") { return None; }
+    let url = url.replace(' ', "%20").replace('<', "%3C").replace('>', "%3E")
+        .replace('\n', "%0A").replace('\r', "%0D");
+    let title = citation.get("title").and_then(Value::as_str).unwrap_or("Source")
+        .replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]")
+        .replace(['\n', '\r'], " ");
+    Some(format!(" [{title}](<{url}>)"))
+}
+
+/// Hosted-tool errors may arrive inside an HTTP 200 response.
+pub(crate) fn hosted_search_error(payload: &Value) -> Option<String> {
+    if payload.get("type").and_then(Value::as_str) == Some("web_search_tool_result_error") {
+        return Some(format!("Native web search failed: {}", payload.get("error_code").and_then(Value::as_str).unwrap_or("unknown_error")));
+    }
+    match payload {
+        Value::Array(items) => items.iter().find_map(hosted_search_error),
+        Value::Object(fields) => fields.values().find_map(hosted_search_error),
+        _ => None,
+    }
+}
+
 fn decode_responses_response(payload: &Value) -> DecodedResponse {
     let mut text = String::new();
     let mut reasoning = String::new();
@@ -572,6 +605,9 @@ fn decode_responses_response(payload: &Value) -> DecodedResponse {
                 for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
                     if part.get("type").and_then(Value::as_str) == Some("output_text") {
                         text.push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
+                        for citation in part.get("annotations").and_then(Value::as_array).into_iter().flatten() {
+                            if let Some(link) = citation_link(citation) { text.push_str(&link); }
+                        }
                     }
                 }
             }
@@ -611,7 +647,12 @@ fn decode_messages_response(payload: &Value) -> DecodedResponse {
     let mut tool_calls = Vec::new();
     for block in payload.get("content").and_then(Value::as_array).into_iter().flatten() {
         match block.get("type").and_then(Value::as_str) {
-            Some("text") => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
+            Some("text") => {
+                text.push_str(block.get("text").and_then(Value::as_str).unwrap_or(""));
+                for citation in block.get("citations").and_then(Value::as_array).into_iter().flatten() {
+                    if let Some(link) = citation_link(citation) { text.push_str(&link); }
+                }
+            },
             Some("thinking") => {
                 reasoning.push_str(block.get("thinking").and_then(Value::as_str).unwrap_or(""))
             }
@@ -744,6 +785,7 @@ pub struct FormatStreamDecoder {
     reasoning_emitted: bool,
     in_think_block: bool,
     finished: bool,
+    citations: std::collections::HashSet<String>,
 }
 
 impl FormatStreamDecoder {
@@ -859,9 +901,18 @@ impl FormatStreamDecoder {
         vec![ChatStreamEvent::Content("</think>\n".to_string())]
     }
 
+    fn emit_citation(&mut self, citation: &Value, events: &mut Vec<ChatStreamEvent>) {
+        if let Some(link) = citation_link(citation) {
+            if self.citations.insert(link.clone()) { self.text(&link, events); }
+        }
+    }
+
     fn feed_responses(&mut self, record: &Value) -> Vec<ChatStreamEvent> {
         let mut events = Vec::new();
         match record.get("type").and_then(Value::as_str) {
+            Some("response.output_text.annotation.added") => {
+                self.emit_citation(record.get("annotation").unwrap_or(&Value::Null), &mut events);
+            }
             Some("response.output_text.delta") => {
                 if let Some(text) = record.get("delta").and_then(Value::as_str) {
                     self.text(text, &mut events);
@@ -917,6 +968,11 @@ impl FormatStreamDecoder {
                     ));
                 }
                 for item in response.get("output").and_then(Value::as_array).into_iter().flatten() {
+                    for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
+                        for citation in part.get("annotations").and_then(Value::as_array).into_iter().flatten() {
+                            self.emit_citation(citation, &mut events);
+                        }
+                    }
                     if item.get("type").and_then(Value::as_str) != Some("function_call") {
                         continue;
                     }
@@ -987,6 +1043,13 @@ impl FormatStreamDecoder {
             }
             Some("content_block_start") => {
                 let block = record.get("content_block").unwrap_or(&Value::Null);
+                if let Some(error) = hosted_search_error(block) {
+                    self.finished = true;
+                    return vec![ChatStreamEvent::Error(error)];
+                }
+                for citation in block.get("citations").and_then(Value::as_array).into_iter().flatten() {
+                    self.emit_citation(citation, &mut events);
+                }
                 if block.get("type").and_then(Value::as_str) == Some("tool_use") {
                     let index = record.get("index").and_then(Value::as_i64).unwrap_or(0);
                     self.partial.insert(
@@ -1010,6 +1073,9 @@ impl FormatStreamDecoder {
             Some("content_block_delta") => {
                 let delta = record.get("delta").unwrap_or(&Value::Null);
                 match delta.get("type").and_then(Value::as_str) {
+                    Some("citations_delta") => {
+                        self.emit_citation(delta.get("citation").unwrap_or(&Value::Null), &mut events);
+                    }
                     Some("text_delta") => {
                         if let Some(text) = delta.get("text").and_then(Value::as_str) {
                             self.text(text, &mut events);
@@ -1026,7 +1092,8 @@ impl FormatStreamDecoder {
                             .get("partial_json")
                             .and_then(Value::as_str)
                             .unwrap_or("");
-                        self.partial.entry(index).or_default().2.push_str(partial);
+                        // Server-side search input is not a client function call.
+                        if let Some(entry) = self.partial.get_mut(&index) { entry.2.push_str(partial); }
                     }
                     _ => {}
                 }
@@ -1056,6 +1123,10 @@ impl FormatStreamDecoder {
                     .and_then(|delta| delta.get("stop_reason"))
                     .and_then(Value::as_str)
                 {
+                    if reason == "pause_turn" {
+                        self.finished = true;
+                        return vec![ChatStreamEvent::Error("Native web search paused by provider (pause_turn); automatic continuation is not enabled.".into())];
+                    }
                     let tool_calls = self.complete_tool_calls();
                     let finish = normalize_finish(Some(reason), !tool_calls.is_empty());
                     events.extend(self.close_think_block());
@@ -1134,7 +1205,8 @@ impl FormatStreamDecoder {
                             .get("arguments")
                             .and_then(Value::as_str)
                             .unwrap_or("");
-                        self.partial.entry(index).or_default().2.push_str(partial);
+                        // Server-side search input is not a client function call.
+                        if let Some(entry) = self.partial.get_mut(&index) { entry.2.push_str(partial); }
                     }
                     _ => {}
                 }
@@ -1224,6 +1296,7 @@ mod tests {
 
     fn request() -> ChatCompletionRequest {
         ChatCompletionRequest {
+            native_web_search: false,
             model: "m1".into(),
             messages: vec![
                 WireMessage::text("system", "be nice"),
@@ -1506,4 +1579,69 @@ mod tests {
             vec![("x-goog-api-key", "sk-2".to_string())]
         );
     }
+
+    #[test]
+    fn native_search_is_opt_in_and_coexists_with_function_tools() {
+        let mut request = request();
+        for format in [ApiFormat::Responses, ApiFormat::Messages] {
+            let off = encode_request(format, &request);
+            assert_eq!(off["tools"].as_array().unwrap().len(), 1);
+        }
+        request.native_web_search = true;
+        let responses = encode_request(ApiFormat::Responses, &request);
+        assert_eq!(responses["tools"][0]["type"], "function");
+        assert_eq!(responses["tools"][1], json!({"type":"web_search"}));
+        let messages = encode_request(ApiFormat::Messages, &request);
+        assert_eq!(messages["tools"][1]["type"], "web_search_20250305");
+        request.tools = None;
+        assert_eq!(encode_request(ApiFormat::Responses, &request)["tools"], json!([{"type":"web_search"}]));
+        assert!(encode_request(ApiFormat::Chat, &request).get("native_web_search").is_none());
+    }
+
+    #[test]
+    fn responses_search_citations_survive_stream_and_snapshot_without_duplicates() {
+        let citation = json!({"type":"url_citation","url":"https://example.com/news","title":"News"});
+        let snapshot = json!({"status":"completed", "output":[
+            {"type":"web_search_call", "id":"search-1", "status":"completed"},
+            {"type":"message", "content":[{"type":"output_text","text":"Today.","annotations":[citation.clone()]}]}
+        ]});
+        assert_eq!(decode_response(ApiFormat::Responses, &snapshot).text, "Today. [News](<https://example.com/news>)");
+        let mut decoder = FormatStreamDecoder::new(ApiFormat::Responses);
+        let mut events = decoder.feed(&json!({"type":"response.output_text.delta","delta":"Today."}).to_string());
+        events.extend(decoder.feed(&json!({"type":"response.output_text.annotation.added","annotation":citation}).to_string()));
+        events.extend(decoder.feed(&json!({"type":"response.completed","response":snapshot}).to_string()));
+        let content: String = events.iter().filter_map(|e| if let ChatStreamEvent::Content(t) = e {Some(t.as_str())} else {None}).collect();
+        assert_eq!(content, "Today. [News](<https://example.com/news>)");
+        assert!(events.iter().any(|e| matches!(e, ChatStreamEvent::Done { tool_calls, .. } if tool_calls.is_empty())));
+    }
+
+    #[test]
+    fn messages_server_search_is_never_dispatched_as_a_client_tool() {
+        let mut decoder = FormatStreamDecoder::new(ApiFormat::Messages);
+        let records = [
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"s1","name":"web_search"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"news\"}"}}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Answer"}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com","title":"Example"}}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+        ];
+        let events: Vec<_> = records.iter().flat_map(|r| decoder.feed(&r.to_string())).collect();
+        assert!(events.iter().any(|e| matches!(e, ChatStreamEvent::Content(t) if t.contains("https://example.com"))));
+        assert!(events.iter().any(|e| matches!(e, ChatStreamEvent::Done {tool_calls, ..} if tool_calls.is_empty())));
+        assert!(!events.iter().any(|e| matches!(e, ChatStreamEvent::Error(_))));
+    }
+
+    #[test]
+    fn messages_search_failure_and_pause_are_visible_errors() {
+        let mut decoder = FormatStreamDecoder::new(ApiFormat::Messages);
+        let events = decoder.feed(&json!({"type":"content_block_start","content_block":{
+            "type":"web_search_tool_result","content":{"type":"web_search_tool_result_error","error_code":"overloaded"}
+        }}).to_string());
+        assert!(matches!(&events[0], ChatStreamEvent::Error(e) if e.contains("overloaded")));
+        let mut decoder = FormatStreamDecoder::new(ApiFormat::Messages);
+        assert!(matches!(&decoder.feed(&json!({"type":"message_delta","delta":{"stop_reason":"pause_turn"}}).to_string())[0], ChatStreamEvent::Error(e) if e.contains("pause_turn")));
+        assert!(citation_link(&json!({"url":"javascript:alert(1)"})).is_none());
+    }
+
 }

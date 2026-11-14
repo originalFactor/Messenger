@@ -26,6 +26,7 @@ pub struct ToolDeclaration {
 /// Sampling/request parameters for one turn.
 #[derive(Debug, Clone, Default)]
 pub struct ChatTurnParams {
+    pub native_web_search: bool,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub max_tokens: Option<i64>,
@@ -61,6 +62,7 @@ fn build_request(
             .collect()
     });
     ChatCompletionRequest {
+        native_web_search: params.native_web_search,
         model: model_id.to_string(),
         messages: request_messages,
         temperature: params.temperature,

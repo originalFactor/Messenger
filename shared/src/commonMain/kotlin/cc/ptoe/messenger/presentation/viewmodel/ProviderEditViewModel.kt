@@ -44,6 +44,7 @@ data class ProviderEditUiState(
     val baseUrl: String = "",
     val apiKey: String = "",
     val apiFormat: ApiFormat = ApiFormat.CHAT,
+    val nativeWebSearch: Boolean = false,
     val nameError: String? = null,
     val baseUrlError: String? = null,
     val apiKeyError: String? = null,
@@ -110,6 +111,7 @@ class ProviderEditViewModel(
                         baseUrl = provider.baseUrl,
                         apiKey = provider.apiKey,
                         apiFormat = provider.apiFormat,
+                        nativeWebSearch = provider.nativeWebSearch,
                         isEditing = true
                     )
                 }
@@ -140,6 +142,10 @@ class ProviderEditViewModel(
 
     fun onApiFormatChange(apiFormat: ApiFormat) {
         _uiState.value = _uiState.value.copy(apiFormat = apiFormat)
+    }
+
+    fun onNativeWebSearchChange(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(nativeWebSearch = enabled)
     }
 
     fun save(): Boolean {
@@ -185,6 +191,7 @@ class ProviderEditViewModel(
                         baseUrl = currentState.baseUrl.trim(),
                         apiKey = currentState.apiKey.trim(),
                         apiFormat = currentState.apiFormat,
+                        nativeWebSearch = currentState.nativeWebSearch,
                         updatedAt = now
                     )
                     providerRepository.update(updatedProvider)
@@ -197,6 +204,7 @@ class ProviderEditViewModel(
                     baseUrl = currentState.baseUrl.trim(),
                     apiKey = currentState.apiKey.trim(),
                     apiFormat = currentState.apiFormat,
+                    nativeWebSearch = currentState.nativeWebSearch,
                     createdAt = now,
                     updatedAt = now
                 )

@@ -56,6 +56,13 @@ impl OpenAiClient {
         }
     }
 
+    fn validate_search(&self, request: &ChatCompletionRequest) -> Result<(), ApiError> {
+        if request.native_web_search && !matches!(self.format, ApiFormat::Responses | ApiFormat::Messages) {
+            return Err(ApiError::InvalidBody("Native web search requires a Responses or Messages provider. Change the provider protocol or disable native web search.".into()));
+        }
+        Ok(())
+    }
+
     pub fn format(&self) -> ApiFormat {
         self.format
     }
@@ -73,6 +80,7 @@ impl OpenAiClient {
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<DecodedResponse, ApiError> {
+        self.validate_search(request)?;
         let body = encode_request(self.format, request);
         let response = self
             .request(Method::POST, self.format.path(), Some(body))
@@ -81,6 +89,12 @@ impl OpenAiClient {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| ApiError::InvalidBody(e.to_string()))?;
+        if let Some(error) = crate::formats::hosted_search_error(&payload) {
+            return Err(ApiError::InvalidBody(error));
+        }
+        if payload.get("stop_reason").and_then(serde_json::Value::as_str) == Some("pause_turn") {
+            return Err(ApiError::InvalidBody("Native web search paused by provider (pause_turn); automatic continuation is not enabled.".into()));
+        }
         Ok(decode_response(self.format, &payload))
     }
 
@@ -91,6 +105,7 @@ impl OpenAiClient {
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ApiError> {
+        self.validate_search(request)?;
         let body = encode_request(self.format, request);
         let response = self
             .request(Method::POST, self.format.path(), Some(body))
@@ -107,6 +122,7 @@ impl OpenAiClient {
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatStream, ApiError> {
+        self.validate_search(request)?;
         let mut body = encode_request(self.format, request);
         if self.format == ApiFormat::Chat {
             // Ask the upstream for a usage chunk; providers that ignore the
@@ -462,6 +478,7 @@ mod tests {
 
     fn sample_request() -> ChatCompletionRequest {
         ChatCompletionRequest {
+            native_web_search: false,
             model: "test-model".into(),
             messages: vec![crate::request::WireMessage::text("user", "hi")],
             temperature: None,
@@ -473,4 +490,18 @@ mod tests {
             stream: true,
         }
     }
+
+    #[tokio::test]
+    async fn native_search_rejects_unsupported_protocol_without_sending_a_request() {
+        let server = wiremock::MockServer::start().await;
+        let mut request = sample_request();
+        request.native_web_search = true;
+        for format in [ApiFormat::Chat, ApiFormat::Interactions] {
+            let client = OpenAiClient::with_format(&server.uri(), "sk", format);
+            assert!(client.stream_chat_completion(&request).await.err().unwrap().to_string().contains("Responses or Messages"));
+            assert!(client.create_completion(&request).await.err().unwrap().to_string().contains("Responses or Messages"));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
 }

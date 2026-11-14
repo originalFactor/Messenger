@@ -47,6 +47,7 @@ data class Provider(
     val baseUrl: String,
     val apiKey: String,
     val apiFormat: ApiFormat = ApiFormat.CHAT,
+    val nativeWebSearch: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 ) {

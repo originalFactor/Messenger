@@ -589,4 +589,6 @@
     <string name="settings_license_core">Rust Core</string>
     <string name="settings_license_notices">源码声明</string>
     <string name="settings_license_link_error">无法打开链接，请检查是否有可用的浏览器。</string>
+    <string name="providers_native_search_title">原生联网搜索</string>
+    <string name="providers_native_search_description">允许支持的模型通过此服务商搜索网页。需要 Responses 或 Messages 协议，每台设备默认关闭。</string>
 </resources>

@@ -590,4 +590,6 @@
     <string name="settings_license_core">Rust Core</string>
     <string name="settings_license_notices">Source notices</string>
     <string name="settings_license_link_error">Unable to open the link. Please check that a browser is available.</string>
+    <string name="providers_native_search_title">Native web search</string>
+    <string name="providers_native_search_description">Let supported models search the web through this provider. Requires Responses or Messages. Off by default on each device.</string>
 </resources>

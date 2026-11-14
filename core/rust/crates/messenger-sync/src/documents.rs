@@ -151,6 +151,7 @@ pub fn model_document_to_row(doc: &CloudModelDocument, provider_id: &str) -> Sto
 
 pub fn provider_document_to_row(doc: &CloudProviderDocument) -> StoredProvider {
     StoredProvider {
+        native_web_search: false,
         id: doc.id.clone(),
         name: doc.name.clone(),
         base_url: doc.base_url.clone(),
@@ -310,6 +311,7 @@ mod tests {
         let row = model_document_to_row(&document, "p");
         assert_eq!(row.cache_write_rate, Some(1.25));
         let provider = StoredProvider {
+            native_web_search: false,
             id: "p".into(), name: "Provider".into(), base_url: "http://localhost".into(),
             api_key: "test".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
         };

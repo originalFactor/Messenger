@@ -1,8 +1,19 @@
-//! DDL for schema version 8. Column names intentionally mirror the legacy
+//! DDL for schema version 9. Column names intentionally mirror the legacy
 //! Room v20 schema so the import can copy rows verbatim; `projects` and
 //! `conversations.projectId` are the v2 additions.
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
+
+/// v8 -> v9: device-local opt-in for provider-hosted search. Existing rows stay off.
+pub fn add_provider_native_web_search_column(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(providers)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|name| name == "nativeWebSearch") {
+        conn.execute("ALTER TABLE providers ADD COLUMN nativeWebSearch INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+    Ok(())
+}
 
 /// v1 → v2: add the `projectId` column to an existing `conversations`
 /// table. Applied only when the column is absent (fresh databases get it
@@ -110,6 +121,7 @@ pub const CREATE_TABLES: &[&str] = &[
         baseUrl TEXT NOT NULL,
         apiKey TEXT NOT NULL,
         apiFormat TEXT NOT NULL DEFAULT 'chat',
+        nativeWebSearch INTEGER NOT NULL DEFAULT 0,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
     )",

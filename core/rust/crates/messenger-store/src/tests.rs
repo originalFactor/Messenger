@@ -13,6 +13,7 @@ use crate::store::{EntityKind, Store};
 
 fn sample_provider(id: &str) -> StoredProvider {
     StoredProvider {
+        native_web_search: false,
         id: id.to_string(),
         name: "OpenRouter".into(),
         base_url: "https://openrouter.ai/api/v1".into(),
@@ -628,6 +629,7 @@ fn v2_database_gains_the_provider_api_format_column() {
     let store = Store::open(&path).unwrap();
     let provider = store.get_provider("p1").unwrap().unwrap();
     assert_eq!(provider.api_format, "chat");
+    assert!(!provider.native_web_search);
 }
 
 #[test]
@@ -803,4 +805,26 @@ fn v6_models_gain_cache_write_rate_and_preserve_zero_on_reopen() {
     assert_eq!(store.get_model("m").unwrap().unwrap().cache_write_rate, Some(0.0));
     let conn = rusqlite::Connection::open(&path).unwrap();
     assert_eq!(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), crate::schema::SCHEMA_VERSION);
+}
+
+
+#[test]
+fn native_search_defaults_off_and_persists_both_toggle_directions() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("search.db");
+    let store = Store::open(&path).unwrap();
+    let mut provider = sample_provider("search");
+    store.upsert_provider(&provider).unwrap();
+    assert!(!store.get_provider("search").unwrap().unwrap().native_web_search);
+    provider.native_web_search = true;
+    store.upsert_provider(&provider).unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert!(store.list_providers().unwrap()[0].native_web_search);
+    provider.native_web_search = false;
+    store.upsert_provider(&provider).unwrap();
+    assert!(!store.get_provider("search").unwrap().unwrap().native_web_search);
+    let mut old_payload = serde_json::to_value(&provider).unwrap();
+    old_payload.as_object_mut().unwrap().remove("native_web_search");
+    assert!(!serde_json::from_value::<StoredProvider>(old_payload).unwrap().native_web_search);
 }

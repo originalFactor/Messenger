@@ -1406,7 +1406,7 @@ mod tests {
                 .unwrap()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            8
+            crate::schema::SCHEMA_VERSION
         );
         let package = store.export_learning().unwrap();
         let dest = Store::open_memory().unwrap();

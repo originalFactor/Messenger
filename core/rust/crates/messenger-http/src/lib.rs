@@ -2714,6 +2714,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
             })
         });
     let turn = TurnRequest {
+        native_web_search: provider.native_web_search,
         conversation_id: conversation.id,
         model_id: model.model_id,
         base_url: provider.base_url,
@@ -3094,6 +3095,7 @@ mod tests {
         let state = test_state();
         let builtin = messenger_sync::models::BUILTIN_PROVIDER_ID;
         let provider = StoredProvider {
+            native_web_search: false,
             id: builtin.into(), name: "Cloud".into(), base_url: "http://localhost/v1".into(),
             api_key: "test".into(), api_format: "chat".into(), created_at: 1, updated_at: 1,
         };
@@ -3533,6 +3535,7 @@ mod tests {
         state
             .store
             .upsert_provider(&StoredProvider {
+                native_web_search: false,
                 id: "p1".into(),
                 name: "test".into(),
                 base_url: base_url.into(),
@@ -4111,6 +4114,7 @@ mod tests {
         state
             .store
             .upsert_provider(&StoredProvider {
+                native_web_search: false,
                 id: "p1".into(),
                 name: "p".into(),
                 base_url: "http://localhost".into(),

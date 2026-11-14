@@ -132,6 +132,7 @@ mod tests {
 
         store
             .upsert_provider(&StoredProvider {
+                native_web_search: false,
                 id: BUILTIN_PROVIDER_ID.into(),
                 name: "Builtin".into(),
                 base_url: format!("{}/v1", server.uri()),
@@ -225,6 +226,7 @@ mod tests {
 
         store
             .upsert_provider(&StoredProvider {
+                native_web_search: false,
                 id: BUILTIN_PROVIDER_ID.into(),
                 name: "Builtin".into(),
                 base_url: format!("{}/v1", server.uri()),

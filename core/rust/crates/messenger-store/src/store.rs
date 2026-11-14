@@ -85,6 +85,7 @@ impl Store {
         if !crate::schema::has_project_device_id_column(&conn)? {
             conn.execute_batch(crate::schema::ADD_PROJECT_DEVICE_ID_COLUMN)?;
         }
+        crate::schema::add_provider_native_web_search_column(&conn)?;
         crate::schema::add_model_metadata_columns(&conn)?;
         crate::schema::add_model_cache_write_rate_column(&conn)?;
         conn.execute_batch(crate::schema::CREATE_PROJECT_ID_INDEX)?;
@@ -132,7 +133,7 @@ impl Store {
 
     pub fn list_providers(&self) -> Result<Vec<StoredProvider>, rusqlite::Error> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare_cached("SELECT id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt FROM providers ORDER BY createdAt")?;
+            let mut stmt = conn.prepare_cached("SELECT id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt, nativeWebSearch FROM providers ORDER BY createdAt")?;
             let rows = stmt.query_map([], map_provider)?;
             rows.collect()
         })
@@ -140,7 +141,7 @@ impl Store {
 
     pub fn get_provider(&self, id: &str) -> Result<Option<StoredProvider>, rusqlite::Error> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare_cached("SELECT id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt FROM providers WHERE id = ?1")?;
+            let mut stmt = conn.prepare_cached("SELECT id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt, nativeWebSearch FROM providers WHERE id = ?1")?;
             let mut rows = stmt.query_map([id], map_provider)?;
             rows.next().transpose()
         })
@@ -841,6 +842,7 @@ fn upsert_project_sql(conn: &Connection, p: &StoredProject) -> Result<(), rusqli
 }
 fn map_provider(row: &rusqlite::Row<'_>) -> Result<StoredProvider, rusqlite::Error> {
     Ok(StoredProvider {
+        native_web_search: row.get(7)?,
         id: row.get(0)?,
         name: row.get(1)?,
         base_url: row.get(2)?,
@@ -987,9 +989,9 @@ fn message_params(m: &StoredMessage) -> Result<Vec<&dyn rusqlite::ToSql>, rusqli
 
 fn upsert_provider_sql(conn: &Connection, p: &StoredProvider) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO providers (id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(id) DO UPDATE SET name=?2, baseUrl=?3, apiKey=?4, apiFormat=?5, updatedAt=?7",
+        "INSERT INTO providers (id, name, baseUrl, apiKey, apiFormat, createdAt, updatedAt, nativeWebSearch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET name=?2, baseUrl=?3, apiKey=?4, apiFormat=?5, updatedAt=?7, nativeWebSearch=?8",
         rusqlite::params![
             p.id,
             p.name,
@@ -997,7 +999,8 @@ fn upsert_provider_sql(conn: &Connection, p: &StoredProvider) -> Result<(), rusq
             p.api_key,
             p.api_format,
             p.created_at,
-            p.updated_at
+            p.updated_at,
+            p.native_web_search
         ],
     )?;
     Ok(())

@@ -254,6 +254,7 @@ data class StoredProviderDto(
     @SerialName("base_url") val baseUrl: String,
     @SerialName("api_key") val apiKey: String,
     @SerialName("api_format") val apiFormat: String = "chat",
+    @SerialName("native_web_search") val nativeWebSearch: Boolean = false,
     @SerialName("created_at") val createdAt: Long,
     @SerialName("updated_at") val updatedAt: Long,
 )
