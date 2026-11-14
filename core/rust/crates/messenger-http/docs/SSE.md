@@ -78,6 +78,13 @@ Unknown versions/types/fields must survive round trips unchanged and fall back t
 readable `output`. Dropping the SSE connection cancels
 the turn and wakes any pending tool host with a cancellation result.
 
+For a projectless turn, the client may create an execution-host temporary
+directory and pass its path as `workspacePath` in the chat request. Core
+declares eligible workspace tools and appends the path and its temporary nature
+to the system prompt; the client executes calls in that same directory. A
+project's stored workspace takes precedence. Clients own temporary directory
+lifecycle; no directory or filesystem instruction file is read by Core.
+
 ## Local learning, assets, applications and image generation
 
 These services reuse `change` with `kind: "Other"`; there are no new event types

@@ -396,6 +396,7 @@ class Messenger(App):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self.chat.close()
 
     def scroll_history(self, key: str) -> None:
         view = self.history_view
@@ -430,15 +431,12 @@ class Messenger(App):
             case "project":
                 self.start(self.open_project)
             case "tools":
-                if not self.chat.project:
-                    self.chat.status("Open a trusted workspace with /project before enabling tools.", True)
-                else:
-                    choices = [
-                        Choice("read", "Enable tools", "Inspection mode; terminal uses your user permissions"),
-                        Choice("write", "Enable tools with file editing", "Allows edit/create and terminal changes"),
-                        Choice("off", "Disable tools"),
-                    ]
-                    self.push_screen(Picker("Conversation tools", choices, ""), self.pick_tools)
+                choices = [
+                    Choice("read", "Enable tools", "Inspection mode; terminal uses your user permissions"),
+                    Choice("write", "Enable tools with file editing", "Allows edit/create and terminal changes"),
+                    Choice("off", "Disable tools"),
+                ]
+                self.push_screen(Picker("Conversation tools", choices, ""), self.pick_tools)
             case "cloud":
                 self.start(self.open_cloud)
             case "sync":

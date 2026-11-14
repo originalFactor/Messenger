@@ -40,6 +40,8 @@ interface ShellRuntimeBridge {
     /** Whether the companion app is installed (cheap PackageManager check). */
     fun isInstalled(): Boolean
 
+    suspend fun temporaryChatWorkspace(conversationId: String): String
+
     // Workspace-confined file operations. The workspace lives in the
     // companion's own data directory (own UID), so the main app reaches it
     // only through these calls.

@@ -288,9 +288,12 @@ class CloudCoreTest(unittest.IsolatedAsyncioTestCase):
                     app.screen.query_one(Checkbox).value = False
                     await pilot.click("#save-model")
                     await app.workers.wait_for_complete()
+                    self.assertIsInstance(app.screen, ModelEditor)
+                    self.assertIn("builtin_catalog_read_only", str(app.screen.query_one("#model-result", Static).content))
+                    await pilot.press("escape")
                     await pilot.click("#fetch-models")
                     await app.workers.wait_for_complete()
-                    self.assertFalse(chat.model["is_enabled"])
+                    self.assertTrue(chat.model["is_enabled"])
                     await pilot.press("escape", "escape", "/", "c", "l", "enter")
                     self.assertIsInstance(app.screen, CloudDialog)
                     app.screen.query_one("#cloud-url", Input).value = second_url

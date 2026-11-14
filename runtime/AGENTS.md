@@ -19,6 +19,7 @@ The agent-tool host and terminal UI for Android. Runs under its OWN UID with **t
 
 - `submit` / `cancel` — agent tool commands (per-request jobs; the binding must stay alive for the WHOLE request or the cached-app freezer can suspend the companion mid-work).
 - `workspace{Glob,Grep,Read,Edit,Create}(root, …)` — synchronous, return a `ToolResult` Parcelable (`WorkspaceOps`). Every method takes a leading workspace `root`. An explicit non-blank root must be an existing directory or the call reports "unavailable"; null/blank uses the companion's own workspace. Project-bound callers must pass their actual root so an unavailable project cannot silently operate elsewhere.
+- `temporaryChatWorkspace(conversationId)` creates a per-conversation directory under the Runtime cache, keyed by a hash of the ID. The main app passes that path to Core and to the Runtime tools, so both execute under the companion UID. Cached contents can be cleared by the OS.
 - `startMcpProcess` / `sendMcpInput` / `stopMcpProcess` — stdio MCP for the main app's `McpManager`.
 - No session API: the terminal UI is in-process (see below).
 

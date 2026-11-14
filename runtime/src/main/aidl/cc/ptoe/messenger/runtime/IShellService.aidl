@@ -34,4 +34,5 @@ interface IShellService {
     boolean startAcpProcess(int sessionId, String executable, in String[] arguments, String envJson, String cwd, IMcpCallback callback);
     boolean sendAcpInput(int sessionId, String line);
     void stopAcpProcess(int sessionId);
+    String temporaryChatWorkspace(String conversationId);
 }

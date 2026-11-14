@@ -624,6 +624,7 @@ class RestCoreBridge(
                 buildJsonObject {
                     put("operation", config.operation)
                     if (config.disableTools) put("disableTools", true)
+                    config.workspacePath?.let { put("workspacePath", it) }
                     config.content?.let { put("content", it) }
                     config.partsJson?.let { put("partsJson", it) }
                     config.messageId?.let { put("messageId", it) }

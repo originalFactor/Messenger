@@ -2208,6 +2208,8 @@ pub struct ChatRequest {
     pub message_id: Option<String>,
     #[serde(default)]
     pub tool_specs: Vec<ToolSpecRequest>,
+    /// Execution host's temporary workspace for a projectless conversation.
+    pub workspace_path: Option<String>,
     #[serde(skip)]
     no_agent_delegation: bool,
 }
@@ -2673,13 +2675,17 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
     let project = conversation.project_id.as_deref()
         .map(|id| state.store.get_project(id))
         .transpose().map_err(ApiError::store)?.flatten();
+    let workspace = project.as_ref().map(|p| p.workspace.as_str()).or_else(|| {
+        (!detached).then_some(request.workspace_path.as_deref()).flatten()
+            .filter(|path| !path.trim().is_empty())
+    });
     let mut tools = if request.disable_tools {
         Vec::new()
     } else if detached {
         let catalog = state.platform_catalog.lock().await;
         configured_tools(&agent, conversation.writable, project.is_some() && catalog.workspace_supported, &catalog.tools)
     } else {
-        configured_tools(&agent, conversation.writable, project.is_some(), &request.tool_specs)
+        configured_tools(&agent, conversation.writable, workspace.is_some(), &request.tool_specs)
     };
     if !request.disable_tools && !request.no_agent_delegation && agent.tools_enabled
         && delegation::enabled(&state.store)
@@ -2728,7 +2734,14 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
             .override_reasoning_effort
             .or(agent.reasoning_effort),
         tools,
-        workspace_note: String::new(),
+        workspace_note: workspace.map(|path| {
+            let quoted = serde_json::to_string(path).unwrap_or_default();
+            if project.is_some() {
+                format!("The working directory for this project is {quoted}. Relative paths in terminal and file tools resolve there.")
+            } else {
+                format!("This conversation has no project. Its temporary working directory is {quoted}; relative paths in terminal and file tools resolve there. Temporary files may be removed, so do not rely on them for durable storage.")
+            }
+        }).unwrap_or_default(),
         context_window: model.context_window,
         summarize_prompt:
             "Summarize the conversation while preserving decisions, facts, and open tasks.".into(),
@@ -2850,8 +2863,9 @@ fn configured_tools(
     }
     let config =
         serde_json::from_str::<HashMap<String, bool>>(&agent.tools_config).unwrap_or_default();
-    let mut tools: Vec<_> = messenger_tools::builtin_registry()
-        .into_iter()
+    let registry = messenger_tools::builtin_registry();
+    let mut tools: Vec<_> = registry
+        .iter().cloned()
         .filter(|tool| config.get(&tool.name).copied().unwrap_or(true))
         .filter(|tool| has_workspace || !tool.workspace_required)
         .collect();
@@ -2859,6 +2873,9 @@ fn configured_tools(
         // Reserved for the Core-owned tool; a client declaration must not
         // bypass the setting or re-enable delegation in a child turn.
         if is_reserved_tool(&spec.name) { continue; }
+        // Built-ins must never be reintroduced as unrestricted client tools
+        // after workspace or writable policy filtered their declarations.
+        if registry.iter().any(|tool| tool.name == spec.name) { continue; }
         if config.get(&spec.name).copied() == Some(false) {
             continue;
         }
@@ -3301,6 +3318,47 @@ mod tests {
             seen.push_str(&String::from_utf8_lossy(&chunk.expect("the feed must stay open")));
         }
         server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_context_reaches_provider_for_project_and_projectless_turns() {
+        for (project_path, temporary_path) in [(None, Some("/temporary/chat")), (None, None), (Some("/project"), Some("/ignored"))] {
+            let provider = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+                .mount(&provider).await;
+            let state = test_state();
+            seed_text_chat(&state, &provider.uri());
+            let mut model = state.store.get_model("m1").unwrap().unwrap();
+            model.supports_tool_calling = true;
+            state.store.upsert_model(&model).unwrap();
+            let mut agent = state.store.get_agent("a1").unwrap().unwrap();
+            agent.tools_enabled = true;
+            state.store.upsert_agent(&agent).unwrap();
+            if let Some(path) = project_path {
+                state.store.upsert_project(&StoredProject { id:"p".into(), name:"P".into(), workspace:path.into(), device_id:None, created_at:1, updated_at:1 }).unwrap();
+                let mut conversation = state.store.get_conversation("c1").unwrap().unwrap();
+                conversation.project_id = Some("p".into());
+                state.store.upsert_conversation(&conversation).unwrap();
+            }
+            let body = serde_json::json!({"content":"Hello", "workspacePath":temporary_path,
+                "toolSpecs":[{"name":"terminal","description":"terminal","parametersJson":"{}"}]}).to_string();
+            let response = router(state).oneshot(request(axum::http::Method::POST, "/api/v1/conversations/c1/messages", Some(&body))).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.into_body().collect().await.unwrap();
+            let calls = provider.received_requests().await.unwrap();
+            let sent: Value = serde_json::from_slice(&calls[0].body).unwrap();
+            let system = sent["messages"][0]["content"].as_str().unwrap();
+            if let Some(path) = project_path.or(temporary_path) {
+                assert!(system.contains(path), "{system}");
+                assert!(sent["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "terminal"));
+                if project_path.is_none() { assert!(system.contains("temporary")); }
+                if project_path.is_some() { assert!(!system.contains("/ignored")); }
+            } else {
+                assert!(sent["tools"].as_array().map_or(true, |tools| tools.is_empty()));
+                assert!(!system.contains("working directory"));
+            }
+        }
     }
 
     #[tokio::test]

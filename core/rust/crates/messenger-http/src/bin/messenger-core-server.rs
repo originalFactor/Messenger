@@ -102,6 +102,7 @@ fn ensure_default_agent(store: &Store) -> Result<(), Box<dyn std::error::Error>>
         "system_prompt": messenger_store::DEFAULT_AGENT_PROMPT.trim(),
         "description": messenger_store::DEFAULT_AGENT_DESCRIPTION,
         "is_default": true,
+        "tools_enabled": true,
         "created_at": now,
         "updated_at": now,
     }))?;
@@ -124,10 +125,12 @@ mod tests {
             messenger_store::DEFAULT_AGENT_PROMPT.trim()
         );
         assert!(agent.default_model_id.is_none());
-        assert!(!agent.tools_enabled);
+        assert!(agent.tools_enabled);
+        assert!(agent.tools_config.is_empty());
 
         agent.description = "My assistant".into();
         agent.system_prompt = "My custom prompt".into();
+        agent.tools_enabled = false;
         store.upsert_agent(&agent).unwrap();
         ensure_default_agent(&store).unwrap();
         assert_eq!(store.list_agents().unwrap(), vec![agent]);

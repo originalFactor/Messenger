@@ -236,6 +236,7 @@ data class TurnConfigBridge(
     val messageId: String? = null,
     val messageGroup: List<String>? = null,
     val disableTools: Boolean = false,
+    val workspacePath: String? = null,
 )
 
 object CoreBridgeRegistry {

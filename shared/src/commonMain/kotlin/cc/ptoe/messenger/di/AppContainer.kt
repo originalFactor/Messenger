@@ -110,8 +110,7 @@ class AppContainer(
      * Agent tool-config and conversation-override screens. Core descriptors
      * never enter availableTools or the platform execution catalog. These screens are about
      * WHICH tools can be toggled, not about one conversation's workspace, so
-     * workspace-bound tools are listed even though they only run inside a
-     * project.
+     * workspace-bound tools are listed independently of the current chat.
      */
     fun allTools(): List<ChatTool> =
         (coreToolCatalog.state.value.tools + createBuiltinChatTools(defaultWorkspaceRoot()) +
@@ -260,6 +259,7 @@ class AppContainer(
                 topP = 1.0f,
                 maxTokens = null,
                 isDefault = true,
+                toolsEnabled = true,
                 createdAt = now,
                 updatedAt = now
             )

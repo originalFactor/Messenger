@@ -163,6 +163,11 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     // Workspace file operations
     // ---------------------------------------------------------------------
 
+    override suspend fun temporaryChatWorkspace(conversationId: String): String = withContext(Dispatchers.IO) {
+        val service = service() ?: error("Messenger Runtime is unavailable.")
+        service.temporaryChatWorkspace(conversationId) ?: error("Could not create temporary chat workspace.")
+    }
+
     override suspend fun workspaceGlob(root: String, pattern: String, maxResults: Int): ToolExecutionResult =
         workspaceCall { it.workspaceGlob(root, pattern, maxResults) }
 

@@ -46,6 +46,14 @@ class ShellService : Service() {
     private val mcpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
 
     private val binder = object : IShellService.Stub() {
+        override fun temporaryChatWorkspace(conversationId: String?): String? {
+            if (!isCallerAllowed() || conversationId.isNullOrBlank()) return null
+            val key = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(conversationId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            val dir = java.io.File(java.io.File(cacheDir, "chat-workspaces"), key)
+            return if (dir.isDirectory || dir.mkdirs()) dir.absolutePath else null
+        }
+
         override fun submit(
             requestId: Int,
             command: String,

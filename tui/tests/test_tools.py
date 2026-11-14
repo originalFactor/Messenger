@@ -16,6 +16,41 @@ from messenger_tui.tools import execute_tool
 
 
 class ToolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_standalone_workspace_matches_tool_execution_and_is_cleaned(self):
+        paths = []
+        results = []
+        conversation = {"id": "standalone", "project_id": None, "writable": True}
+
+        class Api:
+            async def json(self, path, **kwargs):
+                if path.endswith("/result"):
+                    results.append(kwargs["body"])
+                elif path.endswith("/messages"):
+                    return {"items": [], "total": 0}
+                else:
+                    return conversation
+
+            async def turn(self, path, body):
+                paths.append(Path(body["workspacePath"]))
+                yield {"type": "ToolCallRequested", "name": "create", "callId": "call",
+                       "argumentsJson": json.dumps({"path": "file.txt", "content": "hello"})}
+                yield {"type": "Finished"}
+
+        chat = Chat(Api(), {}, {"is_enabled": True})
+        chat.session = conversation
+        # Avoid unrelated cloud upload in this isolated turn test.
+        async def upload(*args, **kwargs):
+            pass
+        chat.upload_conversations = upload
+        await chat.choose_tools("write")
+        await chat.turn({"content": "create"}, lambda: None)
+        self.assertFalse(results[0]["isError"])
+        self.assertEqual((paths[0] / "file.txt").read_text(), "hello")
+        self.assertEqual(chat.temporary_workspace("standalone"), paths[0])
+        self.assertNotEqual(chat.temporary_workspace("other"), paths[0])
+        chat.close()
+        self.assertFalse(paths[0].exists())
+
     @unittest.skipUnless(hasattr(asyncio, "eager_task_factory"), "Requires Python 3.12+")
     async def test_immediate_tool_setting_unlocks_composer_with_eager_tasks(self):
         chat = Chat(None, {"name": "Default"}, None)
@@ -142,7 +177,7 @@ class ToolTest(unittest.IsolatedAsyncioTestCase):
                 executable = Path(os.environ["MESSENGER_TUI_TEST_CORE"])
                 async with open_core(executable, root / "chat.db") as (api, _):
                     agent = await api.json("/agents/default")
-                    self.assertFalse(agent["tools_enabled"])
+                    agent = await api.json(f"/agents/{agent['id']}", method="PUT", body={**agent, "tools_enabled": False})
                     chat = Chat(api, agent, None)
                     provider = await chat.save_provider({"name": "Fake", "api_key": "test", "api_format": "chat",
                                                         "base_url": f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1"})

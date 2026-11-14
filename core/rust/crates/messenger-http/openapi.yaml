@@ -2953,6 +2953,7 @@ components:
         messageGroup: { type: array, items: { type: string }, description: Validated assistant and tool rows for a native regenerate. }
         disableTools: { type: boolean, default: false }
         messageId: { type: string }
+        workspacePath: { type: string, description: "Execution host's temporary working directory for a projectless turn. The client creates and manages this directory; ignored for project conversations." }
         toolSpecs:
           type: array
           items:

@@ -19,7 +19,8 @@ poetry -C tui run python workflow.py dev
 
 Use `/providers` to add a provider, then `/models` to choose a model. Ctrl+P
 searches all commands. `/connect` offers a guided provider/model setup.
-`/project` opens a trusted workspace; `/tools` enables tools for its conversation.
+`/project` opens a trusted workspace; standalone chats use a temporary directory
+that is removed when the TUI exits. `/tools` controls tools for the conversation.
 Local tools run with your user's permissions. Inspection mode omits edit/create
 and guides terminal use; it is not an operating-system sandbox. File search
 requires `rg` on PATH.

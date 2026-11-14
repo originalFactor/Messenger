@@ -1,6 +1,7 @@
 """Conversation state and turn orchestration for the Textual client."""
 
 import asyncio
+import tempfile
 import time
 from contextlib import aclosing
 from pathlib import Path
@@ -56,12 +57,27 @@ class Chat:
         self.catalog = PiCatalog()
         self.tool_mode: str | None = None
         self.tool_task: asyncio.Task | None = None
+        self._temporary_workspace: tempfile.TemporaryDirectory | None = None
+        self._temporary_conversations: dict[str, Path] = {}
+
+    def temporary_workspace(self, conversation_id: str) -> Path:
+        if self._temporary_workspace is None:
+            self._temporary_workspace = tempfile.TemporaryDirectory(prefix="messenger-chat-")
+        if conversation_id not in self._temporary_conversations:
+            path = Path(self._temporary_workspace.name) / str(uuid4())
+            path.mkdir()
+            self._temporary_conversations[conversation_id] = path
+        return self._temporary_conversations[conversation_id]
+
+    def close(self) -> None:
+        if self._temporary_workspace is not None:
+            self._temporary_workspace.cleanup()
+            self._temporary_workspace = None
+            self._temporary_conversations.clear()
 
     async def choose_tools(self, mode: str) -> None:
         if mode not in ("off", "read", "write"):
             raise ValueError("Unknown tool mode.")
-        if not self.project:
-            raise ValueError("Open a trusted workspace with /project before enabling tools.")
         if self.session:
             path = entity("conversations", self.session["id"])
             current = await self.api.json(path)
@@ -433,6 +449,11 @@ class Chat:
                 raise ApiError("model_disabled", "Choose an enabled model with /models before sending.")
             if not self.session:
                 self.session = await self.create_session(body["content"])
+            tool_project = self.project
+            if self.session.get("project_id") is None:
+                workspace = self.temporary_workspace(self.session["id"])
+                body = {**body, "workspacePath": str(workspace)}
+                tool_project = {"workspace": str(workspace), "owner": {"kind": "local"}}
             self.turn_path = entity("conversations", self.session["id"])
             self.status("Waiting for the model…")
             async with aclosing(self.api.turn(self.turn_path, body)) as events:
@@ -453,7 +474,7 @@ class Chat:
                         case "ToolCallRequested":
                             path = entity("turns/tools", event["callId"])
                             self.tool_task = asyncio.create_task(execute_tool(
-                                self.project, bool(self.session.get("writable")), event["name"], event["argumentsJson"],
+                                tool_project, bool(self.session.get("writable")), event["name"], event["argumentsJson"],
                             ))
                             try:
                                 result = await self.tool_task

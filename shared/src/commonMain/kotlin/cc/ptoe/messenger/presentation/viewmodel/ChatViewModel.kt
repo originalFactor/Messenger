@@ -231,8 +231,7 @@ class ChatViewModel(
         )
 
     /**
-     * 本会话所属项目的 workspace；null 表示该会话不属于任何项目，因此
-     * 不声明终端与工作区工具（MCP 工具不受项目约束）。
+     * 本会话所属项目；无项目时回合执行使用临时工作区。
      */
     val project: StateFlow<Project?> = conversation
         .flatMapLatest { conv ->
@@ -466,7 +465,18 @@ class ChatViewModel(
         val (provider, model) = result
         val bridge = coreBridge
         val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-        val workspace = resolveWorkspaceFor(conv)
+        val projectWorkspace = resolveWorkspaceFor(conv)
+        val temporaryWorkspace = if (conv.projectId == null && agent.toolsEnabled && builtinChatToolsSupported()) {
+            try {
+                cc.ptoe.messenger.domain.tool.temporaryChatWorkspace(conversationId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(e.message ?: "Could not create temporary chat workspace.")
+                return
+            }
+        } else null
+        val workspace = projectWorkspace ?: temporaryWorkspace
         val availableTools = builtinTools(workspace)
         val enabledTools = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
             availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
@@ -501,6 +511,7 @@ class ChatViewModel(
             titleAgentId = titleHolder?.id,
             titleAgentSystemPrompt = titleHolder?.systemPrompt,
             titleAgentModelId = titleHolder?.defaultModelId,
+            workspacePath = temporaryWorkspace,
             hasWorkspace = workspace != null,
             workspaceNote = workspace?.let {
                 getString(Res.string.chat_workspace_note, it)
