@@ -31,6 +31,9 @@ interface CoreBridge {
     suspend fun learningRequest(method: String, path: String, body: String? = null): String =
         error("Learning API is unavailable in this Core bridge")
 
+    suspend fun scheduledTaskRequest(method: String, path: String, body: String? = null): String =
+        error("Scheduled tasks unavailable")
+
     suspend fun learningAsset(id: String): ByteArray = error("Asset API is unavailable")
 
     // Store CRUD

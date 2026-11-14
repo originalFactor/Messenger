@@ -32,6 +32,7 @@ sealed class Screen(val route: String) {
     data object CloudSettings : Screen("cloud_settings")
     data object AcpSettings : Screen("acp_settings")
     data object ToolsSettings : Screen("tools_settings")
+    data object ScheduledTasks : Screen("scheduled_tasks")
     data object Skills : Screen("skills")
 
     data object ProviderEdit : Screen("provider_edit?providerId={providerId}") {

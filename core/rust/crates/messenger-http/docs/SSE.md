@@ -216,3 +216,5 @@ Provider. Converted streams preserve text increments, reasoning summaries,
 function calls, usage and terminal events. A truncated upstream stream emits
 `response.failed` for Responses clients or `error` for the other protocols.
 Client disconnect and relay shutdown cancel upstream reads and blocked writes.
+
+Scheduled Agent tasks use the existing `Other` store change feed with ID `scheduled_task:<id>`; clients reload `/scheduled-tasks` after a change. Runs use detached turns and persist their conversation and terminal status; they do not add a separate SSE stream.

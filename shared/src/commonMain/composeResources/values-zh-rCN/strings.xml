@@ -591,4 +591,25 @@
     <string name="settings_license_link_error">无法打开链接，请检查是否有可用的浏览器。</string>
     <string name="providers_native_search_title">原生联网搜索</string>
     <string name="providers_native_search_description">允许支持的模型通过此服务商搜索网页。需要 Responses 或 Messages 协议，每台设备默认关闭。</string>
+    <string name="scheduled_title">计划任务</string>
+    <string name="scheduled_desc">按计划运行 Agent 任务</string>
+    <string name="scheduled_create">新建任务</string>
+    <string name="scheduled_runtime_note">任务仅在 Messenger Core 运行期间执行。错过的任务将在 Core 再次启动后执行。时间以 UTC 显示。</string>
+    <string name="scheduled_empty">暂无计划任务</string>
+    <string name="scheduled_interval_value">每 %1$d 分钟</string>
+    <string name="scheduled_next">下次：%1$s</string>
+    <string name="scheduled_last">上次执行：%1$s</string>
+    <string name="scheduled_no_project">无项目</string>
+    <string name="scheduled_edit">编辑任务</string>
+    <string name="scheduled_pause">暂停</string>
+    <string name="scheduled_resume">恢复</string>
+    <string name="scheduled_delete">删除</string>
+    <string name="scheduled_paused">已暂停</string>
+    <string name="scheduled_cancel">取消</string>
+    <string name="scheduled_name">名称</string>
+    <string name="scheduled_prompt">任务指令</string>
+    <string name="scheduled_agent">选择 Agent</string>
+    <string name="scheduled_interval">间隔分钟数（1–525600）</string>
+    <string name="scheduled_save">保存</string>
+    <string name="scheduled_open_chat">打开上次会话</string>
 </resources>

@@ -14,6 +14,54 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /scheduled-tasks:
+    get:
+      summary: List device-local scheduled Agent tasks
+      responses:
+        '200':
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ScheduledTask' }
+    post:
+      summary: Create a scheduled Agent task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduledTask' }
+      responses:
+        '200':
+          description: Created task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduledTask' }
+  /scheduled-tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      summary: Update a scheduled Agent task
+      description: Include lastRunAt from the loaded task. A concurrent run returns 409 task_changed; reload before editing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduledTask' }
+      responses:
+        '200':
+          description: Updated task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduledTask' }
+    delete:
+      summary: Delete a task and cancel its active run
+      responses:
+        '204': { description: Deleted }
   "/learning/settings":
     "get":
       "operationId": "getLearningCapability"
@@ -2040,6 +2088,21 @@ components:
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
   schemas:
+    ScheduledTask:
+      type: object
+      required: [id, name, prompt, agentId, projectId, intervalMinutes, nextRunAt, enabled]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prompt: { type: string }
+        agentId: { type: string }
+        projectId: { type: [string, 'null'] }
+        intervalMinutes: { type: integer, minimum: 1, maximum: 525600 }
+        nextRunAt: { type: integer, format: int64, description: 'Unix milliseconds; missed runs execute once when Core restarts.' }
+        enabled: { type: boolean }
+        lastRunAt: { type: [integer, 'null'], format: int64, readOnly: true }
+        lastError: { type: [string, 'null'], readOnly: true }
+        lastConversationId: { type: [string, 'null'], readOnly: true }
     "WorkbenchCapability":
       "type": "object"
       "properties":

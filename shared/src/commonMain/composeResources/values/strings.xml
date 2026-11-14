@@ -592,4 +592,25 @@
     <string name="settings_license_link_error">Unable to open the link. Please check that a browser is available.</string>
     <string name="providers_native_search_title">Native web search</string>
     <string name="providers_native_search_description">Let supported models search the web through this provider. Requires Responses or Messages. Off by default on each device.</string>
+    <string name="scheduled_title">Scheduled tasks</string>
+    <string name="scheduled_desc">Run Agent tasks on a schedule</string>
+    <string name="scheduled_create">New task</string>
+    <string name="scheduled_runtime_note">Tasks run while Messenger Core is running. Missed runs execute when Core starts again. Times are shown in UTC.</string>
+    <string name="scheduled_empty">No scheduled tasks yet</string>
+    <string name="scheduled_interval_value">Every %1$d minutes</string>
+    <string name="scheduled_next">Next: %1$s</string>
+    <string name="scheduled_last">Last run: %1$s</string>
+    <string name="scheduled_no_project">No project</string>
+    <string name="scheduled_edit">Edit task</string>
+    <string name="scheduled_pause">Pause</string>
+    <string name="scheduled_resume">Resume</string>
+    <string name="scheduled_delete">Delete</string>
+    <string name="scheduled_paused">Paused</string>
+    <string name="scheduled_cancel">Cancel</string>
+    <string name="scheduled_name">Name</string>
+    <string name="scheduled_prompt">Task instructions</string>
+    <string name="scheduled_agent">Select Agent</string>
+    <string name="scheduled_interval">Interval in minutes (1–525600)</string>
+    <string name="scheduled_save">Save</string>
+    <string name="scheduled_open_chat">Open last conversation</string>
 </resources>

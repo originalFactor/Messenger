@@ -211,7 +211,7 @@ fun NavGraph(
                 val sizeClass = windowSizeClassFor(maxWidth)
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
-                    SettingsDualPaneScreen()
+                    SettingsDualPaneScreen(onOpenConversation = { navController.navigate(Screen.Chat.createRoute(it)) })
                 } else {
                     // Phone: single-pane, push sub-screens on tap.
                     SettingsScreen(
@@ -220,6 +220,7 @@ fun NavGraph(
                         },
                         onToolsClick = { navController.navigate(Screen.ToolsSettings.route) },
                         onAcpSettingsClick = { navController.navigate(Screen.AcpSettings.route) },
+                        onScheduledTasksClick = { navController.navigate(Screen.ScheduledTasks.route) },
                         onSkillsClick = { navController.navigate(Screen.Skills.route) },
                         onLicensesClick = {
                             navController.navigate(Screen.Licenses.route)
@@ -261,6 +262,9 @@ fun NavGraph(
         }
         composable(Screen.Skills.route) {
             cc.ptoe.messenger.presentation.ui.skills.SkillsScreen(onBackClick = { navController.popBackStack() })
+        }
+        composable(Screen.ScheduledTasks.route) {
+            cc.ptoe.messenger.presentation.ui.scheduled.ScheduledTasksScreen(onBackClick = { navController.popBackStack() }, onOpenConversation = { navController.navigate(Screen.Chat.createRoute(it)) })
         }
         composable(Screen.AcpSettings.route) {
             AcpSettingsScreen(onBackClick = { navController.popBackStack() })

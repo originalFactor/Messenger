@@ -76,6 +76,7 @@ mod learning_bundle;
 mod assets;
 mod image_generation;
 mod artifacts;
+mod scheduled_tasks;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
@@ -99,6 +100,7 @@ pub struct ApiState {
     #[cfg(target_os = "android")]
     acp_processes: Arc<android_acp::Processes>,
     agent_mutations: Arc<Mutex<()>>,
+    schedule_gate: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pending_tools: Arc<Mutex<HashMap<String, oneshot::Sender<ToolExecutionResult>>>>,
     events: broadcast::Sender<CoreEvent>,
     /// Cross-device routing: this device's id, who is online, and the relay.
@@ -191,6 +193,7 @@ impl ApiState {
             #[cfg(target_os = "android")]
             acp_processes: Default::default(),
             agent_mutations: Arc::new(Mutex::new(())),
+            schedule_gate: Arc::new(Mutex::new(HashMap::new())),
             pending_tools: Arc::new(Mutex::new(HashMap::new())),
             events,
             remote: Arc::new(remote),
@@ -342,6 +345,7 @@ impl ServerHandle {
             Some(Arc::new(control::DeviceControl(state.clone()))),
             shutdown.clone(),
         ));
+        tokio::spawn(scheduled_tasks::run(state.clone()));
         let router = router(state);
         let shutdown_for_task = shutdown.clone();
         let task = tokio::spawn(async move {
@@ -387,6 +391,7 @@ pub fn router(state: ApiState) -> Router {
     #[cfg(not(target_os = "android"))]
     let protected = protected.route("/acp", get(acp_agent::upgrade));
     let protected = protected
+        .merge(scheduled_tasks::routes())
         .merge(learning::routes())
         .merge(learning_bundle::routes())
         .merge(assets::routes())
@@ -2025,6 +2030,7 @@ async fn cloud_clear_market_links(State(state): State<ApiState>) -> Result<Statu
 }
 
 async fn clear_local_data(State(state): State<ApiState>) -> Result<StatusCode, ApiError> {
+    scheduled_tasks::clear(&state).await?;
     for cancel in state.active_turns.lock().await.values() { cancel.cancel(); }
     state.images.clear().await?;
     state.assets.clear().await?;

@@ -120,6 +120,8 @@ import org.jetbrains.compose.resources.stringResource
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.acp_settings_desc
 import cc.ptoe.messenger.generated.resources.acp_settings
+import cc.ptoe.messenger.generated.resources.scheduled_title
+import cc.ptoe.messenger.generated.resources.scheduled_desc
 import cc.ptoe.messenger.generated.resources.skills_title
 import cc.ptoe.messenger.generated.resources.skills_settings_desc
 
@@ -130,6 +132,7 @@ fun SettingsScreen(
     onToolsClick: () -> Unit = {},
     onAcpSettingsClick: () -> Unit = {},
     onSkillsClick: () -> Unit = {},
+    onScheduledTasksClick: () -> Unit = {},
     onLicensesClick: () -> Unit,
     onCloudSettingsClick: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
@@ -326,6 +329,14 @@ fun SettingsScreen(
                             subtitle = stringResource(Res.string.acp_settings_desc),
                             icon = Icons.Default.Build,
                             onClick = onAcpSettingsClick,
+                        )
+                    }
+                    item {
+                        ListItem(
+                            title = stringResource(cc.ptoe.messenger.generated.resources.scheduled_title),
+                            subtitle = stringResource(cc.ptoe.messenger.generated.resources.scheduled_desc),
+                            icon = Icons.Default.Build,
+                            onClick = onScheduledTasksClick,
                         )
                     }
                     item {

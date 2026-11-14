@@ -113,6 +113,10 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 - **New screen**: add route to `Screen.kt` → destination in `NavGraph.kt` → composable under `presentation/ui/<feature>/` → ViewModel in `presentation/viewmodel/` → (bottom-level routes) `BottomLevelRoutes.kt`.
 - **New local API endpoint**: add the Rust handler and OpenAPI/event contract in `messenger-http` → expose it through `CoreBridge` / `RestCoreBridge` → repository/facade → ViewModel. Keep `{code,message,detail}` failures visible. Provider protocol changes belong in `messenger-llm`; Kotlin DTO/codec changes alone do not alter native chat requests.
 
+## Scheduled Agent tasks
+
+- Settings exposes scheduled Agent tasks on Android/Desktop, including an optional project, recurring interval, enable/pause and last execution errors. Core persists and runs schedules only while its process is running; clients use the authenticated `/scheduled-tasks` API.
+
 ## ACP and remotely started turns
 
 - **ACP Agents** is a list with structured add/edit dialogs (description, stdio command, JSON arguments/environment and optional cwd), seeded once with Codex, Claude Code and OpenCode templates. Remote Control lives inside Messenger Cloud settings; saving either section fetches the current control settings to preserve the other fields. ACP and MCP add actions use the shared `IntegrationFab` (Manual add / Store); the Store requires a Cloud session and loads curated templates through Core `controlCommand(action="store",kind="acp"|"mcp")`. There is no separate ACP Chat settings item or chat toolbar dialog. The project New Conversation picker combines normal Agents and enabled ACP profiles; the home picker contains only normal Agents, and Core rejects projectless ACP creation. ACP session IDs (`acp:`) render `AcpConversationScreen` through `ChatScreen`, with Markdown, streaming, tools, permission choices, cancellation and paged history. Core exposes their local transcripts in normal conversation listings; they never enter Cloud sync. `RestCoreBridge` publishes available built-in and MCP tools and serves Core-requested tools over the event feed.

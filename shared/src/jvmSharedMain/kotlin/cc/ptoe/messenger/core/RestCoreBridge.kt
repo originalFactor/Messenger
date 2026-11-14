@@ -290,6 +290,20 @@ class RestCoreBridge(
         return if (response.status == HttpStatusCode.NoContent) "{}" else response.requireText()
     }
 
+    override suspend fun scheduledTaskRequest(method: String, path: String, body: String?): String {
+        require(path == "/scheduled-tasks" || path.startsWith("/scheduled-tasks/"))
+        require(!path.contains("..") && !path.contains('#') && !path.contains('\\'))
+        val verb = when (method.uppercase()) {
+            "GET" -> HttpMethod.Get
+            "POST" -> HttpMethod.Post
+            "PUT" -> HttpMethod.Put
+            "DELETE" -> HttpMethod.Delete
+            else -> error("Unsupported scheduled task method")
+        }
+        val response = request(verb, path, body)
+        return if (response.status == HttpStatusCode.NoContent) "{}" else response.requireText()
+    }
+
     override suspend fun learningAsset(id: String): ByteArray {
         require(id.length == 64 && id.all { it in '0'..'9' || it in 'a'..'f' })
         val response = request(HttpMethod.Get, "/assets/$id/content")
