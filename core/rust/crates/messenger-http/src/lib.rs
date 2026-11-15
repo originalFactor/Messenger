@@ -3383,6 +3383,7 @@ mod tests {
         let mut model = state.store.get_model("m1").unwrap().unwrap(); model.supports_tool_calling = true; state.store.upsert_model(&model).unwrap();
         let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true; state.store.upsert_agent(&agent).unwrap();
         state.store.kv_set("artifact_tools_enabled", "true").unwrap();
+        let mut feed = state.events.subscribe();
         let app = router(state.clone());
         let mut post = request(axum::http::Method::POST, "/api/v1/conversations/c1/background-turn", Some(r#"{"content":"Create","supportsToolApproval":true}"#));
         post.headers_mut().insert("Idempotency-Key", "approval-key".parse().unwrap());
@@ -3410,6 +3411,14 @@ mod tests {
         assert!(end.contains("ToolApprovalResolved"), "{end}");
         assert!(end.contains("Cancelled"), "{end}");
         assert!(state.pending_approvals.lock().await.is_empty());
+        let mut statuses = Vec::new();
+        while let Ok(CoreEvent::Change(change)) = feed.try_recv() {
+            if change.kind == "taskStatus" {
+                assert_eq!(&change.ids[1..], &["chat", "c1"]);
+                statuses.push(change.ids[0].clone());
+            }
+        }
+        assert_eq!(statuses, ["approval", "approvalResolved", "cancelled"]);
         let replay = app.oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap().into_body().collect().await.unwrap().to_bytes();
         assert!(!String::from_utf8_lossy(&replay).contains("ToolApprovalRequested"));
     }

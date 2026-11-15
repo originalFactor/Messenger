@@ -112,6 +112,7 @@ android {
 // Per-ABI split APKs are produced via splits.abi for distribution.
 
 dependencies {
+    testImplementation(libs.junit)
     implementation(files("libs/jpush-android-6.3.1.aar", "libs/jcore-android-5.6.0.aar", "libs/jpush-android-plugin-fcm-v6.3.1.aar"))
     implementation(libs.firebase.messaging)
     implementation(libs.jetbrains.compose.material3)

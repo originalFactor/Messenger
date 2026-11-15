@@ -4,4 +4,9 @@
     <string name="task_service_running">A task is running in the background</string>
     <string name="task_service_waiting">Scheduled tasks are available in the background</string>
     <string name="task_notification_permission_denied">Notification permission is off. Enable notifications in system settings to see running tasks.</string>
+    <string name="task_update_channel">Task updates</string>
+    <string name="task_update_title">Messenger task</string>
+    <string name="task_update_approval">A task needs your approval. Open Messenger to review it.</string>
+    <string name="task_update_completed">A task completed. Open Messenger for details.</string>
+    <string name="task_update_failed">A task failed. Open Messenger for details.</string>
 </resources>

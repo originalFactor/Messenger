@@ -1375,7 +1375,10 @@ paths:
         "200":
           description: |
             Core change feed. Events are named `change` and carry
-            `{kind, ids}` JSON. `resync` means the client lagged and should
+            `{kind, ids}` JSON. `taskStatus` reports chat/ACP outcomes and
+            approvals; `localTaskStatus` reports scheduled/standalone image
+            outcomes. Both use `[status, taskKind, taskId]` and omit task
+            contents; see `docs/SSE.md`. `resync` means the client lagged and should
             re-query every visible collection. `remoteTool` /
             `remoteToolCancelled` are addressed to the platform client that
             executes tools: another device asked this one to run a workspace

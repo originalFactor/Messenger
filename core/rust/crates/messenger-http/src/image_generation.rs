@@ -1,7 +1,7 @@
 //! Durable BYOK image jobs. Explicit capability, idempotency and no automatic resubmission.
 use crate::{
     assets::{self, bad, load, now, save, AssetReference, AssetService},
-    ApiError, ApiState,
+    ApiError, ApiState, ChangeEvent, CoreEvent,
 };
 use axum::{
     extract::{Path, State},
@@ -162,6 +162,15 @@ impl ImageGenerationService {
         request: GenerateRequest,
         cancel: CancellationToken,
     ) -> Result<ImageGenerationJob, ApiError> {
+        self.submit_inner(request, cancel, None).await
+    }
+
+    async fn submit_inner(
+        self: &Arc<Self>,
+        request: GenerateRequest,
+        cancel: CancellationToken,
+        events: Option<tokio::sync::broadcast::Sender<CoreEvent>>,
+    ) -> Result<ImageGenerationJob, ApiError> {
         let _guard = self.gate.lock().await;
         validate_identifier(&request.request_id)?;
         let id = adapter::content_hash(request.request_id.as_bytes());
@@ -222,7 +231,7 @@ impl ImageGenerationService {
         let worker_job = job.clone();
         tokio::spawn(async move {
             service
-                .run(worker_job, provider.base_url, provider.api_key, cancel)
+                .run(worker_job, provider.base_url, provider.api_key, cancel, events)
                 .await;
         });
         Ok(job)
@@ -233,6 +242,7 @@ impl ImageGenerationService {
         base_url: String,
         key: String,
         cancel: CancellationToken,
+        events: Option<tokio::sync::broadcast::Sender<CoreEvent>>,
     ) {
         {
             let _guard = self.gate.lock().await;
@@ -247,6 +257,11 @@ impl ImageGenerationService {
             job.status = JobStatus::Running;
             job.updated_at = now();
             if self.save_job(&job).is_err() {
+                if let Some(events) = &events {
+                    let _ = events.send(CoreEvent::Change(ChangeEvent {
+                        kind: "localTaskStatus".into(), ids: vec!["failed".into(), "image".into(), job.id.clone()],
+                    }));
+                }
                 self.active.lock().await.remove(&job.id);
                 return;
             }
@@ -275,8 +290,18 @@ impl ImageGenerationService {
                 }
             }
             job.updated_at = now();
-            // If final persistence fails, startup changes the durable Running record to Unknown.
-            let _ = self.save_job(&job);
+            // Do not report success if final persistence failed.
+            let saved = self.save_job(&job).is_ok();
+            if let Some(events) = events {
+                let status = if !saved { "failed" } else { match job.status {
+                    JobStatus::Succeeded => "completed",
+                    JobStatus::Cancelled => "cancelled",
+                    _ => "failed",
+                }};
+                let _ = events.send(CoreEvent::Change(ChangeEvent {
+                    kind: "localTaskStatus".into(), ids: vec![status.into(), "image".into(), job.id.clone()],
+                }));
+            }
         }
         self.active.lock().await.remove(&job.id);
     }
@@ -539,7 +564,7 @@ async fn submit(
     Ok(Json(
         state
             .images
-            .submit(body, state.shutdown.child_token())
+            .submit_inner(body, state.shutdown.child_token(), Some(state.events.clone()))
             .await?,
     ))
 }
@@ -696,8 +721,9 @@ mod tests {
         Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{"b64_json":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC","revised_prompt":"A red pixel"}],"usage":{"images":1}}))).expect(1).mount(&server).await;
         let (_dir, service) = setup(&server).await;
         service.store.kv_set(ENABLED, "true").unwrap();
+        let (events, mut changes) = tokio::sync::broadcast::channel(8);
         let job = service
-            .submit(request(), CancellationToken::new())
+            .submit_inner(request(), CancellationToken::new(), Some(events.clone()))
             .await
             .unwrap();
         let finished = terminal(&service, &job.id).await;
@@ -714,6 +740,16 @@ mod tests {
         assert_eq!((asset.width, asset.height), (Some(1), Some(1)));
         assert_eq!(asset.references[0].owner_id, job.id);
         assert!(!service.assets.read_bytes(&asset.id).unwrap().is_empty());
+        let event = tokio::time::timeout(Duration::from_secs(1), changes.recv()).await.unwrap().unwrap();
+        match event {
+            CoreEvent::Change(change) => {
+                assert_eq!(change.kind, "localTaskStatus");
+                assert_eq!(change.ids, vec!["completed", "image", &job.id]);
+            }
+            _ => panic!("expected image task status"),
+        }
+        service.submit_inner(request(), CancellationToken::new(), Some(events)).await.unwrap();
+        assert!(changes.try_recv().is_err(), "deduplicated requests must not notify twice");
     }
     #[tokio::test]
     async fn capability_admission_dedup_conflict_and_provider_failure() {

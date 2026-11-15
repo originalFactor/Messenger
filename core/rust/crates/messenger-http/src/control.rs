@@ -365,19 +365,21 @@ pub(crate) async fn start_background(
         while let Some(event) = events.recv().await {
             let status = match event["type"].as_str() {
                 Some("Permission") => Some("approval"),
+                Some("PermissionResolved") => Some("approvalResolved"),
                 Some("Finished") => Some("completed"),
                 Some("Error") => Some("failed"),
+                Some("Cancelled") => Some("cancelled"),
                 _ => None,
             };
             if let Some(status) = status {
-                let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec![status.into()] }));
+                let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec![status.into(), "acp".into(), job.session_id.clone()] }));
             }
             let mut log = job.log.lock().await;
             record_background_event(&mut log, event);
         }
         let mut log = job.log.lock().await;
         if !log.events.back().and_then(|v| v["type"].as_str()).is_some_and(|kind| matches!(kind, "Finished" | "Cancelled" | "Error")) {
-            let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec!["failed".into()] }));
+            let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec!["failed".into(), "acp".into(), job.session_id.clone()] }));
             record_background_event(&mut log, json!({"type":"Error","code":"background_ended","message":"Background command ended unexpectedly."}));
         }
         log.done = true;

@@ -270,6 +270,11 @@ async fn execute(state: ApiState, task: Task, cancel: CancellationToken) {
     if let Ok(Some(mut current)) = read(&state.store, &task.id) {
         // An intervening run owns the newer status.
         if current.last_run_at == task.last_run_at {
+            let status = match &result {
+                Ok(_) => Some("completed"),
+                Err((error, _)) if error == "Execution cancelled" => Some("cancelled"),
+                Err(_) => Some("failed"),
+            };
             match result {
                 Ok(id) => {
                     current.last_error = None;
@@ -280,7 +285,13 @@ async fn execute(state: ApiState, task: Task, cancel: CancellationToken) {
                     current.last_conversation_id = id;
                 }
             }
-            let _ = write(&state.store, &current);
+            if write(&state.store, &current).is_ok() {
+                if let Some(status) = status {
+                    let _ = state.events.send(CoreEvent::Change(ChangeEvent {
+                        kind: "localTaskStatus".into(), ids: vec![status.into(), "scheduled".into(), task.id.clone()],
+                    }));
+                }
+            }
         }
     }
 }
@@ -416,6 +427,7 @@ mod tests {
     #[tokio::test]
     async fn overdue_task_is_claimed_once_and_failure_is_visible() {
         let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "test");
+        let mut events = state.events.subscribe();
         let task = Task {
             id: Uuid::new_v4().to_string(), name: "Test".into(), prompt: "Hello".into(),
             agent_id: "missing".into(), project_id: None, interval_minutes: 1,
@@ -429,6 +441,14 @@ mod tests {
             if saved.last_error.as_deref().is_some_and(|e| e.contains("NotFound")) {
                 assert!(saved.next_run_at > saved.last_run_at.unwrap());
                 assert!(saved.last_conversation_id.is_none());
+                let event = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                    loop {
+                        if let CoreEvent::Change(change) = events.recv().await.unwrap() {
+                            if change.kind == "localTaskStatus" { break change; }
+                        }
+                    }
+                }).await.unwrap();
+                assert_eq!(event.ids, vec!["failed", "scheduled", &task.id]);
                 state.shutdown.cancel();
                 worker.await.unwrap();
                 return;

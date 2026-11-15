@@ -19,6 +19,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 ## Local API boundary
 
 - `GET /activity` is a bearer-protected live snapshot for native foreground-service lifecycle: active turns, scheduled runs and image jobs. Counts can overlap; `active` is their union. It does not wake the process or guarantee an Android foreground-service start from background.
+- The local `/events` feed emits `taskStatus` with status, kind and task identity for Core-owned chat/ACP, including approval resolution and cancellation. `localTaskStatus` reports scheduled and standalone image outcomes for on-device notifications; image jobs invoked by a parent tool do not emit a separate notification event. Neither event contains task content or initiates cloud push.
 
 - **Tool approval**: `/tools/approval` selects device-local `manual` (default) or `automatic` review. Core gates calls before local, remote and Core dispatch; trusted read-only calls bypass review, while terminal, write and unclassified calls require approval. Manual-capable clients advertise `supportsToolApproval`, answer the SSE request, and fail closed on cancellation/timeout/disconnect. Automatic review uses a separate tool-free model request with the current model, user request and call; invalid decisions, errors, cancellation and timeout deny. Approval never widens Agent policy or writable mode. Keep `openapi.yaml` and `docs/SSE.md` current.
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.

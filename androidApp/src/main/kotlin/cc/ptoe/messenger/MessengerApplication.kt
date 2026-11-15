@@ -80,6 +80,7 @@ class MessengerApplication : Application() {
         restCore.platformTools = container::availableTools
         restCore.publishPlatformTools(container.mcpManager)
         AppContainerHolder.initialize(container)
+        LocalTaskNotifications.install(this, restCore)
         AndroidForegroundTasks.install(this, restCore)
         PushSetup.startRegistration(this, container.cloud)
         container.initializeLocalAndCloudData()

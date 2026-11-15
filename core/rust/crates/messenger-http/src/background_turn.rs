@@ -146,7 +146,7 @@ async fn start(State(state): State<ApiState>, Path(id): Path<String>, headers: a
         if turns.recent.len() >= MAX_RETAINED_TURNS {
             if let Some(key) = turns.recent.keys().next().cloned() { turns.recent.remove(&key); }
         }
-        turns.recent.insert((id, old.key.clone()), old.fingerprint);
+        turns.recent.insert((id.clone(), old.key.clone()), old.fingerprint);
     }
     drop(turns);
     let event_sender = state.events.clone();
@@ -176,12 +176,14 @@ async fn start(State(state): State<ApiState>, Path(id): Path<String>, headers: a
             }
             let status = serde_json::from_str::<Value>(&data).ok().and_then(|value| match value["type"].as_str() {
                 Some("ToolApprovalRequested") => Some("approval"),
+                Some("ToolApprovalResolved") => Some("approvalResolved"),
                 Some("Finished") => Some("completed"),
                 Some("Error") => Some("failed"),
+                Some("Cancelled") => Some("cancelled"),
                 _ => None,
             });
             if let Some(status) = status {
-                let _ = event_sender.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec![status.into()] }));
+                let _ = event_sender.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec![status.into(), "chat".into(), id.clone()] }));
             }
             turn.push(data).await;
         }

@@ -1799,10 +1799,14 @@ mod tests {
             let mut statuses = Vec::new();
             while let Ok(event) = task_events.try_recv() {
                 if let CoreEvent::Change(change) = event {
-                    if change.kind == "taskStatus" { statuses.extend(change.ids); }
+                    if change.kind == "taskStatus" {
+                        assert_eq!(change.ids.get(1).map(String::as_str), Some("acp"));
+                        assert_eq!(change.ids.get(2), Some(&session));
+                        statuses.push(change.ids[0].clone());
+                    }
                 }
             }
-            assert_eq!(statuses, vec!["approval", "completed"]);
+            assert_eq!(statuses, vec!["approval", "approvalResolved", "completed"]);
             let second_id = Uuid::new_v4();
             assert_eq!(crate::control::start_background(State(state.clone()), Path(second_id), Json(json!({"action":"prompt", "sessionId":session, "text":"wait"}))).await.unwrap(), StatusCode::ACCEPTED);
             loop {
