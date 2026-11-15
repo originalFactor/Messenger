@@ -36,6 +36,7 @@ import cc.ptoe.messenger.presentation.platform.copyTextToClipboard
 import cc.ptoe.messenger.presentation.platform.showPlatformToast
 import cc.ptoe.messenger.presentation.ui.acp.*
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.ui.components.resolveAcpAvatar
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import kotlinx.coroutines.CancellationException
@@ -53,9 +54,11 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val userAvatar by container.appPreferences.userAvatar.collectAsState(initial = null)
+    val profilesRevision by acpProfilesRevision.collectAsState()
     var title by remember { mutableStateOf("") }
     var historyTimestamp by remember { mutableStateOf(currentTimeMillis()) }
     var agentName by remember { mutableStateOf("ACP") }
+    var agentAvatar by remember(sessionId) { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf(emptyList<JsonObject>()) }
     var before by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf(TextFieldValue("")) }
@@ -117,13 +120,20 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     LaunchedEffect(sessionId) {
         try {
             loadHistory()
-            val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
-            val profileId = row?.text("agent_id")?.removePrefix("acp:")
-            agentName = core.controlSettings().objects("agents").firstOrNull { it.text("id") == profileId }?.text("name") ?: "ACP"
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { report(failure.message.orEmpty())
         } finally { loading = false }
         readSettings()
+    }
+    LaunchedEffect(sessionId, profilesRevision) {
+        try {
+            val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
+            val profileId = row?.text("agent_id")?.removePrefix("acp:")
+            val profile = core.controlSettings().objects("agents").firstOrNull { it.text("id") == profileId }
+            agentName = profile?.text("name") ?: "ACP"
+            agentAvatar = resolveAcpAvatar(profileId, profile?.text("avatar"))
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: Exception) { report(failure.message.orEmpty()) }
     }
     fun contentFor(text: String, files: List<AcpAttachment>) = promptContent(text, files)
     fun addAttachments(files: List<AcpAttachment>) {
@@ -207,7 +217,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             sendPrompt(next, false)
         }
     }
-    val agent = remember(agentName) { Agent("acp", agentName, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
+    val agent = remember(agentName, agentAvatar) { Agent("acp", agentName, avatar = agentAvatar, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
     val rows = history + listOfNotNull(liveId?.let { id -> buildJsonObject {
         put("id", id); put("role", "assistant"); put("text", partial); put("status", if (active.isEmpty()) "sent" else "sending")
         put("timestamp", liveTimestamp); put("events", JsonArray(events))
@@ -233,7 +243,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             topBar = {
                 TopAppBar(
                     title = { Row(verticalAlignment = Alignment.CenterVertically) {
-                        AgentAvatar(avatar = null, size = 36.dp)
+                        AgentAvatar(avatar = agentAvatar, size = 36.dp)
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(title.ifBlank { stringResource(Res.string.chat_title_default) }, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1)

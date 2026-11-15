@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.presentation.ui.acp.NewConversationDialog
+import cc.ptoe.messenger.presentation.ui.acp.rememberAcpConversationAvatars
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.generated.resources.Res
@@ -126,7 +127,8 @@ fun ConversationsScreen(
     val projectCounts by viewModel.projectConversationCounts.collectAsStateWithLifecycle()
     val unprojectedCount by viewModel.unprojectedConversationCount.collectAsStateWithLifecycle()
     val recentConversations by viewModel.recentConversations.collectAsStateWithLifecycle()
-    val agentAvatars = remember(allAgents) { allAgents.associate { it.id to it.avatar } }
+    val acpAvatars = rememberAcpConversationAvatars(recentConversations.map { it.agentId }.toSet())
+    val agentAvatars = remember(allAgents, acpAvatars) { allAgents.associate { it.id to it.avatar } + acpAvatars }
     val selectableAgents = remember(allAgents) { allAgents.filter { it.role != Agent.ROLE_TITLE } }
     // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
     val agentNames = agentDisplayNames(allAgents)

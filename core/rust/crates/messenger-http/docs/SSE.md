@@ -202,7 +202,8 @@ Core no longer needs the process. See [ACP.md](ACP.md) for the endpoint pair.
 
 `store {kind:"acp"|"mcp"}` fetches the signed-in Cloud integration catalog and returns
 `Store {items:[...]}`. ACP catalog agents include descriptions and omit disabled
-profiles. Local ACP sessions also appear in the normal conversation list endpoints;
+profiles. Local catalog entries include the profile's device-local `avatar` path;
+remote catalog entries return null. Local ACP sessions also appear in the normal conversation list endpoints;
 these are projections of local transcripts and never create Cloud sync rows.
 
 ACP `sessionSettings {sessionId}` restores the Agent if necessary and returns

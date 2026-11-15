@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -33,8 +34,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
 import cc.ptoe.messenger.data.util.fileExists
 import coil3.compose.AsyncImage
+
+/** Resolve bundled ACP identities for both new and previously saved profiles. */
+fun resolveAcpAvatar(profileId: String?, avatar: String?): String? =
+    avatar?.takeIf { it.isNotBlank() } ?: profileId?.removePrefix("acp:")
+        ?.takeIf { it in setOf("codex", "claude-code", "opencode") }
+        ?.let { "acp-builtin:$it" }
 
 @Composable
 fun AgentAvatar(
@@ -52,6 +60,12 @@ fun AgentAvatar(
     }
     val isValid = avatarSource != null && fileExists(avatarSource)
     val remoteAvatar = avatar?.takeIf { allowRemote && (it.startsWith("http://") || it.startsWith("https://")) }
+    val builtinLabel = when (avatar) {
+        "acp-builtin:codex" -> "Cx"
+        "acp-builtin:claude-code" -> "Cl"
+        "acp-builtin:opencode" -> "Oc"
+        else -> null
+    }
 
     Box(
         modifier = modifier
@@ -60,7 +74,10 @@ fun AgentAvatar(
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
     ) {
-        if (isValid || remoteAvatar != null) {
+        if (builtinLabel != null) {
+            Text(builtinLabel, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontSize = MaterialTheme.typography.titleMedium.fontSize * (size.value / 40f), fontWeight = FontWeight.Bold)
+        } else if (isValid || remoteAvatar != null) {
             AsyncImage(
                 model = avatarSource ?: remoteAvatar,
                 contentDescription = null,

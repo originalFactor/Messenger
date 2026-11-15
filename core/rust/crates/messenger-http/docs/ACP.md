@@ -35,7 +35,7 @@ Install and sign in to the ACP Agent on the device first. On Android install
 Messenger Runtime and perform the Agent setup in its terminal. Open **ACP Agents**
 in Settings and use the FAB to add a profile manually or import one from the
 Messenger Cloud Store. Codex, Claude Code and OpenCode stdio templates are seeded
-once. Profiles support description, enable state, command, JSON arguments and
+once. Profiles support an optional device-local avatar path, description, enable state, command, JSON arguments and
 environment, and optional working directory. The wire format is:
 
 ```json

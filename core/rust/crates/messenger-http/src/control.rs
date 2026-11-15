@@ -391,7 +391,7 @@ async fn execute(
                 }));
             let profiles = settings(&state.store)?.agents;
             let external_agents = profiles.into_iter().filter(|profile| profile.enabled).map(
-                |agent| json!({"id":format!("acp:{}",agent.id),"name":agent.name,"description":agent.description,"kind":"acp"}),
+                |agent| json!({"id":format!("acp:{}",agent.id),"name":agent.name,"description":agent.description,"avatar":if matches!(scope, ControlScope::Local) { agent.avatar } else { None },"kind":"acp"}),
             );
             let mut external: Vec<_> = state
                 .external

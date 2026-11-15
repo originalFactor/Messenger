@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.ptoe.messenger.presentation.ui.acp.NewConversationDialog
+import cc.ptoe.messenger.presentation.ui.acp.rememberAcpConversationAvatars
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.action_back
@@ -116,6 +117,7 @@ fun ProjectConversationsScreen(
     val allAgents by viewModel.allAgents.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val agentsById = remember(allAgents) { allAgents.associateBy { it.id } }
+    val acpAvatars = rememberAcpConversationAvatars(conversations.map { it.agentId }.toSet())
     // 内置 Agent 的种子名按系统语言展示（用户改过名的照原样）。
     val agentNames = agentDisplayNames(allAgents)
 
@@ -223,7 +225,7 @@ fun ProjectConversationsScreen(
                     settingsItems(conversations, key = { it.id }, contentType = "conversation") { conversation ->
                         ConversationListItem(
                             conversation = conversation,
-                            avatar = agentsById[conversation.agentId]?.avatar,
+                            avatar = acpAvatars[conversation.agentId] ?: agentsById[conversation.agentId]?.avatar,
                             isMultiSelectMode = uiState.isMultiSelectMode,
                             isMultiSelected = conversation.id in uiState.selectedConversationIds,
                             enableContextMenu = enableContextMenu,

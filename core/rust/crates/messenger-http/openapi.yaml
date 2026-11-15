@@ -3037,6 +3037,7 @@ components:
               id: { type: string }
               name: { type: string }
               description: { type: string, maxLength: 4000 }
+              avatar: { type: [string, "null"], maxLength: 4096, description: Device-local avatar path for this ACP profile. }
               enabled: { type: boolean, default: true }
               providerTakeover: { type: boolean, default: false, description: Opt-in provider relay for built-in ACP profiles. }
               command: { type: string }

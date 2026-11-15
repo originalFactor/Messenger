@@ -39,6 +39,20 @@ mod mcp_injection_tests {
     use messenger_mcp::{McpServerConfig, McpTransportType};
 
     #[test]
+    fn profile_avatar_round_trips_and_legacy_profiles_remain_readable() {
+        let mut profile: Profile = serde_json::from_value(json!({
+            "id":"custom", "name":"Custom", "command":"agent"
+        })).unwrap();
+        assert!(profile.avatar.is_none());
+        profile.avatar = Some("/private/avatars/custom.png".into());
+        validate_profiles(&[profile.clone()]).unwrap();
+        let restored: Profile = serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+        assert_eq!(restored.avatar, profile.avatar);
+        profile.avatar = Some("x".repeat(4097));
+        assert!(validate_profiles(&[profile]).is_err());
+    }
+
+    #[test]
     fn enabled_servers_are_forwarded_with_credentials_and_disabled_are_omitted() {
         let stdio = McpServerConfig {
             name: "local".into(), command: "server".into(), args: vec!["--stdio".into()],
@@ -72,6 +86,8 @@ pub(crate) struct Profile {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub avatar: Option<String>,
     #[serde(default = "profile_enabled")]
     pub enabled: bool,
     #[serde(default, rename = "providerTakeover")]
@@ -92,7 +108,7 @@ pub(crate) fn default_profiles() -> Vec<Profile> {
         ("claude-code", "Claude Code", "Claude coding agent via ACP", "pnpm", vec!["dlx", "@agentclientprotocol/claude-agent-acp"]),
         ("opencode", "OpenCode", "OpenCode coding agent via ACP", "opencode", vec!["acp"]),
     ].into_iter().map(|(id, name, description, command, args)| Profile {
-        id: id.into(), name: name.into(), description: description.into(), enabled: false, provider_takeover: false,
+        id: id.into(), name: name.into(), description: description.into(), avatar: None, enabled: false, provider_takeover: false,
         command: command.into(), args: args.into_iter().map(str::to_string).collect(),
         env: HashMap::new(), cwd: None,
     }).collect()
@@ -109,6 +125,7 @@ pub(crate) fn validate_profiles(profiles: &[Profile]) -> Result<(), ApiError> {
                 || profile.name.trim().is_empty()
                 || profile.name.len() > 120
                 || profile.description.len() > 4000
+                || profile.avatar.as_ref().is_some_and(|avatar| avatar.len() > 4096 || avatar.contains('\0'))
                 || profile.command.trim().is_empty()
                 || profile.command.contains('\0')
                 || profile
@@ -1382,7 +1399,7 @@ mod tests {
         );
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py");
         let profile = Profile {
-            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true, provider_takeover: false,
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), avatar: None, enabled: true, provider_takeover: false,
             command: "python3".into(), args: vec![fixture.to_string_lossy().into_owned(), "mcp-load".into()],
             env: HashMap::new(), cwd: None,
         };
@@ -1444,7 +1461,7 @@ mod tests {
             ..Default::default()
         }];
         let profile = Profile {
-            id: "fixture".into(), name: "Fixture".into(), description: String::new(), enabled: true, provider_takeover: false,
+            id: "fixture".into(), name: "Fixture".into(), description: String::new(), avatar: None, enabled: true, provider_takeover: false,
             command: "python3".into(),
             args: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_agent.py").to_string_lossy().into_owned(), "mcp-load".into()],
             env: HashMap::new(), cwd: None,
