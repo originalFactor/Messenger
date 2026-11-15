@@ -859,3 +859,30 @@ async fn integration_store_uses_the_cloud_cookie_and_signs_out_on_rejection() {
     assert!(engine.current_user().is_none());
     assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn push_uses_session_cookie_and_clears_rejected_session() {
+    use wiremock::{Mock, ResponseTemplate, matchers::{method, path, header, body_json}};
+    let server = wiremock::MockServer::start().await;
+    let store = Store::open_memory().unwrap();
+    let session = Session { cookie: Some("messenger_session=push".into()), host: Some(server.uri()) };
+    let engine = SyncEngine::new(&store, session.clone());
+    engine.save_session(&session).unwrap();
+    engine.save_user(&CloudUser { id: "acct".into(), ..Default::default() }).unwrap();
+    engine.set_server_url(&server.uri()).unwrap();
+    Mock::given(method("PUT")).and(path("/api/push/device"))
+        .and(header("cookie", "messenger_session=push"))
+        .and(body_json(serde_json::json!({"registrationId":"device-id"})))
+        .respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
+    Mock::given(method("POST")).and(path("/api/push/events"))
+        .and(header("cookie", "messenger_session=push"))
+        .and(body_json(serde_json::json!({"event":"approval"})))
+        .respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
+    engine.register_push_device("device-id").await.unwrap();
+    engine.send_push_event("approval").await.unwrap();
+    Mock::given(method("DELETE")).and(path("/api/push/device"))
+        .respond_with(ResponseTemplate::new(401)).expect(1).mount(&server).await;
+    assert!(matches!(engine.unregister_push_device().await.unwrap_err(), CloudError::SessionExpired { .. }));
+    assert!(engine.current_user().is_none());
+    assert!(store.kv_get(crate::sync::KV_SESSION).unwrap().is_none());
+}

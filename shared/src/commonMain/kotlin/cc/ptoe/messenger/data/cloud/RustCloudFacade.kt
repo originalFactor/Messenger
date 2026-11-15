@@ -181,6 +181,9 @@ class RustCloudFacade(
         core.cloudSetServerUrl(normalized)
     }
 
+    override suspend fun registerPushDevice(registrationId: String) = request { core.cloudPushDevice(registrationId) }
+    override suspend fun sendPushEvent(event: String) = request { core.cloudPushEvent(event) }
+
     override suspend fun login(email: String, password: String, serverUrl: String?): CloudLoginOutcome =
         request {
             prepareRequestServer(serverUrl)

@@ -552,6 +552,7 @@ class ChatViewModel(
         _streamingDiff.value = null
 
         currentGenerationJob = viewModelScope.launch {
+            var terminalEvent = false
             try {
                 bridge.runTurn(
                     config = config,
@@ -576,12 +577,22 @@ class ChatViewModel(
                         }
                     },
                     onEventJson = { eventJson ->
+                        val eventType = runCatching {
+                            NetworkClient.json.parseToJsonElement(eventJson).jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                        }.getOrNull()
+                        when (eventType) {
+                            "ToolApprovalRequested" -> cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("approval")
+                            "Finished" -> { terminalEvent = true; cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("completed") }
+                            "Error" -> { terminalEvent = true; cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("failed") }
+                            "Cancelled" -> terminalEvent = true
+                        }
                         handleTurnEvent(eventJson, clearImagesOnStart = operation == "send")
                     }
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (!terminalEvent) cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("failed")
                 setError(e.message ?: getString(Res.string.error_unknown))
             } finally {
                 _streamingContent.value = null

@@ -59,6 +59,12 @@
         android:theme="@style/Theme.Messenger"
         android:usesCleartextTraffic="true">
         <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
+        <receiver android:name=".PushReceiver" android:enabled="true" android:exported="false">
+            <intent-filter>
+                <action android:name="cn.jpush.android.intent.RECEIVER_MESSAGE" />
+                <category android:name="${applicationId}" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -376,6 +376,27 @@ impl CloudApiClient {
         Ok(Some((bytes, etag, content_type)))
     }
 
+    pub async fn push_device(&self, url: &str, registration_id: &str) -> CloudResult<()> {
+        self.send_no_content(self.http.put(url).json(&serde_json::json!({"registrationId": registration_id}))).await
+    }
+
+    pub async fn remove_push_device(&self, url: &str) -> CloudResult<()> {
+        self.send_no_content(self.http.delete(url)).await
+    }
+
+    pub async fn push_event(&self, url: &str, event: &str) -> CloudResult<()> {
+        self.send_no_content(self.http.post(url).json(&serde_json::json!({"event": event}))).await
+    }
+
+    async fn send_no_content(&self, request: reqwest::RequestBuilder) -> CloudResult<()> {
+        let response = self.add_session(request).send().await.map_err(|e| CloudError::Network(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(authenticated_http_error(status.as_u16(), response.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
     // -- internals --
 
     fn add_session(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

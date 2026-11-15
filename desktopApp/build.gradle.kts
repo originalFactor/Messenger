@@ -24,6 +24,8 @@ plugins {
 }
 
 dependencies {
+    testImplementation(kotlin("test"))
+    implementation(libs.kotlinx.serialization.json)
     implementation(project(":shared"))
     // Rust core (UniFFI bindings + host cdylib); Main.kt opens the store.
     implementation(project(":core-bindings-desktop"))

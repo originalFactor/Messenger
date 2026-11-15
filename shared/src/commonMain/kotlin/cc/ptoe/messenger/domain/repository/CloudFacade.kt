@@ -56,6 +56,9 @@ interface CloudFacade {
 
     suspend fun setServerUrl(url: String)
 
+    suspend fun registerPushDevice(registrationId: String)
+    suspend fun sendPushEvent(event: String)
+
     suspend fun login(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
     suspend fun register(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
     suspend fun refreshUser(): CloudUser

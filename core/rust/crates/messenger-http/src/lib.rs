@@ -486,6 +486,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/migration/import", post(import_legacy_data))
         .route("/models/discover", post(discover_models))
         .route("/models/metadata/:id", get(model_metadata))
+        .route("/cloud/push/device", axum::routing::put(cloud_push_device).delete(cloud_remove_push_device))
+        .route("/cloud/push/events", post(cloud_push_event))
         .route("/cloud/login", post(cloud_login))
         .route("/cloud/register", post(cloud_register))
         .route("/cloud/logout", post(cloud_logout))
@@ -1616,6 +1618,29 @@ async fn model_metadata(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let metadata = models_dev_metadata(&state.store, &id).await;
     json(metadata)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PushDeviceBody { registration_id: String }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PushEventBody { event: String }
+
+async fn cloud_push_device(State(state): State<ApiState>, Json(body): Json<PushDeviceBody>) -> Result<StatusCode, ApiError> {
+    sync_engine(&state.store)?.register_push_device(&body.registration_id).await.map_err(ApiError::cloud)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cloud_remove_push_device(State(state): State<ApiState>) -> Result<StatusCode, ApiError> {
+    sync_engine(&state.store)?.unregister_push_device().await.map_err(ApiError::cloud)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cloud_push_event(State(state): State<ApiState>, Json(body): Json<PushEventBody>) -> Result<StatusCode, ApiError> {
+    sync_engine(&state.store)?.send_push_event(&body.event).await.map_err(ApiError::cloud)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn cloud_login(

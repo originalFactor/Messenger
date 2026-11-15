@@ -460,6 +460,14 @@ class RestCoreBridge(
     )
     override fun kvDelete(key: String) = blockingDelete("/kv/${path(key)}")
 
+    override suspend fun cloudPushDevice(registrationId: String) = putNoContent(
+        "/cloud/push/device", buildJsonObject { put("registrationId", registrationId) }.toString()
+    )
+    override suspend fun cloudRemovePushDevice() = deleteNoContent("/cloud/push/device")
+    override suspend fun cloudPushEvent(event: String) = postNoContent(
+        "/cloud/push/events", buildJsonObject { put("event", event) }.toString()
+    )
+
     override suspend fun cloudLogin(email: String, password: String): String =
         postText("/cloud/login", credentials(email, password))
     override suspend fun cloudRegister(email: String, password: String): String =

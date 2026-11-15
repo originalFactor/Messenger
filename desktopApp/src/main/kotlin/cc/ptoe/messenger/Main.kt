@@ -95,6 +95,7 @@ fun main() {
     restCore.publishPlatformTools(container.mcpManager)
     AppContainerHolder.initialize(container)
     container.initializeLocalAndCloudData()
+    installDesktopTaskPush(container)
 
     SingletonImageLoader.setSafe { context ->
         ImageLoader.Builder(context)

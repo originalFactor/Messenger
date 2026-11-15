@@ -1899,6 +1899,29 @@ paths:
                 legacyDbDir: { type: string }
                 nowMs: { type: integer, format: int64 }
       responses: { "200": { description: "Import summary or `{imported:false}`" } }
+  /cloud/push/device:
+    put:
+      operationId: cloudRegisterPushDevice
+      description: Register this signed-in Android session's JPush registration ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [registrationId], properties: { registrationId: { type: string } } }
+      responses: { "204": { description: Registered }, "401": { $ref: "#/components/responses/CloudError" } }
+    delete:
+      operationId: cloudUnregisterPushDevice
+      responses: { "204": { description: Unregistered }, "401": { $ref: "#/components/responses/CloudError" } }
+  /cloud/push/events:
+    post:
+      operationId: cloudPushEvent
+      description: Request a generic task notification for this account's registered devices.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [event], properties: { event: { type: string, enum: [failed, approval, completed] } } }
+      responses: { "204": { description: Accepted }, "401": { $ref: "#/components/responses/CloudError" } }
   /cloud/login:
     post:
       operationId: cloudLogin

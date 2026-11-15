@@ -101,6 +101,9 @@ interface CoreBridge {
     fun kvDelete(key: String)
 
     // Cloud & Sync
+    suspend fun cloudPushDevice(registrationId: String) { error("Push unavailable") }
+    suspend fun cloudRemovePushDevice() { error("Push unavailable") }
+    suspend fun cloudPushEvent(event: String) { error("Push unavailable") }
     suspend fun cloudLogin(email: String, password: String): String
     suspend fun cloudRegister(email: String, password: String): String
     suspend fun cloudLogout()

@@ -196,17 +196,17 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                                         report(output?.text("output").orEmpty().ifBlank { update.text("status") })
                                                     }
                                                 }
-                                                "Permission" -> permission = event
-                                                "Finished" -> terminal = true
+                                                "Permission" -> { permission = event; TaskPushNotifications.notify("approval") }
+                                                "Finished" -> { terminal = true; TaskPushNotifications.notify("completed") }
                                                 "Cancelled" -> { terminal = true; queuePaused = true }
-                                                "Error" -> { terminal = true; queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(event.errorDetail()) }
+                                                "Error" -> { terminal = true; TaskPushNotifications.notify("failed"); queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(event.errorDetail()) }
                                             }
                                         }
-                                        if (!terminal) { queuePaused = true; report(endedEarly) }
+                                        if (!terminal) { TaskPushNotifications.notify("failed"); queuePaused = true; report(endedEarly) }
                                         loadHistory()
                                         liveId = null
                                     } catch (cancelled: CancellationException) { throw cancelled
-                                    } catch (failure: Exception) { queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(failure.message.orEmpty())
+                                    } catch (failure: Exception) { if (!terminal) TaskPushNotifications.notify("failed"); queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(failure.message.orEmpty())
                                     } finally { active = ""; permission = null }
                                 }
                             }

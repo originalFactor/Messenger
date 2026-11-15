@@ -194,6 +194,18 @@ impl<'a> SyncEngine<'a> {
         Ok(user)
     }
 
+    pub async fn register_push_device(&self, registration_id: &str) -> CloudResult<()> {
+        self.with_session(self.client.push_device(&self.endpoint("api/push/device"), registration_id)).await
+    }
+
+    pub async fn unregister_push_device(&self) -> CloudResult<()> {
+        self.with_session(self.client.remove_push_device(&self.endpoint("api/push/device"))).await
+    }
+
+    pub async fn send_push_event(&self, event: &str) -> CloudResult<()> {
+        self.with_session(self.client.push_event(&self.endpoint("api/push/events"), event)).await
+    }
+
     pub async fn logout(&self) -> CloudResult<()> {
         let _ = self.client.logout(&self.endpoint("api/auth/logout")).await;
         self.clear_session().map_err(CloudError::Network)?;

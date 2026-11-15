@@ -80,6 +80,7 @@ class MessengerApplication : Application() {
         restCore.platformTools = container::availableTools
         restCore.publishPlatformTools(container.mcpManager)
         AppContainerHolder.initialize(container)
+        PushSetup.startRegistration(this, container.cloud)
         container.initializeLocalAndCloudData()
         setupImageLoader(container)
         startWearSync()

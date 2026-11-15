@@ -136,3 +136,5 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 - **Scroll admission**: the default `ExpressiveScaffold` app-bar state starts with `heightOffsetLimit = 0f` until an `ExpressiveTopAppBar` binds and measures it. Screens with a custom app-bar behavior or no collapsing app bar must not lose drag events to an unused outer behavior with the default `-Float.MAX_VALUE` limit. Keep touch and mouse-wheel scroll regressions covered.
 
 - Tool settings expose Core’s manual/automatic tool approval mode. Normal Android/Desktop chat opts in to `ToolApprovalRequested`, displays the tool and arguments, and submits the user’s decision through Core; clients without a decision UI must not opt in. The pending request is cleared when the turn ends or the conversation changes.
+
+- Chat and ACP task events publish generic approval, failure and completion kinds through `TaskPushNotifications`; Desktop installs the optional handler, and other clients leave it unset. Keep message content, tool arguments and credentials out of push events.
