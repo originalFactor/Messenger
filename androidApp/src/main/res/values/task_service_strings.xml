@@ -1,0 +1,7 @@
+<resources>
+    <string name="task_service_channel">Background tasks</string>
+    <string name="task_service_title">Messenger is running</string>
+    <string name="task_service_running">A task is running in the background</string>
+    <string name="task_service_waiting">Scheduled tasks are available in the background</string>
+    <string name="task_notification_permission_denied">Notification permission is off. Enable notifications in system settings to see running tasks.</string>
+</resources>

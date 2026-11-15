@@ -595,6 +595,10 @@
     <string name="scheduled_desc">按计划运行 Agent 任务</string>
     <string name="scheduled_create">新建任务</string>
     <string name="scheduled_runtime_note">任务仅在 Messenger Core 运行期间执行。错过的任务将在 Core 再次启动后执行。时间以 UTC 显示。</string>
+    <string name="scheduled_background_title">长期驻留后台</string>
+    <string name="scheduled_background_description">通过常驻通知保持计划任务运行。Android 系统或设备仍可能停止应用。</string>
+    <string name="scheduled_background_failed">无法启动后台运行，请在 Messenger 打开时重试。</string>
+    <string name="scheduled_background_permission_denied">请在 Android 设置中允许通知，以显示常驻通知。</string>
     <string name="scheduled_empty">暂无计划任务</string>
     <string name="scheduled_interval_value">每 %1$d 分钟</string>
     <string name="scheduled_next">下次：%1$s</string>

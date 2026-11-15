@@ -93,6 +93,10 @@ pub(crate) struct ImageGenerationService {
     active: Mutex<HashMap<String, CancellationToken>>,
 }
 impl ImageGenerationService {
+    pub(crate) async fn active_count(&self) -> usize {
+        self.active.lock().await.len()
+    }
+
     pub(crate) fn new(store: Arc<Store>, assets: Arc<AssetService>) -> Result<Self, ApiError> {
         let service = Self {
             store,
@@ -771,6 +775,7 @@ mod tests {
             .submit(request(), CancellationToken::new())
             .await
             .unwrap();
+        assert_eq!(service.active_count().await, 1);
         service.cancel(&job.id).await.unwrap();
         assert_eq!(
             terminal(&service, &job.id).await.status,

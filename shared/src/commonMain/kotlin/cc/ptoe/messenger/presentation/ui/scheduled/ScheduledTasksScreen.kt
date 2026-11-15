@@ -18,6 +18,7 @@ import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.*
 import cc.ptoe.messenger.presentation.ui.components.*
+import cc.ptoe.messenger.presentation.platform.BackgroundTaskPersistenceRow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -99,6 +100,7 @@ fun ScheduledTasksScreen(onBackClick: () -> Unit, onOpenConversation: (String) -
     }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Text(stringResource(Res.string.scheduled_runtime_note), Modifier.padding(vertical = 12.dp)) }
+            item { BackgroundTaskPersistenceRow { message -> scope.launch { snackbar.showSnackbar(message) } } }
             error?.let { message -> item {
                 Text(message, color = MaterialTheme.colorScheme.error)
                 TextButton(onClick = { scope.launch { refresh() } }) { Text(stringResource(Res.string.action_retry)) }

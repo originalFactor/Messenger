@@ -403,6 +403,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(artifacts::routes())
         .route("/tools/core", get(core_tool_catalog))
         .route("/health", get(health))
+        .route("/activity", get(activity))
         .route("/meta", get(meta))
         .route("/events", get(core_events))
         .route("/remote/status", get(remote_status))
@@ -565,6 +566,20 @@ pub fn router(state: ApiState) -> Router {
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new().nest(API_PREFIX, protected)
+}
+
+/// Snapshot of work currently owned by Core, for native foreground-service
+/// lifecycle. Counts can overlap (a scheduled turn also appears in turns).
+async fn activity(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let turns = state.active_turns.lock().await.len();
+    let scheduled_tasks = state.schedule_gate.lock().await.len();
+    let image_jobs = state.images.active_count().await;
+    Json(serde_json::json!({
+        "active": turns + scheduled_tasks + image_jobs > 0,
+        "turns": turns,
+        "scheduledTasks": scheduled_tasks,
+        "imageJobs": image_jobs,
+    }))
 }
 
 async fn authenticate(
@@ -3267,6 +3282,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn activity_reports_live_turns_and_scheduled_work_and_requires_authentication() {
+        let state = test_state();
+        let app = router(state.clone());
+        let unauthorized = app.clone().oneshot(Request::builder().uri("/api/v1/activity").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let read = || {
+            let app = app.clone();
+            async move {
+                let response = app.oneshot(request(axum::http::Method::GET, "/api/v1/activity", None)).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+            }
+        };
+        assert_eq!(read().await, serde_json::json!({"active": false, "turns": 0, "scheduledTasks": 0, "imageJobs": 0}));
+        state.active_turns.lock().await.insert("conversation".into(), CancellationToken::new());
+        state.schedule_gate.lock().await.insert("schedule".into(), CancellationToken::new());
+        assert_eq!(read().await, serde_json::json!({"active": true, "turns": 1, "scheduledTasks": 1, "imageJobs": 0}));
+        state.active_turns.lock().await.clear();
+        assert!(read().await["active"].as_bool().unwrap());
+        state.schedule_gate.lock().await.clear();
+        assert!(!read().await["active"].as_bool().unwrap());
     }
 
     fn agent_json(id: &str, is_default: bool) -> String {

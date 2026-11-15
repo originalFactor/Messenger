@@ -596,6 +596,10 @@
     <string name="scheduled_desc">Run Agent tasks on a schedule</string>
     <string name="scheduled_create">New task</string>
     <string name="scheduled_runtime_note">Tasks run while Messenger Core is running. Missed runs execute when Core starts again. Times are shown in UTC.</string>
+    <string name="scheduled_background_title">Keep running in background</string>
+    <string name="scheduled_background_description">Keep scheduled tasks available with an ongoing notification. Android or your device may still stop the app.</string>
+    <string name="scheduled_background_failed">Unable to start background operation. Try again while Messenger is open.</string>
+    <string name="scheduled_background_permission_denied">Allow notifications in Android settings to show the ongoing notification.</string>
     <string name="scheduled_empty">No scheduled tasks yet</string>
     <string name="scheduled_interval_value">Every %1$d minutes</string>
     <string name="scheduled_next">Next: %1$s</string>

@@ -31,6 +31,9 @@ interface CoreBridge {
     suspend fun learningRequest(method: String, path: String, body: String? = null): String =
         error("Learning API is unavailable in this Core bridge")
 
+    /** True while Core is executing a turn, scheduled task or image job. */
+    suspend fun hasActiveTasks(): Boolean = false
+
     suspend fun scheduledTaskRequest(method: String, path: String, body: String? = null): String =
         error("Scheduled tasks unavailable")
 

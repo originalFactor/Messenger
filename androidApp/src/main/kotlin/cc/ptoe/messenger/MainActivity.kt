@@ -18,6 +18,8 @@ package cc.ptoe.messenger
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -26,6 +28,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -33,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.Lifecycle
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -41,6 +45,11 @@ import cc.ptoe.messenger.presentation.theme.ThemeMode
 import cc.ptoe.messenger.presentation.ui.components.MainScaffold
 
 class MainActivity : ComponentActivity() {
+
+    override fun onStart() {
+        super.onStart()
+        AndroidForegroundTasks.restoreFromActivity()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,7 +63,20 @@ class MainActivity : ComponentActivity() {
                 var showPushConsent by remember { mutableStateOf(!PushSetup.hasConsent(this)) }
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
-                ) { }
+                ) { granted ->
+                    if (!granted) Toast.makeText(this, R.string.task_notification_permission_denied, Toast.LENGTH_LONG).show()
+                }
+                LaunchedEffect(Unit) {
+                    AndroidForegroundTasks.notificationPermissionRequests.collect {
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                            Toast.makeText(this@MainActivity, R.string.task_notification_permission_denied, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
                 if (showPushConsent) {
                     AlertDialog(
                         onDismissRequest = { showPushConsent = false },

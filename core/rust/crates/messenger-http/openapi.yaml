@@ -14,6 +14,23 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /activity:
+    get:
+      operationId: activity
+      description: Live Core work for native foreground-service lifecycle; counts can overlap.
+      responses:
+        "200":
+          description: Current activity snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [active, turns, scheduledTasks, imageJobs]
+                properties:
+                  active: { type: boolean }
+                  turns: { type: integer, minimum: 0 }
+                  scheduledTasks: { type: integer, minimum: 0 }
+                  imageJobs: { type: integer, minimum: 0 }
   /scheduled-tasks/tool-settings:
     get:
       summary: Read the device-local Agent scheduling tool switch

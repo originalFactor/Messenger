@@ -15,6 +15,8 @@
  */
 package cc.ptoe.messenger.core
 
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
+
 import cc.ptoe.messenger.data.remote.NetworkClient
 import cc.ptoe.messenger.data.remote.createPlatformHttpClient
 import io.ktor.client.HttpClient
@@ -290,6 +292,9 @@ class RestCoreBridge(
         return if (response.status == HttpStatusCode.NoContent) "{}" else response.requireText()
     }
 
+    override suspend fun hasActiveTasks(): Boolean =
+        NetworkClient.json.parseToJsonElement(getText("/activity")).jsonObject.getValue("active").jsonPrimitive.content.toBooleanStrict()
+
     override suspend fun scheduledTaskRequest(method: String, path: String, body: String?): String {
         require(path == "/scheduled-tasks" || path.startsWith("/scheduled-tasks/"))
         require(!path.contains("..") && !path.contains('#') && !path.contains('\\'))
@@ -350,9 +355,16 @@ class RestCoreBridge(
     }
 
     override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
-        mcpManager?.let { publishPlatformCatalog(it) }
-        streamSsePost("/control/commands/${path(requestId)}", command.toString()) {
-            onEvent(NetworkClient.json.parseToJsonElement(it).jsonObject)
+        val task = command["action"]?.jsonPrimitive?.contentOrNull == "prompt"
+        val finishTask = if (task) ForegroundTaskRegistry.end else null
+        if (task) ForegroundTaskRegistry.begin?.invoke()
+        try {
+            mcpManager?.let { publishPlatformCatalog(it) }
+            streamSsePost("/control/commands/${path(requestId)}", command.toString()) {
+                onEvent(NetworkClient.json.parseToJsonElement(it).jsonObject)
+            }
+        } finally {
+            finishTask?.invoke()
         }
     }
 
@@ -648,6 +660,8 @@ class RestCoreBridge(
         onEventJson: (String) -> Unit,
     ) {
         var finished = false
+        val finishTask = ForegroundTaskRegistry.end
+        ForegroundTaskRegistry.begin?.invoke()
         activeConversationId = config.conversationId
         try {
             streamSsePost(
@@ -707,6 +721,7 @@ class RestCoreBridge(
             }
         } finally {
             activeConversationId = null
+            finishTask?.invoke()
         }
         if (!finished) {
             onEventJson(

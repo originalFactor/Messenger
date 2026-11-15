@@ -138,3 +138,5 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 - Tool settings expose Core’s manual/automatic tool approval mode. Normal Android/Desktop chat opts in to `ToolApprovalRequested`, displays the tool and arguments, and submits the user’s decision through Core; clients without a decision UI must not opt in. The pending request is cleared when the turn ends or the conversation changes.
 
 - Chat and ACP task events publish generic approval, failure and completion kinds through `TaskPushNotifications`; Desktop installs the optional handler, and other clients leave it unset. Keep message content, tool arguments and credentials out of push events.
+
+- Android schedules expose an opt-in background persistence switch through `BackgroundTaskPersistenceRegistry`; the Android shell owns the foreground service and persistence, while the shared Android row requests notification permission before enabling it. `RestCoreBridge` brackets normal chat (including Wear) and ACP prompt streams with `ForegroundTaskRegistry` leases; always release in `finally`, including failed starts and cancellation. Desktop leaves these hooks unset.
