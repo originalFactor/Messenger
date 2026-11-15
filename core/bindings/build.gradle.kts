@@ -192,9 +192,7 @@ val generateUniFFIBindings = tasks.register<Exec>("generateUniFFIBindings") {
 /**
  * cargo-ndk for ONE build type's ABI list.
  *
- * Deliberately one task per build type rather than a single task over the union
- * of every ABI: a Rust cross-build of this workspace costs minutes, and a union
- * made every `assembleDebug` cross-compile the release ABI too. Each task owns
+ * Each build type compiles only its configured ABI list. Each task owns
  * its own output directory, so the two never invalidate each other, and each
  * variant registers only its own directory as jniLibs (see androidComponents).
  */
