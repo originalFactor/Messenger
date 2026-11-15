@@ -51,6 +51,7 @@ class Chat:
         self.notice = ""
         self.notice_error = False
         self.update = lambda: None
+        self.approve_tool = None
         self.turn_task: asyncio.Task | None = None
         self.turn_path: str | None = None
         self.accepted = False
@@ -455,6 +456,8 @@ class Chat:
                 body = {**body, "workspacePath": str(workspace)}
                 tool_project = {"workspace": str(workspace), "owner": {"kind": "local"}}
             self.turn_path = entity("conversations", self.session["id"])
+            if self.approve_tool is not None:
+                body = {**body, "supportsToolApproval": True}
             self.status("Waiting for the model…")
             async with aclosing(self.api.turn(self.turn_path, body)) as events:
                 async for event in events:
@@ -471,6 +474,10 @@ class Chat:
                             self.update()
                         case "ToolCallStarted":
                             self.status(f"Tool · {event['name']}")
+                        case "ToolApprovalRequested":
+                            approved = await self.approve_tool(event) if self.approve_tool else False
+                            path = entity("turns/tools", event["callId"])
+                            await self.api.json(f"{path}/approval", method="POST", body={"approved": bool(approved)})
                         case "ToolCallRequested":
                             path = entity("turns/tools", event["callId"])
                             self.tool_task = asyncio.create_task(execute_tool(

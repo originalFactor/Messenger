@@ -1801,6 +1801,31 @@ paths:
     post:
       operationId: cancelTurn
       responses: { "202": { description: Cancellation requested }, "404": { $ref: "#/components/responses/NotFound" } }
+  /tools/approval:
+    get:
+      operationId: getToolApprovalMode
+      responses:
+        "200":
+          description: Device-local approval mode (default manual).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ToolApprovalSettings" } } }
+    put:
+      operationId: setToolApprovalMode
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ToolApprovalSettings" } } }
+      responses:
+        "200":
+          description: Saved approval mode.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ToolApprovalSettings" } } }
+        "400": { description: Invalid mode }
+  /turns/tools/{callId}/approval:
+    parameters: [{ name: callId, in: path, required: true, schema: { type: string }, description: Approval request ID from ToolApprovalRequested. }]
+    post:
+      operationId: resolveToolApproval
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [approved], properties: { approved: { type: boolean } } } } }
+      responses: { "202": { description: Decision delivered }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Approval closed } }
   /turns/tools/{callId}/result:
     parameters: [{ name: callId, in: path, required: true, schema: { type: string } }]
     post:
@@ -3034,6 +3059,11 @@ components:
         modeId: { type: string, description: Legacy Agent mode ID (mutually exclusive with configId). }
         writable: { type: boolean }
         text: { type: string }
+    ToolApprovalSettings:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [manual, automatic], default: manual }
     ChatRequest:
       type: object
       properties:
@@ -3042,6 +3072,7 @@ components:
         partsJson: { type: string, description: Persisted multimodal content for a send. }
         messageGroup: { type: array, items: { type: string }, description: Validated assistant and tool rows for a native regenerate. }
         disableTools: { type: boolean, default: false }
+        supportsToolApproval: { type: boolean, default: false, description: Client handles ToolApprovalRequested events and posts a decision; unsupported manual requests fail closed. }
         messageId: { type: string }
         workspacePath: { type: string, description: "Execution host's temporary working directory for a projectless turn. The client creates and manages this directory; ignored for project conversations." }
         toolSpecs:

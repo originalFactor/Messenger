@@ -304,6 +304,15 @@ class RestCoreBridge(
         return if (response.status == HttpStatusCode.NoContent) "{}" else response.requireText()
     }
 
+    override suspend fun toolApprovalSettings(method: String, body: String?): String {
+        val verb = when (method) { "GET" -> HttpMethod.Get; "PUT" -> HttpMethod.Put; else -> error("Unsupported method") }
+        return request(verb, "/tools/approval", body).requireText()
+    }
+
+    override suspend fun respondToolApproval(callId: String, approved: Boolean) {
+        postNoContent("/turns/tools/${path(callId)}/approval", buildJsonObject { put("approved", approved) }.toString())
+    }
+
     override suspend fun learningAsset(id: String): ByteArray {
         require(id.length == 64 && id.all { it in '0'..'9' || it in 'a'..'f' })
         val response = request(HttpMethod.Get, "/assets/$id/content")
@@ -637,6 +646,7 @@ class RestCoreBridge(
                 "/conversations/${path(config.conversationId)}/messages",
                 buildJsonObject {
                     put("operation", config.operation)
+                    if (config.supportsToolApproval) put("supportsToolApproval", true)
                     if (config.disableTools) put("disableTools", true)
                     config.workspacePath?.let { put("workspacePath", it) }
                     config.content?.let { put("content", it) }

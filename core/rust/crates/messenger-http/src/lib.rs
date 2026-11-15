@@ -77,6 +77,8 @@ mod assets;
 mod image_generation;
 mod artifacts;
 mod scheduled_tasks;
+mod approval;
+mod approval_agent;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
@@ -102,6 +104,7 @@ pub struct ApiState {
     agent_mutations: Arc<Mutex<()>>,
     schedule_gate: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pending_tools: Arc<Mutex<HashMap<String, oneshot::Sender<ToolExecutionResult>>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     events: broadcast::Sender<CoreEvent>,
     /// Cross-device routing: this device's id, who is online, and the relay.
     remote: Arc<RemoteHub>,
@@ -195,6 +198,7 @@ impl ApiState {
             agent_mutations: Arc::new(Mutex::new(())),
             schedule_gate: Arc::new(Mutex::new(HashMap::new())),
             pending_tools: Arc::new(Mutex::new(HashMap::new())),
+            pending_approvals: Default::default(),
             events,
             remote: Arc::new(remote),
             shutdown,
@@ -475,6 +479,8 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/conversations/:id/cancel", post(cancel_turn))
         .route("/turns/tools/:call_id/result", post(resolve_tool_call))
+        .route("/turns/tools/:call_id/approval", post(approval::resolve))
+        .route("/tools/approval", get(approval::get_settings).put(approval::set_settings))
         .route("/changes", post(mark_change))
         .route("/kv/:key", get(kv_get).put(kv_set).delete(kv_delete))
         .route("/migration/import", post(import_legacy_data))
@@ -2216,6 +2222,9 @@ pub struct ChatRequest {
     pub tool_specs: Vec<ToolSpecRequest>,
     /// Execution host's temporary workspace for a projectless conversation.
     pub workspace_path: Option<String>,
+    /// The streaming client can display and answer tool approval requests.
+    #[serde(default)]
+    pub supports_tool_approval: bool,
     #[serde(skip)]
     no_agent_delegation: bool,
     #[serde(skip)]
@@ -2372,6 +2381,14 @@ async fn start_turn(
         .get_provider(&model.provider_id)
         .map_err(ApiError::store)?
         .ok_or_else(|| ApiError::not_found("provider"))?;
+    // Capture the relevant user intent before retry/regeneration removes rows.
+    let approval_user_request = if matches!(request.operation, ChatOperation::Send) {
+        approval_text(request.content.as_deref().unwrap_or_default(), request.parts_json.as_deref())
+    } else {
+        let messages = state.store.list_messages_by_conversation(&conversation_id).map_err(ApiError::store)?;
+        let end = request.message_id.as_ref().and_then(|id| messages.iter().position(|m| &m.id == id)).unwrap_or(messages.len());
+        messages[..end].iter().rev().find(|m| m.role == "user").map(|m| approval_text(&m.content, m.parts_json.as_deref())).unwrap_or_default()
+    };
     let (message_to_insert, messages_to_delete) = match request.operation {
         ChatOperation::Send => {
             let content = request.content.as_deref().unwrap_or_default();
@@ -2530,6 +2547,7 @@ async fn start_turn(
             model: task_model,
             provider: task_provider,
             request: task_request,
+            approval_user_request,
             detached,
             cancel: task_cancel,
             tx: tx.clone(),
@@ -2664,6 +2682,7 @@ struct TurnTask {
     model: StoredModel,
     provider: StoredProvider,
     request: ChatRequest,
+    approval_user_request: String,
     detached: bool,
     cancel: CancellationToken,
     tx: mpsc::UnboundedSender<String>,
@@ -2678,6 +2697,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         model,
         provider,
         request,
+        approval_user_request,
         detached,
         cancel,
         tx,
@@ -2786,12 +2806,24 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         hub: Arc::clone(&state.remote),
         conversation_id: turn.conversation_id.clone(),
         cancel: cancel.clone(),
+        approval_turn: turn.clone(),
+        approval_user_request,
+        supports_approval: request.supports_tool_approval && !detached,
     };
     run_chat_turn(&state.store, &host, &sink, &turn, cancel)
         .await
         .map_err(ApiError::Internal)?;
     sink.terminal.into_inner().unwrap().ok_or_else(|| ApiError::Internal(
         "turn ended without a terminal event".into()))
+}
+
+fn approval_text(content: &str, parts_json: Option<&str>) -> String {
+    use messenger_core::parts::{decode_parts, ContentPart};
+    let parts = decode_parts(parts_json).into_iter().filter_map(|part| match part {
+        ContentPart::Text { text } => Some(text),
+        _ => None,
+    }).collect::<Vec<_>>().join("\n");
+    if parts.is_empty() { content.to_string() } else { parts }
 }
 
 fn effective_agent(
@@ -2930,6 +2962,9 @@ struct RoutedToolHost {
     hub: Arc<RemoteHub>,
     conversation_id: String,
     cancel: CancellationToken,
+    approval_turn: TurnRequest,
+    approval_user_request: String,
+    supports_approval: bool,
 }
 
 #[async_trait]
@@ -2942,6 +2977,10 @@ impl ToolHost for RoutedToolHost {
     ) -> ToolExecutionResult {
         if self.allowed_scheduled_tools.as_ref().is_some_and(|tools| !tools.iter().any(|tool| tool == name)) {
             return ToolExecutionResult { output: "Tool not authorized for this scheduled run".into(), is_error: true, ..Default::default() };
+        }
+        if let Err(reason) = approval::authorize(&self.state, &self.approval_turn, &self.approval_user_request, &self.local.events,
+            self.supports_approval, name, arguments_json, &self.cancel).await {
+            return ToolExecutionResult { output: reason, is_error: true, ..Default::default() };
         }
         if is_core_tool(name) {
             let permitted = self.permitted_core_tools.iter().any(|allowed| allowed == name)
@@ -3434,10 +3473,20 @@ mod tests {
         let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true;
         state.store.upsert_agent(&agent).unwrap();
         state.store.kv_set("artifact_tools_enabled", "true").unwrap();
-        let response = router(state.clone()).oneshot(request(axum::http::Method::POST, "/api/v1/conversations/c1/messages", Some(r#"{"content":"Create a demo"}"#))).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let sse = String::from_utf8(bytes.to_vec()).unwrap();
+        let mut chat = control::text_request("Create a demo".into());
+        chat.supports_tool_approval = true;
+        let mut events = start_turn(state.clone(), "c1".into(), chat, CancellationToken::new(), false).await.unwrap();
+        let mut sse = String::new();
+        while let Some(event) = events.recv().await {
+            let value: Value = serde_json::from_str(&event).unwrap();
+            if value["type"] == "ToolApprovalRequested" {
+                let id = value["callId"].as_str().unwrap();
+                let response = router(state.clone()).oneshot(request(axum::http::Method::POST, &format!("/api/v1/turns/tools/{id}/approval"), Some(r#"{"approved":true}"#))).await.unwrap();
+                assert_eq!(response.status(), StatusCode::ACCEPTED);
+            }
+            sse.push_str(&event);
+        }
+        assert!(sse.contains("ToolApprovalRequested"), "{sse}");
         assert!(sse.contains("structuredContent"), "{sse}");
         assert!(!sse.contains("ToolCallRequested"), "{sse}");
         assert!(sse.contains("\"type\":\"Finished\""), "{sse}");

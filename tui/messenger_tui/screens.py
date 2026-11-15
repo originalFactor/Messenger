@@ -91,6 +91,30 @@ class TrustWorkspace(Dialog):
         self.dismiss(event.button.id == "trust-workspace")
 
 
+class ToolApproval(Dialog):
+    def __init__(self, name: str, arguments: str):
+        super().__init__()
+        self.name = name
+        self.arguments = arguments
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Approve tool call?", classes="dialog-title")
+            with VerticalScroll():
+                yield Static(self.name, markup=False)
+                yield Static(self.arguments, markup=False)
+            yield Button("Deny", id="deny-tool")
+            yield Button("Approve", id="approve-tool")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.query_one("#deny-tool", Button).focus()
+
+    @on(Button.Pressed)
+    def choose(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "approve-tool")
+
+
 class ConfirmDelete(Dialog):
     def __init__(self, prompt: str, button: str):
         super().__init__()

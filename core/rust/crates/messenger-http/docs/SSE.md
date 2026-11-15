@@ -41,6 +41,8 @@ Event types:
 - `RoundPersisted { round, messageId }`
 - `FinalMessagePersisted { messageId, content }`
 - `ToolCallStarted { callId, name }`
+- `ToolApprovalRequested { callId, name, argumentsJson }` — manual approval;
+  `callId` identifies the approval request, not the model's tool-call ID.
 - `ToolCallRequested { callId, name, argumentsJson }`
 - `ToolCallFinished { callId, name, output, isError, structuredContent? }`
 - `UsageRecorded { promptTokens, completionTokens, cachedTokens }`
@@ -57,6 +59,19 @@ finishes with an `isError` result the model can read.
 
 A turn ends with exactly one of `Finished`, `Cancelled`, or `Error`. If the HTTP
 stream closes without one, clients emit a local `stream_ended` error.
+
+Tool approval is configured by `GET`/`PUT /api/v1/tools/approval` with
+`{ "mode": "manual" | "automatic" }` (default manual). Clients opt into
+manual prompts with `supportsToolApproval: true` on the chat request, then
+answer `ToolApprovalRequested` via `POST /api/v1/turns/tools/{callId}/approval`
+with `{ "approved": true | false }`. The pending request closes on turn
+cancellation, shutdown or after 300 seconds; missing client support and closed
+streams deny the call. Read-only calls pass without a prompt; terminal, write
+and unclassified calls require review. Automatic mode uses a separate tool-free
+model request with the current model and user request; denial, malformed output,
+provider failure, cancellation or a 60-second timeout denies execution. Approval
+does not change the effective tool policy or writable mode. A denied call is
+reported as an error tool result.
 
 A failed `messenger_generate_image` result is followed by terminal
 `Error { code: "image_generation_failed", message }` and a persisted assistant

@@ -618,4 +618,12 @@
     <string name="tools_schedule_task">Agent scheduled tasks</string>
     <string name="tools_schedule_task_desc">Allow Agents to manage scheduled tasks in Messenger chats</string>
     <string name="tools_schedule_task_load_error">Could not load scheduled task tool settings: %1$s</string>
+    <string name="tools_approval_mode">Tool approval</string>
+    <string name="tools_approval_manual">Manual approval</string>
+    <string name="tools_approval_automatic">Automatic approval</string>
+    <string name="tools_approval_description">Read-only tools run without approval. Terminal and writable tools require your approval or an automatic review by the built-in approval agent.</string>
+    <string name="tools_approval_load_error">Could not load tool approval settings: %1$s</string>
+    <string name="tools_approval_request">Approve tool call?</string>
+    <string name="tools_approval_allow">Allow</string>
+    <string name="tools_approval_deny">Deny</string>
 </resources>

@@ -16,6 +16,8 @@
 
 package cc.ptoe.messenger.presentation.ui.chat
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -97,6 +99,9 @@ import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import cc.ptoe.messenger.presentation.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.tools_approval_request
+import cc.ptoe.messenger.generated.resources.tools_approval_allow
+import cc.ptoe.messenger.generated.resources.tools_approval_deny
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_go_settings
@@ -186,6 +191,8 @@ private fun MessengerChatScreen(
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsStateWithLifecycle()
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val agent by viewModel.agent.collectAsStateWithLifecycle()
+    val toolApproval by viewModel.toolApproval.collectAsStateWithLifecycle()
+    val approvalBusy by viewModel.approvalBusy.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val needsModelSetup by viewModel.needsModelSetup.collectAsStateWithLifecycle()
@@ -465,6 +472,22 @@ private fun MessengerChatScreen(
         if (candidates.isNotEmpty()) cc.ptoe.messenger.presentation.ui.learning.LearningCaptureDialog(
             messages = candidates, initialMessageId = targetId,
             onDismiss = { learningMessageId = null }, onError = viewModel::learningCaptureError,
+        )
+    }
+    toolApproval?.let { approval ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(Res.string.tools_approval_request)) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(approval.name, style = MaterialTheme.typography.titleMedium)
+                Text(approval.argumentsJson)
+            } },
+            confirmButton = { TextButton(onClick = { viewModel.respondToolApproval(true) }, enabled = !approvalBusy) {
+                Text(stringResource(Res.string.tools_approval_allow))
+            } },
+            dismissButton = { TextButton(onClick = { viewModel.respondToolApproval(false) }, enabled = !approvalBusy) {
+                Text(stringResource(Res.string.tools_approval_deny))
+            } },
         )
     }
     if (needsModelSetup) {

@@ -34,6 +34,10 @@ interface CoreBridge {
     suspend fun scheduledTaskRequest(method: String, path: String, body: String? = null): String =
         error("Scheduled tasks unavailable")
 
+    suspend fun toolApprovalSettings(method: String, body: String? = null): String = error("Tool approval unavailable")
+
+    suspend fun respondToolApproval(callId: String, approved: Boolean) { error("Tool approval unavailable") }
+
     suspend fun learningAsset(id: String): ByteArray = error("Asset API is unavailable")
 
     // Store CRUD
@@ -239,6 +243,7 @@ data class TurnConfigBridge(
     val messageId: String? = null,
     val messageGroup: List<String>? = null,
     val disableTools: Boolean = false,
+    val supportsToolApproval: Boolean = false,
     val workspacePath: String? = null,
 )
 

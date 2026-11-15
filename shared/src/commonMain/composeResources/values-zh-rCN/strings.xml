@@ -617,4 +617,12 @@
     <string name="tools_schedule_task">Agent 计划任务</string>
     <string name="tools_schedule_task_desc">允许 Agent 在 Messenger 聊天中管理计划任务</string>
     <string name="tools_schedule_task_load_error">无法加载计划任务工具设置：%1$s</string>
+    <string name="tools_approval_mode">工具审批</string>
+    <string name="tools_approval_manual">手动审批</string>
+    <string name="tools_approval_automatic">自动审批</string>
+    <string name="tools_approval_description">只读工具无需审批。终端和可写工具需要您审批，或由内置审批 Agent 自动审核。</string>
+    <string name="tools_approval_load_error">无法加载工具审批设置：%1$s</string>
+    <string name="tools_approval_request">审批工具调用？</string>
+    <string name="tools_approval_allow">允许</string>
+    <string name="tools_approval_deny">拒绝</string>
 </resources>

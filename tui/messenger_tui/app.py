@@ -19,7 +19,7 @@ from .cloud import BUILTIN_PROVIDER_ID, CloudAccount, sync_builtin_models
 from .cloud_screen import CloudDialog
 from .project_screen import ProjectDialog
 from .providers_screen import ProviderManager
-from .screens import Choice, Help, Picker, ProviderDialog, TrustWorkspace
+from .screens import Choice, Help, Picker, ProviderDialog, ToolApproval, TrustWorkspace
 
 COMMANDS = (
     ("new", "New session", "n"),
@@ -29,6 +29,7 @@ COMMANDS = (
     ("providers", "Manage providers", ""),
     ("project", "Create, edit, or leave a project", ""),
     ("tools", "Enable or disable tools for this conversation", ""),
+    ("approval", "Choose tool approval mode", ""),
     ("connect", "Add a provider and model", ""),
     ("cloud", "Messenger Cloud account and server address", ""),
     ("sync", "Upload local conversations to Messenger Cloud", ""),
@@ -83,6 +84,7 @@ class Messenger(App):
             self.register_theme(theme)
         self.theme = "messenger-dark"
         self.chat = chat
+        self.chat.approve_tool = self.approve_tool
         self.version = version
         self.workspace = workspace
         self.operation: asyncio.Task | None = None
@@ -93,6 +95,16 @@ class Messenger(App):
         self.rendered = None
         self.checked_cloud_metadata = False
         self.closing = False
+
+    async def approve_tool(self, event: dict) -> bool:
+        result = asyncio.get_running_loop().create_future()
+
+        def resolved(choice):
+            if not result.done():
+                result.set_result(bool(choice))
+
+        self.push_screen(ToolApproval(display(event["name"]), display(event["argumentsJson"])), resolved)
+        return await result
 
     def compose(self) -> ComposeResult:
         with Vertical(id="workspace"):
@@ -437,6 +449,10 @@ class Messenger(App):
                     Choice("off", "Disable tools"),
                 ]
                 self.push_screen(Picker("Conversation tools", choices, ""), self.pick_tools)
+            case "approval":
+                choices = [Choice("manual", "Manual approval", "Review each sensitive tool call"),
+                           Choice("automatic", "Automatic approval", "Use the approval Agent to review calls")]
+                self.push_screen(Picker("Tool approval", choices, ""), self.pick_approval)
             case "cloud":
                 self.start(self.open_cloud)
             case "sync":
@@ -451,6 +467,14 @@ class Messenger(App):
     async def open_cloud(self) -> None:
         account = await CloudAccount.load(self.chat.api)
         self.push_screen(CloudDialog(account, self.chat))
+
+    def pick_approval(self, choice) -> None:
+        if choice:
+            self.start(lambda: self.set_approval(choice.id))
+
+    async def set_approval(self, mode: str) -> None:
+        await self.chat.api.json("/tools/approval", method="PUT", body={"mode": mode})
+        self.chat.status(f"Tool approval: {mode}.")
 
     def pick_tools(self, choice: Choice | None) -> None:
         if choice:

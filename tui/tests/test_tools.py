@@ -16,6 +16,36 @@ from messenger_tui.tools import execute_tool
 
 
 class ToolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_manual_approval_is_returned_before_tool_execution(self):
+        calls = []
+        conversation = {"id": "session", "project_id": None, "writable": True}
+
+        class Api:
+            async def json(self, path, **kwargs):
+                if path.endswith("/approval"):
+                    calls.append(kwargs["body"])
+                elif path.endswith("/messages"):
+                    return {"items": [], "total": 0}
+                return conversation
+
+            async def turn(self, path, body):
+                assert body["supportsToolApproval"]
+                yield {"type": "ToolApprovalRequested", "callId": "c", "name": "terminal", "argumentsJson": "{}"}
+                yield {"type": "Finished"}
+
+        chat = Chat(Api(), {}, {"is_enabled": True})
+        chat.session = conversation
+        async def reject(event):
+            self.assertEqual(event["name"], "terminal")
+            return False
+        async def upload(*args, **kwargs):
+            pass
+        chat.approve_tool = reject
+        chat.upload_conversations = upload
+        await chat.turn({"content": "test"}, lambda: None)
+        self.assertEqual(calls, [{"approved": False}])
+        chat.close()
+
     async def test_standalone_workspace_matches_tool_execution_and_is_cleaned(self):
         paths = []
         results = []

@@ -333,8 +333,8 @@ fun SettingsScreen(
                     }
                     item {
                         ListItem(
-                            title = stringResource(cc.ptoe.messenger.generated.resources.scheduled_title),
-                            subtitle = stringResource(cc.ptoe.messenger.generated.resources.scheduled_desc),
+                            title = stringResource(Res.string.scheduled_title),
+                            subtitle = stringResource(Res.string.scheduled_desc),
                             icon = Icons.Default.Build,
                             onClick = onScheduledTasksClick,
                         )

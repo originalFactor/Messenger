@@ -79,6 +79,11 @@ import cc.ptoe.messenger.domain.mcp.McpManager
 import cc.ptoe.messenger.domain.mcp.McpServerConfig
 import cc.ptoe.messenger.domain.mcp.McpTransportType
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.tools_approval_mode
+import cc.ptoe.messenger.generated.resources.tools_approval_manual
+import cc.ptoe.messenger.generated.resources.tools_approval_automatic
+import cc.ptoe.messenger.generated.resources.tools_approval_description
+import cc.ptoe.messenger.generated.resources.tools_approval_load_error
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_confirm
 import cc.ptoe.messenger.generated.resources.action_save
@@ -122,6 +127,8 @@ import org.jetbrains.compose.resources.stringResource
 
 @Serializable
 private data class ScheduleToolSettings(val enabled: Boolean)
+@Serializable
+private data class ToolApprovalSettings(val mode: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,7 +165,24 @@ fun ToolsSettingsScreen(
         catch (failure: Exception) { scheduleError = failure.message ?: failure.toString() }
         finally { scheduleBusy = false }
     }
-    LaunchedEffect(Unit) { loadScheduleSetting() }
+    var approvalMode by remember { mutableStateOf("manual") }
+    var approvalLoaded by remember { mutableStateOf(false) }
+    var approvalBusy by remember { mutableStateOf(false) }
+    var approvalError by remember { mutableStateOf<String?>(null) }
+    var showApprovalChoice by remember { mutableStateOf(false) }
+    suspend fun loadApprovalSetting() {
+        approvalBusy = true
+        try {
+            approvalMode = catalogJson.decodeFromString<ToolApprovalSettings>(
+                AppContainerHolder.instance.coreBridge.toolApprovalSettings("GET")
+            ).mode
+            approvalLoaded = true
+            approvalError = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { approvalError = failure.message ?: failure.toString() }
+        finally { approvalBusy = false }
+    }
+    LaunchedEffect(Unit) { loadScheduleSetting(); loadApprovalSetting() }
 
     var fabExpanded by remember { mutableStateOf(false) }
     var showStore by remember { mutableStateOf(false) }
@@ -201,6 +225,24 @@ fun ToolsSettingsScreen(
                     .fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)
             ) {
+                item {
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                        onClick = { if (approvalLoaded && !approvalBusy) showApprovalChoice = true },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(Res.string.tools_approval_mode), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(if (approvalMode == "automatic") Res.string.tools_approval_automatic else Res.string.tools_approval_manual), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(Res.string.tools_approval_description), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                approvalError?.let { message ->
+                    item {
+                        Text(stringResource(Res.string.tools_approval_load_error, message), modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { scope.launch { loadApprovalSetting() } }, enabled = !approvalBusy) { Text(stringResource(Res.string.action_retry)) }
+                    }
+                }
                 item {
                     cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
                         onClick = { changeServer { mcpManager.setAgentDelegationEnabled(!agentDelegationEnabled) } },
@@ -322,6 +364,29 @@ fun ToolsSettingsScreen(
             }
             if (fabExpanded) Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { fabExpanded = false } })
         }
+    }
+
+    if (showApprovalChoice) {
+        val manual = stringResource(Res.string.tools_approval_manual)
+        val automatic = stringResource(Res.string.tools_approval_automatic)
+        cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog(
+            title = stringResource(Res.string.tools_approval_mode),
+            items = listOf("manual", "automatic"), initialSelectedId = approvalMode,
+            itemId = { it }, itemLabel = { if (it == "automatic") automatic else manual },
+            confirmButtonText = stringResource(Res.string.action_save), dismissButtonText = stringResource(Res.string.action_cancel),
+            onDismiss = { showApprovalChoice = false }, onConfirm = { selected ->
+                showApprovalChoice = false
+                if (selected != null && selected != approvalMode) scope.launch {
+                    approvalBusy = true
+                    try {
+                        val response = AppContainerHolder.instance.coreBridge.toolApprovalSettings("PUT", catalogJson.encodeToString(ToolApprovalSettings(selected)))
+                        approvalMode = catalogJson.decodeFromString<ToolApprovalSettings>(response).mode
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { snackbar.showSnackbar(failure.message ?: failure.toString()) }
+                    finally { approvalBusy = false }
+                }
+            },
+        )
     }
 
     if (showStore) IntegrationStoreDialog("mcp", { showStore = false }) { row ->

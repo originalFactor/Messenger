@@ -570,6 +570,7 @@ async fn execute(
 
 pub(crate) fn text_request(text: String) -> ChatRequest {
     ChatRequest {
+        supports_tool_approval: false,
         content: Some(text),
         parts_json: None,
         message_group: None,

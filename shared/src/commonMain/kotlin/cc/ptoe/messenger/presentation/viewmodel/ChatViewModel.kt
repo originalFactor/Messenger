@@ -170,6 +170,26 @@ class ChatViewModel(
             initialValue = emptyList()
         )
 
+    data class ToolApproval(val callId: String, val name: String, val argumentsJson: String)
+    private val _toolApproval = MutableStateFlow<ToolApproval?>(null)
+    val toolApproval = _toolApproval.asStateFlow()
+    private val _approvalBusy = MutableStateFlow(false)
+    val approvalBusy = _approvalBusy.asStateFlow()
+
+    fun respondToolApproval(approved: Boolean) {
+        val pending = _toolApproval.value ?: return
+        if (_approvalBusy.value) return
+        _approvalBusy.value = true
+        viewModelScope.launch {
+            try {
+                coreBridge.respondToolApproval(pending.callId, approved)
+                if (_toolApproval.value == pending) _toolApproval.value = null
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { setError(failure.message ?: failure.toString()) }
+            finally { _approvalBusy.value = false }
+        }
+    }
+
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
@@ -347,6 +367,7 @@ class ChatViewModel(
             _streamingContent.value = null
             _streamingMessageId.value = null
             _streamingDiff.value = null
+            _toolApproval.value = null
         }
         // Switching conversations implicitly discards any unsent
         // images: the pending preview is bound to the input bar of a
@@ -512,6 +533,7 @@ class ChatViewModel(
             titleAgentSystemPrompt = titleHolder?.systemPrompt,
             titleAgentModelId = titleHolder?.defaultModelId,
             workspacePath = temporaryWorkspace,
+            supportsToolApproval = true,
             hasWorkspace = workspace != null,
             workspaceNote = workspace?.let {
                 getString(Res.string.chat_workspace_note, it)
@@ -566,6 +588,7 @@ class ChatViewModel(
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
+                _toolApproval.value = null
                 // The core wrote the assistant/tool rows itself, so mark the
                 // conversation dirty explicitly or the reply never uploads.
                 cloud?.requestLocalChange("conversation", conversationId)
@@ -735,6 +758,12 @@ class ChatViewModel(
         }
         val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
+            "ToolApprovalRequested" -> {
+                val callId = root["callId"]?.jsonPrimitive?.contentOrNull ?: return
+                val name = root["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val arguments = root["argumentsJson"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                _toolApproval.value = ToolApproval(callId, name, arguments)
+            }
             "TurnStarted" -> if (clearImagesOnStart) { _pendingImages.value = emptyList() }
             "StreamingStarted" -> {
                 // The Rust loop creates the placeholder row itself; this is
