@@ -1507,6 +1507,35 @@ paths:
                   items: { type: object }
       responses:
         "204": { description: Platform tool availability updated. }
+  /control/background/{requestId}:
+    parameters:
+      - $ref: "#/components/parameters/ControlRequestId"
+    post:
+      operationId: startBackgroundAcpPrompt
+      description: Start a Core-owned ACP prompt. Repeating an identical request ID and body is idempotent; conflicting bodies are rejected. Closing a client does not cancel the prompt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceSessionCommand" }
+      responses:
+        "202": { description: Prompt accepted. }
+        "409": { description: Session already has an active prompt. }
+    get:
+      operationId: backgroundAcpPromptSnapshot
+      parameters:
+        - { name: after, in: query, schema: { type: integer, minimum: 0 }, description: Absolute event cursor; defaults to zero. }
+      responses:
+        "200": { description: '{requestId, events, nextCursor, done}; bounded history can include ReplayGap and pending Permission.' }
+        "404": { description: Request not retained. }
+  /control/background/sessions/{sessionId}:
+    get:
+      operationId: backgroundAcpSessionSnapshot
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Latest retained prompt snapshot from cursor zero. }
+        "404": { description: No retained prompt for this session. }
   /control/commands/{requestId}:
     parameters:
       - $ref: "#/components/parameters/ControlRequestId"
@@ -1813,6 +1842,31 @@ paths:
     delete:
       operationId: deleteConversationMessages
       responses: { "204": { description: Deleted } }
+  /conversations/{id}/background-turn:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: getBackgroundTurn
+      responses:
+        "200":
+          description: Retained turn and idempotency key; active is false after its terminal event.
+          content: { application/json: { schema: { type: object, required: [active, requestId], properties: { active: { type: boolean }, requestId: { type: string } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: startBackgroundTurn
+      description: Core-owned turn; disconnecting observers does not cancel execution. Same key and body is idempotent within the bounded in-memory retention window.
+      parameters: [{ name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ChatRequest" } } }
+      responses: { "202": { description: Accepted }, "409": { $ref: "#/components/responses/GameConflict" } }
+  /conversations/{id}/background-turn/events:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      operationId: observeBackgroundTurn
+      description: Bounded replay followed by live events; dropping the stream does not cancel. See SSE.md for replay gaps and snapshots.
+      responses:
+        "200": { description: Turn events, content: { text/event-stream: { schema: { type: string } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
   /conversations/{id}/cancel:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     post:

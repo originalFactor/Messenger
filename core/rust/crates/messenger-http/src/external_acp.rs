@@ -1110,12 +1110,19 @@ async fn choose(
         }
         None
     };
-    tokio::select! {
+    let outcome = tokio::select! {
         option = wait => option.map(|id| RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)))
             .unwrap_or(RequestPermissionOutcome::Cancelled),
         _ = cancel.cancelled() => RequestPermissionOutcome::Cancelled,
         _ = tokio::time::sleep(Duration::from_secs(120)) => RequestPermissionOutcome::Cancelled,
+    };
+    // Reattached clients must not display a permission that was already
+    // answered, timed out, or cancelled while they were disconnected.
+    tokio::select! {
+        _ = updates.send(json!({"type":"PermissionResolved"})) => {},
+        _ = cancel.cancelled() => {},
     }
+    outcome
 }
 
 pub(crate) struct Process {
@@ -1762,6 +1769,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_prompt_survives_observer_loss_and_replays_permission_and_completion() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let (state, session) = setup("load").await;
+            let mut task_events = state.events.subscribe();
+            let id = Uuid::new_v4();
+            let request = json!({"action":"prompt", "sessionId":session, "text":"one"});
+            assert_eq!(crate::control::start_background(State(state.clone()), Path(id), Json(request.clone())).await.unwrap(), StatusCode::ACCEPTED);
+            assert_eq!(crate::control::start_background(State(state.clone()), Path(id), Json(request.clone())).await.unwrap(), StatusCode::ACCEPTED);
+            assert!(crate::control::start_background(State(state.clone()), Path(id), Json(json!({"action":"prompt", "sessionId":session, "text":"different"}))).await.is_err());
+            assert!(crate::control::start_background(State(state.clone()), Path(Uuid::new_v4()), Json(request)).await.is_err());
+            // No stream is held open: wait for a permission and attach afterwards.
+            let ask = loop {
+                let value = crate::control::background_session(State(state.clone()), Path(session.clone())).await.unwrap().0;
+                if let Some(event) = value["events"].as_array().unwrap().iter().find(|event| event["type"] == "Permission") { break event.clone(); }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            let option = ask["options"][0]["id"].as_str().unwrap().to_string();
+            crate::control::permission(State(state.clone()), Path(id), Json(crate::control::Choice { option_id: option })).await.unwrap();
+            let done = loop {
+                let value = crate::control::background_session(State(state.clone()), Path(session.clone())).await.unwrap().0;
+                if value["done"] == true { break value; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            let events = done["events"].as_array().unwrap();
+            assert!(events.iter().any(|event| event["type"] == "PermissionResolved"));
+            assert_eq!(events.last().unwrap()["type"], "Finished");
+            assert_eq!(done["nextCursor"].as_u64().unwrap() as usize, events.len());
+            let mut statuses = Vec::new();
+            while let Ok(event) = task_events.try_recv() {
+                if let CoreEvent::Change(change) = event {
+                    if change.kind == "taskStatus" { statuses.extend(change.ids); }
+                }
+            }
+            assert_eq!(statuses, vec!["approval", "completed"]);
+            let second_id = Uuid::new_v4();
+            assert_eq!(crate::control::start_background(State(state.clone()), Path(second_id), Json(json!({"action":"prompt", "sessionId":session, "text":"wait"}))).await.unwrap(), StatusCode::ACCEPTED);
+            loop {
+                let value = crate::control::background_session(State(state.clone()), Path(session.clone())).await.unwrap().0;
+                if value["events"].as_array().unwrap().iter().any(|event| event["text"] == "partial") { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            crate::control::cancel_command(State(state.clone()), Path(second_id)).await.unwrap();
+            loop {
+                let value = crate::control::background_session(State(state.clone()), Path(session.clone())).await.unwrap().0;
+                if value["done"] == true {
+                    assert_eq!(value["events"].as_array().unwrap().last().unwrap()["type"], "Cancelled");
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            state.shutdown.cancel();
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn installed_agent_can_stream_authorize_cancel_and_replay() {
         tokio::time::timeout(Duration::from_secs(15), async {
             let (state, session) = setup("load").await;
@@ -1786,6 +1848,7 @@ mod tests {
                     .send(ask["options"][0]["id"].as_str().unwrap().into())
                     .await
                     .unwrap();
+                assert_eq!(events.recv().await.unwrap()["type"], "PermissionResolved");
                 assert_eq!(events.recv().await.unwrap()["text"], "selected");
             };
             let (result, _) = tokio::join!(turn, allow);

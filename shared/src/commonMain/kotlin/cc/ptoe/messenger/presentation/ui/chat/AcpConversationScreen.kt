@@ -41,6 +41,7 @@ import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.jetbrains.compose.resources.stringResource
@@ -82,6 +83,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var queuePaused by remember { mutableStateOf(false) }
     var steering by remember { mutableStateOf(false) }
     val endedEarly = stringResource(Res.string.acp_stream_ended)
+    val replayGapMessage = stringResource(Res.string.background_replay_gap)
     val copied = stringResource(Res.string.chat_copied_toast)
     fun report(message: String) {
         error = buildJsonObject {
@@ -117,9 +119,83 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             } finally { settingsBusy = false }
         }
     }
+    // Poll the Core-owned task; leaving this screen cancels only this observer.
+    suspend fun watchPrompt(requestId: String, input: Queued? = null, initial: JsonObject? = null) {
+        active = requestId
+        var cursor = 0L
+        var terminal = false
+        var admitted = false
+        var shownUser = false
+        var retryDelay = 500L
+        try {
+            var snapshot = initial
+            while (true) {
+                val batch = try { snapshot ?: core.backgroundAcpEvents(requestId, cursor) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    report(failure.message.orEmpty())
+                    // Rebuild from the retained event history after reconnecting. This is
+                    // observation only; never resubmit a prompt after a network failure.
+                    cursor = 0; permission = null; partial = ""; events = emptyList(); liveId = null
+                    delay(retryDelay); retryDelay = (retryDelay * 2).coerceAtMost(5_000L)
+                    continue
+                }
+                retryDelay = 500L
+                snapshot = null
+                for (event in batch.objects("events")) {
+                    (event["settings"] as? JsonObject)?.let { settings = it }
+                    when (event.text("type")) {
+                        "TurnStarted" -> {
+                            admitted = true
+                            liveTimestamp = currentTimeMillis()
+                            liveId = randomUuid()
+                            if (input != null && !shownUser) {
+                                shownUser = true
+                                val text = input.text.ifBlank { input.attachments.joinToString { it.name } }
+                                history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", promptContent(input.text, input.attachments)); put("status", "sent"); put("timestamp", liveTimestamp) }
+                            } else if (input == null) loadHistory()
+                        }
+                        "TextDelta" -> { partial += event.text("text"); events = events + event }
+                        "ThoughtDelta" -> events = events + event
+                        "ToolUpdate" -> {
+                            events = events + event
+                            val update = event["update"] as? JsonObject
+                            if (update?.text("title") == "messenger_generate_image" && update.text("status") == "failed") {
+                                queuePaused = true
+                                val output = update["rawOutput"] as? JsonObject
+                                report(output?.text("output").orEmpty().ifBlank { update.text("status") })
+                            }
+                        }
+                        "Permission" -> permission = event
+                        "ReplayGap" -> { loadHistory(); report(replayGapMessage) }
+                        "PermissionResolved" -> permission = null
+                        "Finished" -> terminal = true
+                        "Cancelled" -> { terminal = true; queuePaused = true }
+                        "Error" -> { terminal = true; queuePaused = true; if (!admitted && input != null) queue = listOf(input) + queue; report(event.errorDetail()) }
+                    }
+                }
+                cursor = (batch["nextCursor"] as? JsonPrimitive)?.longOrNull ?: cursor
+                if ((batch["done"] as? JsonPrimitive)?.booleanOrNull == true) break
+                delay(500)
+            }
+            if (!terminal) { queuePaused = true; report(endedEarly) }
+            loadHistory()
+            liveId = null
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: Exception) {
+            queuePaused = true
+            if (!admitted && input != null) queue = listOf(input) + queue
+            report(failure.message.orEmpty())
+        } finally { active = ""; permission = null }
+    }
     LaunchedEffect(sessionId) {
         try {
             loadHistory()
+            val running = core.backgroundAcpBySession(sessionId)
+            if (running != null && (running["done"] as? JsonPrimitive)?.booleanOrNull != true) {
+                val id = running.text("requestId")
+                if (id.isNotEmpty()) { active = id; scope.launch { watchPrompt(id, initial = running) } }
+            }
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { report(failure.message.orEmpty())
         } finally { loading = false }
@@ -173,41 +249,14 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 active = requestId
                                 error = null; partial = ""; events = emptyList()
                                 scope.launch {
-                                    var terminal = false
-                                    var admitted = false
                                     try {
-                                        core.controlCommand(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text); put("content", content) }) { event ->
-                                            (event["settings"] as? JsonObject)?.let { settings = it }
-                                            when (event.text("type")) {
-                                                "TurnStarted" -> {
-                                                    admitted = true
-                                                    liveTimestamp = currentTimeMillis()
-                                                    liveId = randomUuid()
-                                                    history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", content); put("status", "sent"); put("timestamp", liveTimestamp) }
-                                                }
-                                                "TextDelta" -> { partial += event.text("text"); events = events + event }
-                                                "ThoughtDelta" -> events = events + event
-                                                "ToolUpdate" -> {
-                                                    events = events + event
-                                                    val update = event["update"] as? JsonObject
-                                                    if (update?.text("title") == "messenger_generate_image" && update.text("status") == "failed") {
-                                                        queuePaused = true
-                                                        val output = update["rawOutput"] as? JsonObject
-                                                        report(output?.text("output").orEmpty().ifBlank { update.text("status") })
-                                                    }
-                                                }
-                                                "Permission" -> { permission = event; TaskPushNotifications.notify("approval") }
-                                                "Finished" -> { terminal = true; TaskPushNotifications.notify("completed") }
-                                                "Cancelled" -> { terminal = true; queuePaused = true }
-                                                "Error" -> { terminal = true; TaskPushNotifications.notify("failed"); queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(event.errorDetail()) }
-                                            }
-                                        }
-                                        if (!terminal) { TaskPushNotifications.notify("failed"); queuePaused = true; report(endedEarly) }
-                                        loadHistory()
-                                        liveId = null
+                                        core.startBackgroundAcp(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text); put("content", content) })
+                                        watchPrompt(requestId, input)
                                     } catch (cancelled: CancellationException) { throw cancelled
-                                    } catch (failure: Exception) { if (!terminal) TaskPushNotifications.notify("failed"); queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(failure.message.orEmpty())
-                                    } finally { active = ""; permission = null }
+                                    } catch (failure: Exception) {
+                                        active = ""; queuePaused = true; queue = listOf(input) + queue
+                                        report(failure.message.orEmpty())
+                                    }
                                 }
                             }
     }

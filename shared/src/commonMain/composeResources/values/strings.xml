@@ -630,4 +630,5 @@
     <string name="tools_approval_request">Approve tool call?</string>
     <string name="tools_approval_allow">Allow</string>
     <string name="tools_approval_deny">Deny</string>
+    <string name="background_replay_gap">Some live task updates are no longer available. The saved transcript will refresh when the task finishes.</string>
 </resources>

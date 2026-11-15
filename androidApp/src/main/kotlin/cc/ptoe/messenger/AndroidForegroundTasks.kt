@@ -39,6 +39,7 @@ object AndroidForegroundTasks : BackgroundTaskPersistence {
         BackgroundTaskPersistenceRegistry.controller = this
         ForegroundTaskRegistry.begin = ::beginTask
         ForegroundTaskRegistry.end = ::endTask
+        ForegroundTaskRegistry.coreActive = ::setCoreActive
         scope.launch {
             while (isActive) {
                 try {

@@ -18,6 +18,7 @@ object BackgroundTaskPersistenceRegistry {
 object ForegroundTaskRegistry {
     var begin: (() -> Unit)? = null
     var end: (() -> Unit)? = null
+    var coreActive: ((Boolean) -> Unit)? = null
 }
 
 /** Android supplies the setting; it is absent on platforms without a foreground service. */

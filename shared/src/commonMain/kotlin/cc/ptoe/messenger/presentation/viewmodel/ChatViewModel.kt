@@ -51,6 +51,7 @@ import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +64,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.background_replay_gap
 import cc.ptoe.messenger.generated.resources.chat_picture
 import cc.ptoe.messenger.generated.resources.chat_workspace_note
 import cc.ptoe.messenger.generated.resources.context_summarize_prompt
@@ -232,6 +234,7 @@ class ChatViewModel(
     val streamingDiff: StateFlow<String?> = _streamingDiff.asStateFlow()
 
     private var currentGenerationJob: Job? = null
+    private var observationGeneration = 0L
 
     private val _enabledModels = MutableStateFlow<List<ChatModel>>(emptyList())
     private val enabledModels: StateFlow<List<ChatModel>> = _enabledModels.asStateFlow()
@@ -356,11 +359,9 @@ class ChatViewModel(
     }
 
     fun loadConversation(conversationId: String) {
-        // Switching conversations must not leave the previous conversation's
-        // turn running: its events would keep mutating the streaming
-        // StateFlows (whose message ids belong to the old conversation) and
-        // `_isGenerating` would stay true, blocking sends in the new one.
-        if (_conversationId.value != conversationId && _isGenerating.value) {
+        // Detach from the old turn; Core keeps it running independently.
+        if (_conversationId.value != conversationId) {
+            observationGeneration++
             currentGenerationJob?.cancel()
             currentGenerationJob = null
             _isGenerating.value = false
@@ -375,6 +376,18 @@ class ChatViewModel(
         _pendingImages.value = emptyList()
         _conversationId.value = conversationId
         if (paginateChatHistory) historyPager.start(conversationId)
+        val generation = observationGeneration
+        viewModelScope.launch {
+            try {
+                val active = coreBridge.backgroundTurnActive(conversationId)
+                if (_conversationId.value == conversationId && observationGeneration == generation && !_isGenerating.value && active) {
+                    _isGenerating.value = true
+                    _streamingContent.value = ""
+                    currentGenerationJob = launch { observeBackgroundTurn(conversationId, generation) }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (_conversationId.value == conversationId && observationGeneration == generation) setError(e.message ?: getString(Res.string.error_unknown)) }
+        }
     }
 
     fun loadOlderMessages() = historyPager.loadOlder()
@@ -508,7 +521,6 @@ class ChatViewModel(
         // 请求声明共用 per-tool 开关。写入类工具（edit/create）的声明由
         // Rust 按 writable 过滤，此处保留全量映射，模型误调未声明工具时
         // 由核心回路返回错误自纠。
-        val toolsByName = enabledTools.associateBy { it.name }
         val config = TurnConfigBridge(
             conversationId = conversationId,
             operation = operation,
@@ -551,66 +563,88 @@ class ChatViewModel(
         _streamingContent.value = ""
         _streamingDiff.value = null
 
+        val generation = ++observationGeneration
         currentGenerationJob = viewModelScope.launch {
-            var terminalEvent = false
             try {
-                bridge.runTurn(
-                    config = config,
-                    toolExecutor = { name, argumentsJson ->
-                        val tool = toolsByName[name]
-                        if (tool != null) {
-                            // Never let an exception escape the tool host: on
-                            // Android/Desktop this lambda runs inside a JNI
-                            // upcall, where a foreign exception becomes a Rust
-                            // panic ("tool host cancelled"). Report it to the
-                            // model as an error result for self-correction.
-                            try {
-                                val r = tool.execute(argumentsJson)
-                                r.output to r.isError
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                ("tool execution failed: ${e.message ?: e::class.simpleName}") to true
-                            }
-                        } else {
-                            "Unknown tool: $name" to true
-                        }
-                    },
-                    onEventJson = { eventJson ->
-                        val eventType = runCatching {
-                            NetworkClient.json.parseToJsonElement(eventJson).jsonObject["type"]?.jsonPrimitive?.contentOrNull
-                        }.getOrNull()
+                bridge.startBackgroundTurn(config)
+                observeBackgroundTurn(conversationId, generation, clearImagesOnStart = operation == "send")
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (_conversationId.value == conversationId && observationGeneration == generation) {
+                    _isGenerating.value = false
+                    setError(e.message ?: getString(Res.string.error_unknown))
+                }
+            }
+        }
+    }
+
+    private suspend fun observeBackgroundTurn(conversationId: String, generation: Long, clearImagesOnStart: Boolean = false) {
+        var terminal = false
+        var retryDelay = 500L
+        var completedRetry = false
+        val replayGapMessage = getString(Res.string.background_replay_gap)
+        try {
+            while (!terminal) {
+                var replaying = true
+                var replayGap = false
+                if (_conversationId.value == conversationId && observationGeneration == generation) {
+                    _streamingContent.value = ""
+                    _streamingMessageId.value = null
+                    _toolApproval.value = null
+                }
+                try {
+                    coreBridge.observeBackgroundTurn(conversationId) { eventJson ->
+                        val event = runCatching { NetworkClient.json.parseToJsonElement(eventJson).jsonObject }.getOrNull()
+                        val eventType = event?.get("type")?.jsonPrimitive?.contentOrNull
                         when (eventType) {
-                            "ToolApprovalRequested" -> cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("approval")
-                            "Finished" -> { terminalEvent = true; cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("completed") }
-                            "Error" -> { terminalEvent = true; cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("failed") }
-                            "Cancelled" -> terminalEvent = true
+                            "ReplayComplete" -> { replaying = false; retryDelay = 500L }
+                            "ReplayGap" -> { replayGap = true; if (_conversationId.value == conversationId && observationGeneration == generation) setError(replayGapMessage) }
+                            "ReplaySnapshot" -> if (_conversationId.value == conversationId && observationGeneration == generation) {
+                                _streamingMessageId.value = event?.get("messageId")?.jsonPrimitive?.contentOrNull
+                                _streamingContent.value = event?.get("content")?.jsonPrimitive?.contentOrNull.orEmpty()
+                            }
+                            "ToolApprovalResolved" -> if (_conversationId.value == conversationId && observationGeneration == generation && _toolApproval.value?.callId == event?.get("callId")?.jsonPrimitive?.contentOrNull) _toolApproval.value = null
+                            "Finished", "Error", "Cancelled" -> terminal = true
                         }
-                        handleTurnEvent(eventJson, clearImagesOnStart = operation == "send")
+                        if (_conversationId.value == conversationId && observationGeneration == generation && !(replayGap && replaying && eventType == "TextDelta")) handleTurnEvent(eventJson, clearImagesOnStart)
                     }
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (!terminalEvent) cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify("failed")
-                setError(e.message ?: getString(Res.string.error_unknown))
-            } finally {
+                    if (terminal) break
+                    throw IllegalStateException("The core event stream ended before completion.")
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (failure: Exception) {
+                    if (_conversationId.value == conversationId && observationGeneration == generation) setError(failure.message ?: getString(Res.string.error_unknown))
+                    // Reconnect only the observation stream. Core owns execution; do not resubmit it.
+                    val active = try { coreBridge.backgroundTurnActive(conversationId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { true }
+                    if (!active) {
+                        // The task may have completed while disconnected; its retained
+                        // terminal event is still available on a fresh subscription.
+                        if (completedRetry) break
+                        completedRetry = true
+                    }
+                    delay(retryDelay)
+                    retryDelay = (retryDelay * 2).coerceAtMost(5_000L)
+                }
+            }
+        } finally {
+            if (_conversationId.value == conversationId && observationGeneration == generation) {
                 _streamingContent.value = null
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
                 _toolApproval.value = null
-                // The core wrote the assistant/tool rows itself, so mark the
-                // conversation dirty explicitly or the reply never uploads.
-                cloud?.requestLocalChange("conversation", conversationId)
             }
         }
     }
 
     fun stopGeneration() {
-        // Dropping this client's SSE cancels only the turn it started.
-        // Core finalizes the partial message and any interrupted tools.
-        currentGenerationJob?.cancel()
+        val conversationId = _conversationId.value ?: return
+        viewModelScope.launch {
+            try { coreBridge.cancelBackgroundTurn(conversationId) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { setError(e.message ?: getString(Res.string.error_unknown)) }
+        }
     }
 
     fun retrySend(messageId: String) {
@@ -841,6 +875,7 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        observationGeneration++
         currentGenerationJob?.cancel()
         currentGenerationJob = null
     }

@@ -190,6 +190,9 @@ interface CoreBridge {
         command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
     ) { error("Device control unavailable") }
+    suspend fun startBackgroundAcp(requestId: String, command: kotlinx.serialization.json.JsonObject) { error("Background ACP unavailable") }
+    suspend fun backgroundAcpBySession(sessionId: String): kotlinx.serialization.json.JsonObject? = error("Background ACP unavailable")
+    suspend fun backgroundAcpEvents(requestId: String, after: Long): kotlinx.serialization.json.JsonObject = error("Background ACP unavailable")
     suspend fun controlCancel(requestId: String) { error("Device control unavailable") }
     suspend fun controlPermission(requestId: String, optionId: String) { error("Device control unavailable") }
     // Device-local Agent Skills packages. YAML validation and tool policy belong to Core.
@@ -203,6 +206,11 @@ interface CoreBridge {
 
     suspend fun agentDelegationEnabled(): Boolean = false
     suspend fun setAgentDelegationEnabled(enabled: Boolean) { error("Agent delegation unavailable") }
+
+    suspend fun startBackgroundTurn(config: TurnConfigBridge) { error("Background turns unavailable") }
+    suspend fun backgroundTurnActive(conversationId: String): Boolean = false
+    suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) { error("Background turns unavailable") }
+    suspend fun cancelBackgroundTurn(conversationId: String) { error("Background turns unavailable") }
 
     suspend fun runTurn(
         config: TurnConfigBridge,

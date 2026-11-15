@@ -136,6 +136,10 @@ class RestCoreBridge(
                             val ids = root["ids"]?.jsonArray
                                 ?.map { it.jsonPrimitive.contentOrNull.orEmpty() }
                                 .orEmpty()
+                            if (kind == "taskStatus") {
+                                ids.firstOrNull()?.takeIf { it in setOf("approval", "failed", "completed") }
+                                    ?.let { cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify(it) }
+                            }
                             listeners.forEach { it(kind, ids) }
                         }
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -367,6 +371,33 @@ class RestCoreBridge(
             finishTask?.invoke()
         }
     }
+
+    override suspend fun startBackgroundAcp(requestId: String, command: JsonObject) = withContext(NonCancellable) {
+        ForegroundTaskRegistry.begin?.invoke()
+        try {
+            kotlinx.coroutines.withTimeout(45_000) {
+            mcpManager?.let { publishPlatformCatalog(it) }
+            try {
+                kotlinx.coroutines.withTimeout(30_000) { postNoContent("/control/background/${path(requestId)}", command.toString()) }
+            } catch (failure: Exception) {
+                val sessionId = command["sessionId"]?.jsonPrimitive?.contentOrNull
+                val accepted = if (sessionId == null) false else try {
+                    backgroundAcpBySession(sessionId)?.get("requestId")?.jsonPrimitive?.contentOrNull == requestId
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+                } catch (_: Exception) { false }
+                if (!accepted) throw failure
+            }
+            ForegroundTaskRegistry.coreActive?.invoke(true)
+            }
+        } finally { ForegroundTaskRegistry.end?.invoke() }
+        Unit
+    }
+
+    override suspend fun backgroundAcpBySession(sessionId: String): JsonObject? =
+        optionalText("/control/background/sessions/${path(sessionId)}")?.let { NetworkClient.json.parseToJsonElement(it).jsonObject }
+
+    override suspend fun backgroundAcpEvents(requestId: String, after: Long): JsonObject =
+        NetworkClient.json.parseToJsonElement(getText("/control/background/${path(requestId)}?after=$after")).jsonObject
 
     override suspend fun controlCancel(requestId: String) {
         postNoContent("/control/commands/${path(requestId)}/cancel")
@@ -652,6 +683,63 @@ class RestCoreBridge(
         runCatching {
             runBlocking { postNoContent("/conversations/${path(conversationId)}/cancel") }
         }
+    }
+
+    override suspend fun startBackgroundTurn(config: TurnConfigBridge) = withContext(NonCancellable) {
+        ForegroundTaskRegistry.begin?.invoke()
+        try {
+            kotlinx.coroutines.withTimeout(45_000) {
+            mcpManager?.let { publishPlatformCatalog(it) }
+            val requestId = cc.ptoe.messenger.data.util.randomUuid()
+            val payload = buildJsonObject {
+                put("operation", config.operation)
+                if (config.supportsToolApproval) put("supportsToolApproval", true)
+                if (config.disableTools) put("disableTools", true)
+                config.workspacePath?.let { put("workspacePath", it) }
+                config.content?.let { put("content", it) }
+                config.partsJson?.let { put("partsJson", it) }
+                config.messageId?.let { put("messageId", it) }
+                config.messageGroup?.let { group -> put("messageGroup", kotlinx.serialization.json.JsonArray(group.map { kotlinx.serialization.json.JsonPrimitive(it) })) }
+                put("toolSpecs", kotlinx.serialization.json.JsonArray(config.tools.map { tool -> buildJsonObject {
+                    put("name", tool.name); put("description", tool.description); put("parametersJson", tool.parametersJson)
+                } }))
+            }.toString()
+            try {
+                kotlinx.coroutines.withTimeout(30_000) {
+                    client.request(baseUrl + "/conversations/${path(config.conversationId)}/background-turn") {
+                        method = HttpMethod.Post
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        header("Idempotency-Key", requestId)
+                        setBody(TextContent(payload, ContentType.Application.Json))
+                    }.requireNoContent()
+                }
+            } catch (failure: Exception) {
+                // A lost admission response is ambiguous; inspect, never retry the turn.
+                val accepted = try {
+                    optionalText("/conversations/${path(config.conversationId)}/background-turn")?.let {
+                        NetworkClient.json.parseToJsonElement(it).jsonObject["requestId"]?.jsonPrimitive?.contentOrNull == requestId
+                    } == true
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+                } catch (_: Exception) { false }
+                if (!accepted) throw failure
+            }
+            ForegroundTaskRegistry.coreActive?.invoke(true)
+            }
+        } finally { ForegroundTaskRegistry.end?.invoke() }
+        Unit
+    }
+
+    override suspend fun backgroundTurnActive(conversationId: String): Boolean =
+        optionalText("/conversations/${path(conversationId)}/background-turn")?.let {
+            NetworkClient.json.parseToJsonElement(it).jsonObject["active"]?.jsonPrimitive?.contentOrNull == "true"
+        } ?: false
+
+    override suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) {
+        streamSse("/conversations/${path(conversationId)}/background-turn/events") { onEventJson(it) }
+    }
+
+    override suspend fun cancelBackgroundTurn(conversationId: String) {
+        postNoContent("/conversations/${path(conversationId)}/cancel")
     }
 
     override suspend fun runTurn(

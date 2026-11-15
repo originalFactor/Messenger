@@ -325,6 +325,7 @@ class RestCoreBridgeIntegrationTest {
                     titleAgentModelId = null,
                     hasWorkspace = false,
                     workspaceNote = "",
+                    supportsToolApproval = true,
                     tools = listOf(
                         ToolSpecBridge(
                             name = "echo",
@@ -338,8 +339,15 @@ class RestCoreBridgeIntegrationTest {
                     toolCalls++
                     "tool-output" to false
                 },
-                onEventJson = events::add,
+                onEventJson = { data ->
+                    events.add(data)
+                    val event = NetworkClient.json.parseToJsonElement(data).jsonObject
+                    if (event["type"]?.jsonPrimitive?.content == "ToolApprovalRequested") {
+                        runBlocking { bridge.respondToolApproval(event.getValue("callId").jsonPrimitive.content, true) }
+                    }
+                },
             )
+            assertTrue(events.any { it.contains("\"type\":\"ToolApprovalRequested\"") })
             assertEquals(1, toolCalls)
             assertTrue(events.any { it.contains("\"type\":\"ToolCallRequested\"") })
             assertTrue(events.any { it.contains("\"type\":\"ToolCallFinished\"") })

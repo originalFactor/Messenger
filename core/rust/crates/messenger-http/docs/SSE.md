@@ -6,6 +6,7 @@ All streams use `text/event-stream`. Chat events are named `message`; the
 ## Core change feed (`GET /api/v1/events`)
 
 - `change`: `{ "kind": "Provider|Model|Agent|Project|Conversation|Message|Other", "ids": [...] }`
+- `change`: `{ "kind": "taskStatus", "ids": ["approval" | "failed" | "completed"] }` for each original Core-owned native/ACP task event; no task content is included.
 - `resync`: a client lagged the bounded broadcast buffer and must re-query.
 - `remoteTool`: `{ callId, projectId, conversationId, workspace, name, argumentsJson }` —
   another device of the account asked this one to run a workspace tool of a
@@ -24,6 +25,12 @@ Remote Skills discovery and preview (`POST /api/v1/skills/remote/discover` and
 `/skills/remote/preview`) are bounded JSON requests, emit no SSE events and never
 mutate the installed catalog. Discovery returns a pinned commit ref for preview;
 only the existing package PUT persists a skill and produces store changes.
+
+## Core-owned native chat
+
+`POST /api/v1/conversations/{id}/background-turn` accepts the normal ChatRequest and a required `Idempotency-Key` header. Admission is idempotent for the same conversation, key and body while retained in process memory; a key reused with a different body conflicts. Retention is bounded and is lost when Core restarts, so clients must reconcile status and persisted history after an ambiguous result rather than silently repeat a provider request. `GET` on the same path returns `{active,requestId}` or 404; `POST /conversations/{id}/cancel` cancels the active turn.
+
+`GET /conversations/{id}/background-turn/events` replays retained events and then follows the live turn. Closing an observer does not cancel the turn. `ReplayComplete` separates replay from live events. If the bounded history was exceeded, `ReplayGap` and `ReplaySnapshot {messageId,content,truncated}` replace historical streaming events; truncated means even the snapshot was bounded and the client must reload persisted history on completion. A pending manual `ToolApprovalRequested` is replayed only while still outstanding; `ToolApprovalResolved {callId}` clears it on decision, timeout or cancellation. Platform tools are dispatched through the app-wide `/events` host, not the observer. The global feed emits `change` with `kind: taskStatus` and `ids: [approval|failed|completed]` once per live event, without task contents. Explicit cancellation and Core shutdown still cancel execution and pending tools.
 
 ## Chat (`POST /api/v1/conversations/{id}/messages`)
 
@@ -223,6 +230,21 @@ Native history pages contain complete local rows; Cloud control pages remain
 bounded previews, with `eventsTruncated:true` if an oversized tool trace is omitted.
 
 ACP `SessionSettings` snapshots also include Agent `availableCommands`, `usage` (`used`/`size`) and advertised `steering` metadata. Local control `prompt` accepts ACP content blocks; `steer` forwards `_session/steering` with host-owned `promptRequired` idle fallback and returns `Steering.result.outcome`. Injected inputs persist with the owning transcript. Control request bodies are bounded at 24 MiB.
+
+### Core-owned ACP prompts
+
+`POST /api/v1/control/background/{requestId}` accepts an ACP `prompt` and returns
+202. An identical request ID and body is idempotent. The task survives client
+and screen disconnection; explicit cancellation and permission answers use the
+existing `/control/commands/{requestId}/cancel` and `/permission` routes. Core
+shutdown cancels it. `GET /control/background/sessions/{sessionId}` locates the
+latest retained request; `GET /control/background/{requestId}?after=N` reads
+`{requestId,events,nextCursor,done}` using an absolute cursor. Terminal results
+are retained for up to 30 minutes, subject to the 32-request retention bound.
+Events are bounded to 4 MiB / 16384 items: `ReplayGap` signals discarded history,
+while an unresolved `Permission` is retained for reattachment. `PermissionResolved`
+clears an approval on answer, timeout, cancellation or shutdown. History is
+process-local; transcript history remains the source for completed messages.
 
 ## Agent model relay streams
 

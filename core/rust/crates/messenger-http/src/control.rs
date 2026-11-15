@@ -3,6 +3,7 @@ use super::*;
 use axum::body::to_bytes;
 use messenger_remote::ControlHost;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 const CONFIG: &str = "device_control_config";
 const GRANT: &str = "device_control_grant";
@@ -222,6 +223,171 @@ pub(crate) struct CommandHandle {
     cancel: CancellationToken,
 }
 
+// Retained only for the lifetime of this Core process; cursors index an
+// append-only log, so a reconnect never depends on a live SSE consumer.
+pub(crate) struct BackgroundCommand {
+    session_id: String,
+    request_digest: [u8; 32],
+    created: std::time::Instant,
+    log: Mutex<BackgroundLog>,
+}
+
+#[derive(Default)]
+struct BackgroundLog {
+    events: std::collections::VecDeque<Value>,
+    base: usize,
+    bytes: usize,
+    done: bool,
+    pending_permission: Option<(usize, Value)>,
+    completed: Option<std::time::Instant>,
+}
+
+const BACKGROUND_MAX_JOBS: usize = 32;
+const BACKGROUND_MAX_BYTES: usize = 4 * 1024 * 1024;
+const BACKGROUND_RETENTION: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+#[derive(Default, Deserialize)]
+pub(crate) struct BackgroundCursor { #[serde(default)] after: usize }
+
+async fn snapshot(id: Uuid, job: &BackgroundCommand, after: usize) -> Result<Json<Value>, ApiError> {
+    let log = job.log.lock().await;
+    if log.completed.is_some_and(|at| at.elapsed() >= BACKGROUND_RETENTION) {
+        return Err(ApiError::not_found("background command"));
+    }
+    let end = log.base + log.events.len();
+    if after > end {
+        return Err(ApiError::BadRequest("invalid background event cursor".into()));
+    }
+    let mut events = Vec::new();
+    if after < log.base {
+        events.push(json!({"type":"ReplayGap"}));
+        if let Some((index, permission)) = &log.pending_permission {
+            if *index < log.base { events.push(permission.clone()); }
+        }
+    }
+    events.extend(log.events.iter().skip(after.saturating_sub(log.base)).cloned());
+    Ok(Json(json!({"requestId": id, "events": events, "nextCursor": end, "done": log.done})))
+}
+
+fn record_background_event(log: &mut BackgroundLog, event: Value) {
+    let size = event.to_string().len();
+    let index = log.base + log.events.len();
+    match event["type"].as_str() {
+        Some("Permission") => log.pending_permission = Some((index, event.clone())),
+        Some("PermissionResolved" | "Finished" | "Cancelled" | "Error") => log.pending_permission = None,
+        _ => {}
+    }
+    while !log.events.is_empty() && (log.bytes.saturating_add(size) > BACKGROUND_MAX_BYTES || log.events.len() >= 16_384) {
+        let removed = log.events.pop_front().unwrap();
+        log.bytes -= removed.to_string().len();
+        log.base += 1;
+    }
+    if size > BACKGROUND_MAX_BYTES {
+        log.base += 1;
+    } else {
+        log.bytes += size;
+        log.events.push_back(event);
+    }
+}
+
+pub(crate) async fn background_snapshot(
+    State(state): State<ApiState>, Path(id): Path<Uuid>, Query(cursor): Query<BackgroundCursor>,
+) -> Result<Json<Value>, ApiError> {
+    let job = state.background_commands.lock().await.get(&id).cloned()
+        .ok_or_else(|| ApiError::not_found("background command"))?;
+    snapshot(id, &job, cursor.after).await
+}
+
+pub(crate) async fn background_session(
+    State(state): State<ApiState>, Path(session_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let jobs = state.background_commands.lock().await;
+    let (id, job) = jobs.iter().filter(|(_, job)| job.session_id == session_id)
+        .max_by_key(|(_, job)| job.created)
+        .map(|(id, job)| (*id, job.clone()))
+        .ok_or_else(|| ApiError::not_found("background command"))?;
+    drop(jobs);
+    snapshot(id, &job, 0).await
+}
+
+pub(crate) async fn start_background(
+    State(state): State<ApiState>, Path(request_id): Path<Uuid>, Json(request): Json<Value>,
+) -> Result<StatusCode, ApiError> {
+    let command: Command = serde_json::from_value(request.clone()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let session_id = match command {
+        Command::Prompt { session_id, ref text, .. } if session_id.starts_with("acp:") && !text.trim().is_empty() && text.len() <= 128_000 => session_id,
+        _ => return Err(ApiError::BadRequest("background command must be a valid ACP prompt".into())),
+    };
+    // Validate the session before accepting ownership of a task.
+    state.external.record(&state.store, &session_id)?;
+    let cancel = state.shutdown.child_token();
+    let (permissions, choices) = mpsc::channel(8);
+    let request_digest: [u8; 32] = Sha256::digest(serde_json::to_vec(&request).map_err(ApiError::internal)?).into();
+    let job = Arc::new(BackgroundCommand { session_id: session_id.clone(), request_digest, created: std::time::Instant::now(), log: Mutex::new(BackgroundLog::default()) });
+    {
+        let mut jobs = state.background_commands.lock().await;
+        let now = std::time::Instant::now();
+        let mut remove = Vec::new();
+        for (id, previous) in jobs.iter() {
+            let log = previous.log.lock().await;
+            if log.completed.is_some_and(|at| now.duration_since(at) >= BACKGROUND_RETENTION) { remove.push(*id); }
+            if *id == request_id && !remove.contains(id) {
+                return if previous.request_digest == request_digest { Ok(StatusCode::ACCEPTED) } else { Err(ApiError::BadRequest("duplicate control request ID".into())) };
+            }
+            if previous.session_id == session_id && !log.done {
+                return Err(ApiError::Conflict { code: "turn_in_progress".into(), message: "The session is generating.".into() });
+            }
+        }
+        for id in remove { jobs.remove(&id); }
+        if jobs.len() >= BACKGROUND_MAX_JOBS {
+            let mut oldest = None;
+            for (id, previous) in jobs.iter() {
+                if let Some(at) = previous.log.lock().await.completed {
+                    if oldest.as_ref().is_none_or(|(_, time)| at < *time) { oldest = Some((*id, at)); }
+                }
+            }
+            if let Some((id, _)) = oldest { jobs.remove(&id); }
+        }
+        if jobs.len() >= BACKGROUND_MAX_JOBS { return Err(ApiError::BadRequest("too many active background commands".into())); }
+        let mut pending = state.control_permissions.lock().await;
+        if pending.contains_key(&request_id) || jobs.contains_key(&request_id) { return Err(ApiError::BadRequest("duplicate control request ID".into())); }
+        pending.insert(request_id, CommandHandle { permissions, cancel: cancel.clone() });
+        jobs.insert(request_id, job.clone());
+    }
+    let (updates, mut events) = mpsc::channel(64);
+    let task_state = state.clone();
+    let task_cancel = cancel.clone();
+    tokio::spawn(async move {
+        let result = dispatch(task_state, request, task_cancel, choices, updates.clone(), ControlScope::Local).await;
+        let _ = updates.send(result).await;
+    });
+    tokio::spawn(async move {
+        while let Some(event) = events.recv().await {
+            let status = match event["type"].as_str() {
+                Some("Permission") => Some("approval"),
+                Some("Finished") => Some("completed"),
+                Some("Error") => Some("failed"),
+                _ => None,
+            };
+            if let Some(status) = status {
+                let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec![status.into()] }));
+            }
+            let mut log = job.log.lock().await;
+            record_background_event(&mut log, event);
+        }
+        let mut log = job.log.lock().await;
+        if !log.events.back().and_then(|v| v["type"].as_str()).is_some_and(|kind| matches!(kind, "Finished" | "Cancelled" | "Error")) {
+            let _ = state.events.send(CoreEvent::Change(ChangeEvent { kind: "taskStatus".into(), ids: vec!["failed".into()] }));
+            record_background_event(&mut log, json!({"type":"Error","code":"background_ended","message":"Background command ended unexpectedly."}));
+        }
+        log.done = true;
+        log.completed = Some(std::time::Instant::now());
+        drop(log);
+        state.control_permissions.lock().await.remove(&request_id);
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+
 pub(crate) async fn cancel_command(
     State(state): State<ApiState>,
     Path(request_id): Path<Uuid>,
@@ -283,7 +449,7 @@ pub(crate) async fn commands(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Choice {
-    option_id: String,
+    pub(crate) option_id: String,
 }
 
 pub(crate) async fn permission(
@@ -679,4 +845,32 @@ pub(crate) fn short(value: &str, limit: usize) -> String {
         text.push('…');
     }
     text
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn replay_gap_keeps_pending_permission_without_cancelling_work() {
+        let job = BackgroundCommand { session_id: "acp:test".into(), request_digest: [0; 32], created: std::time::Instant::now(), log: Mutex::new(BackgroundLog::default()) };
+        {
+            let mut log = job.log.lock().await;
+            record_background_event(&mut log, json!({"type":"Permission","options":[{"id":"choice"}]}));
+            for _ in 0..17 { record_background_event(&mut log, json!({"type":"TextDelta","text":"x".repeat(256 * 1024)})); }
+        }
+        let value = snapshot(Uuid::new_v4(), &job, 0).await.unwrap().0;
+        assert_eq!(value["events"][0]["type"], "ReplayGap");
+        assert_eq!(value["events"][1]["type"], "Permission");
+        assert_eq!(value["done"], false);
+        let cursor = value["nextCursor"].as_u64().unwrap() as usize;
+        {
+            let mut log = job.log.lock().await;
+            record_background_event(&mut log, json!({"type":"PermissionResolved"}));
+        }
+        let value = snapshot(Uuid::new_v4(), &job, cursor).await.unwrap().0;
+        assert_eq!(value["events"][0]["type"], "PermissionResolved");
+        let value = snapshot(Uuid::new_v4(), &job, 0).await.unwrap().0;
+        assert!(!value["events"].as_array().unwrap().iter().any(|event| event["type"] == "Permission"));
+    }
 }

@@ -629,4 +629,5 @@
     <string name="tools_approval_request">审批工具调用？</string>
     <string name="tools_approval_allow">允许</string>
     <string name="tools_approval_deny">拒绝</string>
+    <string name="background_replay_gap">部分实时任务更新已不可用。任务结束后将刷新已保存的对话记录。</string>
 </resources>

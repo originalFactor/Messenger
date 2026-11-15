@@ -46,6 +46,7 @@ pub(crate) async fn authorize(state: &ApiState, turn: &TurnRequest, user_request
         _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => false,
     };
     state.pending_approvals.lock().await.remove(&id);
+    let _ = events.send(serde_json::json!({"type":"ToolApprovalResolved", "callId": id}).to_string());
     if approved { Ok(()) } else { Err("Tool approval denied or cancelled".into()) }
 }
 #[cfg(test)]

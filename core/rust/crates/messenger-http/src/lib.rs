@@ -79,6 +79,7 @@ mod artifacts;
 mod scheduled_tasks;
 mod approval;
 mod approval_agent;
+mod background_turn;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
@@ -92,6 +93,8 @@ pub struct ApiState {
     images: Arc<image_generation::ImageGenerationService>,
     active_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
     control_permissions: Arc<Mutex<HashMap<Uuid, control::CommandHandle>>>,
+    background_commands: Arc<Mutex<HashMap<Uuid, Arc<control::BackgroundCommand>>>>,
+    background_turns: Arc<Mutex<background_turn::BackgroundRegistry>>,
     platform_catalog: Arc<Mutex<control::PlatformCatalog>>,
     /// Cancelled once this process has an authoritative platform catalog.
     platform_catalog_ready: CancellationToken,
@@ -187,6 +190,8 @@ impl ApiState {
             images,
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             control_permissions: Default::default(),
+            background_commands: Default::default(),
+            background_turns: Default::default(),
             platform_catalog: Default::default(),
             platform_catalog_ready,
             platform_tools_ready,
@@ -395,6 +400,7 @@ pub fn router(state: ApiState) -> Router {
     #[cfg(not(target_os = "android"))]
     let protected = protected.route("/acp", get(acp_agent::upgrade));
     let protected = protected
+        .merge(background_turn::routes())
         .merge(scheduled_tasks::routes())
         .merge(learning::routes())
         .merge(learning_bundle::routes())
@@ -419,6 +425,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/control/commands/:id", post(control::commands).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
         .route("/control/commands/:id/permission", post(control::permission))
         .route("/control/commands/:id/cancel", post(control::cancel_command))
+        .route("/control/background/:id", post(control::start_background).get(control::background_snapshot).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
+        .route("/control/background/sessions/:session_id", get(control::background_session))
         .route("/providers", get(list_providers).put(upsert_provider_body))
         .route(
             "/providers/:id",
@@ -2332,6 +2340,17 @@ async fn start_turn(
     cancel: CancellationToken,
     detached: bool,
 ) -> Result<mpsc::UnboundedReceiver<String>, ApiError> {
+    start_turn_inner(state, conversation_id, request, cancel, detached, false).await
+}
+
+async fn start_turn_inner(
+    state: ApiState,
+    conversation_id: String,
+    request: ChatRequest,
+    cancel: CancellationToken,
+    detached: bool,
+    background: bool,
+) -> Result<mpsc::UnboundedReceiver<String>, ApiError> {
     if detached && !request.disable_tools && !state.platform_tools_ready.is_cancelled() {
         if cancel.is_cancelled() {
             return Err(ApiError::Conflict { code: "turn_cancelled".into(), message: "the turn was cancelled".into() });
@@ -2589,6 +2608,7 @@ async fn start_turn(
             request: task_request,
             approval_user_request,
             detached,
+            background,
             cancel: task_cancel,
             tx: tx.clone(),
         })
@@ -2724,6 +2744,7 @@ struct TurnTask {
     request: ChatRequest,
     approval_user_request: String,
     detached: bool,
+    background: bool,
     cancel: CancellationToken,
     tx: mpsc::UnboundedSender<String>,
 }
@@ -2739,6 +2760,7 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         request,
         approval_user_request,
         detached,
+        background,
         cancel,
         tx,
     } = task;
@@ -2746,14 +2768,14 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         .map(|id| state.store.get_project(id))
         .transpose().map_err(ApiError::store)?.flatten();
     let workspace = project.as_ref().map(|p| p.workspace.as_str()).or_else(|| {
-        (!detached).then_some(request.workspace_path.as_deref()).flatten()
+        (!detached || background).then_some(request.workspace_path.as_deref()).flatten()
             .filter(|path| !path.trim().is_empty())
     });
     let mut tools = if request.disable_tools {
         Vec::new()
     } else if detached {
         let catalog = state.platform_catalog.lock().await;
-        configured_tools(&agent, conversation.writable, project.is_some() && catalog.workspace_supported, &catalog.tools)
+        configured_tools(&agent, conversation.writable, workspace.is_some() && catalog.workspace_supported, &catalog.tools)
     } else {
         configured_tools(&agent, conversation.writable, workspace.is_some(), &request.tool_specs)
     };
@@ -2842,13 +2864,13 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         platform: detached.then(|| (LocalClientExecutor {
             pending: Arc::clone(&state.pending_tools),
             events: state.events.clone(),
-        }, project)),
+        }, project.clone(), workspace.map(str::to_owned))),
         hub: Arc::clone(&state.remote),
         conversation_id: turn.conversation_id.clone(),
         cancel: cancel.clone(),
         approval_turn: turn.clone(),
         approval_user_request,
-        supports_approval: request.supports_tool_approval && !detached,
+        supports_approval: request.supports_tool_approval && (!detached || background),
     };
     run_chat_turn(&state.store, &host, &sink, &turn, cancel)
         .await
@@ -2998,7 +3020,7 @@ struct RoutedToolHost {
     writable: bool,
     local: RemoteToolHost,
     route: ToolRoute,
-    platform: Option<(LocalClientExecutor, Option<StoredProject>)>,
+    platform: Option<(LocalClientExecutor, Option<StoredProject>, Option<String>)>,
     hub: Arc<RemoteHub>,
     conversation_id: String,
     cancel: CancellationToken,
@@ -3041,12 +3063,12 @@ impl ToolHost for RoutedToolHost {
             return delegation::execute(&self.state, self.project.as_ref(), self.writable, arguments_json, &self.cancel).await;
         }
         let ToolRoute::Remote { device_id, project_id } = &self.route else {
-            if let Some((executor, project)) = &self.platform {
+            if let Some((executor, project, workspace)) = &self.platform {
                 return executor.execute_event(RemoteToolEvent {
                     call_id: format!("control:{}", Uuid::new_v4()),
                     project_id: project.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
                     conversation_id: self.conversation_id.clone(),
-                    workspace: project.as_ref().map(|p| p.workspace.clone()).unwrap_or_default(),
+                    workspace: workspace.clone().unwrap_or_default(),
                     name: name.to_string(),
                     arguments_json: arguments_json.to_string(),
                 }, self.cancel.clone()).await;
@@ -3057,6 +3079,16 @@ impl ToolHost for RoutedToolHost {
             .iter()
             .any(|tool| tool.name == name && tool.workspace_required);
         if !is_workspace_tool {
+            if let Some((executor, project, workspace)) = &self.platform {
+                return executor.execute_event(RemoteToolEvent {
+                    call_id: format!("control:{}", Uuid::new_v4()),
+                    project_id: project.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
+                    conversation_id: self.conversation_id.clone(),
+                    workspace: workspace.clone().unwrap_or_default(),
+                    name: name.to_string(),
+                    arguments_json: arguments_json.to_string(),
+                }, self.cancel.clone()).await;
+            }
             return self.local.execute(call_id, name, arguments_json).await;
         }
         // The model's call id is only unique within its turn; the relay needs
@@ -3307,6 +3339,111 @@ mod tests {
         assert!(read().await["active"].as_bool().unwrap());
         state.schedule_gate.lock().await.clear();
         assert!(!read().await["active"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn background_turn_survives_detached_subscriber_and_is_idempotent() {
+        let provider = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(150))
+                .set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state(); seed_text_chat(&state, &provider.uri());
+        let app = router(state.clone());
+        let make = |body: &str| {
+            let mut r = request(axum::http::Method::POST, "/api/v1/conversations/c1/background-turn", Some(body));
+            r.headers_mut().insert("Idempotency-Key", "test-key".parse().unwrap()); r
+        };
+        let body = r#"{"content":"hello","disableTools":true}"#;
+        assert_eq!(app.clone().oneshot(make(body)).await.unwrap().status(), StatusCode::ACCEPTED);
+        let live = app.clone().oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap();
+        drop(live);
+        assert_eq!(app.clone().oneshot(make(body)).await.unwrap().status(), StatusCode::ACCEPTED);
+        assert_eq!(app.clone().oneshot(make(r#"{"content":"other","disableTools":true}"#)).await.unwrap().status(), StatusCode::CONFLICT);
+        let response = app.clone().oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap();
+        let stream = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&stream);
+        assert!(text.contains("Finished"), "{text}");
+        assert!(text.contains("hello"), "{text}");
+        let response = app.oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn", None)).await.unwrap();
+        let value: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(value, serde_json::json!({"active":false,"requestId":"test-key"}));
+        assert_eq!(provider.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn background_approval_survives_observer_disconnect_then_cancels() {
+        let provider = wiremock::MockServer::start().await;
+        let arguments = serde_json::json!({"action":"create","title":"Demo","files":{"index.html":"<p>demo</p>"}}).to_string();
+        let call = serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"artifact-call","type":"function","function":{"name":artifacts::TOOL_NAME,"arguments":arguments}}]},"finish_reason":"tool_calls"}]}).to_string();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(format!("data: {call}\n\ndata: [DONE]\n\n")))
+            .mount(&provider).await;
+        let state = test_state(); seed_text_chat(&state, &provider.uri());
+        let mut model = state.store.get_model("m1").unwrap().unwrap(); model.supports_tool_calling = true; state.store.upsert_model(&model).unwrap();
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true; state.store.upsert_agent(&agent).unwrap();
+        state.store.kv_set("artifact_tools_enabled", "true").unwrap();
+        let app = router(state.clone());
+        let mut post = request(axum::http::Method::POST, "/api/v1/conversations/c1/background-turn", Some(r#"{"content":"Create","supportsToolApproval":true}"#));
+        post.headers_mut().insert("Idempotency-Key", "approval-key".parse().unwrap());
+        assert_eq!(app.clone().oneshot(post).await.unwrap().status(), StatusCode::ACCEPTED);
+        let observer = app.clone().oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap();
+        drop(observer);
+        let approval_id = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(id) = state.pending_approvals.lock().await.keys().next().cloned() { break id; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        let attached = app.clone().oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap();
+        let mut stream = attached.into_body().into_data_stream();
+        let approval = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut text = String::new();
+            while let Some(frame) = stream.next().await { text.push_str(&String::from_utf8_lossy(&frame.unwrap())); if text.contains("ToolApprovalRequested") { break; } }
+            text
+        }).await.unwrap();
+        assert!(approval.contains(&approval_id));
+        assert_eq!(app.clone().oneshot(request(axum::http::Method::POST, "/api/v1/conversations/c1/cancel", None)).await.unwrap().status(), StatusCode::ACCEPTED);
+        let end = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut text = String::new(); while let Some(frame) = stream.next().await { text.push_str(&String::from_utf8_lossy(&frame.unwrap())); } text
+        }).await.unwrap();
+        assert!(end.contains("ToolApprovalResolved"), "{end}");
+        assert!(end.contains("Cancelled"), "{end}");
+        assert!(state.pending_approvals.lock().await.is_empty());
+        let replay = app.oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap().into_body().collect().await.unwrap().to_bytes();
+        assert!(!String::from_utf8_lossy(&replay).contains("ToolApprovalRequested"));
+    }
+
+    #[tokio::test]
+    async fn background_platform_tool_uses_temporary_workspace_without_observer() {
+        let provider = wiremock::MockServer::start().await;
+        let call = serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read-1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}).to_string();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(format!("data: {call}\n\ndata: [DONE]\n\n")))
+            .up_to_n_times(1).mount(&provider).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state(); seed_text_chat(&state, &provider.uri());
+        let mut model = state.store.get_model("m1").unwrap().unwrap(); model.supports_tool_calling = true; state.store.upsert_model(&model).unwrap();
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true; state.store.upsert_agent(&agent).unwrap();
+        { let mut catalog = state.platform_catalog.lock().await; catalog.workspace_supported = true; catalog.tools.push(ToolSpecRequest { name: "read".into(), description: "read".into(), parameters_json: "{}".into() }); }
+        let mut feed = state.events.subscribe();
+        let app = router(state.clone());
+        let mut post = request(axum::http::Method::POST, "/api/v1/conversations/c1/background-turn", Some(r#"{"content":"Read","workspacePath":"/tmp/task"}"#));
+        post.headers_mut().insert("Idempotency-Key", "tool-key".parse().unwrap());
+        assert_eq!(app.clone().oneshot(post).await.unwrap().status(), StatusCode::ACCEPTED);
+        let call = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop { if let Ok(CoreEvent::RemoteTool(call)) = feed.recv().await { break call; } }
+        }).await.unwrap();
+        assert_eq!(call.workspace, "/tmp/task");
+        assert_eq!(call.name, "read");
+        let result = format!("/api/v1/turns/tools/{}/result", call.call_id);
+        assert_eq!(app.clone().oneshot(request(axum::http::Method::POST, &result, Some(r#"{"output":"file content"}"#))).await.unwrap().status(), StatusCode::ACCEPTED);
+        let replay = app.oneshot(request(axum::http::Method::GET, "/api/v1/conversations/c1/background-turn/events", None)).await.unwrap().into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&replay);
+        assert!(text.contains("Finished"), "{text}");
+        assert!(!text.contains("ToolCallRequested"));
     }
 
     fn agent_json(id: &str, is_default: bool) -> String {
