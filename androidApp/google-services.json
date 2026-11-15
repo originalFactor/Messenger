@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1047234927394",
+    "project_id": "messenger-fefcf",
+    "storage_bucket": "messenger-fefcf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1047234927394:android:37e2f5e92f79883995a37b",
+        "android_client_info": {
+          "package_name": "cc.ptoe.messenger"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuDRtQSzVLTYrgh4bM6ZDKPukpf-yoUBE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

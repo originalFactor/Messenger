@@ -16,7 +16,20 @@
 
 package cc.ptoe.messenger
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -38,6 +51,35 @@ class MainActivity : ComponentActivity() {
 
             MessengerTheme(themeMode = themeMode) {
                 MainScaffold()
+                var showPushConsent by remember { mutableStateOf(!PushSetup.hasConsent(this)) }
+                val notificationPermission = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { }
+                if (showPushConsent) {
+                    AlertDialog(
+                        onDismissRequest = { showPushConsent = false },
+                        title = { Text(stringResource(R.string.push_consent_title)) },
+                        text = {
+                            TextButton(onClick = {
+                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.jiguang.cn/license/privacy")))
+                            }) { Text(stringResource(R.string.push_consent_message)) }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                PushSetup.enable(this)
+                                showPushConsent = false
+                                if (Build.VERSION.SDK_INT >= 33) {
+                                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }) { Text(stringResource(R.string.push_consent_enable)) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showPushConsent = false }) {
+                                Text(stringResource(R.string.push_consent_later))
+                            }
+                        },
+                    )
+                }
             }
         }
     }

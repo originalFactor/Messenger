@@ -43,6 +43,9 @@ class MessengerApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // JPush runs a separate :pushcore process; never open another Core server there.
+        if (getProcessName() != packageName) return
+        PushSetup.initializeIfConsented(this)
         AndroidContextHolder.appContext = applicationContext
         // Optional companion runtime app (targetSdk 28, its own UID) hosts the
         // Termux bootstrap in its legacy SELinux domain. Agent shell/workspace

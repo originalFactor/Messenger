@@ -20,6 +20,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.google.services)
 }
 
 // Shared ABI matrix (root build script): release ships arm64-v8a, debug adds
@@ -41,6 +42,8 @@ android {
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["JPUSH_APPKEY"] = "0cfeb5bf0683589beee0fc75"
+        manifestPlaceholders["JPUSH_CHANNEL"] = "default_developer"
     }
 
     signingConfigs {
@@ -109,6 +112,9 @@ android {
 // Per-ABI split APKs are produced via splits.abi for distribution.
 
 dependencies {
+    implementation(files("libs/jpush-android-6.3.1.aar", "libs/jcore-android-5.6.0.aar", "libs/jpush-android-plugin-fcm-v6.3.1.aar"))
+    implementation(libs.firebase.messaging)
+    implementation(libs.jetbrains.compose.material3)
     implementation(project(":shared"))
     implementation(project(":core-bindings"))
     implementation(libs.ucrop)

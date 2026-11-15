@@ -13,6 +13,8 @@
 # limitations under the License.
 
 [versions]
+googleServices = "4.4.2"
+firebaseMessaging = "23.1.2"
 typewriterHighlights = "1.2.0"
 typewriterRatex = "0.1.15"
 agp = "9.5.1"
@@ -54,6 +56,7 @@ sqliteBundled = "2.7.0"
 okio = "3.18.0"
 
 [libraries]
+firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebaseMessaging" }
 typewriter-highlights = { module = "dev.snipme:highlights", version.ref = "typewriterHighlights" }
 typewriter-ratex = { module = "io.github.darriousliu:ratex", version.ref = "typewriterRatex" }
 typewriter-ratex-windows = { module = "io.github.darriousliu:ratex-native-windows-x86-64", version.ref = "typewriterRatex" }
@@ -127,6 +130,7 @@ ucrop = { group = "com.github.Yalantis", name = "ucrop", version.ref = "ucrop" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
 
 [plugins]
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
