@@ -217,6 +217,49 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             sendPrompt(next, false)
         }
     }
+    // Agents can advertise commands asynchronously after the initial settings snapshot.
+    val commandQuery = draft.selection.takeIf { it.collapsed }?.start?.let { cursor ->
+        draft.text.take(cursor).takeIf { it.startsWith("/") && it.none(Char::isWhitespace) }
+    }
+    LaunchedEffect(commandQuery != null, active, loading) {
+        if (commandQuery != null && active.isEmpty() && !loading) {
+            try {
+                val result = requestAcp(core, "sessionSettings") { put("sessionId", sessionId) }
+                (result["settings"] as? JsonObject)?.let { settings = it }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { report(failure.message.orEmpty()) }
+        }
+    }
+    val commands = commandQuery?.let { query ->
+        settings.objects("availableCommands").filter { it.text("name").startsWith(query.removePrefix("/"), ignoreCase = true) }.take(6)
+    }.orEmpty()
+    val fileToken = draft.selection.takeIf { it.collapsed }?.start?.let { cursor ->
+        val prefix = draft.text.take(cursor)
+        val start = prefix.indexOfLast { it.isWhitespace() } + 1
+        prefix.substring(start).takeIf { it.startsWith("@") }?.let { start to it.drop(1) }
+    }
+    var workspaceFiles by remember(sessionId) { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(sessionId, fileToken?.second) {
+        if (fileToken != null) {
+            workspaceFiles = emptyList()
+            try { workspaceFiles = acpCompletionFiles(core, sessionId, fileToken.second) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { report(failure.message.orEmpty()) }
+        }
+    }
+    val files = fileToken?.second?.let { query -> workspaceFiles.filter { it.contains(query, ignoreCase = true) }.take(6) }.orEmpty()
+    fun insertFile(path: String) {
+        val token = fileToken ?: return
+        val suffix = draft.text.drop(draft.selection.start).dropWhile { !it.isWhitespace() }
+        val value = draft.text.take(token.first) + "@" + path + if (suffix.firstOrNull()?.isWhitespace() == true) "" else " "
+        draft = TextFieldValue(value + suffix, TextRange(value.length))
+    }
+    fun insertCommand(command: JsonObject) {
+        val cursor = draft.selection.start
+        val suffix = draft.text.drop(cursor).dropWhile { !it.isWhitespace() }
+        val value = "/${command.text("name")}" + if (suffix.firstOrNull()?.isWhitespace() == true) "" else " "
+        draft = TextFieldValue(value + suffix, TextRange(value.length))
+    }
     val agent = remember(agentName, agentAvatar) { Agent("acp", agentName, avatar = agentAvatar, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
     val rows = history + listOfNotNull(liveId?.let { id -> buildJsonObject {
         put("id", id); put("role", "assistant"); put("text", partial); put("status", if (active.isEmpty()) "sent" else "sending")
@@ -287,15 +330,18 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         TextButton(onClick = { queue = queue - queued }) { Text("×") }
                     } }
                     attachments.forEach { attachment -> TextButton(onClick = { attachments = attachments - attachment }) { Text("${attachment.name} ×") } }
-                    if (draft.text.startsWith("/")) settings.objects("availableCommands").filter { it.text("name").startsWith(draft.text.removePrefix("/")) }.take(6).forEach { command ->
-                        TextButton(onClick = { val value = "/${command.text("name")} "; draft = TextFieldValue(value, TextRange(value.length)) }) { Text("/${command.text("name")} — ${command.text("description")}") }
+                    commands.forEach { command ->
+                        TextButton(onClick = { insertCommand(command) }) { Text("/${command.text("name")} — ${command.text("description")}") }
                     }
+                    files.forEach { path -> TextButton(onClick = { insertFile(path) }) { Text("@$path", maxLines = 1) } }
                     ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = true, sendWhileGenerating = true, hasAttachments = attachments.isNotEmpty(),
                         onAddClick = { imagePicker.launch() },
                         modifier = Modifier.onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && draft.text.startsWith("/")) {
-                                val command = settings.objects("availableCommands").firstOrNull { it.text("name").startsWith(draft.text.removePrefix("/")) }
-                                if (command != null) { val text = "/${command.text("name")} "; draft = TextFieldValue(text, TextRange(text.length)) }
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && files.isNotEmpty()) {
+                                insertFile(files.first()); true
+                            } else if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && commands.isNotEmpty()) {
+                                val command = commands.firstOrNull()
+                                if (command != null) insertCommand(command)
                                 command != null
                             } else if (event.type == KeyEventType.KeyDown && event.key == Key.V && (event.isCtrlPressed || event.isMetaPressed)) {
                                 pasteAttachments {
