@@ -181,8 +181,14 @@ class RustCloudFacade(
         core.cloudSetServerUrl(normalized)
     }
 
+    override suspend fun remoteControlCommand(
+        requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) = request { core.remoteControlCommand(requestId, deviceId, command, onEvent) }
+
     override suspend fun registerPushDevice(registrationId: String) = request { core.cloudPushDevice(registrationId) }
-    override suspend fun sendPushEvent(event: String) = request { core.cloudPushEvent(event) }
+    override suspend fun sendPushEvent(event: String, title: String?, targetKind: String?, conversationId: String?, deviceId: String?) =
+        request { core.cloudPushEvent(event, title, targetKind, conversationId, deviceId) }
 
     override suspend fun login(email: String, password: String, serverUrl: String?): CloudLoginOutcome =
         request {

@@ -138,7 +138,11 @@ class RestCoreBridge(
                                 .orEmpty()
                             if (kind == "taskStatus") {
                                 ids.firstOrNull()?.takeIf { it in setOf("approval", "failed", "completed") }
-                                    ?.let { cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify(it) }
+                                    ?.let { status ->
+                                        cc.ptoe.messenger.presentation.platform.TaskPushNotifications.notify(
+                                            cc.ptoe.messenger.presentation.platform.TaskPushEvent(status, ids.getOrNull(2), ids.getOrNull(1).orEmpty())
+                                        )
+                                    }
                             }
                             listeners.forEach { it(kind, ids) }
                         }
@@ -280,6 +284,9 @@ class RestCoreBridge(
     override suspend fun controlSettings(): JsonObject =
         NetworkClient.json.parseToJsonElement(getText("/control/settings")).jsonObject
 
+    override suspend fun remoteStatus(): JsonObject =
+        NetworkClient.json.parseToJsonElement(getText("/remote/status")).jsonObject
+
     override suspend fun learningRequest(method: String, path: String, body: String?): String {
         require(path.startsWith("/learning/") || path == "/learning" ||
             path.startsWith("/artifacts") || path.startsWith("/assets") ||
@@ -370,6 +377,19 @@ class RestCoreBridge(
         } finally {
             finishTask?.invoke()
         }
+    }
+
+    override suspend fun remoteControlCommand(requestId: String, deviceId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
+        streamSsePost("/remote/client/commands/${path(requestId)}", buildJsonObject {
+            put("target", deviceId)
+            put("payload", command)
+        }.toString()) { onEvent(NetworkClient.json.parseToJsonElement(it).jsonObject) }
+    }
+
+    override suspend fun remoteControlSignal(requestId: String, optionId: String?) {
+        postNoContent("/remote/client/commands/${path(requestId)}/signal", buildJsonObject {
+            optionId?.let { put("optionId", it) }
+        }.toString())
     }
 
     override suspend fun startBackgroundAcp(requestId: String, command: JsonObject) = withContext(NonCancellable) {
@@ -507,8 +527,15 @@ class RestCoreBridge(
         "/cloud/push/device", buildJsonObject { put("registrationId", registrationId) }.toString()
     )
     override suspend fun cloudRemovePushDevice() = deleteNoContent("/cloud/push/device")
-    override suspend fun cloudPushEvent(event: String) = postNoContent(
-        "/cloud/push/events", buildJsonObject { put("event", event) }.toString()
+    override suspend fun cloudPushEvent(event: String, title: String?, targetKind: String?, conversationId: String?, deviceId: String?) = postNoContent(
+        "/cloud/push/events", buildJsonObject {
+            put("event", event)
+            if (title != null) put("title", title)
+            if (targetKind != null && conversationId != null) put("target", buildJsonObject {
+                put("kind", targetKind); put("conversationId", conversationId)
+                if (deviceId != null) put("deviceId", deviceId)
+            })
+        }.toString()
     )
 
     override suspend fun cloudLogin(email: String, password: String): String =

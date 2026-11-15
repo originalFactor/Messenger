@@ -13,7 +13,7 @@ fn mode(state: &ApiState) -> Result<String, ApiError> {
     Ok(match state.store.kv_get(KEY).map_err(ApiError::store)?.as_deref() { Some("automatic") => "automatic", _ => "manual" }.into())
 }
 #[derive(Deserialize)]
-pub(crate) struct Decision { approved: bool }
+pub(crate) struct Decision { pub(crate) approved: bool }
 pub(crate) async fn resolve(State(state): State<ApiState>, Path(id): Path<String>, Json(decision): Json<Decision>) -> Result<StatusCode, ApiError> {
     let sender = state.pending_approvals.lock().await.remove(&id).ok_or_else(|| ApiError::not_found("pending approval"))?;
     sender.send(decision.approved).map_err(|_| ApiError::Conflict { code: "approval_closed".into(), message: "the approval request has closed".into() })?;

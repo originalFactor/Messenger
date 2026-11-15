@@ -388,6 +388,10 @@ impl CloudApiClient {
         self.send_no_content(self.http.post(url).json(&serde_json::json!({"event": event}))).await
     }
 
+    pub async fn push_event_payload(&self, url: &str, payload: &serde_json::Value) -> CloudResult<()> {
+        self.send_no_content(self.http.post(url).json(payload)).await
+    }
+
     async fn send_no_content(&self, request: reqwest::RequestBuilder) -> CloudResult<()> {
         let response = self.add_session(request).send().await.map_err(|e| CloudError::Network(e.to_string()))?;
         let status = response.status();

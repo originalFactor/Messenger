@@ -106,7 +106,7 @@ interface CoreBridge {
     // Cloud & Sync
     suspend fun cloudPushDevice(registrationId: String) { error("Push unavailable") }
     suspend fun cloudRemovePushDevice() { error("Push unavailable") }
-    suspend fun cloudPushEvent(event: String) { error("Push unavailable") }
+    suspend fun cloudPushEvent(event: String, title: String? = null, targetKind: String? = null, conversationId: String? = null, deviceId: String? = null) { error("Push unavailable") }
     suspend fun cloudLogin(email: String, password: String): String
     suspend fun cloudRegister(email: String, password: String): String
     suspend fun cloudLogout()
@@ -182,6 +182,7 @@ interface CoreBridge {
      * event loop cannot block.
      */
     suspend fun controlSettings(): kotlinx.serialization.json.JsonObject = error("Device control unavailable")
+    suspend fun remoteStatus(): kotlinx.serialization.json.JsonObject = error("Device control unavailable")
     suspend fun saveControlSettings(settings: kotlinx.serialization.json.JsonObject) {
         error("Device control unavailable")
     }
@@ -190,6 +191,11 @@ interface CoreBridge {
         command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
     ) { error("Device control unavailable") }
+    suspend fun remoteControlCommand(
+        requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) { error("Remote control unavailable") }
+    suspend fun remoteControlSignal(requestId: String, optionId: String? = null) { error("Remote control unavailable") }
     suspend fun startBackgroundAcp(requestId: String, command: kotlinx.serialization.json.JsonObject) { error("Background ACP unavailable") }
     suspend fun backgroundAcpBySession(sessionId: String): kotlinx.serialization.json.JsonObject? = error("Background ACP unavailable")
     suspend fun backgroundAcpEvents(requestId: String, after: Long): kotlinx.serialization.json.JsonObject = error("Background ACP unavailable")

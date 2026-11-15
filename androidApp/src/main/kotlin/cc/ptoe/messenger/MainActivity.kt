@@ -40,6 +40,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.presentation.navigation.ConversationOpenRequests
 import cc.ptoe.messenger.presentation.theme.MessengerTheme
 import cc.ptoe.messenger.presentation.theme.ThemeMode
 import cc.ptoe.messenger.presentation.ui.components.MainScaffold
@@ -51,8 +52,24 @@ class MainActivity : ComponentActivity() {
         AndroidForegroundTasks.restoreFromActivity()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openNotificationTarget(intent)
+    }
+
+    private fun openNotificationTarget(intent: Intent?) {
+        if (intent?.action != ACTION_OPEN_CONVERSATION) return
+        val target = notificationTargetFromExtras(
+            intent.getStringExtra("kind"), intent.getStringExtra("conversationId"), intent.getStringExtra("deviceId"),
+            intent.getStringExtra("n_extras"), intent.getStringExtra("JMessageExtra"),
+        ) ?: return
+        ConversationOpenRequests.open(target.conversationId, target.deviceId)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) openNotificationTarget(intent)
         enableEdgeToEdge()
         setContent {
             val themeMode by AppContainerHolder.instance.themePreferences.themeMode

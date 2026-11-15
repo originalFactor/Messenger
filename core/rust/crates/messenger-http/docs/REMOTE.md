@@ -71,6 +71,32 @@ events query. A `controlReady` event provides an opaque `connectionId`.
 `GET /api/remote/control` lists opted-in devices of the current account.
 `POST /api/remote/control` takes `connectionId` and one of these packets:
 
+Native notification navigation uses an ephemeral controller connection with
+`control=client&controlOnly=1`; it does not appear in device presence. Core
+exposes `POST /api/v1/remote/client/commands/{requestId}` with JSON
+`{target, payload}` as a bearer-protected SSE stream of the host's reply
+payloads. Allowed actions are `history`, `prompt`, `notificationOpen`,
+`notificationDecision` and `notificationCancel`. The target is an opted-in
+device ID of the signed-in account. `POST /remote/client/commands/{requestId}/signal`
+forwards `{optionId}` for an active prompt, or `{}` to cancel it. Closing the
+local stream closes the remote control lane; no prompt is resubmitted. The
+Cloud cookie stays in Core, a 401 clears only the still-current session, and
+session changes terminate active lanes.
+
+For a notification containing an exact session ID on that opted-in host,
+`notificationOpen {sessionId, before?}` reads a bounded page of that locally
+stored Messenger or ACP transcript plus the live background task state and
+pending approval, including projectless sessions and sessions whose project is
+owned by another device. It does not enumerate sessions or start a new turn.
+`notificationDecision {sessionId, requestId, optionId}` and
+`notificationCancel {sessionId, requestId}` act only on the matching current
+background task; a decision must match an outstanding approval option. Stale
+request IDs and unrelated approval options are rejected. These targeted actions
+still require the same-account relay and the host's remote-control opt-in. They
+do not expand catalog discovery, general `history`/`prompt` access, workspace
+ownership, Agent tool policy, or permission grants: the existing remote project
+scope continues to apply to those operations.
+
 | kind | Additional fields | Delivered event |
 |---|---|---|
 | `advertise` | `enabled, name` | Registers or removes a host from discovery |

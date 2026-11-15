@@ -80,6 +80,7 @@ mod scheduled_tasks;
 mod approval;
 mod approval_agent;
 mod background_turn;
+mod remote_client;
 
 /// Stable API prefix. Keep this in one place so clients and documentation do
 /// not drift when a future incompatible version is introduced.
@@ -95,6 +96,7 @@ pub struct ApiState {
     control_permissions: Arc<Mutex<HashMap<Uuid, control::CommandHandle>>>,
     background_commands: Arc<Mutex<HashMap<Uuid, Arc<control::BackgroundCommand>>>>,
     background_turns: Arc<Mutex<background_turn::BackgroundRegistry>>,
+    remote_clients: Arc<Mutex<HashMap<Uuid, remote_client::ClientLane>>>,
     platform_catalog: Arc<Mutex<control::PlatformCatalog>>,
     /// Cancelled once this process has an authoritative platform catalog.
     platform_catalog_ready: CancellationToken,
@@ -192,6 +194,7 @@ impl ApiState {
             control_permissions: Default::default(),
             background_commands: Default::default(),
             background_turns: Default::default(),
+            remote_clients: Default::default(),
             platform_catalog: Default::default(),
             platform_catalog_ready,
             platform_tools_ready,
@@ -400,6 +403,7 @@ pub fn router(state: ApiState) -> Router {
     #[cfg(not(target_os = "android"))]
     let protected = protected.route("/acp", get(acp_agent::upgrade));
     let protected = protected
+        .merge(remote_client::routes())
         .merge(background_turn::routes())
         .merge(scheduled_tasks::routes())
         .merge(learning::routes())
@@ -1647,9 +1651,24 @@ async fn model_metadata(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushDeviceBody { registration_id: String }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct PushEventBody { event: String }
+struct PushEventBody {
+    event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target: Option<PushTarget>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PushTarget {
+    kind: String,
+    conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_id: Option<String>,
+}
 
 async fn cloud_push_device(State(state): State<ApiState>, Json(body): Json<PushDeviceBody>) -> Result<StatusCode, ApiError> {
     sync_engine(&state.store)?.register_push_device(&body.registration_id).await.map_err(ApiError::cloud)?;
@@ -1662,7 +1681,7 @@ async fn cloud_remove_push_device(State(state): State<ApiState>) -> Result<Statu
 }
 
 async fn cloud_push_event(State(state): State<ApiState>, Json(body): Json<PushEventBody>) -> Result<StatusCode, ApiError> {
-    sync_engine(&state.store)?.send_push_event(&body.event).await.map_err(ApiError::cloud)?;
+    sync_engine(&state.store)?.send_push_event_payload(&serde_json::to_value(body).map_err(|e| ApiError::Internal(e.to_string()))?).await.map_err(ApiError::cloud)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

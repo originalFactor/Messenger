@@ -196,6 +196,67 @@ async fn find(state: &ApiState, id: &str) -> Result<Arc<BackgroundTurn>, ApiErro
     state.background_turns.lock().await.current.get(id).cloned().ok_or_else(|| ApiError::not_found("background turn"))
 }
 
+#[cfg(test)]
+pub(super) async fn insert_test_turn_with_approval(state: &ApiState, id: &str, call_id: &str) -> oneshot::Receiver<bool> {
+    let (sender, receiver) = oneshot::channel();
+    state.pending_approvals.lock().await.insert(call_id.into(), sender);
+    let turn = Arc::new(BackgroundTurn::new("test".into(), [0; 32]));
+    turn.push(serde_json::json!({"type":"TextDelta", "text":"working"}).to_string()).await;
+    turn.push(serde_json::json!({"type":"ToolApprovalRequested", "callId":call_id,
+        "name":"terminal", "argumentsJson":"{\"command\":\"ls\"}"}).to_string()).await;
+    state.background_turns.lock().await.current.insert(id.into(), turn);
+    receiver
+}
+
+/// A bounded snapshot for an authenticated, explicitly enabled remote controller.
+pub(super) async fn remote_snapshot(state: &ApiState, id: &str) -> Value {
+    let Ok(turn) = find(state, id).await else { return serde_json::json!({"active":false,"events":[]}) };
+    let h = turn.history.lock().await;
+    let mut events = Vec::new();
+    if !h.done && !h.text.is_empty() {
+        events.push(serde_json::json!({"type":"TextDelta","text":control::short(&h.text,8_000)}));
+    }
+    if let Some(pending) = h.pending_approval.as_ref().filter(|_| !h.done) {
+        if let Ok(value) = serde_json::from_str::<Value>(pending) {
+            if let Some(call_id) = value["callId"].as_str() {
+                if state.pending_approvals.lock().await.contains_key(call_id) {
+                    events.push(serde_json::json!({"type":"Permission","options":[{"id":format!("approve:{call_id}"),"name":"Approve"},{"id":format!("deny:{call_id}"),"name":"Deny"}],"tool":{
+                        "title":control::short(value["name"].as_str().unwrap_or_default(),180),
+                        "detail":control::short(value["argumentsJson"].as_str().unwrap_or_default(),1500)
+                    }}));
+                }
+            }
+        }
+    }
+    serde_json::json!({"active":!h.done,"requestId":turn.key,"events":events})
+}
+
+pub(super) async fn remote_cancel(state: &ApiState, id: &str, request_id: &str) -> Result<(), ApiError> {
+    let turns = state.background_turns.lock().await;
+    let turn = turns.current.get(id).ok_or_else(|| ApiError::not_found("background turn"))?;
+    if turn.key != request_id || turn.history.lock().await.done {
+        return Err(ApiError::Conflict { code: "turn_changed".into(), message: "The active task has changed".into() });
+    }
+    let active = state.active_turns.lock().await;
+    let cancel = active.get(id).ok_or_else(|| ApiError::not_found("active turn"))?;
+    cancel.cancel();
+    Ok(())
+}
+
+pub(super) async fn remote_decide(state: &ApiState, id: &str, request_id: &str, option: &str) -> Result<(), ApiError> {
+    let turn = find(state, id).await?;
+    if turn.key != request_id { return Err(ApiError::Conflict { code: "turn_changed".into(), message: "The active task has changed".into() }); }
+    let call_id = turn.history.lock().await.pending_approval.as_ref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|v| v["callId"].as_str().map(str::to_owned))
+        .ok_or_else(|| ApiError::not_found("pending approval"))?;
+    let (decision, requested_id) = option.split_once(':').ok_or_else(|| ApiError::BadRequest("invalid approval option".into()))?;
+    if requested_id != call_id { return Err(ApiError::Conflict { code: "approval_changed".into(), message: "The pending approval has changed".into() }); }
+    let approved = match decision { "approve" => true, "deny" => false, _ => return Err(ApiError::BadRequest("invalid approval option".into())) };
+    approval::resolve(State(state.clone()), Path(call_id), Json(approval::Decision { approved })).await?;
+    Ok(())
+}
+
 async fn status(State(state): State<ApiState>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
     let turn = find(&state, &id).await?;
     let active = !turn.history.lock().await.done;

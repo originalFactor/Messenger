@@ -54,6 +54,7 @@ private fun <T> expressiveSpatialSpec(visibilityThreshold: T): FiniteAnimationSp
 private val RouteOrders: Map<String, Int> = mapOf(
     Screen.Conversations.route to 0,
     Screen.Chat.route to 1,
+    Screen.RemoteConversation.route to 1,
     Screen.ProjectConversations.route to 1,
     Screen.UnprojectedConversations.route to 1,
     Screen.ConversationSettings.route to 2,

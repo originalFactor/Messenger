@@ -630,4 +630,10 @@
     <string name="tools_approval_allow">允许</string>
     <string name="tools_approval_deny">拒绝</string>
     <string name="background_replay_gap">部分实时任务更新已不可用。任务结束后将刷新已保存的对话记录。</string>
+    <string name="notification_conversation_unavailable">此设备上无法打开该会话。</string>
+    <string name="remote_notification_unavailable">无法打开远程设备或会话。请检查设备是否在线并已开启远程控制。</string>
+    <string name="remote_notification_title">远程会话</string>
+    <string name="remote_notification_read_only">此会话位于另一台设备。请在该设备上发送新消息。</string>
+    <string name="remote_notification_approval">需要审批</string>
+    <string name="remote_notification_cancel">停止任务</string>
 </resources>

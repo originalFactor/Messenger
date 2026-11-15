@@ -193,6 +193,13 @@ Skills are enabled; installing Skills does not silently leave such sessions unsu
 
 ## Device session commands (`POST /api/v1/control/commands/{requestId}`)
 
+`POST /api/v1/remote/client/commands/{requestId}` opens a Cloud control-client
+lane and streams the remote host's reply payloads as `message` events. The
+paired `/remote/client/commands/{requestId}/signal` route forwards approval or
+cancellation. A disconnected subscriber closes its control lane; see
+`REMOTE.md`. Cloud authentication failures produce an `Error` event and clear
+the rejected session.
+
 Non-turn actions finish with `Catalog`, `Created`, `History`, `Mode`, `Store`, `SessionSettings` or
 `Error`. Catalog sessions include `projectId` (nullable) and `updatedAt`
 (milliseconds since the Unix epoch, or 0 for legacy ACP sessions). Prompt commands stream the turn events above, ending in `Finished`,

@@ -206,6 +206,10 @@ impl<'a> SyncEngine<'a> {
         self.with_session(self.client.push_event(&self.endpoint("api/push/events"), event)).await
     }
 
+    pub async fn send_push_event_payload(&self, payload: &serde_json::Value) -> CloudResult<()> {
+        self.with_session(self.client.push_event_payload(&self.endpoint("api/push/events"), payload)).await
+    }
+
     pub async fn logout(&self) -> CloudResult<()> {
         let _ = self.client.logout(&self.endpoint("api/auth/logout")).await;
         self.clear_session().map_err(CloudError::Network)?;

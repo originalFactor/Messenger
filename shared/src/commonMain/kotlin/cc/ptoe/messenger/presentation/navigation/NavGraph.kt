@@ -44,6 +44,7 @@ import cc.ptoe.messenger.presentation.ui.agents.AgentsScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentMarketDetailScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentMarketScreen
 import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
+import cc.ptoe.messenger.presentation.ui.chat.RemoteConversationScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationSettingsScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsScreen
@@ -137,6 +138,17 @@ fun NavGraph(
                     navController.navigate(Screen.ConversationSettings.createRoute(conversationId))
                 }
             )
+        }
+        composable(
+            route = Screen.RemoteConversation.route,
+            arguments = listOf(
+                navArgument("deviceId") { type = NavType.StringType },
+                navArgument("conversationId") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val deviceId = entry.arguments?.read { getStringOrNull("deviceId") }.orEmpty()
+            val conversationId = entry.arguments?.read { getStringOrNull("conversationId") }.orEmpty()
+            RemoteConversationScreen(deviceId, conversationId) { navController.popBackStack() }
         }
         composable(Screen.Agents.route) { backStackEntry ->
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {

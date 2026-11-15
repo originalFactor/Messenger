@@ -32,6 +32,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -42,6 +44,18 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import cc.ptoe.messenger.presentation.navigation.BottomLevelRoutes
 import cc.ptoe.messenger.presentation.navigation.NavGraph
+import cc.ptoe.messenger.presentation.navigation.Screen
+import cc.ptoe.messenger.presentation.navigation.ConversationOpenRequests
+import cc.ptoe.messenger.presentation.navigation.prepareLocalConversation
+import cc.ptoe.messenger.presentation.platform.showPlatformToast
+import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.notification_conversation_unavailable
+import org.jetbrains.compose.resources.stringResource
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 
@@ -50,6 +64,31 @@ fun MainScaffold(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController()
 ) {
+    val openRequest by ConversationOpenRequests.requests.collectAsState()
+    val unavailableMessage = stringResource(Res.string.notification_conversation_unavailable)
+    LaunchedEffect(openRequest) {
+        val request = openRequest ?: return@LaunchedEffect
+        try {
+            if (request.deviceId != null) {
+                navController.navigate(Screen.RemoteConversation.createRoute(request.deviceId, request.conversationId)) { launchSingleTop = true }
+            } else {
+                val container = AppContainerHolder.instance
+                val exists = prepareLocalConversation(
+                    signedIn = container.cloud.user.first() != null,
+                    sync = { container.cloud.sync() },
+                    exists = { withContext(Dispatchers.IO) { container.coreBridge.getConversationJson(request.conversationId) != null } },
+                    onSyncFailure = { showPlatformToast(it.message ?: unavailableMessage) },
+                )
+                if (exists) navController.navigate(Screen.Chat.createRoute(request.conversationId)) { launchSingleTop = true }
+                else showPlatformToast(unavailableMessage)
+            }
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: Exception) {
+            showPlatformToast(failure.message ?: unavailableMessage)
+        } finally {
+            ConversationOpenRequests.consume(request)
+        }
+    }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 

@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.coroutines.launch
 
 internal const val IDLE_NANOS = 5L * 60 * 1_000_000_000
@@ -24,7 +25,7 @@ internal const val IDLE_NANOS = 5L * 60 * 1_000_000_000
 internal fun shouldPushTaskEvent(focused: Boolean, idleNanos: Long): Boolean =
     !focused || idleNanos >= IDLE_NANOS
 
-/** Sends only generic event types; conversation content stays on the device. */
+/** Conversation title and identity accompany the generic event when available. */
 internal fun installDesktopTaskPush(container: AppContainer) {
     val lastInput = AtomicLong(System.nanoTime())
     Toolkit.getDefaultToolkit().addAWTEventListener(
@@ -45,7 +46,8 @@ internal fun installDesktopTaskPush(container: AppContainer) {
                     val task = element.jsonObject
                     val id = task["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                     ScheduledTaskSnapshot(id, task["lastRunAt"]?.jsonPrimitive?.longOrNull,
-                        task["lastError"]?.jsonPrimitive?.contentOrNull)
+                        task["lastError"]?.jsonPrimitive?.contentOrNull,
+                        task["lastConversationId"]?.jsonPrimitive?.contentOrNull)
                 }
                 observer.update(snapshots).forEach(TaskPushNotifications::notify)
             } catch (failure: Exception) {
@@ -60,7 +62,36 @@ internal fun installDesktopTaskPush(container: AppContainer) {
             scope.launch {
                 if (container.cloud.user.first() != null) {
                     try {
-                        container.cloud.sendPushEvent(event)
+                        val conversationId = event.conversationId?.takeIf { it.matches(Regex("[A-Za-z0-9_:-]{1,200}")) }
+                        val title = conversationId?.let { id ->
+                            try {
+                                container.coreBridge.getConversationJson(id)?.let { raw ->
+                                    Json.parseToJsonElement(raw).jsonObject["title"]?.jsonPrimitive?.contentOrNull?.let(::pushTitle)
+                                }
+                            } catch (failure: Exception) {
+                                System.err.println("Messenger could not load the task conversation title: ${failure.message}")
+                                null
+                            }
+                        }
+                        val remoteEnabled = conversationId?.let {
+                            try {
+                                container.coreBridge.controlSettings()["enabled"]?.jsonPrimitive?.booleanOrNull == true
+                            } catch (failure: Exception) {
+                                System.err.println("Messenger could not determine remote control availability: ${failure.message}")
+                                false
+                            }
+                        } ?: false
+                        val deviceId = conversationId?.let {
+                            try {
+                                container.coreBridge.remoteStatus()["deviceId"]?.jsonPrimitive?.contentOrNull
+                                    ?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) }
+                            } catch (failure: Exception) {
+                                System.err.println("Messenger could not identify the task device: ${failure.message}")
+                                null
+                            }
+                        }
+                        val targetKind = taskTargetKind(event.kind, event.event, conversationId, deviceId, remoteEnabled)
+                        container.cloud.sendPushEvent(event.event, title, targetKind, conversationId, deviceId.takeIf { targetKind == "remote" })
                     } catch (failure: Exception) {
                         System.err.println("Messenger task push failed: ${failure.message}")
                     }
@@ -68,4 +99,18 @@ internal fun installDesktopTaskPush(container: AppContainer) {
             }
         }
     }
+}
+
+/** JPush titles are bounded and do not contain control characters. */
+internal fun pushTitle(value: String): String? {
+    val cleaned = value.filterNot { it.isISOControl() }.trim().take(160)
+    return cleaned.dropLastWhile { it.isHighSurrogate() }.ifBlank { null }
+}
+
+internal fun taskTargetKind(taskKind: String, event: String, conversationId: String?, deviceId: String?, remoteEnabled: Boolean): String? = when {
+    conversationId == null -> null
+    (taskKind == "acp" || event == "approval" || remoteEnabled) && deviceId != null -> "remote"
+    taskKind == "acp" || event == "approval" -> null
+    taskKind == "chat" -> "local"
+    else -> null
 }

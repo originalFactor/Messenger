@@ -1405,6 +1405,48 @@ paths:
                   deviceId: { type: string }
                   connected: { type: boolean }
                   onlineDevices: { type: array, items: { type: string } }
+  /remote/client/commands/{requestId}:
+    post:
+      operationId: remoteClientCommand
+      description: |
+        Opens an account-scoped remote control lane to an opted-in device. The
+        request payload is a history, prompt, notificationOpen,
+        notificationDecision or notificationCancel command. Each event is a
+        host control reply; disconnect cancels this relay lane. The Cloud
+        session stays inside Core and a rejected session is cleared.
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, payload]
+              properties:
+                target: { type: string, maxLength: 64 }
+                payload: { type: object }
+      responses:
+        "200":
+          description: Remote host replies, including a terminal result or error.
+          content: { text/event-stream: { schema: { type: string } } }
+        "400": { description: Invalid remote command. }
+        "401": { $ref: "#/components/responses/CloudError" }
+        "409": { description: Duplicate active request. }
+  /remote/client/commands/{requestId}/signal:
+    post:
+      operationId: remoteClientSignal
+      description: Send an approval option, or omit optionId to cancel the active relay lane.
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { optionId: { type: string, maxLength: 256 } } }
+      responses:
+        "202": { description: Signal queued. }
+        "404": { $ref: "#/components/responses/NotFound" }
   /acp:
     get:
       operationId: connectAcp
@@ -1989,12 +2031,12 @@ paths:
   /cloud/push/events:
     post:
       operationId: cloudPushEvent
-      description: Request a generic task notification for this account's registered devices.
+      description: Request a task notification for this account's registered devices, optionally including a conversation title and target.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [event], properties: { event: { type: string, enum: [failed, approval, completed] } } }
+            schema: { type: object, required: [event], properties: { event: { type: string, enum: [failed, approval, completed] }, title: { type: string }, target: { type: object, required: [kind, conversationId], properties: { kind: { type: string, enum: [local, remote] }, conversationId: { type: string }, deviceId: { type: string } } } } }
       responses: { "204": { description: Accepted }, "401": { $ref: "#/components/responses/CloudError" } }
   /cloud/login:
     post:

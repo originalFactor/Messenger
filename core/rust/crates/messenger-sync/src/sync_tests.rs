@@ -876,10 +876,10 @@ async fn push_uses_session_cookie_and_clears_rejected_session() {
         .respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
     Mock::given(method("POST")).and(path("/api/push/events"))
         .and(header("cookie", "messenger_session=push"))
-        .and(body_json(serde_json::json!({"event":"approval"})))
+        .and(body_json(serde_json::json!({"event":"approval", "title":"Conversation", "target":{"kind":"remote", "conversationId":"c1", "deviceId":"desktop"}})))
         .respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
     engine.register_push_device("device-id").await.unwrap();
-    engine.send_push_event("approval").await.unwrap();
+    engine.send_push_event_payload(&serde_json::json!({"event":"approval", "title":"Conversation", "target":{"kind":"remote", "conversationId":"c1", "deviceId":"desktop"}})).await.unwrap();
     Mock::given(method("DELETE")).and(path("/api/push/device"))
         .respond_with(ResponseTemplate::new(401)).expect(1).mount(&server).await;
     assert!(matches!(engine.unregister_push_device().await.unwrap_err(), CloudError::SessionExpired { .. }));

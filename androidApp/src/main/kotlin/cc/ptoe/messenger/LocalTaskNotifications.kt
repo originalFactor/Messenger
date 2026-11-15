@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.net.Uri
 import android.util.Log
 import cc.ptoe.messenger.core.CoreBridge
 
@@ -41,9 +42,19 @@ object LocalTaskNotifications {
                 (Build.VERSION.SDK_INT >= 33 && app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             ) return@subscribe
 
+            val openIntent = Intent(app, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (action.taskKind == "chat" || action.taskKind == "acp") {
+                openIntent.action = ACTION_OPEN_CONVERSATION
+                openIntent.putExtra("kind", "local")
+                openIntent.putExtra("conversationId", action.taskId)
+                // PendingIntent identity excludes extras: assign a distinct URI per task.
+                openIntent.data = Uri.Builder().scheme("messenger-notification").authority("task")
+                    .appendPath(action.taskKind).appendPath(action.taskId).build()
+            }
             val open = PendingIntent.getActivity(
                 app, 0,
-                Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val notification = Notification.Builder(app, CHANNEL_ID)

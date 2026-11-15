@@ -56,8 +56,12 @@ interface CloudFacade {
 
     suspend fun setServerUrl(url: String)
 
+    suspend fun remoteControlCommand(
+        requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) { error("Remote control unavailable") }
     suspend fun registerPushDevice(registrationId: String)
-    suspend fun sendPushEvent(event: String)
+    suspend fun sendPushEvent(event: String, title: String? = null, targetKind: String? = null, conversationId: String? = null, deviceId: String? = null)
 
     suspend fun login(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
     suspend fun register(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome

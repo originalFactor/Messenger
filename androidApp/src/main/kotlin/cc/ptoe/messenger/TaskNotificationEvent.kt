@@ -3,7 +3,7 @@ package cc.ptoe.messenger
 
 internal sealed interface TaskNotificationAction {
     val tag: String
-    data class Show(override val tag: String, val status: String) : TaskNotificationAction
+    data class Show(override val tag: String, val status: String, val taskKind: String, val taskId: String) : TaskNotificationAction
     data class Clear(override val tag: String) : TaskNotificationAction
 }
 
@@ -16,7 +16,7 @@ internal fun taskNotificationAction(kind: String, ids: List<String>): TaskNotifi
     if (taskKind !in setOf("chat", "acp", "scheduled", "image")) return null
     val tag = "task:$taskKind:$taskId"
     return when (status) {
-        "approval", "completed", "failed" -> TaskNotificationAction.Show(tag, status)
+        "approval", "completed", "failed" -> TaskNotificationAction.Show(tag, status, taskKind, taskId)
         "approvalResolved", "cancelled" -> TaskNotificationAction.Clear(tag)
         else -> null
     }

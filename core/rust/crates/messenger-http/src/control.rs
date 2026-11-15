@@ -156,6 +156,9 @@ enum Command {
         session_id: String,
         before: Option<String>,
     },
+    NotificationOpen { session_id: String, before: Option<String> },
+    NotificationDecision { session_id: String, request_id: String, option_id: String },
+    NotificationCancel { session_id: String, request_id: String },
     Create {
         agent_id: String,
         project_id: Option<String>,
@@ -597,6 +600,93 @@ async fn execute(
             scope.workspace(&state, record.project.as_deref())?;
             state.external.settings(&state, &session_id, Some(change), &cancel).await
         }
+        Command::NotificationOpen { session_id, before } => {
+            let (title, writable, mut messages) = if session_id.starts_with("acp:") {
+                let session = state.external.record(&state.store, &session_id)?;
+                (session.title, None, session.messages)
+            } else {
+                let conversation = conversation(&state, &session_id)?;
+                let rows = state.store.list_messages_by_conversation(&session_id).map_err(ApiError::store)?
+                    .into_iter().map(|message| json!({"id":message.id,"role":message.role,
+                        "text":message.error_message.as_ref().unwrap_or(&message.content),"status":message.status})).collect();
+                (conversation.title, Some(conversation.writable), rows)
+            };
+            // Relay packets are bounded; return a small tail without credentials or binary content.
+            let end = before.as_ref().and_then(|id| messages.iter().position(|row| row["id"] == *id)).unwrap_or(messages.len());
+            messages.truncate(end);
+            let mut page = Vec::new();
+            let mut bytes = 0usize;
+            for row in messages.iter().rev().take(20) {
+                let sanitized = json!({"id":row["id"], "role":row["role"],
+                    "text":short(row["text"].as_str().unwrap_or_default(), 12_000), "status":row["status"]});
+                let size = sanitized.to_string().len();
+                if !page.is_empty() && bytes + size > 120_000 { break; }
+                bytes += size;
+                page.push(sanitized);
+            }
+            page.reverse();
+            let has_more = page.len() < end;
+            messages = page;
+            let task = if session_id.starts_with("acp:") {
+                let jobs = state.background_commands.lock().await;
+                let entry = jobs.iter().filter(|(_, job)| job.session_id == session_id)
+                    .max_by_key(|(_, job)| job.created).map(|(id, job)| (*id, job.clone()));
+                drop(jobs);
+                if let Some((request_id, job)) = entry {
+                    let log = job.log.lock().await;
+                    let pending = log.pending_permission.as_ref().map(|(_, event)| event.clone());
+                    let mut text = String::new();
+                    for event in &log.events {
+                        if event["type"] == "TextDelta" {
+                            text.push_str(event["text"].as_str().unwrap_or_default());
+                            if text.len() > 36_000 { break; }
+                        }
+                    }
+                    let mut events = Vec::new();
+                    if !log.done && !text.is_empty() { events.push(json!({"type":"TextDelta","text":short(&text, 8_000)})); }
+                    if !log.done { if let Some(pending) = pending { events.push(pending); } }
+                    json!({"active":!log.done,"requestId":request_id,"events":events})
+                } else { json!({"active":false,"events":[]}) }
+            } else { background_turn::remote_snapshot(&state, &session_id).await };
+            let next_before = has_more.then(|| messages.first().and_then(|row| row["id"].as_str()).map(str::to_owned)).flatten();
+            Ok(json!({"type":"Session","title":short(&title,160),"writable":writable,"messages":messages,"before":next_before,
+                "active":task["active"],"requestId":task["requestId"],"events":task["events"]}))
+        }
+        Command::NotificationDecision { session_id, request_id, option_id } => {
+            if session_id.starts_with("acp:") {
+                state.external.record(&state.store, &session_id)?;
+                let jobs = state.background_commands.lock().await;
+                let id = Uuid::parse_str(&request_id).map_err(|_| ApiError::BadRequest("invalid background request".into()))?;
+                let entry = jobs.get(&id).filter(|job| job.session_id == session_id).map(|job| (id, job.clone()));
+                drop(jobs);
+                let (id, job) = entry.ok_or_else(|| ApiError::not_found("background command"))?;
+                let log = job.log.lock().await;
+                let pending = log.pending_permission.as_ref().map(|(_, event)| event).ok_or_else(|| ApiError::not_found("pending permission"))?;
+                if !pending["options"].as_array().is_some_and(|options| options.iter().any(|o| o["id"] == option_id)) {
+                    return Err(ApiError::BadRequest("invalid permission option".into()));
+                }
+                drop(log);
+                permission(State(state.clone()), Path(id), Json(Choice { option_id })).await?;
+            } else {
+                conversation(&state, &session_id)?;
+                background_turn::remote_decide(&state, &session_id, &request_id, &option_id).await?;
+            }
+            Ok(json!({"type":"DecisionAccepted"}))
+        }
+        Command::NotificationCancel { session_id, request_id } => {
+            if session_id.starts_with("acp:") {
+                state.external.record(&state.store, &session_id)?;
+                let id = Uuid::parse_str(&request_id).map_err(|_| ApiError::BadRequest("invalid background request".into()))?;
+                let jobs = state.background_commands.lock().await;
+                let job = jobs.get(&id).filter(|job| job.session_id == session_id).ok_or_else(|| ApiError::not_found("background command"))?;
+                if job.log.lock().await.done { return Err(ApiError::Conflict { code: "turn_changed".into(), message: "The active task has changed".into() }); }
+                cancel_command(State(state.clone()), Path(id)).await?;
+            } else {
+                conversation(&state, &session_id)?;
+                background_turn::remote_cancel(&state, &session_id, &request_id).await?;
+            }
+            Ok(json!({"type":"CancelAccepted"}))
+        }
         Command::History { session_id, before } => {
             let mut writable = None;
             let mut rows = if session_id.starts_with("acp:") {
@@ -852,6 +942,120 @@ pub(crate) fn short(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod background_tests {
     use super::*;
+
+    async fn notification_command(state: &ApiState, command: Value) -> Value {
+        let (_permission_tx, permissions) = mpsc::channel(1);
+        let (updates, _update_rx) = mpsc::channel(1);
+        dispatch(state.clone(), command, CancellationToken::new(), permissions, updates, ControlScope::Remote).await
+    }
+
+    fn insert_conversation(state: &ApiState, id: &str, project_id: Option<&str>) {
+        if state.store.get_agent("test-agent").unwrap().is_none() {
+            let agent: StoredAgent = serde_json::from_value(json!({
+                "id":"test-agent", "name":"Test", "system_prompt":"", "created_at":1, "updated_at":1
+            })).unwrap();
+            state.store.upsert_agent(&agent).unwrap();
+        }
+        state.store.upsert_conversation(&StoredConversation {
+            id: id.into(), title: format!("Title {id}"), project_id: project_id.map(str::to_owned),
+            agent_id: "test-agent".into(), writable: true, ..Default::default()
+        }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notification_commands_open_decide_and_cancel_projectless_turns() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        insert_conversation(&state, "first", None);
+        insert_conversation(&state, "second", None);
+        state.store.upsert_message(&StoredMessage {
+            id: "message".into(), conversation_id: "first".into(), role: "user".into(),
+            content: "hello".into(), parts_json: None, timestamp: 1, status: "sent".into(), error_message: None,
+        }).unwrap();
+        let mut first_approval = background_turn::insert_test_turn_with_approval(&state, "first", "secret-first").await;
+        let mut second_approval = background_turn::insert_test_turn_with_approval(&state, "second", "secret-second").await;
+        let first_cancel = CancellationToken::new();
+        let second_cancel = CancellationToken::new();
+        state.active_turns.lock().await.insert("first".into(), first_cancel.clone());
+        state.active_turns.lock().await.insert("second".into(), second_cancel.clone());
+
+        let opened = notification_command(&state, json!({"action":"notificationOpen","sessionId":"first"})).await;
+        assert_eq!(opened["type"], "Session");
+        assert_eq!(opened["title"], "Title first");
+        assert_eq!(opened["messages"][0]["text"], "hello");
+        assert_eq!(opened["active"], true);
+        assert_eq!(opened["requestId"], "test");
+        assert_eq!(opened["events"][0]["text"], "working");
+        assert_eq!(opened["events"][1]["type"], "Permission");
+        assert_eq!(opened["events"][1]["options"][0]["id"], "approve:secret-first");
+
+        let invalid = notification_command(&state, json!({"action":"notificationDecision","sessionId":"first","requestId":"test","optionId":"approve:secret-second"})).await;
+        assert_eq!(invalid["type"], "Error");
+        assert!(first_approval.try_recv().is_err());
+        assert!(second_approval.try_recv().is_err());
+        let stale = notification_command(&state, json!({"action":"notificationDecision","sessionId":"first","requestId":"old","optionId":"approve:secret-first"})).await;
+        assert_eq!(stale["type"], "Error");
+        let accepted = notification_command(&state, json!({"action":"notificationDecision","sessionId":"first","requestId":"test","optionId":"approve:secret-first"})).await;
+        assert_eq!(accepted["type"], "DecisionAccepted");
+        assert_eq!(first_approval.await.unwrap(), true);
+        assert!(second_approval.try_recv().is_err());
+        let repeated = notification_command(&state, json!({"action":"notificationDecision","sessionId":"first","requestId":"test","optionId":"approve:secret-first"})).await;
+        assert_eq!(repeated["type"], "Error");
+
+        let stale_cancel = notification_command(&state, json!({"action":"notificationCancel","sessionId":"first","requestId":"old"})).await;
+        assert_eq!(stale_cancel["type"], "Error");
+        assert!(!first_cancel.is_cancelled());
+        let cancelled = notification_command(&state, json!({"action":"notificationCancel","sessionId":"first","requestId":"test"})).await;
+        assert_eq!(cancelled["type"], "CancelAccepted");
+        assert!(first_cancel.is_cancelled());
+        assert!(!second_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn notification_commands_open_exact_remote_project_without_expanding_catalog_scope() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        state.store.upsert_project(&StoredProject {
+            id: "foreign".into(), name: "Foreign".into(), workspace: "/foreign".into(),
+            device_id: Some("different-device".into()), created_at: 1, updated_at: 1,
+        }).unwrap();
+        insert_conversation(&state, "foreign-chat", Some("foreign"));
+        let mut approval = background_turn::insert_test_turn_with_approval(&state, "foreign-chat", "foreign-call").await;
+        let token = CancellationToken::new();
+        state.active_turns.lock().await.insert("foreign-chat".into(), token.clone());
+        let opened = notification_command(&state, json!({"action":"notificationOpen","sessionId":"foreign-chat"})).await;
+        assert_eq!(opened["type"], "Session");
+        let history = notification_command(&state, json!({"action":"history","sessionId":"foreign-chat"})).await;
+        assert_eq!(history["type"], "Error");
+        let decision = notification_command(&state, json!({"action":"notificationDecision","sessionId":"foreign-chat","requestId":"test","optionId":"approve:foreign-call"})).await;
+        assert_eq!(decision["type"], "DecisionAccepted");
+        assert_eq!(approval.try_recv().unwrap(), true);
+        let cancelled = notification_command(&state, json!({"action":"notificationCancel","sessionId":"foreign-chat","requestId":"test"})).await;
+        assert_eq!(cancelled["type"], "CancelAccepted");
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn notification_open_pages_and_bounds_projectless_history() {
+        let state = ApiState::new(Arc::new(Store::open_memory().unwrap()), "token");
+        insert_conversation(&state, "history", None);
+        for index in 0..23 {
+            state.store.upsert_message(&StoredMessage {
+                id: format!("m{index:02}"), conversation_id: "history".into(), role: "assistant".into(),
+                content: if index == 22 { "x".repeat(12_500) } else { format!("message {index}") },
+                parts_json: None, timestamp: index, status: "sent".into(), error_message: None,
+            }).unwrap();
+        }
+        let page = notification_command(&state, json!({"action":"notificationOpen","sessionId":"history"})).await;
+        assert_eq!(page["messages"].as_array().unwrap().len(), 20);
+        assert_eq!(page["messages"][0]["id"], "m03");
+        assert_eq!(page["before"], "m03");
+        assert_eq!(page["messages"][19]["text"].as_str().unwrap().chars().count(), 12_001);
+        assert!(page["messages"][19]["text"].as_str().unwrap().ends_with('…'));
+
+        let previous = notification_command(&state, json!({"action":"notificationOpen","sessionId":"history","before":"m03"})).await;
+        assert_eq!(previous["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(previous["messages"][2]["id"], "m02");
+        assert!(previous["before"].is_null());
+    }
 
     #[tokio::test]
     async fn replay_gap_keeps_pending_permission_without_cancelling_work() {
