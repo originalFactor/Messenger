@@ -400,7 +400,7 @@ impl ExternalSessions {
         if cancel.is_cancelled() {
             return Ok(json!({"type":"Cancelled"}));
         }
-        if !record.delegated && !worker.skills_available && !crate::core_tools(&state.store)?.is_empty() {
+        if !record.delegated && !worker.skills_available && crate::core_tools(&state.store)?.iter().any(|tool| tool.name != scheduled_tasks::TOOL_NAME) {
             return Err(ApiError::BadRequest("Core learning, artifact and image tools require ACP MCP SSE or HTTP support; restart with a compatible agent".into()));
         }
         let mut prompt_content = content.clone();
@@ -764,7 +764,8 @@ async fn start_worker_impl(
                     let core_tool_scope: Vec<String> = if allow_delegation {
                         crate::core_tools(&gateway_state.store)
                             .map_err(|error| agent_client_protocol::Error::new(-32000, format!("{error:?}")))?
-                            .into_iter().map(|tool| tool.name).collect()
+                            .into_iter().filter(|tool| tool.name != scheduled_tasks::TOOL_NAME)
+                            .map(|tool| tool.name).collect()
                     } else { Vec::new() };
                     let skills_available = init.agent_capabilities.mcp_capabilities.sse || init.agent_capabilities.mcp_capabilities.http;
                     if !skills_available {

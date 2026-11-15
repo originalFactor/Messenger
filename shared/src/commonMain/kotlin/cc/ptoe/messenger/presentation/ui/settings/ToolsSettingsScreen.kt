@@ -60,6 +60,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -104,11 +105,23 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_url_hint
 import cc.ptoe.messenger.generated.resources.tools_settings_title
 import cc.ptoe.messenger.generated.resources.tools_agent_delegation
 import cc.ptoe.messenger.generated.resources.tools_agent_delegation_desc
+import cc.ptoe.messenger.generated.resources.tools_schedule_task
+import cc.ptoe.messenger.generated.resources.tools_schedule_task_desc
+import cc.ptoe.messenger.generated.resources.tools_schedule_task_load_error
+import cc.ptoe.messenger.generated.resources.action_retry
+import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.CancellationException
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
+
+@Serializable
+private data class ScheduleToolSettings(val enabled: Boolean)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,6 +143,22 @@ fun ToolsSettingsScreen(
     val mcpServers by mcpManager.servers.collectAsState()
     val mcpConfigurationError by mcpManager.configurationError.collectAsState()
     val agentDelegationEnabled by mcpManager.agentDelegationEnabled.collectAsState()
+    var scheduleEnabled by remember { mutableStateOf(false) }
+    var scheduleLoaded by remember { mutableStateOf(false) }
+    var scheduleBusy by remember { mutableStateOf(false) }
+    var scheduleError by remember { mutableStateOf<String?>(null) }
+    suspend fun loadScheduleSetting() {
+        scheduleBusy = true
+        try {
+            val response = AppContainerHolder.instance.coreBridge.scheduledTaskRequest("GET", "/scheduled-tasks/tool-settings")
+            scheduleEnabled = catalogJson.decodeFromString<ScheduleToolSettings>(response).enabled
+            scheduleLoaded = true
+            scheduleError = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { scheduleError = failure.message ?: failure.toString() }
+        finally { scheduleBusy = false }
+    }
+    LaunchedEffect(Unit) { loadScheduleSetting() }
 
     var fabExpanded by remember { mutableStateOf(false) }
     var showStore by remember { mutableStateOf(false) }
@@ -184,6 +213,39 @@ fun ToolsSettingsScreen(
                         Switch(checked = agentDelegationEnabled, onCheckedChange = { enabled ->
                             changeServer { mcpManager.setAgentDelegationEnabled(enabled) }
                         })
+                    }
+                }
+                item {
+                    ExpressiveSwitchRow(
+                        title = stringResource(Res.string.tools_schedule_task),
+                        subtitle = stringResource(Res.string.tools_schedule_task_desc),
+                        checked = scheduleEnabled,
+                        enabled = scheduleLoaded && !scheduleBusy,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                scheduleBusy = true
+                                try {
+                                    AppContainerHolder.instance.coreBridge.scheduledTaskRequest(
+                                        "PUT", "/scheduled-tasks/tool-settings", catalogJson.encodeToString(ScheduleToolSettings(enabled))
+                                    )
+                                    scheduleEnabled = enabled
+                                    scheduleError = null
+                                    AppContainerHolder.instance.refreshCoreToolCatalog()
+                                } catch (cancelled: CancellationException) { throw cancelled }
+                                catch (failure: Exception) { snackbar.showSnackbar(failure.message ?: failure.toString()) }
+                                finally { scheduleBusy = false }
+                            }
+                        },
+                    )
+                }
+                scheduleError?.let { message ->
+                    item {
+                        Text(stringResource(Res.string.tools_schedule_task_load_error, message),
+                            modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { scope.launch { loadScheduleSetting() } }, enabled = !scheduleBusy) {
+                            Text(stringResource(Res.string.action_retry))
+                        }
                     }
                 }
                 if (mcpConfigurationError) {

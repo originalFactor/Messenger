@@ -14,6 +14,32 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /scheduled-tasks/tool-settings:
+    get:
+      summary: Read the device-local Agent scheduling tool switch
+      responses:
+        '200':
+          description: The tool defaults disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
+    put:
+      summary: Enable or disable Agent creation of scheduled tasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200': { description: Updated tool setting }
   /scheduled-tasks:
     get:
       summary: List device-local scheduled Agent tasks
@@ -2103,6 +2129,7 @@ components:
         lastRunAt: { type: [integer, 'null'], format: int64, readOnly: true }
         lastError: { type: [string, 'null'], readOnly: true }
         lastConversationId: { type: [string, 'null'], readOnly: true }
+        allowedTools: { type: array, items: { type: string }, readOnly: true, description: 'Creation-time tool ceiling for Agent-created tasks; absent for user-created tasks.' }
     "WorkbenchCapability":
       "type": "object"
       "properties":

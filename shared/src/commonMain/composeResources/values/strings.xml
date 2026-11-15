@@ -613,4 +613,9 @@
     <string name="scheduled_interval">Interval in minutes (1–525600)</string>
     <string name="scheduled_save">Save</string>
     <string name="scheduled_open_chat">Open last conversation</string>
+    <string name="tool_name_schedule_task">Scheduled tasks</string>
+    <string name="tool_desc_schedule_task">Create and manage scheduled tasks for this conversation’s Agent and project</string>
+    <string name="tools_schedule_task">Agent scheduled tasks</string>
+    <string name="tools_schedule_task_desc">Allow Agents to manage scheduled tasks in Messenger chats</string>
+    <string name="tools_schedule_task_load_error">Could not load scheduled task tool settings: %1$s</string>
 </resources>

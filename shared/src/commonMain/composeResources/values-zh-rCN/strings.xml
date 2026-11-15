@@ -612,4 +612,9 @@
     <string name="scheduled_interval">间隔分钟数（1–525600）</string>
     <string name="scheduled_save">保存</string>
     <string name="scheduled_open_chat">打开上次会话</string>
+    <string name="tool_name_schedule_task">计划任务</string>
+    <string name="tool_desc_schedule_task">为当前会话的 Agent 和项目创建及管理计划任务</string>
+    <string name="tools_schedule_task">Agent 计划任务</string>
+    <string name="tools_schedule_task_desc">允许 Agent 在 Messenger 聊天中管理计划任务</string>
+    <string name="tools_schedule_task_load_error">无法加载计划任务工具设置：%1$s</string>
 </resources>

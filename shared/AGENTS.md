@@ -115,7 +115,7 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 
 ## Scheduled Agent tasks
 
-- Settings exposes scheduled Agent tasks on Android/Desktop, including an optional project, recurring interval, enable/pause and last execution errors. Core persists and runs schedules only while its process is running; clients use the authenticated `/scheduled-tasks` API.
+- Settings exposes scheduled Agent tasks on Android/Desktop, including an optional project, recurring interval, enable/pause and last execution errors. Core persists and runs schedules only while its process is running; clients use the authenticated `/scheduled-tasks` API. The default-off Agent scheduling tool has a separate switch in Tools settings and also respects the Agent tool policy; the Core-owned descriptor appears in tool inventories only.
 
 ## ACP and remotely started turns
 

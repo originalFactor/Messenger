@@ -2218,6 +2218,10 @@ pub struct ChatRequest {
     pub workspace_path: Option<String>,
     #[serde(skip)]
     no_agent_delegation: bool,
+    #[serde(skip)]
+    scheduled_run: bool,
+    #[serde(skip)]
+    scheduled_allowed_tools: Option<Vec<String>>,
 }
 
 async fn wait_for_platform_catalog(state: &ApiState, cancel: &CancellationToken, require_tools: bool) -> Result<(), ApiError> {
@@ -2708,7 +2712,13 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
             tools.push(skills::tool());
         }
     }
-    tools.extend(configured_core_tools(&state.store, &agent, request.disable_tools, request.no_agent_delegation)?);
+    tools.extend(configured_core_tools(&state.store, &agent, request.disable_tools, request.no_agent_delegation && !request.scheduled_run)?
+        .into_iter().filter(|tool| tool.name != scheduled_tasks::TOOL_NAME || (!request.no_agent_delegation && conversation.writable && conversation.override_tools_enabled.is_none() && conversation.override_tools_config.is_none())));
+    if let Some(allowed) = &request.scheduled_allowed_tools {
+        tools.retain(|tool| allowed.contains(&tool.name));
+    }
+    let allowed_scheduled_tools = request.scheduled_run.then(|| tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>());
+    let current_tool_names = tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>();
     let permitted_core_tools: Vec<String> = tools.iter().filter(|tool| is_core_tool(&tool.name)).map(|tool| tool.name.clone()).collect();
     let agent_id = agent.id.clone();
     let title = state
@@ -2758,6 +2768,8 @@ async fn run_turn(task: TurnTask) -> Result<String, ApiError> {
         state: state.clone(),
         skills_allowed,
         permitted_core_tools,
+        current_tool_names,
+        allowed_scheduled_tools,
         agent_id,
         project: project.clone(),
         writable: conversation.writable,
@@ -2812,7 +2824,7 @@ fn effective_agent(
 
 /// Core-owned capabilities are independent of workspace/platform tool discovery.
 fn is_core_tool(name: &str) -> bool {
-    matches!(name, learning::TOOL_NAME | artifacts::TOOL_NAME | image_generation::TOOL_NAME)
+    matches!(name, learning::TOOL_NAME | artifacts::TOOL_NAME | image_generation::TOOL_NAME | scheduled_tasks::TOOL_NAME)
 }
 
 fn is_reserved_tool(name: &str) -> bool {
@@ -2824,6 +2836,7 @@ fn core_tools(store: &Store) -> Result<Vec<messenger_tools::BuiltinTool>, ApiErr
     if learning::enabled(store) { tools.push(learning::tool()); }
     if artifacts::enabled(store) { tools.push(artifacts::tool()); }
     if image_generation::enabled(store)? { tools.push(image_generation::tool()); }
+    if scheduled_tasks::enabled(store) { tools.push(scheduled_tasks::tool()); }
     Ok(tools)
 }
 
@@ -2835,7 +2848,7 @@ fn configured_core_tools(store: &Store, agent: &StoredAgent, disable_tools: bool
 
 async fn core_tool_catalog(State(state): State<ApiState>) -> Result<Json<Value>, ApiError> {
     let enabled = core_tools(&state.store)?;
-    let tools = [skills::tool(), delegation::tool(), learning::tool(), artifacts::tool(), image_generation::tool()];
+    let tools = [skills::tool(), delegation::tool(), learning::tool(), artifacts::tool(), image_generation::tool(), scheduled_tasks::tool()];
     Ok(Json(serde_json::json!({"tools":tools.into_iter().map(|tool| {
         let available = if tool.name == skills::TOOL_NAME { true }
             else if tool.name == delegation::TOOL_NAME { delegation::enabled(&state.store) }
@@ -2906,6 +2919,8 @@ struct RoutedToolHost {
     state: ApiState,
     skills_allowed: bool,
     permitted_core_tools: Vec<String>,
+    current_tool_names: Vec<String>,
+    allowed_scheduled_tools: Option<Vec<String>>,
     agent_id: String,
     project: Option<StoredProject>,
     writable: bool,
@@ -2925,6 +2940,9 @@ impl ToolHost for RoutedToolHost {
         name: &str,
         arguments_json: &str,
     ) -> ToolExecutionResult {
+        if self.allowed_scheduled_tools.as_ref().is_some_and(|tools| !tools.iter().any(|tool| tool == name)) {
+            return ToolExecutionResult { output: "Tool not authorized for this scheduled run".into(), is_error: true, ..Default::default() };
+        }
         if is_core_tool(name) {
             let permitted = self.permitted_core_tools.iter().any(|allowed| allowed == name)
                 && self.state.store.get_agent(&self.agent_id).ok().flatten().zip(
@@ -2932,6 +2950,9 @@ impl ToolHost for RoutedToolHost {
                 ).and_then(|(agent, conversation)| effective_agent(&self.state.store, agent, &conversation).ok())
                     .is_some_and(|agent| agent.tools_enabled && serde_json::from_str::<HashMap<String, bool>>(&agent.tools_config)
                         .unwrap_or_default().get(name).copied() != Some(false));
+            if name == scheduled_tasks::TOOL_NAME {
+                return scheduled_tasks::execute_tool(&self.state, &self.agent_id, &self.conversation_id, permitted, arguments_json, &self.current_tool_names, &self.cancel).await;
+            }
             return execute_core_tool(&self.state, name, permitted, arguments_json, self.cancel.clone()).await;
         }
         if name == skills::TOOL_NAME {
@@ -3368,6 +3389,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scheduled_turn_rejects_undeclared_tools_even_if_provider_calls_them() {
+        let provider = wiremock::MockServer::start().await;
+        let arguments = serde_json::json!({"name":"recursive","prompt":"again","intervalMinutes":10,"firstRunDelayMinutes":10,"projectless":true}).to_string();
+        let call = serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call","type":"function","function":{"name":scheduled_tasks::TOOL_NAME,"arguments":arguments}}]},"finish_reason":"tool_calls"}]}).to_string();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(format!("data: {call}\n\ndata: [DONE]\n\n")))
+            .up_to_n_times(1).mount(&provider).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+            .mount(&provider).await;
+        let state = test_state();
+        seed_text_chat(&state, &provider.uri());
+        let mut model = state.store.get_model("m1").unwrap().unwrap(); model.supports_tool_calling = true; state.store.upsert_model(&model).unwrap();
+        let mut agent = state.store.get_agent("a1").unwrap().unwrap(); agent.tools_enabled = true; state.store.upsert_agent(&agent).unwrap();
+        let mut conversation = state.store.get_conversation("c1").unwrap().unwrap(); conversation.writable = true; state.store.upsert_conversation(&conversation).unwrap();
+        state.store.kv_set("scheduled_task_tool_enabled", "true").unwrap();
+        let mut request = control::text_request("test".into());
+        request.no_agent_delegation = true; request.scheduled_run = true; request.scheduled_allowed_tools = Some(vec![]);
+        let mut events = start_turn(state.clone(), "c1".into(), request, CancellationToken::new(), false).await.unwrap();
+        let mut transcript = String::new();
+        while let Some(event) = events.recv().await { transcript.push_str(&event); }
+        assert!(transcript.contains("Unknown tool: messenger_schedule_task"), "{transcript}");
+        assert!(state.store.kv_list_prefix("scheduled_task:").unwrap().is_empty());
+        let calls = provider.received_requests().await.unwrap();
+        let first: Value = serde_json::from_slice(&calls[0].body).unwrap();
+        assert!(first["tools"].as_array().map_or(true, |tools| !tools.iter().any(|tool| tool["function"]["name"] == scheduled_tasks::TOOL_NAME)));
+    }
+
+    #[tokio::test]
     async fn projectless_core_tool_persists_structured_result_without_platform_execution() {
         let provider = wiremock::MockServer::start().await;
         let arguments = serde_json::json!({"action":"create","title":"Demo","files":{"index.html":"<p>independent artifact</p>"}}).to_string();
@@ -3595,7 +3645,7 @@ mod tests {
             .unwrap();
     }
 
-    fn seed_text_chat(state: &ApiState, base_url: &str) {
+    pub(super) fn seed_text_chat(state: &ApiState, base_url: &str) {
         state
             .store
             .upsert_provider(&StoredProvider {
