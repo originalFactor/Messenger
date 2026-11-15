@@ -73,6 +73,7 @@ private val appComponents = listOf(
     OpenSourceComponent("OkHttp", "Apache-2.0", "https://github.com/square/okhttp"),
     OpenSourceComponent("Okio", "Apache-2.0", "https://github.com/square/okio"),
     OpenSourceComponent("Coil", "Apache-2.0", "https://github.com/coil-kt/coil"),
+    OpenSourceComponent("Lobe Icons", "MIT · Copyright 2023 LobeHub", "https://github.com/lobehub/lobe-icons"),
     OpenSourceComponent("Java-WebSocket", "MIT", "https://github.com/TooTallNate/Java-WebSocket"),
     OpenSourceComponent("uCrop", "Apache-2.0", "https://github.com/Yalantis/uCrop"),
     OpenSourceComponent("JNA", "Apache-2.0 OR LGPL-2.1-or-later", "https://github.com/java-native-access/jna"),
