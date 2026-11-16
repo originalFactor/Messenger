@@ -32,6 +32,10 @@ internal class AcpWorkerConfiguration(
             this.environment.all { (key, value) -> key.isNotEmpty() && '=' !in key && '\u0000' !in key && '\u0000' !in value }) { "Invalid ACP worker configuration" }
     }
     override fun toString() = "AcpWorkerConfiguration(redacted)"
+
+    internal fun sameAs(other: AcpWorkerConfiguration): Boolean =
+        command == other.command && arguments == other.arguments && environment == other.environment &&
+            mcpServers == other.mcpServers && allowDelegation == other.allowDelegation && coreToolScope == other.coreToolScope
 }
 
 /** Creating a handle performs no I/O; stopAndAwait must prove the process and its side effects stopped. */
@@ -41,6 +45,18 @@ internal interface AcpWorkerProcess {
     /** Return true only after the agent acknowledges cancellation and the request has finished. */
     suspend fun cancelAndConfirm(): Boolean
     suspend fun stopAndAwait()
+}
+
+/**
+ * Optional platform-provided proof for an ACP process which can remain alive between turns.
+ * Both checks must establish that its prior work, descendants and external side effects have
+ * stopped and cannot resume until a subsequent prompt. An ACP response or cancellation
+ * acknowledgement alone is not such a proof. The factory is a trusted platform boundary.
+ */
+internal interface AcpReusableWorkerProof {
+    val supportsReusableTurns: Boolean
+    suspend fun requireInitialQuiescence()
+    suspend fun requireTurnQuiescence(turnId: String)
 }
 /** Optional recording adapter finalizes only after gateway calls and worker side effects are stopped. */
 internal interface AcpTurnFinalizer {
@@ -61,9 +77,11 @@ internal class AcpWorkerManager(
     private val needsGateway: suspend () -> Boolean,
     private val startupTimeoutMillis: Long = 30_000,
     private val cancelTimeoutMillis: Long = 2_000,
+    private val holdForSettlement: Boolean = false,
 ) : AcpSessionMutationGate, AcpActiveTurnGuard {
     private class Worker(val binding: AcpWorkerBinding, val process: AcpWorkerProcess, val gateway: AcpGatewayCore) {
         var ready: AcpWorkerReady? = null
+        var configuration: AcpWorkerConfiguration? = null
     }
     private class Slot {
         val mutex = Mutex()
@@ -73,6 +91,7 @@ internal class AcpWorkerManager(
         var unsafe = false
         var finishedTurn: String? = null
         var stoppedTurn: Boolean = false
+        var settlementPending = false
     }
     private val slots = ConcurrentHashMap<String, Slot>()
     private fun slot(id: String): Slot {
@@ -82,7 +101,7 @@ internal class AcpWorkerManager(
 
     override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T = slot(id).mutex.withLock {
         val current = slot(id)
-        check(!current.unsafe && current.active == null) { "ACP session is active or its worker has not stopped" }
+        check(!current.unsafe && current.active == null && !current.settlementPending) { "ACP session is active or its worker has not stopped" }
         if (deleting) {
             current.worker?.let { worker ->
                 // The reservation remains locked until shutdown is known to have completed.
@@ -118,7 +137,7 @@ internal class AcpWorkerManager(
         try {
             withContext(NonCancellable) {
                 acquired = current.mutex.withLock {
-                    check(!current.unsafe && current.active == null && current.worker == null) { "ACP session already exists or is still stopping" }
+                    check(!current.unsafe && current.active == null && current.worker == null && !current.settlementPending) { "ACP session already exists or is still stopping" }
                     current.active = operation; current.activeJob = currentJob
                     current.finishedTurn = null; current.stoppedTurn = false
                     try {
@@ -148,7 +167,7 @@ internal class AcpWorkerManager(
                     check(current.active == operation && current.worker === worker && !current.unsafe) { "ACP creation reservation changed" }
                     (worker.process as? AcpNewSessionBinding ?: error("ACP worker cannot adopt a new session")).bindCreatedSession(binding)
                     persist(binding)
-                    current.worker = Worker(binding, worker.process, worker.gateway).also { it.ready = ready }
+                    current.worker = Worker(binding, worker.process, worker.gateway).also { it.ready = ready; it.configuration = snapshot }
                     current.active = null; current.activeJob = null
                     adopted = true
                 }
@@ -198,7 +217,7 @@ internal class AcpWorkerManager(
         try {
             withContext(NonCancellable) {
                 acquired = current.mutex.withLock {
-                    check(!current.unsafe && current.active == null) { "ACP session already has an active or unresolved turn" }
+                    check(!current.unsafe && current.active == null && !current.settlementPending) { "ACP session already has an active or unresolved turn" }
                     current.active = turnId; current.activeJob = currentJob
                     current.finishedTurn = null; current.stoppedTurn = false
                     try {
@@ -225,8 +244,14 @@ internal class AcpWorkerManager(
                     configuration.allowDelegation && !binding.delegated,
                     if (binding.delegated) emptySet() else configuration.coreToolScope.toSet())
                 worker.ready = withTimeout(startupTimeoutMillis) { worker.process.start(binding, snapshot, worker.gateway) }
+                worker.configuration = snapshot
                 check(worker.ready!!.agentSessionId == null || worker.ready!!.agentSessionId == binding.agentSessionId) { "ACP worker restored a different session" }
                 started = true
+            } else {
+                val effective = AcpWorkerConfiguration(configuration.command, configuration.arguments, configuration.environment,
+                    configuration.mcpServers, configuration.allowDelegation && !binding.delegated,
+                    if (binding.delegated) emptySet() else configuration.coreToolScope)
+                check(worker.configuration?.sameAs(effective) == true) { "ACP worker configuration changed; restart is required" }
             }
             workspace.requireLocalUnchanged(binding)
             check(worker.ready!!.skillsGatewayAvailable || !needsGateway()) { "This ACP agent needs MCP SSE or HTTP support; restart with a compatible agent" }
@@ -288,6 +313,7 @@ internal class AcpWorkerManager(
                             if (acquired != null) {
                                 current.finishedTurn = turnId
                                 current.stoppedTurn = retire && safe
+                                current.settlementPending = holdForSettlement && safe
                             }
                             if (retire && safe && current.worker === acquired) current.worker = null
                             if (safe) { current.active = null; current.activeJob = null }
@@ -306,6 +332,7 @@ internal class AcpWorkerManager(
         check(current.activeJob?.isCompleted != false) { "ACP turn is still running" }
         current.worker?.let { worker -> withContext(NonCancellable) { worker.gateway.close(); worker.process.stopAndAwait() } }
         current.worker = null; current.active = null; current.activeJob = null; current.unsafe = false
+        current.settlementPending = false
         if (current.finishedTurn != null) current.stoppedTurn = true
         true
     }
@@ -324,9 +351,40 @@ internal class AcpWorkerManager(
                     current.worker = null; current.stoppedTurn = true
                 }
                 current.active = null; current.activeJob = null; current.unsafe = false
-                action()
+                try { action().also { current.settlementPending = false } }
+                catch (failure: Throwable) { if (current.settlementPending) current.unsafe = true; throw failure }
             }
         }
+    }
+
+    /** A created worker may be retained only after its trusted platform proves startup is idle. */
+    suspend fun retainCreatedWorker(id: String): Boolean = slot(id).mutex.withLock {
+        val current = slot(id)
+        check(!current.unsafe && current.active == null && !current.settlementPending) { "ACP worker is not idle" }
+        val proof = current.worker?.process as? AcpReusableWorkerProof ?: return@withLock false
+        if (!proof.supportsReusableTurns) return@withLock false
+        try { proof.requireInitialQuiescence(); true }
+        catch (failure: Throwable) { current.unsafe = true; throw failure }
+    }
+
+    /** The same lock excludes later turns and mutations through quiescence proof and ledger commit. */
+    suspend fun <T> withQuiescentTurn(id: String, turnId: String, action: suspend () -> T): T = slot(id).mutex.withLock {
+        val current = slot(id)
+        check(holdForSettlement && !current.unsafe && current.active == null && current.settlementPending &&
+            current.finishedTurn == turnId && !current.stoppedTurn) { "ACP turn cannot be safely reused" }
+        val proof = current.worker?.process as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")
+        check(proof.supportsReusableTurns) { "ACP reusable-worker proof is unavailable" }
+        withContext(NonCancellable) {
+            try {
+                proof.requireTurnQuiescence(turnId)
+                action().also { current.settlementPending = false }
+            } catch (failure: Throwable) { current.unsafe = true; throw failure }
+        }
+    }
+
+    suspend fun canReuseWorker(id: String): Boolean = slot(id).mutex.withLock {
+        val proof = slot(id).worker?.process as? AcpReusableWorkerProof
+        proof?.supportsReusableTurns == true
     }
 
     suspend fun cancel(id: String): Boolean {

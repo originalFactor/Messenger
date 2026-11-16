@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -68,6 +69,27 @@ class RoomToolApprovalTest {
             write.rejectUnavailableApproval(second)
             assertTrue(db.rows().messagesFor(listOf("c")).any { it.role == "tool" && it.content.contains("cannot request") })
             write.cancel(second); write.release(second)
+        }
+    }
+
+    @Test fun cancelledUndispatchedRuntimeCallReleasesOnlyItsOwnReservation(): Unit = runBlocking {
+        database { db, _ ->
+            val store = RoomKotlinTurnStore(db, preparer("read"), policy)
+            val id = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "read", null))).turnId
+            assertTrue(store.claim(id, false)); store.beginProvider(id)
+            val call = ToolCallData("r", "read", "{}")
+            store.completeProvider(id, listOf(call), null)
+            assertEquals(call, store.beginTool(id))
+            assertFailsWith<IllegalStateException> {
+                store.rejectUndispatchedRuntimeTool(id, call.copy(callId = "another"), "rejected")
+            }
+            assertEquals(KotlinTurnPhase.EXECUTING_TOOL, store.snapshot(id).phase)
+            store.cancel(id)
+            assertIs<KotlinTurnAdmission.Rejected>(store.admit(KotlinTurnCommand.Send("c", "too early", null)))
+            store.rejectUndispatchedRuntimeTool(id, call, "rejected")
+            assertEquals(KotlinTurnPhase.CANCELLED, store.snapshot(id).phase)
+            assertNull(store.observeFailure(id).first())
+            assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "after", null)))
         }
     }
 

@@ -162,7 +162,7 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
 
 /** Adds durable input, transcript and replay without changing the ACP wire implementation. */
 internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val worker: AcpWorkerProcess, private val events: AcpTurnCoordinator,
-    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding {
+    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof {
     @Volatile private var binding = initialBinding
     private val begun = mutableSetOf<String>()
     override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
@@ -186,6 +186,11 @@ internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val 
     }
     override suspend fun cancelAndConfirm() = worker.cancelAndConfirm()
     override suspend fun stopAndAwait() = worker.stopAndAwait()
+    override val supportsReusableTurns: Boolean get() = (worker as? AcpReusableWorkerProof)?.supportsReusableTurns == true
+    override suspend fun requireInitialQuiescence() =
+        (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireInitialQuiescence()
+    override suspend fun requireTurnQuiescence(turnId: String) =
+        (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireTurnQuiescence(turnId)
 }
 
 /** Constructs real stdio workers while requiring the platform to supply a stop-confirming transport. */

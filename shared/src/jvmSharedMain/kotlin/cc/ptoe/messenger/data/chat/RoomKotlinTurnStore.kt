@@ -656,6 +656,21 @@ class RoomKotlinTurnStore(
         rows.completeToolResult(turn, call, result)
         mark(turn.conversationId)
     } }
+    override suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { transaction { rows, mark ->
+        val turn = rows.read(turnId); turn.requireOwner()
+        check(turn.phase() in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) &&
+            rows.getValue(ACTIVE + turn.conversationId)?.value == turnId && !turn.invocationStarted &&
+            turn.toolGrant?.let { it.conversationId == turn.conversationId && call.name in it.allowedNames } == true &&
+            turn.calls.getOrNull(turn.index)?.domain() == call) { "Runtime invocation may already have started" }
+        val cancelled = turn.phase() == KotlinTurnPhase.CANCELLING_TOOL
+        val assistant = checkNotNull(rows.message(turn.assistantId))
+        rows.upsertMessages(listOf(assistant.copy(status = if (cancelled) "sent" else "error", errorMessage = if (cancelled) null else detail)))
+        rows.write(turn.copy(phase = if (cancelled) KotlinTurnPhase.CANCELLED.name else KotlinTurnPhase.FAILED.name, detail = if (cancelled) null else detail))
+        if (!cancelled) rows.upsertValues(listOf(KeyValueRow(NOTICE + turn.id, detail)))
+        rows.deleteValue(ACTIVE + turn.conversationId)
+        rows.refreshConversationPreview(turn.conversationId)
+        mark(turn.conversationId)
+    } }
     private suspend fun LocalRowsDao.completeToolResult(turn: StoredTurn, call: ToolCallData, result: ToolExecutionResult) {
         val now = nextMessageTimestamp(turn.conversationId)
         val part = ContentPart.ToolResult(call.callId, call.name, result.output, result.isError, result.structuredContent)
@@ -809,6 +824,35 @@ class RoomKotlinTurnStore(
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (failure: Exception) { ToolExecutionResult(failure.message ?: "Core tool failed", isError = true) }
     }
+
+    /** Atomically recheck the live workspace and policy immediately before a tracked dispatch. */
+    internal suspend fun claimRuntimeToolInvocation(turnId: String, call: ToolCallData, grant: KotlinRuntimeToolGrant) {
+        transaction { rows, _ ->
+            val turn = rows.read(turnId)
+            turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.EXECUTING_TOOL)
+            rows.requireTurnCloudSession(turn)
+            turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
+            check(turn.toolGrant == grant && grant.conversationId == turn.conversationId && call.name in grant.allowedNames) {
+                "Runtime workspace grant changed"
+            }
+            check(call.name in setOf("glob", "grep", "read", "edit", "create")) { "Runtime operation is unavailable" }
+            val conversation = requireNotNull(rows.conversation(turn.conversationId)) { "Conversation is unavailable" }
+            check(conversation.projectId == grant.projectId) { "Conversation workspace changed" }
+            if (grant.projectId != null) {
+                val project = requireNotNull(rows.project(grant.projectId)) { "Project workspace is unavailable" }
+                check(project.workspace == grant.workspaceRoot && project.deviceId == grant.deviceId) { "Project workspace changed" }
+            }
+            val agent = requireNotNull(rows.agent(conversation.agentId)) { "Agent is unavailable" }
+            val default = rows.defaultAgents().singleOrNull() ?: error("Default Agent is unavailable")
+            check(runtimeToolAllowedByAgent(conversation, agent, default, call.name, call.name in setOf("edit", "create"))) {
+                "Runtime tool is disabled by Agent policy"
+            }
+            check(turn.request.tools.orEmpty().count { it.function.name == call.name } == 1 &&
+                turn.calls.getOrNull(turn.index)?.domain() == call && !turn.invocationStarted) { "Tool invocation was already claimed" }
+            rows.write(turn.copy(invocationStarted = true))
+        }
+    }
+
     /** Persist this before dispatch so no second caller can invoke the same external side effect. */
     suspend fun claimToolInvocation(turnId: String, call: ToolCallData) { transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.EXECUTING_TOOL)

@@ -10,6 +10,7 @@ import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.ProjectRow
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.repository.room.AcpSessionMutationGate
+import cc.ptoe.messenger.data.repository.room.RoomAcpConversationStore
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Files
 import java.nio.file.Path
@@ -38,7 +39,9 @@ class RoomAcpBackgroundOwnerTest {
             mutex.lock()
             return AcpConfigurationLease { mutex.unlock() }
         }
+        override suspend fun <T> withExclusiveWriter(action: suspend () -> T): T = mutex.withLock { action() }
         suspend fun <T> mutate(action: suspend () -> T): T = mutex.withLock { action() }
+        fun held() = mutex.isLocked
     }
 
     private class Worker(
@@ -94,9 +97,11 @@ class RoomAcpBackgroundOwnerTest {
     private fun content() = JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", "hello") }))
 
     private suspend fun owner(db: LocalDatabase, binding: AcpWorkerBinding, lifecycle: RoomManagedShutdown,
-        factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess, source: AcpSessionConfigurationSource = AcpSessionConfigurationSource { binding to config }, fence: Fence = Fence()) =
+        factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess, source: AcpSessionConfigurationSource = AcpSessionConfigurationSource { binding to config },
+        fence: Fence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {}) =
         RoomAcpBackgroundOwner.attach(db, Path.of(db.openHelperPathForTest()), lifecycle, AcpPriorOwnerBarrier { }, fence, source,
-            AcpPublishedMcpCatalog { emptyList() }, backend, { false }, factory) { 1000 }
+            AcpPublishedMcpCatalog { emptyList() }, backend, { false }, factory, now = { 1000 }, retainReusableWorkers = reuse,
+            afterQuiescentCommit = afterCommit)
 
     private suspend fun LocalDatabase.openHelperPathForTest(): String = useReaderConnection { connection ->
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
@@ -209,7 +214,8 @@ class RoomAcpBackgroundOwnerTest {
         val stopEntered = CompletableDeferred<Unit>(); val allowStop = CompletableDeferred<Unit>()
         val fence = Fence()
         try {
-            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, stopEntered = stopEntered, allowStop = allowStop) }, fence = fence)
+            // Opting in does not retain a worker that supplies no quiescence proof.
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, stopEntered = stopEntered, allowStop = allowStop) }, fence = fence, reuse = true)
             val draft = binding.copy(conversationId = "acp:${UUID.randomUUID()}", agentSessionId = "")
             val creating = async { owner.create(draft, config, "New") }
             withTimeout(5_000) { stopEntered.await() }
@@ -323,6 +329,201 @@ class RoomAcpBackgroundOwnerTest {
             }
             assertFalse(owner.hasActiveTasks())
             assertEquals(1, starts)
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun verifiedReusableWorkerKeepsNewSessionAcrossTurnsWithoutSessionLoad(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-reusable-session")
+        val (db, original) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val fence = Fence()
+        var bound: AcpWorkerBinding? = null
+        var starts = 0
+        var prompts = 0
+        var initialProofs = 0
+        var turnProofs = 0
+        var stops = 0
+        try {
+            val owner = owner(db, original, lifecycle, { _, events ->
+                object : AcpWorkerProcess, AcpNewSessionBinding, AcpReusableWorkerProof {
+                    override val supportsReusableTurns = true
+                    override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
+                        check(binding.agentSessionId.isEmpty()) { "This agent cannot load an existing session" }
+                        starts++
+                        return AcpWorkerReady(true, "new-session")
+                    }
+                    override fun bindCreatedSession(binding: AcpWorkerBinding) { bound = binding }
+                    override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
+                        prompts++
+                        events.update(turnId, buildJsonObject { put("sessionUpdate", "agent_message_chunk"); put("content", buildJsonObject { put("text", "answer-$prompts") }) })
+                        return buildJsonObject { put("type", "Finished") }
+                    }
+                    override suspend fun requireInitialQuiescence() { initialProofs++ }
+                    override suspend fun requireTurnQuiescence(turnId: String) { turnProofs++ }
+                    override suspend fun cancelAndConfirm() = false
+                    override suspend fun stopAndAwait() { stops++ }
+                }
+            }, source = AcpSessionConfigurationSource { checkNotNull(bound) to config }, fence = fence, reuse = true)
+            val draft = original.copy(conversationId = "acp:${UUID.randomUUID()}", agentSessionId = "")
+            val created = owner.create(draft, config, "Agent")
+            assertEquals(created, bound)
+            assertEquals(1, starts)
+            assertEquals(1, initialProofs)
+            assertEquals(0, stops)
+            assertTrue(fence.held())
+            repeat(2) { index ->
+                val id = UUID.randomUUID().toString()
+                owner.start(id, created.conversationId, content())
+                val done = withTimeout(5_000) {
+                    var batch = owner.events(id, 0)
+                    while (!batch.getValue("done").jsonPrimitive.boolean) { delay(10); batch = owner.events(id, 0) }
+                    batch
+                }
+                assertTrue(done.getValue("events").jsonArray.any { it.jsonObject["type"]?.jsonPrimitive?.content == "Finished" })
+                assertEquals(index + 1, turnProofs)
+                assertTrue(fence.held())
+            }
+            assertEquals(1, starts)
+            assertEquals(2, prompts)
+            assertEquals(0, stops)
+            assertTrue(owner.hasActiveTasks()) // An idle worker still requires its process lifetime.
+            assertTrue(withTimeout(5_000) { owner.withConfigurationWrite { true } })
+            assertEquals(1, stops)
+            assertFalse(owner.hasActiveTasks())
+            lifecycle.stopAndAwait()
+            assertEquals(1, stops)
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun waitingConfigurationWriterPreventsActiveTurnFromRetainingWorker(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-writer-active-turn")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        var proofs = 0
+        var stops = 0
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ ->
+                object : AcpWorkerProcess, AcpReusableWorkerProof {
+                    override val supportsReusableTurns = true
+                    override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true)
+                    override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
+                        started.complete(Unit)
+                        finish.await()
+                        return buildJsonObject { put("type", "Finished") }
+                    }
+                    override suspend fun requireInitialQuiescence() = Unit
+                    override suspend fun requireTurnQuiescence(turnId: String) { proofs++ }
+                    override suspend fun cancelAndConfirm() = false
+                    override suspend fun stopAndAwait() { stops++ }
+                }
+            }, reuse = true)
+            val id = UUID.randomUUID().toString()
+            owner.start(id, binding.conversationId, content())
+            withTimeout(5_000) { started.await() }
+            val writer = async(start = CoroutineStart.UNDISPATCHED) { owner.withConfigurationWrite { true } }
+            assertFalse(writer.isCompleted)
+            val failure = assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            assertEquals("ACP configuration is being changed", failure.message)
+            finish.complete(Unit)
+            assertTrue(withTimeout(5_000) { writer.await() })
+            assertEquals(0, proofs)
+            assertEquals(1, stops)
+            assertEquals(null, RoomAcpRequestLedger(db).activeRequest(binding.conversationId))
+            assertFalse(owner.hasActiveTasks())
+            lifecycle.stopAndAwait()
+        } finally { finish.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun deleteWaitsForRetainedWorkerPublicationAfterLedgerCommit(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-delete-after-commit")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val committed = CompletableDeferred<Unit>()
+        val publish = CompletableDeferred<Unit>()
+        var stops = 0
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ ->
+                object : AcpWorkerProcess, AcpReusableWorkerProof {
+                    override val supportsReusableTurns = true
+                    override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true)
+                    override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker) = buildJsonObject { put("type", "Finished") }
+                    override suspend fun requireInitialQuiescence() = Unit
+                    override suspend fun requireTurnQuiescence(turnId: String) = Unit
+                    override suspend fun cancelAndConfirm() = false
+                    override suspend fun stopAndAwait() { stops++ }
+                }
+            }, reuse = true, afterCommit = { committed.complete(Unit); publish.await() })
+            owner.start(UUID.randomUUID().toString(), binding.conversationId, content())
+            withTimeout(5_000) { committed.await() }
+            assertEquals(null, RoomAcpRequestLedger(db).activeRequest(binding.conversationId))
+            val delete = async(start = CoroutineStart.UNDISPATCHED) { RoomAcpConversationStore(db, owner.mutationGate).delete(binding.conversationId) }
+            assertFalse(delete.isCompleted)
+            assertEquals(0, stops)
+            publish.complete(Unit)
+            withTimeout(5_000) { delete.await() }
+            assertEquals(1, stops)
+            val sessions = Json.parseToJsonElement(checkNotNull(db.rows().getValue("local_acp_sessions")).value).jsonObject
+            assertFalse(binding.conversationId in sessions)
+            lifecycle.stopAndAwait()
+        } finally { publish.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun failedTurnQuiescenceRetainsLeaseAndUncertainRequestUntilProvenStop(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-reusable-proof-failure")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val fence = Fence()
+        var starts = 0
+        var stops = 0
+        lateinit var worker: AcpWorkerProcess
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ ->
+                object : AcpWorkerProcess, AcpReusableWorkerProof {
+                    override val supportsReusableTurns = true
+                    override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady { starts++; return AcpWorkerReady(true) }
+                    override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker) = buildJsonObject { put("type", "Finished") }
+                    override suspend fun requireInitialQuiescence() = Unit
+                    override suspend fun requireTurnQuiescence(turnId: String) { error("side effects cannot be proven stopped") }
+                    override suspend fun cancelAndConfirm() = false
+                    override suspend fun stopAndAwait() { stops++ }
+                }.also { worker = it }
+            }, fence = fence, reuse = true)
+            val id = UUID.randomUUID().toString()
+            owner.start(id, binding.conversationId, content())
+            val done = withTimeout(5_000) {
+                var batch = owner.events(id, 0)
+                while (!batch.getValue("done").jsonPrimitive.boolean) { delay(10); batch = owner.events(id, 0) }
+                batch
+            }
+            assertTrue(done.getValue("events").jsonArray.any { it.jsonObject["type"]?.jsonPrimitive?.content == "Error" })
+            assertEquals(AcpAdmission.Existing(AcpAdmissionState.UNCERTAIN, true), RoomAcpRequestLedger(db).admit(id, binding.conversationId, content()))
+            assertEquals(AcpAdmission.SessionBusy, RoomAcpRequestLedger(db).admit(UUID.randomUUID().toString(), binding.conversationId, content()))
+            val writer = async(start = CoroutineStart.UNDISPATCHED) { fence.mutate { true } }
+            assertFalse(writer.isCompleted)
+            assertTrue(owner.hasActiveTasks())
+            assertEquals(1, starts)
+            assertEquals(0, stops)
+            val barrier = object : AcpRecoveryBarrier {
+                override suspend fun <T> withStopped(requestId: String, sessionId: String, action: suspend () -> T): T {
+                    worker.stopAndAwait()
+                    return action()
+                }
+            }
+            withTimeout(5_000) {
+                while (true) {
+                    try { assertEquals(AcpAdmissionState.INTERRUPTED, owner.recover(id, binding.conversationId, barrier)); break }
+                    catch (failure: IllegalStateException) {
+                        if (failure.message != "ACP worker is still active") throw failure
+                        delay(10)
+                    }
+                }
+                writer.await()
+            }
+            assertEquals(2, stops)
+            assertFalse(owner.hasActiveTasks())
             lifecycle.stopAndAwait()
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }

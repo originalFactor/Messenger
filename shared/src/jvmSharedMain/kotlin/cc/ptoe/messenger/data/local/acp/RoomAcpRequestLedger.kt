@@ -23,6 +23,11 @@ internal interface AcpRecoveryBarrier {
     suspend fun <T> withStopped(requestId: String, sessionId: String, action: suspend () -> T): T
 }
 
+/** Holds exclusive admission while a completed turn is either stopped or independently proven idle. */
+internal interface AcpCompletionBarrier {
+    suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T
+}
+
 /** Persistent at-most-once admission only. This does not start or retry any worker. */
 internal class RoomAcpRequestLedger(private val db: LocalDatabase) {
     private val random = SecureRandom()
@@ -91,8 +96,16 @@ internal class RoomAcpRequestLedger(private val db: LocalDatabase) {
 
     /** Completion releases the session only while the old worker is proven stopped. */
     suspend fun complete(requestId: String, sessionId: String, barrier: AcpRecoveryBarrier): AcpAdmissionState {
+        return complete(requestId, sessionId, object : AcpCompletionBarrier {
+            override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T =
+                barrier.withStopped(requestId, sessionId, action)
+        })
+    }
+
+    /** A reusable worker additionally requires a platform proof of turn quiescence. */
+    suspend fun complete(requestId: String, sessionId: String, barrier: AcpCompletionBarrier): AcpAdmissionState {
         validateId(requestId); validateSession(sessionId)
-        return barrier.withStopped(requestId, sessionId) {
+        return barrier.withCompleted(requestId, sessionId) {
             transaction {
                 val rows = db.rows()
                 val current = rows.getValue(requestKey(requestId))?.let { decode(it.value) } ?: error("ACP request is unavailable")

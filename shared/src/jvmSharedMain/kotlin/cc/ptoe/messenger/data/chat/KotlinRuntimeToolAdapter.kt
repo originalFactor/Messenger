@@ -9,6 +9,7 @@ import cc.ptoe.messenger.data.remote.dto.ToolSpecFunctionDto
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.domain.chat.KotlinRuntimeToolGrant
 import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
+import cc.ptoe.messenger.domain.chat.RuntimeToolNotDispatchedException
 import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.TerminalTool
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
@@ -16,6 +17,7 @@ import cc.ptoe.messenger.domain.tool.builtinChatToolsSupported
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import java.io.File
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
@@ -45,6 +47,7 @@ class KotlinRuntimeToolAdapter(
     private val verifier: RuntimeWorkspaceVerifier,
     private val store: () -> RoomKotlinTurnStore,
     private val trackedHost: TrackedWorkspaceHost,
+    private val fence: RuntimeWorkspaceFence,
     private val toolsForWorkspace: (String?) -> List<ChatTool> = ::createBuiltinChatTools,
     private val hostAvailable: () -> Boolean = ::builtinChatToolsSupported,
 ) : KotlinToolCatalog, KotlinTurnToolPolicy, KotlinTurnToolExecutor {
@@ -53,6 +56,7 @@ class KotlinRuntimeToolAdapter(
         require(grant.allowedNames.distinct().size == grant.allowedNames.size)
         require(grant.allowedNames.all { it in setOf("glob", "grep", "read", "edit", "create") }) { "This Runtime tool cannot yet be tracked safely" }
         require(grant.allowedNames.all { it in trackedHost.supportedOperations }) { "Runtime cannot safely track a requested workspace operation" }
+        fence.requireOwner(db)
     }
     override fun toolGrant() = grant
 
@@ -93,20 +97,40 @@ class KotlinRuntimeToolAdapter(
     }
 
     override suspend fun execute(turnId: String, call: ToolCallData): ToolExecutionResult {
-        val conversation = db.rows().conversation(grant.conversationId) ?: error("Conversation is unavailable")
-        validatedTool(turnId, conversation, call) ?: error("Runtime tool permission or workspace is no longer available")
-        store().claimToolInvocation(turnId, call)
-        // The host journals this stable token before dispatch and never repeats it.
-        return trackedHost.execute(trackedToolToken(turnId, call.callId), grant.workspaceRoot, call)
+        val token = trackedToolToken(turnId, call.callId)
+        var claimed = false
+        try { return fence.execute(token, trackedHost) { markDispatched ->
+            val conversation = db.rows().conversation(grant.conversationId) ?: error("Conversation is unavailable")
+            validatedTool(turnId, conversation, call) ?: error("Runtime tool permission or workspace is no longer available")
+            // The active grant, workspace and live policy are checked atomically with the claim.
+            store().claimRuntimeToolInvocation(turnId, call, grant)
+            claimed = true
+            markDispatched()
+            val result = trackedHost.execute(token, grant.workspaceRoot, call)
+            check(trackedHost.protocolAvailable && trackedHost.status(token) == TrackedWorkspaceStatus.STOPPED) {
+                "Workspace operation stop is unverified"
+            }
+            result
+        } } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            if (!claimed) throw RuntimeToolNotDispatchedException(failure)
+            throw failure
+        }
     }
 
     private fun permitted(conversation: ConversationRow, agent: AgentRow, default: AgentRow, tool: ChatTool): Boolean {
-        if (tool.name !in grant.allowedNames || tool.name.startsWith("messenger_")) return false
-        if ((!conversation.writable && tool.writeAccess) || (!conversation.writable && tool.name == TerminalTool.TOOL_NAME)) return false
-        val follow = !agent.isDefault && agent.toolsFollowDefault
-        if (!(conversation.overrideToolsEnabled ?: if (follow) default.toolsEnabled else agent.toolsEnabled)) return false
-        val config = conversation.overrideToolsConfig ?: if (follow) default.toolsConfig else agent.toolsConfig
-        val parsed = if (config.isBlank()) emptyMap() else Json.decodeFromString<Map<String, Boolean>>(config)
-        return parsed[tool.name] != false
+        return tool.name in grant.allowedNames && runtimeToolAllowedByAgent(conversation, agent, default, tool.name, tool.writeAccess)
     }
+}
+
+/** Must be evaluated again inside the transaction that claims the invocation. */
+internal fun runtimeToolAllowedByAgent(conversation: ConversationRow, agent: AgentRow, default: AgentRow,
+    name: String, writes: Boolean): Boolean {
+    if (name.startsWith("messenger_") || (!conversation.writable && (writes || name == TerminalTool.TOOL_NAME))) return false
+    val follow = !agent.isDefault && agent.toolsFollowDefault
+    if (!(conversation.overrideToolsEnabled ?: if (follow) default.toolsEnabled else agent.toolsEnabled)) return false
+    val config = conversation.overrideToolsConfig ?: if (follow) default.toolsConfig else agent.toolsConfig
+    val parsed = if (config.isBlank()) emptyMap() else
+        runCatching { Json.decodeFromString<Map<String, Boolean>>(config) }.getOrElse { return false }
+    return parsed[name] != false
 }

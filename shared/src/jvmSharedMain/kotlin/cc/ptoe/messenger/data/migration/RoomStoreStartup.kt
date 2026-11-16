@@ -55,6 +55,7 @@ internal object RoomStoreStartup {
                     checkDatabasePath(room, target)
                     check(room.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
                     check(room.rows().getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
+                    check(room.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
                     shutdown.enter()
                     try { useRoom(room) } finally { shutdown.stopAndAwait() }
                 } finally { room.close() }
@@ -91,6 +92,7 @@ internal object RoomStoreStartup {
             checkDatabasePath(room, target)
             check(room.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             check(room.rows().getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
+            check(room.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
             shutdown.enter()
             try { useRoom(room) } finally { shutdown.stopAndAwait() }
         } finally { room.close() }
@@ -114,7 +116,11 @@ internal object RoomStoreStartup {
 
     private suspend fun verifyRoom(path: Path, openRoom: (Path) -> LocalDatabase) {
         val db = openRoom(path)
-        try { checkDatabasePath(db, path); check(db.rows().defaultAgents().size == 1) { "Room database must have exactly one default Agent" } }
+        try {
+            checkDatabasePath(db, path)
+            check(db.rows().defaultAgents().size == 1) { "Room database must have exactly one default Agent" }
+            check(db.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
+        }
         finally { db.close() }
     }
 

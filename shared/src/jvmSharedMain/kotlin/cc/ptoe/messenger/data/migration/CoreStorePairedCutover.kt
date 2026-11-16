@@ -32,6 +32,25 @@ internal object CoreStorePairedCutover {
     internal fun receiptFor(target: Path): Path = target.resolveSibling(".${target.fileName}.room-pair-v1")
     private fun stageFor(target: Path, id: String): Path = target.resolveSibling(".${target.fileName}.room-pair-$id.db")
 
+    /** Restore preflight only: these markers establish publication identity, not backup age. */
+    internal fun verifyRestorePair(lease: CoreSourceSqliteLease, destination: Path, destinationAssets: Path,
+        evidence: CoreRestoreEvidence.ContentMatch) {
+        val target = destination.toAbsolutePath().normalize()
+        val assets = destinationAssets.toAbsolutePath().normalize()
+        require(assets.parent == target.parent && assets != target) { "Room database and assets require a shared private parent" }
+        requireRoomPublicationParent(requireNotNull(target.parent))
+        requireRoomPublicationParent(assets)
+        lease.requireDistinctDatabasePaths(target)
+        val receipt = receiptFor(target)
+        val assetMarker = assets.resolve(ASSET_MARKER)
+        lease.requireDistinct(receipt)
+        lease.requireDistinct(assetMarker)
+        val expected = Identity(evidence.publicationId, evidence.previousIdentity)
+        check(readMarker(receipt) == expected && readMarker(assetMarker) == expected) {
+            "Restored database and asset publication markers differ"
+        }
+    }
+
     suspend fun migrate(lease: CoreSourceSqliteLease, sourceAssets: Path, destination: Path, destinationAssets: Path,
         initializeRoom: suspend (Path) -> Unit, verifyRoom: suspend (Path) -> Unit): CutoverResult {
         val target = destination.toAbsolutePath().normalize()

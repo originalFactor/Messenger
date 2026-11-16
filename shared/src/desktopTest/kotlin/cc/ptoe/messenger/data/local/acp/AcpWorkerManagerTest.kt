@@ -203,4 +203,54 @@ class AcpWorkerManagerTest {
         manager.retireAndAwait("acp:session")
     }
 
+    @Test fun quiescenceProofAndLedgerSettlementFenceLaterTurns(): Unit = runBlocking {
+        val proving = CompletableDeferred<Unit>()
+        val finishProof = CompletableDeferred<Unit>()
+        var prompts = 0
+        val process = object : AcpWorkerProcess, AcpReusableWorkerProof {
+            override val supportsReusableTurns = true
+            override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true)
+            override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
+                prompts++
+                return buildJsonObject { put("type", "Finished") }
+            }
+            override suspend fun requireInitialQuiescence() = Unit
+            override suspend fun requireTurnQuiescence(turnId: String) { proving.complete(Unit); finishProof.await() }
+            override suspend fun cancelAndConfirm() = false
+            override suspend fun stopAndAwait() = Unit
+        }
+        val manager = AcpWorkerManager(AcpWorkerFactory { process }, AcpWorkspaceAuthority {}, backend, { false }, holdForSettlement = true)
+        val first = "1fc44a2a-a164-4192-bf49-7f226c902f32"
+        val second = "2fc44a2a-a164-4192-bf49-7f226c902f32"
+        manager.prompt(binding(), config(), content, first)
+        assertFailsWith<IllegalStateException> { manager.prompt(binding(), config(), content, second) }
+        val committing = async { manager.withQuiescentTurn("acp:session", first) { "saved" } }
+        withTimeout(5_000) { proving.await() }
+        val later = async(start = CoroutineStart.UNDISPATCHED) { manager.prompt(binding(), config(), content, second) }
+        assertFalse(later.isCompleted)
+        assertEquals(1, prompts)
+        finishProof.complete(Unit)
+        withTimeout(5_000) { assertEquals("saved", committing.await()); later.await() }
+        assertEquals(2, prompts)
+        assertFailsWith<IllegalStateException> { manager.withQuiescentTurn("acp:session", first) { } }
+        manager.withStoppedTurn("acp:session", second) { }
+    }
+
+    @Test fun reusableWorkerRejectsChangedStartupConfiguration(): Unit = runBlocking {
+        var starts = 0
+        var stops = 0
+        val process = object : AcpWorkerProcess {
+            override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady { starts++; return AcpWorkerReady(true) }
+            override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker) = buildJsonObject { put("type", "Finished") }
+            override suspend fun cancelAndConfirm() = false
+            override suspend fun stopAndAwait() { stops++ }
+        }
+        val manager = AcpWorkerManager(AcpWorkerFactory { process }, AcpWorkspaceAuthority {}, backend, { false })
+        manager.prompt(binding(), config(), content)
+        val changed = AcpWorkerConfiguration("agent", listOf("different"), mapOf("SECRET" to "token"), JsonArray(emptyList()), true, setOf("messenger_learning"))
+        assertFailsWith<IllegalStateException> { manager.prompt(binding(), changed, content) }
+        assertEquals(1, starts)
+        assertEquals(1, stops)
+    }
+
 }

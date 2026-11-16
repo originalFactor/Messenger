@@ -112,6 +112,8 @@ interface KotlinTurnStore {
     suspend fun decideRemoteApproval(scope: KotlinRemoteControlScope, conversationId: String, turnId: String, callId: String, allow: Boolean) { error("Remote approval unavailable") }
     suspend fun beginTool(turnId: String): ToolCallData
     suspend fun completeTool(turnId: String, call: ToolCallData, result: ToolExecutionResult)
+    /** Atomically reject a proven undispatched Runtime call; fail closed if the claim is uncertain. */
+    suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { error("Undispatched Runtime rejection unavailable") }
     suspend fun fail(turnId: String, detail: String)
     suspend fun cancel(turnId: String)
     suspend fun cancelRemote(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) { error("Remote cancellation unavailable") }
@@ -142,6 +144,9 @@ fun interface KotlinTurnProvider {
 fun interface KotlinTurnToolExecutor {
     suspend fun execute(turnId: String, call: ToolCallData): ToolExecutionResult
 }
+
+/** Only a Runtime executor that has not attempted dispatch may report this outcome. */
+internal class RuntimeToolNotDispatchedException(cause: Exception) : Exception(cause.message ?: "Runtime tool was not dispatched", cause)
 
 /** Process lifecycle hooks must never contain message contents, credentials or tool arguments. */
 interface KotlinTurnLifecycle {
@@ -314,7 +319,13 @@ class KotlinChatTurnRunner(
                     // Some platform operations cannot acknowledge cancellation. Wait for the
                     // invocation to return before releasing its conversation reservation.
                     currentCoroutineContext().ensureActive()
-                    val result = withContext(NonCancellable) { tools.execute(turnId, call) }
+                    val result = withContext(NonCancellable) {
+                        try { tools.execute(turnId, call) }
+                        catch (rejected: RuntimeToolNotDispatchedException) {
+                            store.rejectUndispatchedRuntimeTool(turnId, call, rejected.message ?: "Runtime tool was not dispatched")
+                            null
+                        }
+                    } ?: return
                     currentCoroutineContext().ensureActive()
                     store.completeTool(turnId, call, result)
                 }

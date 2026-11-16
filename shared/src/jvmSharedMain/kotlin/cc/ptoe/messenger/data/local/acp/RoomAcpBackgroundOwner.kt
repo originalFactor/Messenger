@@ -42,10 +42,16 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 
-/** All profile, MCP, capability, project and Cloud writers must honor the same lease. */
+/**
+ * All profile, MCP, capability, project and Cloud writers must honor the same lease.
+ * A production fence supporting multiple retained workers must admit shared reader leases.
+ * All writers must enter through the ACP owner's [RoomAcpBackgroundOwner.withConfigurationWrite].
+ */
 internal interface AcpConfigurationFence {
     /** Cancellation before return must not leave an acquired lease behind. */
     suspend fun acquire(binding: AcpWorkerBinding): AcpConfigurationLease
+    /** Exclusive writer access is entered only after the owner drains its retained workers. */
+    suspend fun <T> withExclusiveWriter(action: suspend () -> T): T = error("ACP configuration writes are unavailable")
 }
 
 /** Release is only permitted after stop proof; a failed release must retain writer exclusion. */
@@ -64,7 +70,7 @@ internal fun interface AcpNewSessionSource {
 
 /**
  * Isolated ACP background owner. The caller holds the enclosing Room owner and must ensure all
- * ACP workers use this owner, all configuration/workspace writers use [configurationFence], and
+ * ACP workers use this owner, all configuration/workspace writers use [withConfigurationWrite], and
  * the worker factory's stop method proves that the process and its side effects cannot resume.
  * This does not install a platform worker or supply a production stop proof.
  */
@@ -78,6 +84,8 @@ internal class RoomAcpBackgroundOwner private constructor(
     private val configurationFence: AcpConfigurationFence,
     private val source: AcpSessionConfigurationSource,
     private val now: () -> Long,
+    private val retainReusableWorkers: Boolean,
+    private val afterQuiescentCommit: suspend () -> Unit,
 ) {
     private class Task(val id: String, val sessionId: String) {
         lateinit var job: Job
@@ -94,15 +102,23 @@ internal class RoomAcpBackgroundOwner private constructor(
     private val tasks = linkedMapOf<String, Task>()
     private val sessions = mutableSetOf<String>()
     private val leases = mutableMapOf<String, AcpConfigurationLease>()
+    private val retained = mutableSetOf<String>()
+    private var pendingConfigurationWriters = 0
     private var closing = false
     private val observation = AcpUiObservationBridge(coordinator, manager)
 
     /** ACP session deletion and updates must use this gate, not a separate manager or DB. */
     val mutationGate: AcpSessionMutationGate = object : AcpSessionMutationGate {
         override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T = admitted {
-            exclusive.withOwner {
-                check(ledger.activeRequest(id) == null) { "ACP session has an unresolved request" }
-                manager.withInactiveSession(id, deleting, action)
+            admissions.withLock {
+                synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+                exclusive.withOwner {
+                    check(ledger.activeRequest(id) == null) { "ACP session has an unresolved request" }
+                    if (synchronized(lock) { id in retained }) {
+                        withContext(NonCancellable) { manager.retireAndAwait(id); releaseLease(id) }
+                    }
+                    manager.withInactiveSession(id, deleting, action)
+                }
             }
         }
     }
@@ -129,28 +145,45 @@ internal class RoomAcpBackgroundOwner private constructor(
         }
     }
 
+    /** A retained worker already holds this exact session's configuration lease. */
+    private suspend fun acquireOrReuseLease(binding: AcpWorkerBinding) {
+        if (synchronized(lock) { binding.conversationId in retained && binding.conversationId in leases }) return
+        acquireLease(binding)
+    }
+
     /** Call only after the manager has proved this session's worker stopped. */
     private suspend fun releaseLease(sessionId: String) {
         val lease = synchronized(lock) { leases[sessionId] } ?: return
         lease.release()
-        synchronized(lock) { if (leases[sessionId] === lease) leases.remove(sessionId) }
+        synchronized(lock) {
+            if (leases[sessionId] === lease) { leases.remove(sessionId); retained.remove(sessionId) }
+        }
     }
 
     /** Creates a local session only after the live project/profile and MCP snapshot are verified. */
     suspend fun create(draft: AcpWorkerBinding, configuration: AcpWorkerConfiguration, title: String): AcpWorkerBinding = admitted {
-        exclusive.withOwner {
+        admissions.withLock {
+          synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+          exclusive.withOwner {
             check(ledger.activeRequest(draft.conversationId) == null) { "ACP session has an unresolved request" }
             requireSupportedScope(configuration)
             synchronized(lock) { sessions.add(draft.conversationId) }
             acquireLease(draft)
+            var keep = false
             try {
-                AcpSessionCreator(manager, RoomAcpSessionStore(db, manager), authority, now).create(draft, configuration, title)
+                val created = AcpSessionCreator(manager, RoomAcpSessionStore(db, manager), authority, now).create(draft, configuration, title)
+                if (retainReusableWorkers && manager.retainCreatedWorker(draft.conversationId)) {
+                    synchronized(lock) { retained.add(draft.conversationId) }
+                    keep = true
+                }
+                created
             } finally {
-                withContext(NonCancellable) {
+                if (!keep) withContext(NonCancellable) {
                     manager.retireAndAwait(draft.conversationId)
                     releaseLease(draft.conversationId)
                 }
             }
+          }
         }
     }
 
@@ -173,6 +206,7 @@ internal class RoomAcpBackgroundOwner private constructor(
         val frozenContent = Json.parseToJsonElement(content.toString()).jsonArray
         withContext(NonCancellable) {
             admissions.withLock {
+                synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
                 exclusive.withOwner {
                     currentCoroutineContext().ensureActive()
                     synchronized(lock) {
@@ -205,23 +239,39 @@ internal class RoomAcpBackgroundOwner private constructor(
     private suspend fun runTask(task: Task, content: JsonArray) {
         var failed = false
         var completed = false
+        var keep = false
         try {
             val (binding, configuration) = source.load(task.sessionId)
             check(binding.conversationId == task.sessionId && !binding.delegated) { "ACP session binding changed" }
             requireSupportedScope(configuration)
-            acquireLease(binding)
+            acquireOrReuseLease(binding)
             try {
                 authority.verify(binding, configuration)
-                manager.prompt(binding, configuration, content, task.id)
+                val result = manager.prompt(binding, configuration, content, task.id)
+                keep = retainReusableWorkers && (result["type"] as? JsonPrimitive)?.contentOrNull == "Finished" &&
+                    manager.canReuseWorker(task.sessionId)
             } finally {
                 withContext(NonCancellable) {
-                    try {
-                        ledger.complete(task.id, task.sessionId, AcpManagerStopBarrier(manager))
-                        completed = true
-                    } finally {
-                        // Even if ledger settlement fails, a proven stopped worker permits release.
-                        manager.retireAndAwait(task.sessionId)
-                        releaseLease(task.sessionId)
+                    admissions.withLock {
+                        keep = keep && synchronized(lock) { pendingConfigurationWriters == 0 }
+                        try {
+                            if (keep) ledger.complete(task.id, task.sessionId, object : AcpCompletionBarrier {
+                                override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T =
+                                    manager.withQuiescentTurn(sessionId, requestId, action)
+                            }) else ledger.complete(task.id, task.sessionId, AcpManagerStopBarrier(manager))
+                            completed = true
+                            if (keep) {
+                                // The hook permits testing the commit/publication boundary under the real gate.
+                                try { afterQuiescentCommit() }
+                                finally { synchronized(lock) { retained.add(task.sessionId) } }
+                            }
+                        } finally {
+                            if (!keep || !completed) {
+                                // Even if ledger settlement fails, a proven stopped worker permits release.
+                                manager.retireAndAwait(task.sessionId)
+                                releaseLease(task.sessionId)
+                            }
+                        }
                     }
                 }
             }
@@ -232,6 +282,7 @@ internal class RoomAcpBackgroundOwner private constructor(
         } finally {
             withContext(NonCancellable) {
                 if (!completed) {
+                    synchronized(lock) { retained.remove(task.sessionId) }
                     failed = true
                     try { ledger.markUncertain(task.id, task.sessionId) } catch (_: Exception) { }
                 }
@@ -365,6 +416,35 @@ internal class RoomAcpBackgroundOwner private constructor(
         if (task.finished) false else { task.job.cancel(CancellationException("ACP turn cancelled")); true }
     }
 
+    /**
+     * All configuration writers use this entry point, rather than acquiring the fence directly.
+     * Intent blocks later starts while previously admitted turns finish and their workers retire.
+     */
+    suspend fun <T> withConfigurationWrite(action: suspend () -> T): T = admitted {
+        var registered = false
+        try {
+            admissions.withLock {
+                synchronized(lock) {
+                    check(!closing) { "ACP owner is shutting down" }
+                    pendingConfigurationWriters++
+                    registered = true
+                }
+            }
+            val active = synchronized(lock) { liveTasks.toList() }
+            active.joinAll()
+            exclusive.withOwner {
+                val owned = synchronized(lock) { leases.keys.toList() }
+                for (id in owned) {
+                    check(ledger.activeRequest(id) == null) { "ACP session has an active or unresolved request" }
+                    withContext(NonCancellable) { manager.retireAndAwait(id); releaseLease(id) }
+                }
+                configurationFence.withExclusiveWriter(action)
+            }
+        } finally {
+            if (registered) withContext(NonCancellable) { synchronized(lock) { pendingConfigurationWriters-- } }
+        }
+    }
+
     /** Independent recovery must prove the prior worker and its side effects cannot resume. */
     suspend fun recover(requestId: String, sessionId: String, barrier: AcpRecoveryBarrier): AcpAdmissionState = admitted {
         exclusive.withOwner {
@@ -416,6 +496,8 @@ internal class RoomAcpBackgroundOwner private constructor(
             needsGateway: suspend () -> Boolean,
             factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess,
             now: () -> Long,
+            retainReusableWorkers: Boolean = false,
+            afterQuiescentCommit: suspend () -> Unit = {},
         ): RoomAcpBackgroundOwner {
             db.useReaderConnection { connection -> connection.usePrepared("PRAGMA database_list") {
                 check(it.step() && it.getText(1) == "main" && Files.isSameFile(Paths.get(it.getText(2)), databasePath)) { "ACP owner database does not match Room" }
@@ -433,9 +515,10 @@ internal class RoomAcpBackgroundOwner private constructor(
                     val worker = factory(binding, coordinator.eventsFor { current.get() })
                     RecordingAcpWorker(binding, worker, coordinator) { current.set(it) }
                 }
-                manager = AcpWorkerManager(recorded, RoomAcpWorkspaceAuthority(db), backend, needsGateway)
+                manager = AcpWorkerManager(recorded, RoomAcpWorkspaceAuthority(db), backend, needsGateway,
+                    holdForSettlement = retainReusableWorkers)
                 val owner = RoomAcpBackgroundOwner(db, exclusive, RoomAcpRequestLedger(db), manager, coordinator,
-                    RoomAcpNewSessionAuthority(db, catalog), configurationFence, source, now)
+                    RoomAcpNewSessionAuthority(db, catalog), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit)
                 withContext(NonCancellable) { shutdown.registerStop { owner.shutdown() } }
                 return owner
             } catch (failure: Throwable) {
