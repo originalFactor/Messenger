@@ -116,7 +116,7 @@ Android 如需终端工具，请同时安装配套的 **Messenger Runtime** APK�
 ## 致谢
 
 - [llm-typewriter](https://github.com/originalFactor/llm-typewriter)：流式 Markdown、代码和公式显示。
-- [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP)：数学公式渲染。
+- [Compose LaTeX](https://github.com/huarangmeng/latex)：数学公式渲染。
 - [Jetpack Compose](https://developer.android.com/jetpack/compose)、[Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/) 和 [Material 3](https://m3.material.io/)：应用界面。
 - [Axum](https://github.com/tokio-rs/axum) 和 [OkHttp](https://square.github.io/okhttp/)：网络通信。
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template)：原始 README 模板。

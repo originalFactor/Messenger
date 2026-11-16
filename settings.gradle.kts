@@ -57,4 +57,5 @@ include(":core-bindings-desktop")
 project(":core-bindings-desktop").projectDir = file("core/bindings-desktop")
 
 include(":llm-typewriter")
-project(":llm-typewriter").projectDir = file("rendering/llm-typewriter")
+project(":llm-typewriter").projectDir = file("rendering/llm-typewriter-repo/llm-typewriter")
+project(":llm-typewriter").buildFileName = "messenger.gradle.kts"

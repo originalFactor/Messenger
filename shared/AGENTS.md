@@ -85,7 +85,7 @@ Key columns to know: `models.contextWindow/inputRate/outputRate/cacheReadRate/ca
 ## Chat rendering
 
 
-- Inline-math layout uses `:llm-typewriter`, with embedded upstream sources and local layout fixes: full measured equation height and a shared 1.2× visual font calibration for measurement/painting. Matrices and fractions can expand prose lines; do not restore fixed-height clipping. See `rendering/llm-typewriter/AGENTS.md`.
+- Inline-math layout uses `:llm-typewriter`, from the llm-typewriter submodule and Compose LaTeX, preserving full measured equation height and the shared 1.2× font calibration for measurement and painting. Matrices and fractions can expand prose lines; do not restore fixed-height clipping. See `rendering/llm-typewriter-repo/AGENTS.md`.
 - Thinking-card labels and expanded/collapsed state descriptions come from shared Compose resources
   and are passed to the embedded renderer on both Android and Desktop.
 - Android and Desktop render Markdown/code/LaTeX with `cc.ptoe:llm-typewriter` through the `ChatMarkdownText` expect/actual. Android uses a Compose `LazyColumn`; Desktop uses `ChatDocumentBubble`. Raw assistant Markdown travels as `ChatBlock.RawMarkdown` so tool cards and text retain turn order. Do not reintroduce `:renderer-android`, native DocumentHandle, or a native LaTeX engine.

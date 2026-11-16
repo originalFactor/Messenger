@@ -50,6 +50,10 @@ jobs:
           # submodule is not an input to any native client.
           fetch-depth: 0
 
+      - name: Initialize renderer submodule
+        shell: bash
+        run: git submodule update --init rendering/llm-typewriter-repo
+
       - name: Resolve version
         shell: bash
         run: |

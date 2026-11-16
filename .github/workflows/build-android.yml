@@ -40,6 +40,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Initialize renderer submodule
+        shell: bash
+        run: git submodule update --init rendering/llm-typewriter-repo
+
       - name: Resolve version (semantic name from VERSION, code from commit count)
         shell: bash
         run: |

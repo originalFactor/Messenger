@@ -2,3 +2,6 @@
 	path = server
 	url = https://github.com/originalFactor/Messenger-Server.git
 
+[submodule "rendering/llm-typewriter-repo"]
+	path = rendering/llm-typewriter-repo
+	url = https://github.com/originalFactor/llm-typewriter.git

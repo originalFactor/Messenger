@@ -16,7 +16,7 @@
 googleServices = "4.4.2"
 firebaseMessaging = "23.1.2"
 typewriterHighlights = "1.2.0"
-typewriterRatex = "0.1.15"
+latex = "1.7.3"
 agp = "9.5.1"
 coreKtx = "1.19.0"
 jna = "5.17.0"
@@ -57,13 +57,9 @@ okio = "3.18.0"
 
 [libraries]
 firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebaseMessaging" }
+latex-renderer = { module = "io.github.huarangmeng:latex-renderer", version.ref = "latex" }
+latex-fonts-katex = { module = "io.github.huarangmeng:latex-fonts-katex", version.ref = "latex" }
 typewriter-highlights = { module = "dev.snipme:highlights", version.ref = "typewriterHighlights" }
-typewriter-ratex = { module = "io.github.darriousliu:ratex", version.ref = "typewriterRatex" }
-typewriter-ratex-windows = { module = "io.github.darriousliu:ratex-native-windows-x86-64", version.ref = "typewriterRatex" }
-typewriter-ratex-linux = { module = "io.github.darriousliu:ratex-native-linux-x86-64", version.ref = "typewriterRatex" }
-typewriter-ratex-linuxarm = { module = "io.github.darriousliu:ratex-native-linux-aarch64", version.ref = "typewriterRatex" }
-typewriter-ratex-macos = { module = "io.github.darriousliu:ratex-native-darwin-x86-64", version.ref = "typewriterRatex" }
-typewriter-ratex-macosarm = { module = "io.github.darriousliu:ratex-native-darwin-aarch64", version.ref = "typewriterRatex" }
 coil3-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil3" }
 
 androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }

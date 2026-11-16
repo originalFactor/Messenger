@@ -85,10 +85,10 @@ private val appComponents = listOf(
 )
 
 private val renderingComponents = listOf(
-    OpenSourceComponent("llm-typewriter", "Apache-2.0 · Copyright 2026 ECSDevs; includes work by NadeemIqbal", "https://github.com/ECSDevs/llm-typewriter/tree/3906043b2372c2f9e30e4142f51d9cad53b29658"),
+    OpenSourceComponent("llm-typewriter", "Apache-2.0 · Copyright 2026 ECSDevs; includes work by NadeemIqbal", "https://github.com/originalFactor/llm-typewriter"),
     OpenSourceComponent("Highlights", "Apache-2.0", "https://github.com/SnipMeDev/Highlights"),
-    OpenSourceComponent("RaTeX-CMP", "MIT", "https://github.com/darriousliu/RaTeX-CMP"),
-    OpenSourceComponent("RaTeX", "MIT", "https://github.com/erweixin/RaTeX"),
+    OpenSourceComponent("Compose LaTeX", "MIT", "https://github.com/huarangmeng/latex"),
+    OpenSourceComponent("KaTeX fonts", "SIL Open Font License 1.1", "https://github.com/KaTeX/KaTeX"),
     OpenSourceComponent("Cascadia Code", "SIL Open Font License 1.1 · Copyright Microsoft Corporation", "https://github.com/microsoft/cascadia-code"),
 )
 

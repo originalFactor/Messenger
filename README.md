@@ -100,7 +100,7 @@ Conversations are stored on your device. Model requests go to your selected prov
 ## Acknowledgments
 
 - [llm-typewriter](https://github.com/originalFactor/llm-typewriter) — Streaming Markdown, code, and math.
-- [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP) — Math rendering.
+- [Compose LaTeX](https://github.com/huarangmeng/latex) — Math rendering.
 - [Jetpack Compose](https://developer.android.com/jetpack/compose), [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/), and [Material 3](https://m3.material.io/) — App interface.
 - [Axum](https://github.com/tokio-rs/axum) and [OkHttp](https://square.github.io/okhttp/) — Networking.
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — Original README template.

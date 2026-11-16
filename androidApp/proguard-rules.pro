@@ -6,7 +6,7 @@
 # sensitive surface comes from
 #   * the lifecycle-only Rust bridge (UniFFI-generated Kotlin + JNA), kept by
 #     :core-bindings' consumer rules,
-#   * llm-typewriter / RaTeX runtime classes contributed by Maven dependencies,
+#   * llm-typewriter runtime classes contributed by Maven dependencies,
 #   * kotlinx.serialization (20 @Serializable DTOs decoded reified),
 #   * OkHttp/Ktor/Coil service-loader entry points,
 #   * the manifest-declared components and ucrop's activity,
