@@ -16,19 +16,32 @@ name: Build All
 
 on:
   workflow_call:
+    inputs:
+      android:
+        type: boolean
+        default: true
+      wear:
+        type: boolean
+        default: true
+      desktop:
+        type: boolean
+        default: true
 
 jobs:
   build-android:
+    if: ${{ inputs.android }}
     name: Build Android
     uses: ./.github/workflows/build-android.yml
     secrets: inherit
 
   build-wear:
+    if: ${{ inputs.wear }}
     name: Build Wear
     uses: ./.github/workflows/build-wear.yml
     secrets: inherit
 
   build-desktop:
+    if: ${{ inputs.desktop }}
     name: Build Desktop
     uses: ./.github/workflows/build-desktop.yml
     secrets: inherit

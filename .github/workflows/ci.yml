@@ -70,7 +70,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select-builds:
+    name: Select affected clients
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      android: ${{ steps.select.outputs.android }}
+      wear: ${{ steps.select.outputs.wear }}
+      desktop: ${{ steps.select.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify client selection
+        shell: bash
+        run: bash .github/scripts/test-select-client-builds.sh
+      - name: Select client builds
+        id: select
+        shell: bash
+        env:
+          CI_DIFF_EVENT: ${{ github.event_name }}
+          CI_DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          CI_DIFF_HEAD: ${{ github.sha }}
+        run: bash .github/scripts/select-client-builds.sh
+
   build-all:
     name: Build All
+    needs: select-builds
     uses: ./.github/workflows/build-all.yml
+    with:
+      android: ${{ needs.select-builds.outputs.android == 'true' }}
+      wear: ${{ needs.select-builds.outputs.wear == 'true' }}
+      desktop: ${{ needs.select-builds.outputs.desktop == 'true' }}
     secrets: inherit
+
+  client-build-result:
+    name: Client build result
+    if: ${{ always() }}
+    needs: [select-builds, build-all]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify selection and selected builds
+        shell: bash
+        env:
+          SELECTION_RESULT: ${{ needs.select-builds.result }}
+          BUILD_RESULT: ${{ needs.build-all.result }}
+        run: |
+          if [[ "$SELECTION_RESULT" != success || "$BUILD_RESULT" != success ]]; then
+            echo "Client build selection or execution did not succeed" >&2
+            exit 1
+          fi
