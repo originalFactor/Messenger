@@ -531,6 +531,16 @@ internal interface CloudSyncDao {
         writeValue(KeyValueRow(PUSH_UNCERTAIN, scope))
     }
 
+    /** Explicit upload may resolve an uncertain push, but stays uncertain until it succeeds. */
+    @Transaction
+    suspend fun beginExplicitPush(session: SyncSession) {
+        requireReplacementAccess(session)
+        val scope = claimDataScope(session)
+        val previous = value(PUSH_UNCERTAIN)?.value
+        check(previous == null || previous == scope) { "Cloud push belongs to another dataset" }
+        if (previous == null) writeValue(KeyValueRow(PUSH_UNCERTAIN, scope))
+    }
+
     @Transaction
     suspend fun finishPush(session: SyncSession) {
         requireReplacementAccess(session)

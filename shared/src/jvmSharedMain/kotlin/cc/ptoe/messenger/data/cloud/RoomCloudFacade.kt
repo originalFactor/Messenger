@@ -71,6 +71,8 @@ internal class RoomCloudFacade private constructor(
     @Volatile private var autoSyncEnabled = allowAutoSync
     private var pushing = false
     private var pendingAfterPush = false
+    private var pendingAfterRecovery = false
+    private var explicitUploadInProgress = false
     private var autoSyncBlocked = initialPushUncertain
     @Volatile private var coordinator = initial
     /** Supply this same gate to any isolated Room Kotlin turn store owned by this facade. */
@@ -291,10 +293,20 @@ internal class RoomCloudFacade private constructor(
     private suspend fun requireLoginChoice() { check(!db.cloudSync().loginChoicePending()) { "Complete the cloud data choice before syncing" } }
     private suspend fun enableAutoSync() {
         val uncertain = db.cloudSync().automaticPushUncertain()
-        synchronized(scheduleLock) { autoSyncBlocked = uncertain; autoSyncEnabled = !uncertain }
+        val reschedule = synchronized(scheduleLock) {
+            autoSyncBlocked = uncertain
+            autoSyncEnabled = !uncertain
+            (!uncertain && pendingAfterRecovery).also { if (it) pendingAfterRecovery = false }
+        }
+        if (reschedule) requestLocalSync()
     }
-    override suspend fun sync() = request { requireLoginChoice(); it.sync(pushPending = true).also { _ -> it.finishExplicitPush(); enableAutoSync() } }
-    override suspend fun upload() = request { requireLoginChoice(); it.upload().also { _ -> it.finishExplicitPush(); enableAutoSync() } }
+    override suspend fun sync() = request { requireLoginChoice(); it.sync().also { _ -> enableAutoSync() } }
+    override suspend fun upload() = request {
+        requireLoginChoice()
+        synchronized(scheduleLock) { explicitUploadInProgress = true }
+        try { it.upload().also { _ -> it.finishExplicitPush(); enableAutoSync() } }
+        finally { synchronized(scheduleLock) { explicitUploadInProgress = false } }
+    }
     override suspend fun completeLogin(useLocalData: Boolean) = request {
         check(db.cloudSync().loginChoicePending()) { "No cloud data choice is pending" }
         val result = if (useLocalData) it.replaceCloud(it.planReplacement()) else it.sync(replaceLocal = true)
@@ -328,7 +340,12 @@ internal class RoomCloudFacade private constructor(
     private fun closeRemote() = synchronized(remoteLock) { remote?.close(); remote = null }
 
     override fun requestLocalSync(): Unit = synchronized(scheduleLock) {
-        if (closed || !autoSyncEnabled || autoSyncBlocked || userState.value == null) return@synchronized
+        if (closed || userState.value == null) return@synchronized
+        if (autoSyncBlocked) {
+            if (explicitUploadInProgress) pendingAfterRecovery = true
+            return@synchronized
+        }
+        if (!autoSyncEnabled) return@synchronized
         if (pushing) { pendingAfterPush = true; return@synchronized }
         scheduled?.cancel()
         scheduled = scope.launch {
@@ -355,7 +372,10 @@ internal class RoomCloudFacade private constructor(
         }
     }
     override suspend fun cancelPendingLocalSync() {
-        val job = synchronized(scheduleLock) { autoSyncEnabled = false; pendingAfterPush = false; scheduled.also { scheduled = null } }
+        val job = synchronized(scheduleLock) {
+            autoSyncEnabled = false; pendingAfterPush = false; pendingAfterRecovery = false
+            scheduled.also { scheduled = null }
+        }
         job?.cancelAndJoin()
     }
     /** Room repositories enqueue changes transactionally; callbacks only schedule delivery. */

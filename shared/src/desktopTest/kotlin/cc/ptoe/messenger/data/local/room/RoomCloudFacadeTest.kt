@@ -229,6 +229,9 @@ class RoomCloudFacadeTest {
         val received = ConcurrentLinkedQueue<String>()
         val avatarExpired = AtomicBoolean(false)
         val failPush = AtomicBoolean(false)
+        val holdRecovery = AtomicBoolean(false)
+        val recoveryEntered = CompletableDeferred<Unit>()
+        val releaseRecovery = CountDownLatch(1)
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val executor = Executors.newCachedThreadPool()
         server.executor = executor
@@ -258,6 +261,10 @@ class RoomCloudFacadeTest {
         server.createContext("/api/agents/") { exchange ->
             received.add("mutation:${exchange.requestMethod}:${exchange.requestURI.path}")
             exchange.requestBody.readBytes()
+            if (holdRecovery.get() && exchange.requestURI.path == "/api/agents/retry") {
+                recoveryEntered.complete(Unit)
+                releaseRecovery.await(10, TimeUnit.SECONDS)
+            }
             exchange.reply(if (failPush.get()) 503 else 200, """{"version":4}""")
         }
         server.createContext("/api/push/events") { exchange ->
@@ -341,9 +348,30 @@ class RoomCloudFacadeTest {
             instance.requestLocalSync()
             delay(1000)
             assertEquals(1, received.count { it == "mutation:DELETE:/api/agents/uncertain" })
-            instance.sync() // explicit user retry
+            instance.sync() // Pulling cannot retry or clear an ambiguous push.
+            assertEquals(1, received.count { it == "mutation:DELETE:/api/agents/uncertain" })
+            assertTrue(db.cloudSync().automaticPushUncertain())
+            instance.upload() // Explicit user action retries the queued changes.
             assertEquals(2, received.count { it == "mutation:DELETE:/api/agents/uncertain" })
             assertFalse(db.cloudSync().automaticPushUncertain())
+            instance.cancelPendingLocalSync()
+            instance.sync()
+            failPush.set(true)
+            db.cloudSync().enqueueLocal(SyncCollection.AGENT, "retry", SyncMutation.DELETE)
+            instance.requestLocalChange("agent", "retry", true)
+            withTimeout(10_000) { while (!db.cloudSync().automaticPushUncertain() || instance.syncError.value == null) delay(25) }
+            failPush.set(false)
+            holdRecovery.set(true)
+            val recovering = async(Dispatchers.IO) { instance.upload() }
+            withTimeout(10_000) { recoveryEntered.await() }
+            // This edit is queued after upload captured its snapshot while auto-sync is blocked.
+            db.cloudSync().enqueueLocal(SyncCollection.AGENT, "concurrent", SyncMutation.DELETE)
+            instance.requestLocalChange("agent", "concurrent", true)
+            releaseRecovery.countDown()
+            withTimeout(10_000) { recovering.await() }
+            withTimeout(10_000) {
+                while (received.none { it == "mutation:DELETE:/api/agents/concurrent" } || db.cloudSync().automaticPushUncertain()) delay(25)
+            }
             instance.cancelPendingLocalSync()
             avatarExpired.set(true)
             instance.avatarHttpClient.get("$base/api/avatars/user")
@@ -356,6 +384,7 @@ class RoomCloudFacadeTest {
             assertEquals("$base/other", instance.serverUrl.first())
             assertEquals("$base/other", db.rows().getValue("cloud_server_url")?.value)
         } finally {
+            releaseRecovery.countDown()
             facade?.close()
             db.close()
             server.stop(0)

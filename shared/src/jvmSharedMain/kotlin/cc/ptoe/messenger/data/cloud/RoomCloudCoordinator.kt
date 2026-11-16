@@ -164,6 +164,7 @@ internal class RoomCloudCoordinator(
         val current = bound()
         cloudOperation(current) {
             dao.enqueueFullSnapshot(current.session)
+            dao.beginExplicitPush(current.session)
             syncLocked(current, replaceLocal = false, pushPending = true)
         }
     }
