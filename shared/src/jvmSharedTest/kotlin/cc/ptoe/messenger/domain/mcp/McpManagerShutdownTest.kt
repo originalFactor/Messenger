@@ -22,6 +22,34 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class McpManagerShutdownTest {
+    @Test fun failedRemovalRetainsUnverifiedClientUntilShutdownCanProveStop(): Unit = runBlocking {
+        val preferences = object : DataStore<Preferences> {
+            override val data = MutableStateFlow<Preferences>(emptyPreferences())
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+                transform(data.value).also { data.value = it }
+        }
+        val config = McpServerConfig(id = "mock", name = "Mock", transportType = McpTransportType.STDIO, command = "mock")
+        val appPreferences = AppPreferences(preferences)
+        appPreferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), listOf(config)))
+        val started = CompletableDeferred<Unit>()
+        var starts = 0
+        var verified = false
+        val bridge = object : McpProcessBridge {
+            override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean { starts++; started.complete(Unit); return true }
+            override suspend fun sendLine(line: String) = true
+            override suspend fun close() { check(verified) { "MCP process stop is unverified" } }
+        }
+        val manager = McpManager(appPreferences) { bridge }
+        withTimeout(5_000) { started.await() }
+        assertFailsWith<IllegalStateException> { withTimeout(5_000) { manager.saveServers(emptyList()) } }
+        assertFailsWith<IllegalStateException> { withTimeout(5_000) { manager.saveServers(listOf(config)) } }
+        assertEquals(1, starts, "an unverified old client must prevent a replacement")
+        assertFailsWith<IllegalStateException> { withTimeout(5_000) { manager.shutdown() } }
+        verified = true
+        withTimeout(5_000) { manager.shutdown() }
+    }
+
     @Test fun blockedStdioWriteIsStoppedBeforeJoiningItsCleanup(): Unit = runBlocking {
         val writeEntered = CompletableDeferred<Unit>()
         val stopRequested = CompletableDeferred<Unit>()

@@ -77,7 +77,9 @@ interface ShellRuntimeBridge {
         envJson: String?,
         onOutput: (String) -> Unit,
         onError: (String) -> Unit,
-        onClosed: (Int) -> Unit
+        onClosed: (Int) -> Unit,
+        /** The Runtime connection was lost; this does not establish that the child exited. */
+        onConnectionLost: () -> Unit
     ): Boolean
     suspend fun sendMcpInput(sessionId: Int, line: String): Boolean
     suspend fun stopMcpProcess(sessionId: Int)

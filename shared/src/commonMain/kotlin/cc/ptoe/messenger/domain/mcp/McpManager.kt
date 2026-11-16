@@ -139,13 +139,26 @@ class McpManager(
     }
 
     private suspend fun syncClientsLocked(configs: List<McpServerConfig>) {
+        // A prior close failure is not evidence that the process stopped. Keep it
+        // owned and retry it before allowing replacement clients to start.
+        for (client in closingClients.toList()) {
+            client.close()
+            closingClients.remove(client)
+        }
         val activeIds = configs.filter { it.isEnabled }.map { it.id }.toSet()
 
         // Close removed or disabled clients
         val toRemove = clients.keys.filter { it !in activeIds }
         for (id in toRemove) {
             pendingClients.remove(id)
-            clients.remove(id)?.close()
+            clients.remove(id)?.let { client ->
+                closingClients.add(client)
+                // Do not keep publishing this client's tools if close fails.
+                recomputeActiveTools()
+                _toolInventoryReady.value = pendingClients.isEmpty()
+                client.close()
+                closingClients.remove(client)
+            }
         }
 
         // Start/connect newly enabled clients

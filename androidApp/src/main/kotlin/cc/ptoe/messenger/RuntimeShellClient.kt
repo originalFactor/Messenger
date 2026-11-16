@@ -41,6 +41,7 @@ import cc.ptoe.messenger.runtime.IShellCallback
 import cc.ptoe.messenger.runtime.IShellService
 import cc.ptoe.messenger.runtime.ToolResult
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -139,6 +140,39 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
     private val connectLock = Any()
     private var cached: IShellService? = null
     private var connectLatch: CompletableDeferred<IShellService?>? = null
+    private val mcpConnections = mutableMapOf<Int, McpConnection>()
+
+    /** One session stays bound to the Runtime process that accepted its start call. */
+    private inner class McpConnection(
+        val sessionId: Int,
+        val service: IShellService,
+        val onClosed: (Int) -> Unit,
+        val onConnectionLost: () -> Unit,
+    ) {
+        val binder: IBinder = service.asBinder()
+        private val ended = AtomicBoolean(false)
+        val death = IBinder.DeathRecipient { lost() }
+
+        private fun end(notify: () -> Unit) {
+            if (!ended.compareAndSet(false, true)) return
+            synchronized(connectLock) {
+                if (mcpConnections[sessionId] === this) mcpConnections.remove(sessionId)
+            }
+            runCatching { binder.unlinkToDeath(death, 0) }
+            notify()
+        }
+
+        fun closed(code: Int) = end { onClosed(code) }
+        fun lost() = end(onConnectionLost)
+        fun rejected() = end { }
+        fun isEnded(): Boolean = ended.get()
+    }
+
+    private fun disconnectMcp(binder: IBinder?) {
+        if (binder == null) return
+        val sessions = synchronized(connectLock) { mcpConnections.values.filter { it.binder == binder } }
+        sessions.forEach { session -> runCatching { session.lost() } }
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -150,20 +184,26 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            synchronized(connectLock) {
+            val binder = synchronized(connectLock) {
+                val previous = cached?.asBinder()
                 workspaceDisconnected()
                 cached = null
                 connectLatch = null
+                previous
             }
+            disconnectMcp(binder)
         }
 
         override fun onBindingDied(name: ComponentName?) {
             // The framework cleans up the dead binding; the next call re-binds.
-            synchronized(connectLock) {
+            val binder = synchronized(connectLock) {
+                val previous = cached?.asBinder()
                 workspaceDisconnected()
                 cached = null
                 connectLatch = null
+                previous
             }
+            disconnectMcp(binder)
         }
     }
 
@@ -369,44 +409,59 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
         envJson: String?,
         onOutput: (String) -> Unit,
         onError: (String) -> Unit,
-        onClosed: (Int) -> Unit
+        onClosed: (Int) -> Unit,
+        onConnectionLost: () -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         val service = service() ?: return@withContext false
+        val session = McpConnection(sessionId, service, onClosed, onConnectionLost)
+        synchronized(connectLock) {
+            if (cached?.asBinder() != session.binder) return@withContext false
+            check(mcpConnections.putIfAbsent(sessionId, session) == null) { "Duplicate MCP session" }
+        }
         val callback = object : cc.ptoe.messenger.runtime.IMcpCallback.Stub() {
             override fun onOutput(reqId: Int, line: String?) {
-                line?.let(onOutput)
+                if (reqId == sessionId && !session.isEnded()) line?.let(onOutput)
             }
 
             override fun onError(reqId: Int, error: String?) {
-                error?.let(onError)
+                if (reqId == sessionId && !session.isEnded()) error?.let(onError)
             }
 
             override fun onClosed(reqId: Int, exitCode: Int) {
-                onClosed(exitCode)
+                if (reqId == sessionId) session.closed(exitCode)
             }
         }
         try {
-            service.startMcpProcess(sessionId, command, envJson, callback)
+            session.binder.linkToDeath(session.death, 0)
+            if (session.isEnded()) return@withContext false
+            service.startMcpProcess(sessionId, command, envJson, callback).also { started ->
+                if (!started) session.rejected()
+            }
         } catch (e: Exception) {
+            // A failed Binder transaction can have started the child before the reply was lost.
+            session.lost()
             android.util.Log.e(TAG, "startMcpProcess failed", e)
             false
         }
     }
 
     override suspend fun sendMcpInput(sessionId: Int, line: String): Boolean = withContext(Dispatchers.IO) {
-        val service = service() ?: return@withContext false
+        val session = synchronized(connectLock) { mcpConnections[sessionId] } ?: return@withContext false
         try {
-            service.sendMcpInput(sessionId, line)
+            session.service.sendMcpInput(sessionId, line)
         } catch (e: Exception) {
+            session.lost()
             false
         }
     }
 
     override suspend fun stopMcpProcess(sessionId: Int): Unit = withContext(Dispatchers.IO) {
-        val service = service() ?: return@withContext
+        val session = synchronized(connectLock) { mcpConnections[sessionId] } ?: return@withContext
         try {
-            service.stopMcpProcess(sessionId)
-        } catch (_: Exception) {}
+            session.service.stopMcpProcess(sessionId)
+        } catch (error: Exception) {
+            session.lost()
+        }
     }
 
     private companion object {
