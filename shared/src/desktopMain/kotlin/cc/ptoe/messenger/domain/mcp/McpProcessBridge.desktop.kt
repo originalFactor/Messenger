@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets
 class DesktopMcpProcessBridge : McpProcessBridge {
     private var process: Process? = null
     private var writer: BufferedWriter? = null
+    private var stdoutThread: Thread? = null
+    private var stderrThread: Thread? = null
 
     override suspend fun startProcess(
         command: String,
@@ -49,7 +51,7 @@ class DesktopMcpProcessBridge : McpProcessBridge {
             writer = BufferedWriter(OutputStreamWriter(proc.outputStream, StandardCharsets.UTF_8))
 
             // Thread for stdout
-            Thread {
+            stdoutThread = Thread {
                 try {
                     InputStreamReader(proc.inputStream, StandardCharsets.UTF_8).buffered().useLines { lines ->
                         for (line in lines) {
@@ -59,10 +61,10 @@ class DesktopMcpProcessBridge : McpProcessBridge {
                 } catch (_: Exception) {}
                 val code = runCatching { proc.waitFor() }.getOrDefault(-1)
                 onClose(code)
-            }.start()
+            }.apply { start() }
 
             // Thread for stderr
-            Thread {
+            stderrThread = Thread {
                 try {
                     InputStreamReader(proc.errorStream, StandardCharsets.UTF_8).buffered().useLines { lines ->
                         for (line in lines) {
@@ -70,7 +72,7 @@ class DesktopMcpProcessBridge : McpProcessBridge {
                         }
                     }
                 } catch (_: Exception) {}
-            }.start()
+            }.apply { start() }
 
             true
         } catch (e: Exception) {
@@ -91,10 +93,21 @@ class DesktopMcpProcessBridge : McpProcessBridge {
     }
 
     override suspend fun close(): Unit = withContext(Dispatchers.IO) {
+        val current = process
+        if (current != null) {
+            // Terminate children before the shell so they do not keep its stdin pipe open.
+            current.descendants().use { descendants -> descendants.forEach { it.destroyForcibly() } }
+            current.destroyForcibly()
+            current.waitFor()
+        }
+        // close() can otherwise block behind sendLine while the child is not reading.
         runCatching { writer?.close() }
-        runCatching { process?.destroyForcibly() }
+        stdoutThread?.join()
+        stderrThread?.join()
         writer = null
         process = null
+        stdoutThread = null
+        stderrThread = null
     }
 }
 

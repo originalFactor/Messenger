@@ -777,8 +777,11 @@ internal object TermuxRuntime {
         }
 
         fun close() {
+            // A full stdin pipe can keep writer.close() blocked behind sendLine().
+            // Stop and wait for the child first so the blocked writer can unwind.
+            process.destroyForcibly()
+            process.waitFor()
             runCatching { writer.close() }
-            runCatching { process.destroyForcibly() }
         }
     }
 

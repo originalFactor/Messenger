@@ -18,6 +18,8 @@ package cc.ptoe.messenger.domain.mcp
 
 import cc.ptoe.messenger.domain.tool.ShellRuntimeRegistry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -28,6 +30,8 @@ private val androidSessionIds = AtomicInteger(1000)
 
 class AndroidMcpProcessBridge : McpProcessBridge {
     private val sessionId = androidSessionIds.incrementAndGet()
+    @Volatile private var started = false
+    private val stopped = CompletableDeferred<Unit>()
 
     override suspend fun startProcess(
         command: String,
@@ -41,7 +45,13 @@ class AndroidMcpProcessBridge : McpProcessBridge {
             Json.encodeToString(JsonObject.serializer(), JsonObject(env.mapValues { JsonPrimitive(it.value) }))
         } else null
 
-        bridge.startMcpProcess(sessionId, command, envJson, onLine, onError, onClose)
+        // A Binder call can finish creating the process after its caller is cancelled.
+        // Record the result before allowing shutdown to decide whether to wait.
+        withContext(NonCancellable) {
+            bridge.startMcpProcess(sessionId, command, envJson, onLine, onError) { code ->
+                try { onClose(code) } finally { stopped.complete(Unit) }
+            }.also { launched -> started = launched }
+        }
     }
 
     override suspend fun sendLine(line: String): Boolean = withContext(Dispatchers.IO) {
@@ -50,8 +60,10 @@ class AndroidMcpProcessBridge : McpProcessBridge {
     }
 
     override suspend fun close(): Unit = withContext(Dispatchers.IO) {
-        val bridge = ShellRuntimeRegistry.bridge ?: return@withContext
-        bridge.stopMcpProcess(sessionId)
+        ShellRuntimeRegistry.bridge?.stopMcpProcess(sessionId)
+        // The legacy stop call is one-way evidence only. Wait for the process exit
+        // callback; a lost connection must not be mistaken for a confirmed stop.
+        if (started) stopped.await()
     }
 }
 

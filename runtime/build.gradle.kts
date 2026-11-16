@@ -337,6 +337,7 @@ androidComponents {
 
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(libs.junit)
     // The vendored Termux terminal emulator annotates its APIs.
     implementation(libs.androidx.annotation)
 }

@@ -18,13 +18,16 @@ package cc.ptoe.messenger.domain.mcp
 
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.domain.tool.ChatTool
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
@@ -45,6 +48,9 @@ class McpManager(
     private val scope = CoroutineScope(ioDispatcher + Job())
     private val mutex = Mutex()
     private val delegationMutex = Mutex()
+    private val shutdownMutex = Mutex()
+    @Volatile private var stopped = false
+    private val closingClients = mutableSetOf<McpClient>()
 
     private val _servers = MutableStateFlow<List<McpServerConfig>>(emptyList())
     val servers: StateFlow<List<McpServerConfig>> = _servers.asStateFlow()
@@ -73,11 +79,13 @@ class McpManager(
     }
 
     suspend fun setAgentDelegationEnabled(enabled: Boolean) = delegationMutex.withLock {
+        check(!stopped) { "MCP manager is shut down" }
         requireNotNull(cc.ptoe.messenger.core.CoreBridgeRegistry.bridge).setAgentDelegationEnabled(enabled)
         _agentDelegationEnabled.value = enabled
     }
 
     suspend fun loadServers(): List<McpServerConfig> = mutex.withLock {
+        check(!stopped) { "MCP manager is shut down" }
         val rawJson = appPreferences.mcpServersJson.first()
         val list = if (!rawJson.isNullOrBlank()) {
             val decoded = runCatching {
@@ -100,6 +108,7 @@ class McpManager(
     }
 
     suspend fun saveServers(newServers: List<McpServerConfig>) = mutex.withLock {
+        check(!stopped) { "MCP manager is shut down" }
         _configurationError.value = false
         _servers.value = newServers
         val rawJson = json.encodeToString(ListSerializer(McpServerConfig.serializer()), newServers)
@@ -176,5 +185,35 @@ class McpManager(
     suspend fun getActiveTools(): List<ChatTool> = mutex.withLock {
         recomputeActiveTools()
         _activeTools.value
+    }
+
+    /** Stop admission, close every connection and wait for in-flight connection work. */
+    suspend fun shutdown(): Unit = withContext(NonCancellable) {
+        shutdownMutex.withLock {
+            val job = scope.coroutineContext[Job]
+            job?.cancel()
+            val closing = delegationMutex.withLock {
+                mutex.withLock {
+                    stopped = true
+                    closingClients.addAll(clients.values)
+                    clients.clear()
+                    pendingClients.clear()
+                    _activeTools.value = emptyList()
+                    _toolInventoryReady.value = false
+                    closingClients.toList()
+                }
+            }
+            var failure: Throwable? = null
+            for (client in closing) {
+                try {
+                    client.close()
+                    mutex.withLock { closingClients.remove(client) }
+                } catch (error: Throwable) {
+                    if (failure == null) failure = error else failure.addSuppressed(error)
+                }
+            }
+            job?.join()
+            failure?.let { throw it }
+        }
     }
 }

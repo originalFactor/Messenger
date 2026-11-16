@@ -30,13 +30,20 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import cc.ptoe.messenger.data.util.synchronizedBlock
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -64,13 +71,13 @@ class McpClient(
     }
 
     private val mutex = Mutex()
+    private val closeMutex = Mutex()
+    private val sendMutex = Mutex()
     private val requestMutex = Mutex()
     private val scope = CoroutineScope(ioDispatcher + Job())
     private var requestId = 0L
 
     private val pendingRequests = mutableMapOf<Long, CompletableDeferred<JsonRpcResponse>>()
-    /** Guards [pendingRequests]; `synchronized` is JVM-only. */
-    private val pendingMutex = Mutex()
     private val _tools = MutableStateFlow<List<ChatTool>>(emptyList())
     val tools: StateFlow<List<ChatTool>> = _tools.asStateFlow()
 
@@ -78,37 +85,66 @@ class McpClient(
     private var sseEndpointUrl: String? = null
     private var httpClient: HttpClient? = null
     private var isInitialized = false
+    private var closed = false
+    private var closing = false
+    private val admissionLock = Any()
+    private val admitted = mutableSetOf<Job>()
+    private var stdioStarting = false
 
-    suspend fun connect(): Boolean = mutex.withLock {
-        if (isInitialized) return true
-        return try {
+    /** Track actual coroutine completion so close can cancel and join blocked transports. */
+    private suspend fun <T> withAdmission(unavailable: T, block: suspend () -> T): T = try {
+        coroutineScope {
+            val job = checkNotNull(currentCoroutineContext()[Job])
+            val accepted = synchronizedBlock(admissionLock) {
+                if (closing || closed) false else { admitted.add(job); true }
+            }
+            if (!accepted) return@coroutineScope unavailable
+            job.invokeOnCompletion { synchronizedBlock(admissionLock) { admitted.remove(job) } }
+            block()
+        }
+    } catch (cancelled: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        if (synchronizedBlock(admissionLock) { closing || closed }) unavailable else throw cancelled
+    }
+
+    suspend fun connect(): Boolean = withAdmission(false) { mutex.withLock {
+        if (isInitialized) return@withLock true
+        try {
             when (config.transportType) {
                 McpTransportType.STDIO -> connectStdio()
                 McpTransportType.SSE -> connectSse()
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             false
         }
-    }
+    } }
 
     private suspend fun connectStdio(): Boolean {
         val bridge = bridgeFactory()
-        processBridge = bridge
+        synchronizedBlock(admissionLock) {
+            if (closing || closed) throw CancellationException("MCP client is closing")
+            processBridge = bridge
+            stdioStarting = true
+        }
         val fullCommand = if (config.args.isNotEmpty()) {
             "${config.command} ${config.args.joinToString(" ")}"
         } else {
             config.command
         }
 
-        val started = bridge.startProcess(
-            command = fullCommand,
-            env = config.env,
-            onLine = { line -> handleIncomingLine(line) },
-            onError = { /* stderr log */ },
-            onClose = { code ->
-                handleConnectionClosed(code)
-            }
-        )
+        val started = try {
+            bridge.startProcess(
+                command = fullCommand,
+                env = config.env,
+                onLine = { line -> handleIncomingLine(line) },
+                onError = { /* stderr log */ },
+                onClose = { code -> handleConnectionClosed(code) }
+            )
+        } finally {
+            synchronizedBlock(admissionLock) { stdioStarting = false }
+        }
         if (!started) return false
 
         return initializeHandshake()
@@ -230,47 +266,42 @@ class McpClient(
     suspend fun sendRequest(method: String, params: JsonElement?): JsonRpcResponse? {
         val reqId = requestMutex.withLock { ++requestId }
         val deferred = CompletableDeferred<JsonRpcResponse>()
-        pendingMutex.withLock { pendingRequests[reqId] = deferred }
+        synchronizedBlock(pendingRequests) { pendingRequests[reqId] = deferred }
 
-        val request = JsonRpcRequest(
-            id = reqId,
-            method = method,
-            params = params
-        )
-        val text = json.encodeToString(JsonRpcRequest.serializer(), request)
-
-        val sent = when (config.transportType) {
-            McpTransportType.STDIO -> processBridge?.sendLine(text) ?: false
-            McpTransportType.SSE -> {
-                val endpoint = sseEndpointUrl ?: return null
-                val client = httpClient ?: return null
-                try {
-                    val resp = client.post(endpoint) {
-                        contentType(ContentType.Application.Json)
-                        config.headers.forEach { (k, v) -> header(k, v) }
-                        setBody(text)
+        try {
+            val request = JsonRpcRequest(id = reqId, method = method, params = params)
+            val text = json.encodeToString(JsonRpcRequest.serializer(), request)
+            val sent = withAdmission(false) {
+                when (config.transportType) {
+                    McpTransportType.STDIO -> sendMutex.withLock {
+                        currentCoroutineContext().ensureActive()
+                        processBridge?.sendLine(text) ?: false
                     }
-                    resp.status.value in 200..299
-                } catch (e: Exception) {
-                    false
+                    McpTransportType.SSE -> {
+                        currentCoroutineContext().ensureActive()
+                        val endpoint = sseEndpointUrl ?: return@withAdmission false
+                        val client = httpClient ?: return@withAdmission false
+                        try {
+                            val resp = client.post(endpoint) {
+                                contentType(ContentType.Application.Json)
+                                config.headers.forEach { (k, v) -> header(k, v) }
+                                setBody(text)
+                            }
+                            resp.status.value in 200..299
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
                 }
             }
-        }
-
-        if (!sent) {
-            pendingMutex.withLock { pendingRequests.remove(reqId) }
-            return null
-        }
-
-        return withTimeoutOrNull(30_000) {
-            deferred.await()
-        } ?: run {
-            pendingMutex.withLock { pendingRequests.remove(reqId) }
-            null
-        }
+            if (!sent) return null
+            return withTimeoutOrNull(30_000) { deferred.await() }
+        } finally { synchronizedBlock(pendingRequests) { pendingRequests.remove(reqId) } }
     }
 
-    private suspend fun sendNotification(method: String, params: JsonElement?) {
+    private suspend fun sendNotification(method: String, params: JsonElement?): Unit = withAdmission(Unit) {
         val request = JsonRpcRequest(
             id = null,
             method = method,
@@ -279,17 +310,21 @@ class McpClient(
         val text = json.encodeToString(JsonRpcRequest.serializer(), request)
 
         when (config.transportType) {
-            McpTransportType.STDIO -> processBridge?.sendLine(text)
+            McpTransportType.STDIO -> sendMutex.withLock {
+                currentCoroutineContext().ensureActive()
+                processBridge?.sendLine(text)
+            }
             McpTransportType.SSE -> {
-                val endpoint = sseEndpointUrl ?: return
-                val client = httpClient ?: return
-                runCatching {
+                val endpoint = sseEndpointUrl ?: return@withAdmission
+                val client = httpClient ?: return@withAdmission
+                try {
                     client.post(endpoint) {
                         contentType(ContentType.Application.Json)
                         config.headers.forEach { (k, v) -> header(k, v) }
                         setBody(text)
                     }
-                }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { }
             }
         }
     }
@@ -302,9 +337,8 @@ class McpClient(
         }.getOrNull() ?: return
 
         val id = response.id ?: return
-        // Non-suspend transport callback: the map is only ever touched from
-        // this client's single dispatcher, so no lock is needed (and
-        // `Mutex.withLock` could not be called from here anyway).
+        // The callback can arrive on a transport thread, so it uses the same
+        // synchronous lock as request registration and cancellation.
         val deferred = synchronizedBlock(pendingRequests) { pendingRequests.remove(id) }
         deferred?.complete(response)
     }
@@ -324,16 +358,36 @@ class McpClient(
         _tools.value = emptyList()
     }
 
-    suspend fun close() = mutex.withLock {
-        isInitialized = false
-        when (config.transportType) {
-            McpTransportType.STDIO -> processBridge?.close()
-            McpTransportType.SSE -> httpClient?.close()
+    suspend fun close(): Unit = withContext(NonCancellable) { closeMutex.withLock {
+        val (operations, earlyBridge, wasStarting) = synchronizedBlock(admissionLock) {
+            closing = true
+            Triple(admitted.toList(), processBridge, stdioStarting)
         }
-        processBridge = null
-        httpClient = null
-        _tools.value = emptyList()
-    }
+        operations.forEach { it.cancel() }
+        val job = scope.coroutineContext[Job]
+        job?.cancel()
+        // A synchronous Binder/pipe write may ignore coroutine cancellation. Stop the
+        // process before waiting for the send lock so the blocked write can finish.
+        if (config.transportType == McpTransportType.STDIO) earlyBridge?.close()
+        mutex.withLock {
+            sendMutex.withLock {
+                if (!closed) {
+                    isInitialized = false
+                    when (config.transportType) {
+                        // A process start that raced the early stop can complete later.
+                        McpTransportType.STDIO -> if (wasStarting || processBridge !== earlyBridge) processBridge?.close()
+                        McpTransportType.SSE -> httpClient?.close()
+                    }
+                    processBridge = null
+                    httpClient = null
+                    handleConnectionClosed(-1)
+                    synchronizedBlock(admissionLock) { closed = true }
+                }
+            }
+        }
+        operations.joinAll()
+        job?.join()
+    } }
 }
 
 class McpChatTool(
