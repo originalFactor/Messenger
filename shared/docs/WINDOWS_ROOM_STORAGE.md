@@ -73,6 +73,50 @@ journal mode and synchronous settings against its documented
 [WAL](https://www.sqlite.org/wal.html) guarantees; successful process-kill
 tests alone do not establish power-loss behavior.
 
+The current `CoreSourceSqliteLease` cannot itself serve as the in-place owner:
+it holds `BEGIN IMMEDIATE`, so a separate Room writer cannot acquire its own
+write transaction until that lease is released. Opening or closing another
+descriptor for the same database or WAL shared-memory file can also release
+POSIX SQLite locks. There is consequently an ownership handoff gap unless an
+independent platform fence prevents every old Core and asset writer from
+starting or resuming across the entire Room lifetime. A cooperative Room marker
+alone cannot fence old Core binaries. No current Desktop implementation provides
+that proof or a verified, durable database-and-assets backup and recovery path;
+the in-place experiment therefore remains disconnected from startup on every
+platform.
+
+The old implementation makes that gap consequential: `Store::open` opens the
+SQLite path directly and `Store::init` executes schema setup and assigns Core's
+`user_version` without first consulting a Room owner marker. Separately,
+`AssetService::new` scans the asset directory and removes `.stage-*` files.
+These operations are in `core/rust/crates/messenger-store/src/store.rs` and
+`core/rust/crates/messenger-http/src/assets.rs`; the asset mutex is local to
+that service instance. Stopping the old process once, or locking only SQLite,
+does not prevent another old process from starting or touching assets.
+
+### Candidate Windows exclusion and backup mechanisms
+
+| Mechanism | What it establishes | Why it does not yet close the handoff |
+|---|---|---|
+| Named mutex or separate lock file | Exclusive ownership among cooperating new processes | Existing Core does not take it; it cannot exclude an old binary or its asset operations. |
+| `CreateFileW` with no sharing | Rejects incompatible existing opens and subsequent opens while the handle remains open | It also denies Room's separate database open. Releasing it for Room recreates the handoff gap; it does not cover the asset tree. [Microsoft CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew) documents that sharing applies until handle close, regardless of process. |
+| `LockFileEx` on SQLite lock bytes | Can block a conflicting lock on those bytes | Room needs SQLite's own locking through another handle; Windows denies access to an exclusively locked byte range from a second handle even in the same process. WAL shared memory and asset files introduce additional state. See [Windows byte-range locking](https://learn.microsoft.com/en-us/windows/win32/fileio/locking-and-unlocking-byte-ranges-in-files). |
+| Opportunistic lock | Notifies the holder of certain conflicting operations | A conflicting operation may break the oplock, including from another handle in the same process; this is not a permanent owner fence. See [Windows oplocks](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/oplock-overview). |
+
+`VACUUM INTO` is a possible database snapshot, not a complete backup protocol.
+SQLite forbids it on a connection with an open transaction, so it cannot run
+through the connection holding `CoreSourceSqliteLease`'s transaction. Opening
+another source descriptor while that POSIX lease is live risks dropping its
+locks. SQLite also warns that an interrupted output may be incomplete; it must
+be verified and durably published along with the corresponding asset bytes and
+recovery state. See [SQLite VACUUM](https://www.sqlite.org/lang_vacuum.html).
+The existing `CoreStoreMigration.snapshot` does not supply those combined
+guarantees. A future platform implementation could explore a brokered/custom
+SQLite VFS or an OS-enforced process boundary, but would need to prove the same
+fence covers Room, old binaries and asset users throughout startup, recovery
+and shutdown. Neither mechanism exists here; no POSIX result is evidence that
+an equivalent Windows design works.
+
 ## Windows primitives and verification
 
 An eventual Windows adapter needs to establish all of the following together:

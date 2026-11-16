@@ -22,11 +22,15 @@ import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,6 +41,7 @@ import cc.ptoe.messenger.data.util.ioDispatcher
 
 class McpManager(
     private val appPreferences: AppPreferences,
+    private val enabled: Boolean = true,
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
 ) {
     private val json = Json {
@@ -49,7 +54,10 @@ class McpManager(
     private val mutex = Mutex()
     private val delegationMutex = Mutex()
     private val shutdownMutex = Mutex()
-    @Volatile private var stopped = false
+    private val editMutex = Mutex()
+    private var editing = false
+    private var needsReload = false
+    @Volatile private var stopped = !enabled
     private val closingClients = mutableSetOf<McpClient>()
 
     private val _servers = MutableStateFlow<List<McpServerConfig>>(emptyList())
@@ -68,7 +76,7 @@ class McpManager(
     val agentDelegationEnabled: StateFlow<Boolean> = _agentDelegationEnabled.asStateFlow()
 
     init {
-        scope.launch {
+        if (enabled) scope.launch {
             loadServers()
             delegationMutex.withLock {
                 cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.let {
@@ -84,107 +92,146 @@ class McpManager(
         _agentDelegationEnabled.value = enabled
     }
 
-    suspend fun loadServers(): List<McpServerConfig> = mutex.withLock {
+    suspend fun loadServers(): List<McpServerConfig> = editMutex.withLock {
         check(!stopped) { "MCP manager is shut down" }
         val rawJson = appPreferences.mcpServersJson.first()
         val list = if (!rawJson.isNullOrBlank()) {
-            val decoded = runCatching {
-                json.decodeFromString(ListSerializer(McpServerConfig.serializer()), rawJson)
-            }
+            val decoded = runCatching { json.decodeFromString(ListSerializer(McpServerConfig.serializer()), rawJson) }
             decoded.getOrElse {
-                // Keep the last known-good in-memory configuration. Clearing
-                // it here would make a corrupted preference look like the
-                // user deleted every MCP server.
-                _configurationError.value = true
+                mutex.withLock { needsReload = true; _configurationError.value = true; updateInventoryReadyLocked() }
                 return@withLock _servers.value
             }
-        } else {
-            emptyList()
-        }
-        _configurationError.value = false
-        _servers.value = list
-        syncClientsLocked(list)
+        } else emptyList()
+        applyConfiguration(list, persist = false)
         list
     }
 
-    suspend fun saveServers(newServers: List<McpServerConfig>) = mutex.withLock {
+    suspend fun saveServers(newServers: List<McpServerConfig>) = editMutex.withLock {
+        applyConfiguration(newServers, persist = true)
+    }
+
+    private suspend fun editServers(change: (List<McpServerConfig>) -> List<McpServerConfig>) = editMutex.withLock {
         check(!stopped) { "MCP manager is shut down" }
-        _configurationError.value = false
-        _servers.value = newServers
-        val rawJson = json.encodeToString(ListSerializer(McpServerConfig.serializer()), newServers)
-        appPreferences.setMcpServersJson(rawJson)
-        syncClientsLocked(newServers)
+        check(!needsReload) { "Reload MCP settings before editing" }
+        applyConfiguration(change(_servers.value), persist = true)
     }
 
-    suspend fun addServer(config: McpServerConfig) {
-        val current = _servers.value.filter { it.id != config.id } + config
-        saveServers(current)
+    suspend fun addServer(config: McpServerConfig) = editServers { it.filter { old -> old.id != config.id } + config }
+    suspend fun updateServer(config: McpServerConfig) = editServers { it.map { old -> if (old.id == config.id) config else old } }
+    suspend fun removeServer(serverId: String) = editServers { it.filter { old -> old.id != serverId } }
+    suspend fun toggleServer(serverId: String, enabled: Boolean) = editServers { list ->
+        list.map { if (it.id == serverId) it.copy(isEnabled = enabled) else it }
     }
 
-    suspend fun updateServer(config: McpServerConfig) {
-        val current = _servers.value.map { if (it.id == config.id) config else it }
-        saveServers(current)
-    }
+    private fun enabledConfigs(configs: List<McpServerConfig>): Map<String, McpServerConfig> =
+        configs.filter { it.isEnabled }.distinctBy { it.id }.associateBy { it.id }
 
-    suspend fun removeServer(serverId: String) {
-        val current = _servers.value.filter { it.id != serverId }
-        saveServers(current)
-    }
-
-    suspend fun toggleServer(serverId: String, enabled: Boolean) {
-        val current = _servers.value.map {
-            if (it.id == serverId) it.copy(isEnabled = enabled) else it
-        }
-        saveServers(current)
-    }
-
-    private suspend fun syncClientsLocked(configs: List<McpServerConfig>) {
-        // A prior close failure is not evidence that the process stopped. Keep it
-        // owned and retry it before allowing replacement clients to start.
-        for (client in closingClients.toList()) {
-            client.close()
-            closingClients.remove(client)
-        }
-        val activeIds = configs.filter { it.isEnabled }.map { it.id }.toSet()
-
-        // Close removed or disabled clients
-        val toRemove = clients.keys.filter { it !in activeIds }
-        for (id in toRemove) {
-            pendingClients.remove(id)
-            clients.remove(id)?.let { client ->
-                closingClients.add(client)
-                // Do not keep publishing this client's tools if close fails.
-                recomputeActiveTools()
-                _toolInventoryReady.value = pendingClients.isEmpty()
-                client.close()
-                closingClients.remove(client)
+    /** The manager mutex protects state only; no client close or DataStore write holds it. */
+    private suspend fun applyConfiguration(configs: List<McpServerConfig>, persist: Boolean) {
+        val retiring = mutex.withLock {
+            check(!stopped) { "MCP manager is shut down" }
+            editing = true
+            val desired = enabledConfigs(configs)
+            val removed = clients.keys.filter { id -> desired[id] != clients[id]?.config }
+            for (id in removed) {
+                pendingClients.remove(id)
+                clients.remove(id)?.let { closingClients.add(it) }
             }
+            recomputeActiveTools()
+            updateInventoryReadyLocked()
+            closingClients.toList()
         }
+        try {
+            closeClients(retiring)?.let { throw it }
+            currentCoroutineContext().ensureActive()
+            if (persist) {
+                val raw = json.encodeToString(ListSerializer(McpServerConfig.serializer()), configs)
+                // A failed/cancelled write may have committed. Force a reload before incremental edits.
+                mutex.withLock { check(!stopped) { "MCP manager is shut down" }; needsReload = true }
+                var writeAdmitted = false
+                try {
+                    currentCoroutineContext().ensureActive()
+                    writeAdmitted = true
+                    withContext(NonCancellable) { appPreferences.setMcpServersJson(raw) }
+                }
+                catch (failure: Throwable) {
+                    withContext(NonCancellable) { mutex.withLock {
+                        needsReload = writeAdmitted
+                        if (writeAdmitted) _configurationError.value = true
+                    } }
+                    throw failure
+                }
+            }
+            mutex.withLock {
+                check(!stopped) { "MCP manager is shut down" }
+                needsReload = false
+                _configurationError.value = false
+                _servers.value = configs
+                startMissingClientsLocked(configs)
+            }
+        } catch (failure: Throwable) {
+            // A cancelled edit may already have retired the old client. Restore the
+            // persisted inventory only after every old client has proved it stopped.
+            try {
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        if (needsReload) _configurationError.value = true
+                        if (!stopped && !needsReload && closingClients.isEmpty()) startMissingClientsLocked(_servers.value)
+                    }
+                }
+            } catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+            throw failure
+        } finally {
+            withContext(NonCancellable) { mutex.withLock { editing = false; updateInventoryReadyLocked() } }
+        }
+    }
 
-        // Start/connect newly enabled clients
-        for (config in configs) {
-            if (config.isEnabled && !clients.containsKey(config.id)) {
+    private fun startMissingClientsLocked(configs: List<McpServerConfig>) {
+        for (config in enabledConfigs(configs).values) {
+            if (!clients.containsKey(config.id)) {
                 val client = McpClient(config, bridgeFactory)
                 clients[config.id] = client
                 pendingClients.add(config.id)
                 scope.launch {
-                    try {
-                        client.connect()
-                    } finally {
+                    try { client.connect() } finally {
                         mutex.withLock {
                             if (clients[config.id] === client) {
                                 pendingClients.remove(config.id)
                                 recomputeActiveTools()
-                                _toolInventoryReady.value = pendingClients.isEmpty()
                             }
+                            updateInventoryReadyLocked()
                         }
                     }
                 }
             }
         }
-
         recomputeActiveTools()
-        _toolInventoryReady.value = pendingClients.isEmpty()
+        updateInventoryReadyLocked()
+    }
+
+    private fun updateInventoryReadyLocked() {
+        val desired = enabledConfigs(_servers.value)
+        _toolInventoryReady.value = !stopped && !editing && !needsReload && closingClients.isEmpty() &&
+            pendingClients.isEmpty() && clients.size == desired.size &&
+            clients.all { (id, client) -> desired[id] == client.config }
+    }
+
+    /** Start every close even if another hangs or fails; a failure remains owned for retry. */
+    private suspend fun closeClients(closing: List<McpClient>): Throwable? = withContext(NonCancellable) {
+        val results = supervisorScope {
+            closing.map { client -> async {
+                try { client.close(); null } catch (failure: Throwable) { failure }
+            } }.map { it.await() }
+        }
+        mutex.withLock {
+            closing.zip(results).forEach { (client, failure) -> if (failure == null) closingClients.remove(client) }
+            updateInventoryReadyLocked()
+        }
+        var error: Throwable? = null
+        results.filterNotNull().forEach { failure ->
+            if (error == null) error = failure else if (error !== failure) error?.addSuppressed(failure)
+        }
+        error
     }
 
     private fun recomputeActiveTools() {
@@ -205,26 +252,20 @@ class McpManager(
         shutdownMutex.withLock {
             val job = scope.coroutineContext[Job]
             job?.cancel()
-            val closing = delegationMutex.withLock {
-                mutex.withLock {
-                    stopped = true
-                    closingClients.addAll(clients.values)
-                    clients.clear()
-                    pendingClients.clear()
-                    _activeTools.value = emptyList()
-                    _toolInventoryReady.value = false
-                    closingClients.toList()
-                }
+            val closing = mutex.withLock {
+                stopped = true
+                closingClients.addAll(clients.values)
+                clients.clear()
+                pendingClients.clear()
+                _activeTools.value = emptyList()
+                _toolInventoryReady.value = false
+                closingClients.toList()
             }
-            var failure: Throwable? = null
-            for (client in closing) {
-                try {
-                    client.close()
-                    mutex.withLock { closingClients.remove(client) }
-                } catch (error: Throwable) {
-                    if (failure == null) failure = error else failure.addSuppressed(error)
-                }
-            }
+            val failure = closeClients(closing)
+            // Close clients first so an edit blocked on one close cannot prevent the
+            // shutdown from revoking the other clients. Then join the edit itself.
+            editMutex.withLock { }
+            delegationMutex.withLock { }
             job?.join()
             failure?.let { throw it }
         }

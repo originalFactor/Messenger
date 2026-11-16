@@ -114,7 +114,8 @@ class ChatViewModel(
      * finished reply would never be uploaded.
      */
     private val cloud: CloudFacade? = null,
-    private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
+    private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
+    private val platformToolsEnabled: Boolean = true,
 ) : ViewModel() {
 
     private val _conversationId = MutableStateFlow<String?>(null)
@@ -499,8 +500,8 @@ class ChatViewModel(
         val (provider, model) = result
         val bridge = coreBridge
         val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-        val projectWorkspace = resolveWorkspaceFor(conv)
-        val temporaryWorkspace = if (conv.projectId == null && agent.toolsEnabled && builtinChatToolsSupported()) {
+        val projectWorkspace = if (platformToolsEnabled) resolveWorkspaceFor(conv) else null
+        val temporaryWorkspace = if (platformToolsEnabled && conv.projectId == null && agent.toolsEnabled && builtinChatToolsSupported()) {
             try {
                 cc.ptoe.messenger.domain.tool.temporaryChatWorkspace(conversationId)
             } catch (e: CancellationException) {
@@ -895,7 +896,8 @@ class ChatViewModel(
             builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
             projectRepository: ProjectRepository? = null,
             cloud: CloudFacade? = null,
-            coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
+            coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
+            platformToolsEnabled: Boolean = true,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -909,7 +911,8 @@ class ChatViewModel(
                     builtinTools,
                     projectRepository,
                     cloud,
-                    coreBridge
+                    coreBridge,
+                    platformToolsEnabled
                 ) as T
             }
         }

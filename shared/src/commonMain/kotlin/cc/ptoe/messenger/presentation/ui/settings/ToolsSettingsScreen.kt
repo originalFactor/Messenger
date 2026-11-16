@@ -93,6 +93,8 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_args
 import cc.ptoe.messenger.generated.resources.tools_mcp_args_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_command
 import cc.ptoe.messenger.generated.resources.tools_mcp_config_error
+import cc.ptoe.messenger.generated.resources.tools_mcp_reload
+import cc.ptoe.messenger.generated.resources.tools_mcp_reload_failed
 import cc.ptoe.messenger.generated.resources.tools_mcp_command_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete_confirm
@@ -149,6 +151,8 @@ fun ToolsSettingsScreen(
     }
     val mcpServers by mcpManager.servers.collectAsState()
     val mcpConfigurationError by mcpManager.configurationError.collectAsState()
+    val mcpReloadFailed = stringResource(Res.string.tools_mcp_reload_failed)
+    var mcpReloadBusy by remember { mutableStateOf(false) }
     val agentDelegationEnabled by mcpManager.agentDelegationEnabled.collectAsState()
     var scheduleEnabled by remember { mutableStateOf(false) }
     var scheduleLoaded by remember { mutableStateOf(false) }
@@ -298,6 +302,22 @@ fun ToolsSettingsScreen(
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )
+                        TextButton(onClick = {
+                            if (!mcpReloadBusy) {
+                                mcpReloadBusy = true
+                                scope.launch {
+                                    val failure = try {
+                                        mcpManager.loadServers()
+                                        if (mcpManager.configurationError.value) mcpReloadFailed else null
+                                    } catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (error: Exception) { error.message?.takeIf { it.isNotBlank() } ?: mcpReloadFailed }
+                                    finally { mcpReloadBusy = false }
+                                    if (failure != null) snackbar.showSnackbar(failure)
+                                }
+                            }
+                        }, enabled = !mcpReloadBusy) {
+                            Text(stringResource(Res.string.tools_mcp_reload))
+                        }
                     }
                 }
                 if (mcpServers.isEmpty()) {

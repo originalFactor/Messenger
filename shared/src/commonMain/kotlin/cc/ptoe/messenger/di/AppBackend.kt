@@ -33,4 +33,6 @@ class AppBackend(
     val clearLocalData: suspend () -> Unit,
     /** Optional trusted-UI sandbox host, owned and stopped by this same backend. */
     val artifactUiHost: ArtifactUiHost? = null,
+    /** Platform and MCP tools need their own authority and lifetime proof. */
+    val platformToolsEnabled: Boolean = true,
 )

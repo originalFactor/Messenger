@@ -52,4 +52,22 @@ class RoomManagedShutdownTest {
         assertEquals(RoomShutdownState.Stopped, shutdown.state.value)
     }
 
+    @Test fun multipleOwnersAwaitTheSameProvenStop(): Unit = runBlocking {
+        var safe = false
+        var attempts = 0
+        val shutdown = RoomManagedShutdown { attempts++; check(safe) }
+        shutdown.enter()
+        val containerStop = async { shutdown.stopAndAwait() }
+        withTimeout(5_000) { shutdown.state.first { it is RoomShutdownState.RecoveryRequired } }
+        val enclosingOwnerStop = async { shutdown.stopAndAwait() }
+        assertFalse(containerStop.isCompleted)
+        assertFalse(enclosingOwnerStop.isCompleted)
+        safe = true
+        shutdown.retryStop()
+        withTimeout(5_000) { containerStop.await(); enclosingOwnerStop.await() }
+        shutdown.stopAndAwait()
+        assertEquals(2, attempts)
+        assertEquals(RoomShutdownState.Stopped, shutdown.state.value)
+    }
+
 }

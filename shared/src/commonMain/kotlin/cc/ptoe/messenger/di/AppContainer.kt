@@ -107,9 +107,10 @@ class AppContainer(
      * Re-evaluated on access: Android's tool set depends on whether the
      * companion runtime app is installed (may change during a session).
      */
-    val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) }
+    val platformToolsEnabled: Boolean = backend?.platformToolsEnabled != false
+    val builtinTools: (String?) -> List<ChatTool> = { if (platformToolsEnabled) createBuiltinChatTools(it) else emptyList() }
 
-    val mcpManager = McpManager(appPreferences)
+    val mcpManager = McpManager(appPreferences, enabled = platformToolsEnabled)
 
     /**
      * Returns active tools: built-in tools for [workspaceRoot] + active MCP
@@ -127,7 +128,7 @@ class AppContainer(
      * workspace-bound tools are listed independently of the current chat.
      */
     fun allTools(): List<ChatTool> =
-        (coreToolCatalog.state.value.tools + createBuiltinChatTools(defaultWorkspaceRoot()) +
+        (coreToolCatalog.state.value.tools + builtinTools(defaultWorkspaceRoot()) +
             mcpManager.activeTools.value).distinctBy { it.name }
 
     /**

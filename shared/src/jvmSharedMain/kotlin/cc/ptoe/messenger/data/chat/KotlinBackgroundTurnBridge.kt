@@ -45,7 +45,38 @@ class KotlinBackgroundTurnBridge(
     private val processScope: CoroutineScope,
 ) : CoreBridge by delegate {
     private val legacyLock = Mutex()
-    @Volatile private var legacyTurn: String? = null
+    @Volatile private var legacyInvocation: LegacyInvocation? = null
+
+    /** One legacy call's stop request cannot be inherited by a later call. */
+    internal class LegacyInvocation(private val runner: KotlinChatTurnRunner) {
+        private val lock = Any()
+        private var turnId: String? = null
+        private var cancellationRequested = false
+        private var retired = false
+
+        fun requestCancellation(): (suspend () -> Unit)? {
+            val id = synchronized(lock) {
+                if (retired) return null
+                cancellationRequested = true
+                turnId
+            }
+            return id?.let { captured -> suspend { runner.cancel(captured) } }
+        }
+
+        suspend fun admitted(id: String) {
+            val cancel = synchronized(lock) { turnId = id; cancellationRequested }
+            if (cancel) runner.cancel(id)
+        }
+
+        suspend fun beforeWorkerStart(id: String) {
+            val cancel = synchronized(lock) { cancellationRequested }
+            if (cancel) runner.cancel(id)
+        }
+
+        fun retire() = synchronized(lock) { retired = true }
+    }
+
+    internal fun newLegacyInvocation() = LegacyInvocation(runner)
 
     override suspend fun toolApprovalSettings(method: String, body: String?): String {
         val mode = when (method.uppercase()) {
@@ -63,14 +94,15 @@ class KotlinBackgroundTurnBridge(
         return buildJsonObject { put("mode", mode) }.toString()
     }
 
-    private suspend fun submit(config: TurnConfigBridge, onAdmitted: (String) -> Unit = {}): String {
+    private suspend fun submit(config: TurnConfigBridge, beforeWorkerStart: suspend (String) -> Unit = {},
+        onAdmitted: suspend (String) -> Unit = {}): String {
         val command = when (config.operation) {
             "send" -> KotlinTurnCommand.Send(config.conversationId, config.content.orEmpty(), config.partsJson, config.disableTools, config.supportsToolApproval, config.summarizePrompt)
             "retry" -> KotlinTurnCommand.Retry(config.conversationId, requireNotNull(config.messageId), config.disableTools, config.supportsToolApproval, config.summarizePrompt)
             "regenerate" -> KotlinTurnCommand.Regenerate(config.conversationId, requireNotNull(config.messageId), config.messageGroup, config.disableTools, config.supportsToolApproval, config.summarizePrompt)
             else -> error("Unsupported turn operation: ${config.operation}")
         }
-        return when (val result = runner.submit(command, onAdmitted)) {
+        return when (val result = runner.submit(command, beforeWorkerStart, onAdmitted)) {
             is KotlinTurnAdmission.Accepted -> result.turnId
             KotlinTurnAdmission.ModelRequired -> error("A model is required")
             is KotlinTurnAdmission.Rejected -> error(result.reason)
@@ -99,23 +131,32 @@ class KotlinBackgroundTurnBridge(
     }
 
     override fun cancelTurn() {
-        legacyTurn?.let { id -> processScope.launch { runner.cancel(id) } }
+        val cancel = legacyInvocation?.requestCancellation() ?: return
+        processScope.launch { cancel() }
     }
 
     /** The legacy stream owns its turn and cancels it when its subscriber disconnects. */
-    override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>, onEventJson: (String) -> Unit) {
+    override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>, onEventJson: (String) -> Unit) =
+        runLegacyTurn(config, onEventJson, newLegacyInvocation())
+
+    internal suspend fun runLegacyTurn(config: TurnConfigBridge, onEventJson: (String) -> Unit, invocation: LegacyInvocation,
+        beforeWorkerStart: suspend () -> Unit = {}) {
         require(config.disableTools) { "Legacy Kotlin turns require tools to be disabled" }
         legacyLock.withLock {
+            legacyInvocation = invocation
             var admitted: String? = null
             var terminal = false
             try {
-                val id = submit(config) { admitted = it; legacyTurn = it }
+                val id = submit(config, beforeWorkerStart = { beforeWorkerStart(); invocation.beforeWorkerStart(it) }) {
+                    admitted = it; invocation.admitted(it)
+                }
                 observe(id, config.conversationId) { event ->
                     onEventJson(event)
                     if (Json.parseToJsonElement(event).jsonObject["type"]?.jsonPrimitive?.content in setOf("Finished", "Cancelled", "Error")) terminal = true
                 }
             } finally {
-                legacyTurn = null
+                invocation.retire()
+                if (legacyInvocation === invocation) legacyInvocation = null
                 if (!terminal) admitted?.let { id -> withContext(NonCancellable) { runner.cancelAndAwait(id) } }
             }
         }

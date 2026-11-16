@@ -181,6 +181,7 @@ private fun MessengerChatScreen(
             providerRepository = AppContainerHolder.instance.providerRepository,
             chatImageStore = AppContainerHolder.instance.chatImageStore,
             builtinTools = { workspace -> AppContainerHolder.instance.availableTools(workspace) },
+            platformToolsEnabled = AppContainerHolder.instance.platformToolsEnabled,
             projectRepository = AppContainerHolder.instance.projectRepository,
             cloud = AppContainerHolder.instance.cloud
         )

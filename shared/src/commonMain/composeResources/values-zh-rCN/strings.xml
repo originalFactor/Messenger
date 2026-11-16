@@ -370,7 +370,9 @@
     <string name="tools_mcp_empty">尚未添加任何 MCP 服务器</string>
     <string name="tools_agent_delegation">Agent 互调</string>
     <string name="tools_agent_delegation_desc">允许 Agent 将任务交给其他 Agent。ACP 会话需要支持 MCP SSE 或 HTTP，重启应用后应用更改。调用 ACP Agent 需要本地项目和可写模式。</string>
-    <string name="tools_mcp_config_error">MCP 配置无法读取，请检查本地设置后重新保存。</string>
+    <string name="tools_mcp_config_error">无法读取 MCP 设置，或无法确认上次保存的结果。请重新加载设置后继续。</string>
+    <string name="tools_mcp_reload">重新加载 MCP 设置</string>
+    <string name="tools_mcp_reload_failed">无法加载 MCP 设置，请检查本地设置后重试。</string>
     <string name="tools_mcp_add">添加 MCP 服务器</string>
     <string name="tools_mcp_edit">编辑 MCP 服务器</string>
     <string name="tools_mcp_delete">删除 MCP 服务器</string>

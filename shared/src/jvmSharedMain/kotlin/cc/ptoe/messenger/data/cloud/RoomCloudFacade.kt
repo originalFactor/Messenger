@@ -172,6 +172,21 @@ internal class RoomCloudFacade private constructor(
         userState.value = source.user.value
         expiryState.value = source.sessionExpired.value
     }
+
+    /** A relay 401 may only expire the exact session that owned that connection. */
+    internal suspend fun rejectDeviceHostSession(owner: LocalDatabase, expected: StoredCloudSession) = withContext(NonCancellable) {
+        operation.withLock {
+            check(owner === db) { "Device host belongs to another Room owner" }
+            check(!closed) { "Cloud facade is closed" }
+            if (!RoomDeviceHostAccessSource(db) { it }.stillCurrent(expected)) return@withLock
+            val selected = coordinator
+            try { selected.rejectSession(expected.session) } finally { updateStates(selected) }
+        }
+    }
+
+    internal fun requireDeviceHostOwner(owner: LocalDatabase) {
+        check(owner === db) { "Device host belongs to another Room owner" }
+    }
     private suspend fun <T> request(block: suspend (RoomCloudCoordinator) -> T): T = operation.withLock {
         check(!closed) { "Cloud facade is closed" }
         val selected = coordinator

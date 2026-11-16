@@ -10,6 +10,9 @@ import cc.ptoe.messenger.data.cloud.RoomCloudFacade
 import cc.ptoe.messenger.data.cloud.RoomCloudHttpClient
 import cc.ptoe.messenger.data.cloud.defaultCloudServerUrl
 import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHost
+import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHostConfig
+import cc.ptoe.messenger.di.AppBackend
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.acp.AcpGatewayBackend
 import cc.ptoe.messenger.data.local.acp.AcpGatewayTool
@@ -65,13 +68,14 @@ import okio.Path.Companion.toPath
 /**
  * Partial, unconnected Room-only backend. The enclosing owner must exclude Rust and other Room
  * owners, stop all UI/other database users, and retain Room until [shutdown] has completed.
- * This is not an AppBackend: Runtime tools, ACP Core tools and several media routes remain unavailable.
+ * Runtime tools, ACP Core tools and several media routes remain unavailable.
  * Only opted-in learning and artifact Core tools can execute; the optional scheduler and
  * trusted-UI image jobs require explicit previous-worker stop proofs. Optional ACP requires a
  * platform owner and a configuration fence shared by all project, settings and MCP writers.
  * The optional artifact host requires trusted device-user consent and a native sandbox owner.
  */
 internal class KotlinRoomBackendSlice private constructor(
+    private val shutdownOwner: RoomManagedShutdown,
     val stores: LocalStores,
     val bridge: CoreBridge,
     val providers: RoomProviderRepository,
@@ -87,7 +91,20 @@ internal class KotlinRoomBackendSlice private constructor(
     val imageOwner: RoomImageJobOwner?,
     val acpOwner: RoomAcpBackgroundOwner?,
     val artifactUiHost: ArtifactUiHost?,
+    val deviceHost: IsolatedRoomDeviceHost?,
 ) {
+    /** Experimental only: never expose this backend to production until parity is established. */
+    fun asAppBackend(): AppBackend {
+        check(shutdownOwner.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) {
+            "Room owner must be running"
+        }
+        check(acpOwner == null && deviceHost == null) { "ACP and device host are unavailable in the isolated AppBackend" }
+        return AppBackend(stores, bridge, providers, models, agents, conversations, projects, messages,
+            currentAgent, learning, shutdown = { shutdownOwner.stopAndAwait() },
+            clearLocalData = { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") },
+            artifactUiHost = artifactUiHost, platformToolsEnabled = false)
+    }
+
     companion object {
         /** Call only inside a managed, exclusive Room owner after previous workers have stopped. */
         suspend fun attach(
@@ -106,6 +123,7 @@ internal class KotlinRoomBackendSlice private constructor(
             acpConfig: IsolatedAcpConfig? = null,
             artifactUi: IsolatedArtifactUiConfig? = null,
             remoteSkills: RemoteSkillImport? = null,
+            deviceHost: IsolatedRoomDeviceHostConfig? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             val gate = RoomAssetGate()
@@ -197,9 +215,10 @@ internal class KotlinRoomBackendSlice private constructor(
                 IsolatedRoomScheduler(db, checkNotNull(scheduledTasks), learningOwnership, artifacts, cloud.providerGate, processScope, it, now, admissions)
                     .also { scheduler -> scheduler.start() }
             }
-            return KotlinRoomBackendSlice(LocalStores(cloud, appPreferences, themePreferences), bridge,
+            val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it) }
+            return KotlinRoomBackendSlice(shutdown, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
-                artifactHost)
+                artifactHost, attachedDeviceHost)
         }
     }
 }

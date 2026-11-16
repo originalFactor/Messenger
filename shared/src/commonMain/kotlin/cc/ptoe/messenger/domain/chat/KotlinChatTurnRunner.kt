@@ -175,17 +175,29 @@ class KotlinChatTurnRunner(
     private val lock = Mutex()
     private val running = mutableMapOf<String, Job>()
 
+    /** Includes cancelled or terminal workers until their coroutine and cleanup have completed. */
+    suspend fun hasRunningJobs(): Boolean = lock.withLock {
+        running.entries.removeAll { it.value.isCompleted }
+        running.isNotEmpty()
+    }
+
+    /** A persisted active ID can also belong to a different runner or a previous process. */
+    suspend fun ownsRunningJob(turnId: String): Boolean = lock.withLock {
+        running[turnId]?.isCompleted == false
+    }
+
     suspend fun submit(command: KotlinTurnCommand): KotlinTurnAdmission = submit(command) { }
 
-    /** The callback records the admitted identity before worker startup; it must not throw. */
-    suspend fun submit(command: KotlinTurnCommand, onAdmitted: (String) -> Unit): KotlinTurnAdmission {
+    /** The callback records the admitted identity before worker startup. */
+    suspend fun submit(command: KotlinTurnCommand, beforeWorkerStart: suspend (String) -> Unit = {},
+        onAdmitted: suspend (String) -> Unit): KotlinTurnAdmission {
         currentCoroutineContext().ensureActive()
         return withContext(NonCancellable) {
             val result = store.admit(command)
             if (result is KotlinTurnAdmission.Accepted) {
                 try {
                     onAdmitted(result.turnId)
-                    start(result.turnId, recovery = false)
+                    start(result.turnId, recovery = false, beforeWorkerStart = beforeWorkerStart)
                 } catch (failure: Throwable) {
                     try { store.fail(result.turnId, failure.message ?: "Chat worker could not start") }
                     catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
@@ -235,8 +247,9 @@ class KotlinChatTurnRunner(
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private suspend fun start(turnId: String, recovery: Boolean) = lock.withLock {
-        if (running[turnId]?.isActive == true) return@withLock
+    private suspend fun start(turnId: String, recovery: Boolean, beforeWorkerStart: suspend (String) -> Unit = {}) = lock.withLock {
+        running.entries.removeAll { it.value.isCompleted }
+        if (running.containsKey(turnId)) return@withLock
         if (!store.claim(turnId, recovery)) return@withLock
         val conversationId = try { store.snapshot(turnId).conversationId } catch (failure: Throwable) {
             withContext(NonCancellable) {
@@ -251,6 +264,8 @@ class KotlinChatTurnRunner(
             var began = false
             try {
                 currentCoroutineContext().ensureActive()
+                beforeWorkerStart(turnId)
+                currentCoroutineContext().ensureActive()
                 lifecycle.begin(conversationId)
                 began = true
                 run(turnId)
@@ -260,7 +275,6 @@ class KotlinChatTurnRunner(
             } catch (failure: Exception) {
                 withContext(NonCancellable) { store.fail(turnId, failure.message ?: "Chat turn failed") }
             } finally {
-                val worker = currentCoroutineContext()[Job]
                 withContext(NonCancellable) {
                     try {
                         store.release(turnId)
@@ -273,8 +287,7 @@ class KotlinChatTurnRunner(
                         }
                         if (status != null) lifecycle.status(conversationId, status)
                     } finally {
-                        try { if (began) lifecycle.end(conversationId) }
-                        finally { lock.withLock { if (running[turnId] === worker) running.remove(turnId) } }
+                        if (began) lifecycle.end(conversationId)
                     }
                 }
             }

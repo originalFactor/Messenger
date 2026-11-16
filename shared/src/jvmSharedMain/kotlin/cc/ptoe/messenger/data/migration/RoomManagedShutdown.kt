@@ -55,8 +55,11 @@ internal class RoomManagedShutdown(private val stopAndJoin: suspend () -> Unit) 
 
     internal suspend fun stopAndAwait() = withContext(NonCancellable) {
         mutex.withLock {
-            check(mutableState.value == RoomShutdownState.Running)
-            attemptStop()
+            when (mutableState.value) {
+                RoomShutdownState.Running -> attemptStop()
+                RoomShutdownState.Stopped, is RoomShutdownState.RecoveryRequired -> Unit
+                else -> error("Room shutdown lifecycle has not entered")
+            }
         }
         stopped.await()
     }

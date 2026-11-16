@@ -10,11 +10,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -22,6 +26,88 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class McpManagerShutdownTest {
+    @Test fun editingEnabledServerStopsOldClientBeforeReplacementWithoutReplayingCalls(): Unit = runBlocking {
+        val preferences = object : DataStore<Preferences> {
+            override val data = MutableStateFlow<Preferences>(emptyPreferences())
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+                transform(data.value).also { data.value = it }
+        }
+        val original = McpServerConfig(id = "mock", name = "Old", transportType = McpTransportType.STDIO, command = "old")
+        val updated = original.copy(name = "New", command = "new", env = mapOf("CONFIG" to "new"))
+        val appPreferences = AppPreferences(preferences)
+        appPreferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), listOf(original)))
+        val starts = ConcurrentLinkedQueue<String>()
+        val oldCalls = AtomicInteger()
+        val newCalls = AtomicInteger()
+        val callStarted = CompletableDeferred<Unit>()
+        val closeStarted = CompletableDeferred<Unit>()
+        val allowClose = CompletableDeferred<Unit>()
+        val bridgeCount = AtomicInteger()
+        val verifyStop = AtomicBoolean(false)
+        val manager = McpManager(appPreferences) {
+            val ordinal = bridgeCount.incrementAndGet()
+            object : McpProcessBridge {
+                private var callback: ((String) -> Unit)? = null
+                override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                    onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean {
+                    starts.add(command)
+                    if (ordinal == 2) assertEquals(mapOf("CONFIG" to "new"), env)
+                    callback = onLine
+                    return true
+                }
+                override suspend fun sendLine(line: String): Boolean {
+                    val request = Json.decodeFromString<JsonRpcRequest>(line)
+                    when (request.method) {
+                        "initialize" -> callback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}""")
+                        "tools/list" -> callback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"tools":[{"name":"work","inputSchema":{"type":"object"}}]}}""")
+                        "tools/call" -> {
+                            if (ordinal == 1) { oldCalls.incrementAndGet(); callStarted.complete(Unit) }
+                            else newCalls.incrementAndGet()
+                        }
+                    }
+                    return true
+                }
+                override suspend fun close() {
+                    if (ordinal == 1) {
+                        check(verifyStop.get()) { "Old process stop is unverified" }
+                        closeStarted.complete(Unit)
+                        allowClose.await()
+                    }
+                }
+            }
+        }
+        try {
+            withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+            val old = manager.activeTools.value.single()
+            assertEquals("Old_work", old.name)
+            val call = async(Dispatchers.IO) { old.execute("{}") }
+            withTimeout(5_000) { callStarted.await() }
+            assertFailsWith<IllegalStateException> { manager.saveServers(listOf(updated)) }
+            assertTrue(manager.activeTools.value.isEmpty())
+            assertFalse(manager.toolInventoryReady.value)
+            assertEquals(listOf("old"), starts.toList())
+
+            verifyStop.set(true)
+            val replacement = async(Dispatchers.IO) { manager.saveServers(listOf(updated)) }
+            withTimeout(5_000) { closeStarted.await() }
+            assertFalse(replacement.isCompleted)
+            assertEquals(listOf("old"), starts.toList())
+            allowClose.complete(Unit)
+            withTimeout(5_000) { replacement.await(); manager.toolInventoryReady.first { it } }
+            assertTrue(withTimeout(5_000) { call.await() }.isError)
+            assertEquals("New_work", manager.activeTools.value.single().name)
+            assertEquals(listOf("old", "new"), starts.toList())
+            assertEquals(1, oldCalls.get())
+            assertEquals(0, newCalls.get(), "the old request must never be replayed")
+            manager.saveServers(listOf(updated))
+            assertEquals(listOf("old", "new"), starts.toList(), "unchanged settings must not restart the client")
+        } finally {
+            verifyStop.set(true)
+            allowClose.complete(Unit)
+            manager.shutdown()
+        }
+    }
+
     @Test fun failedRemovalRetainsUnverifiedClientUntilShutdownCanProveStop(): Unit = runBlocking {
         val preferences = object : DataStore<Preferences> {
             override val data = MutableStateFlow<Preferences>(emptyPreferences())
