@@ -28,6 +28,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -66,6 +67,7 @@ class McpManager(
     /** True when the persisted MCP configuration could not be decoded. */
     val configurationError: StateFlow<Boolean> = _configurationError.asStateFlow()
     private val clients = mutableMapOf<String, McpClient>()
+    private val toolObservers = mutableMapOf<String, Job>()
     private val pendingClients = mutableSetOf<String>()
     private val _activeTools = MutableStateFlow<List<ChatTool>>(emptyList())
     val activeTools: StateFlow<List<ChatTool>> = _activeTools.asStateFlow()
@@ -135,6 +137,7 @@ class McpManager(
             val removed = clients.keys.filter { id -> desired[id] != clients[id]?.config }
             for (id in removed) {
                 pendingClients.remove(id)
+                toolObservers.remove(id)?.cancel()
                 clients.remove(id)?.let { closingClients.add(it) }
             }
             recomputeActiveTools()
@@ -192,6 +195,13 @@ class McpManager(
                 val client = McpClient(config, bridgeFactory)
                 clients[config.id] = client
                 pendingClients.add(config.id)
+                toolObservers[config.id] = scope.launch {
+                    client.tools.collect {
+                        mutex.withLock {
+                            if (clients[config.id] === client) recomputeActiveTools()
+                        }
+                    }
+                }
                 scope.launch {
                     try { client.connect() } finally {
                         mutex.withLock {
@@ -256,6 +266,7 @@ class McpManager(
                 stopped = true
                 closingClients.addAll(clients.values)
                 clients.clear()
+                toolObservers.clear()
                 pendingClients.clear()
                 _activeTools.value = emptyList()
                 _toolInventoryReady.value = false

@@ -258,16 +258,21 @@ class KotlinChatTurnRunner(
             }
             throw failure
         }
+        // Acquire the worker's lease before admitting caller releases its temporary lease.
+        // Even an already-cancelled scope must retain it until the atomic cleanup completes.
+        try { lifecycle.begin(conversationId) } catch (failure: Throwable) {
+            withContext(NonCancellable) {
+                try { store.release(turnId) } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
+            }
+            throw failure
+        }
         // Atomic start guarantees the cleanup body runs even when the process scope was already
         // cancelled or is cancelled before dispatch. Never leave an admitted turn without a worker.
-        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
-            var began = false
+        val job = try { scope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
             try {
                 currentCoroutineContext().ensureActive()
                 beforeWorkerStart(turnId)
                 currentCoroutineContext().ensureActive()
-                lifecycle.begin(conversationId)
-                began = true
                 run(turnId)
             } catch (cancelled: CancellationException) {
                 withContext(NonCancellable) { store.cancel(turnId) }
@@ -287,10 +292,16 @@ class KotlinChatTurnRunner(
                         }
                         if (status != null) lifecycle.status(conversationId, status)
                     } finally {
-                        if (began) lifecycle.end(conversationId)
+                        lifecycle.end(conversationId)
                     }
                 }
             }
+        } } catch (failure: Throwable) {
+            withContext(NonCancellable) {
+                try { lifecycle.end(conversationId) } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
+                try { store.release(turnId) } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
+            }
+            throw failure
         }
         running[turnId] = job
     }

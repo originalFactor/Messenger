@@ -85,6 +85,11 @@ class McpClient(
     private var sseEndpointUrl: String? = null
     private var httpClient: HttpClient? = null
     private var isInitialized = false
+    private val connectionLock = Any()
+    private var connectionGeneration = 0L
+    private var connectionAlive = false
+    private var connectionAttempted = false
+    internal var beforeToolPublication: suspend () -> Unit = {}
     private var closed = false
     private var closing = false
     private val admissionLock = Any()
@@ -108,11 +113,19 @@ class McpClient(
     }
 
     suspend fun connect(): Boolean = withAdmission(false) { mutex.withLock {
-        if (isInitialized) return@withLock true
+        val generation = synchronizedBlock(connectionLock) {
+            if (isInitialized && connectionAlive) return@withLock true
+            // A failed connection can still own a process or SSE reader. Only a new
+            // client, created after this one is closed, may start another transport.
+            if (connectionAttempted) return@withLock false
+            connectionAttempted = true
+            connectionAlive = true
+            ++connectionGeneration
+        }
         try {
             when (config.transportType) {
-                McpTransportType.STDIO -> connectStdio()
-                McpTransportType.SSE -> connectSse()
+                McpTransportType.STDIO -> connectStdio(generation)
+                McpTransportType.SSE -> connectSse(generation)
             }
         } catch (e: CancellationException) {
             throw e
@@ -121,7 +134,7 @@ class McpClient(
         }
     } }
 
-    private suspend fun connectStdio(): Boolean {
+    private suspend fun connectStdio(generation: Long): Boolean {
         val bridge = bridgeFactory()
         synchronizedBlock(admissionLock) {
             if (closing || closed) throw CancellationException("MCP client is closing")
@@ -140,17 +153,17 @@ class McpClient(
                 env = config.env,
                 onLine = { line -> handleIncomingLine(line) },
                 onError = { /* stderr log */ },
-                onClose = { code -> handleConnectionClosed(code) }
+                onClose = { code -> handleConnectionClosed(code, generation) }
             )
         } finally {
             synchronizedBlock(admissionLock) { stdioStarting = false }
         }
         if (!started) return false
 
-        return initializeHandshake()
+        return initializeHandshake(generation)
     }
 
-    private suspend fun connectSse(): Boolean {
+    private suspend fun connectSse(generation: Long): Boolean {
         val client = HttpClient {
             install(SSE)
             install(ContentNegotiation) {
@@ -191,15 +204,18 @@ class McpClient(
                 if (!endpointDeferred.isCompleted) {
                     endpointDeferred.completeExceptionally(e)
                 }
+            } finally {
+                endpointDeferred.completeExceptionally(IllegalStateException("MCP SSE connection ended"))
+                handleConnectionClosed(-1, generation)
             }
         }
 
         val endpoint = withTimeoutOrNull(10_000) { endpointDeferred.await() } ?: return false
         sseEndpointUrl = endpoint
-        return initializeHandshake()
+        return initializeHandshake(generation)
     }
 
-    private suspend fun initializeHandshake(): Boolean {
+    private suspend fun initializeHandshake(generation: Long): Boolean {
         val initParams = json.encodeToJsonElement(McpInitializeParams())
         val initResponse = sendRequest("initialize", initParams) ?: return false
         if (initResponse.error != null) return false
@@ -207,12 +223,17 @@ class McpClient(
         // Send notifications/initialized
         sendNotification("notifications/initialized", null)
 
-        isInitialized = true
+        val initialized = synchronizedBlock(connectionLock) {
+            if (connectionGeneration != generation || !connectionAlive) false
+            else { isInitialized = true; true }
+        }
+        if (!initialized) return false
         refreshTools()
-        return true
+        return synchronizedBlock(connectionLock) { connectionGeneration == generation && connectionAlive }
     }
 
     suspend fun refreshTools(): List<ChatTool> {
+        val generation = synchronizedBlock(connectionLock) { connectionGeneration }
         val response = sendRequest("tools/list", null) ?: return emptyList()
         val result = response.result?.let {
             runCatching { json.decodeFromJsonElement<McpToolsListResult>(it) }.getOrNull()
@@ -225,8 +246,11 @@ class McpClient(
                 client = this
             )
         }
-        _tools.value = chatTools
-        return chatTools
+        beforeToolPublication()
+        return synchronizedBlock(connectionLock) {
+            if (generation != connectionGeneration || !connectionAlive) emptyList()
+            else { _tools.value = chatTools; chatTools }
+        }
     }
 
     suspend fun callTool(name: String, argumentsJson: String): ToolExecutionResult {
@@ -266,7 +290,13 @@ class McpClient(
     suspend fun sendRequest(method: String, params: JsonElement?): JsonRpcResponse? {
         val reqId = requestMutex.withLock { ++requestId }
         val deferred = CompletableDeferred<JsonRpcResponse>()
-        synchronizedBlock(pendingRequests) { pendingRequests[reqId] = deferred }
+        val registered = synchronizedBlock(connectionLock) {
+            if (!connectionAlive) false else {
+                synchronizedBlock(pendingRequests) { pendingRequests[reqId] = deferred }
+                true
+            }
+        }
+        if (!registered) return null
 
         try {
             val request = JsonRpcRequest(id = reqId, method = method, params = params)
@@ -343,19 +373,20 @@ class McpClient(
         deferred?.complete(response)
     }
 
-    private fun handleConnectionClosed(code: Int) {
-        isInitialized = false
-        synchronizedBlock(pendingRequests) {
-            for ((_, deferred) in pendingRequests) {
-                deferred.complete(
-                    JsonRpcResponse(
-                        error = JsonRpcError(-32000, "MCP server process exited with code $code")
-                    )
-                )
+    private fun handleConnectionClosed(code: Int, generation: Long = connectionGeneration) {
+        synchronizedBlock(connectionLock) {
+            if (generation == connectionGeneration) {
+                connectionAlive = false
+                isInitialized = false
+                _tools.value = emptyList()
+                synchronizedBlock(pendingRequests) {
+                    for ((_, deferred) in pendingRequests) {
+                        deferred.complete(JsonRpcResponse(error = JsonRpcError(-32000, "MCP server process exited with code $code")))
+                    }
+                    pendingRequests.clear()
+                }
             }
-            pendingRequests.clear()
         }
-        _tools.value = emptyList()
     }
 
     suspend fun close(): Unit = withContext(NonCancellable) { closeMutex.withLock {
@@ -372,7 +403,6 @@ class McpClient(
         mutex.withLock {
             sendMutex.withLock {
                 if (!closed) {
-                    isInitialized = false
                     when (config.transportType) {
                         // A process start that raced the early stop can complete later.
                         McpTransportType.STDIO -> if (wasStarting || processBridge !== earlyBridge) processBridge?.close()

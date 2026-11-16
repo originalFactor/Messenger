@@ -65,6 +65,7 @@ internal object RoomStoreStartup {
     /** Fresh stores only. Existing Core stores require leased paired migration. */
     suspend fun <T> withRoomStore(source: Path, destination: Path, ownership: RoomStoreOwnership,
         shutdown: RoomManagedShutdown, openRoom: (Path) -> LocalDatabase,
+        verifyFreshSource: suspend () -> Unit = {},
         useRoom: suspend (LocalDatabase) -> T): T = ownership.withExclusiveOwnership {
         val target = destination.toAbsolutePath().normalize()
         val oldStore = source.toAbsolutePath().normalize()
@@ -85,7 +86,9 @@ internal object RoomStoreStartup {
         check(Files.notExists(oldStore, LinkOption.NOFOLLOW_LINKS)) {
             "Existing Core stores require leased database and asset migration"
         }
-        initializeFresh(oldStore, target, freshWork, openRoom)
+        verifyFreshSource()
+        initializeFresh(oldStore, target, freshWork, openRoom, verifyFreshSource)
+        verifyFreshSource()
         val room = openRoom(target)
         try {
             // Room is initialized and validated before any repository receives the handle.
@@ -124,7 +127,8 @@ internal object RoomStoreStartup {
         finally { db.close() }
     }
 
-    private suspend fun initializeFresh(source: Path, target: Path, work: Path, openRoom: (Path) -> LocalDatabase) {
+    private suspend fun initializeFresh(source: Path, target: Path, work: Path, openRoom: (Path) -> LocalDatabase,
+        verifyFreshSource: suspend () -> Unit) {
         if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
             check(Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) { "Invalid existing Room target" }
             verifyPublishedRoomDatabase(target, ::syncRoomPublicationDirectory) { path ->
@@ -164,6 +168,7 @@ internal object RoomStoreStartup {
             verifyRoom(file, openRoom)
             CoreStoreCutover.finalizeDatabase(file)
             check(Files.notExists(source, LinkOption.NOFOLLOW_LINKS)) { "Core store appeared during fresh initialization" }
+            verifyFreshSource()
             publishRoomDatabase(file, target, publicationId, ::syncRoomPublicationDirectory) { verifyRoom(it, openRoom) }
             check(Files.notExists(source, LinkOption.NOFOLLOW_LINKS)) { "Core store appeared during fresh initialization" }
         } catch (error: Throwable) { failure = error; throw error }

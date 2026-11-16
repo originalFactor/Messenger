@@ -51,7 +51,9 @@ import cc.ptoe.messenger.di.LocalStores
 import cc.ptoe.messenger.domain.artifact.ArtifactUiHost
 import cc.ptoe.messenger.domain.chat.TurnFailureNotice
 import cc.ptoe.messenger.domain.chat.TurnFailureNotices
+import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -136,6 +138,7 @@ internal class KotlinRoomBackendSlice private constructor(
             remoteSkills: RemoteSkillImport? = null,
             deviceHost: IsolatedRoomDeviceHostConfig? = null,
             previousChatWorkersStopped: PreviousChatWorkersStopped? = null,
+            turnProvider: KotlinTurnProvider? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
@@ -218,7 +221,7 @@ internal class KotlinRoomBackendSlice private constructor(
             val processJob = SupervisorJob()
             val processScope = CoroutineScope(processJob + Dispatchers.IO)
             val rawBridge = IsolatedCoreTurnBridge(scheduledBridge, db, learningOwnership, artifacts, cloud.providerGate,
-                processScope, now, modelImageTool, lifecycle = composition.chatLifecycle)
+                processScope, now, modelImageTool, provider = turnProvider, lifecycle = composition.chatLifecycle)
             val admissions = PartialChatCalls()
             val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions)
             try { withContext(NonCancellable) { shutdown.registerStop { bridge.shutdown() } } }
@@ -250,7 +253,15 @@ private class PartialChatBridge(
     private val calls: PartialChatCalls,
 ) : CoreBridge by delegate {
     private suspend fun <T> admitted(block: suspend () -> T): T = calls.run(block)
-    override suspend fun startBackgroundTurn(config: TurnConfigBridge) = admitted { delegate.startBackgroundTurn(config) }
+    private suspend fun <T> withForegroundAdmission(block: suspend () -> T): T {
+        val begin = ForegroundTaskRegistry.begin ?: return block()
+        val end = ForegroundTaskRegistry.end ?: return block()
+        begin()
+        return try { block() } finally { end() }
+    }
+    override suspend fun startBackgroundTurn(config: TurnConfigBridge) = withForegroundAdmission {
+        admitted { delegate.startBackgroundTurn(config) }
+    }
     override suspend fun backgroundTurnActive(conversationId: String) = admitted { delegate.backgroundTurnActive(conversationId) }
     override suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) =
         admitted { delegate.observeBackgroundTurn(conversationId, onEventJson) }
@@ -275,7 +286,9 @@ private class PartialChatBridge(
     override suspend fun scheduledTaskRequest(method: String, path: String, body: String?) =
         admitted { delegate.scheduledTaskRequest(method, path, body) }
     override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
-        onEventJson: (String) -> Unit) = admitted { delegate.runTurn(config, toolExecutor, onEventJson) }
+        onEventJson: (String) -> Unit) = withForegroundAdmission {
+        admitted { delegate.runTurn(config, toolExecutor, onEventJson) }
+    }
     override fun cancelTurn() { if (!calls.isClosing) delegate.cancelTurn() }
 
     suspend fun shutdown() = withContext(NonCancellable) {

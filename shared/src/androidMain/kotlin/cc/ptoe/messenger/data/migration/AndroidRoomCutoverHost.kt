@@ -3,6 +3,8 @@ package cc.ptoe.messenger.data.migration
 
 import android.content.Context
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.StateFlow
@@ -53,6 +55,7 @@ internal class AndroidRoomCutoverHost private constructor(
     private val proofs: AndroidRoomCutoverProofs,
     private val shutdown: RoomManagedShutdown,
     private val openRoom: (Path) -> LocalDatabase,
+    private val legacyDatabases: List<Path>,
 ) {
     private val mutex = Mutex()
     private var started = false
@@ -62,7 +65,12 @@ internal class AndroidRoomCutoverHost private constructor(
 
     /** Use only when there is no Core database; the startup also checks this before publication. */
     suspend fun <T> withFreshStore(useRoom: suspend (LocalDatabase) -> T): T = runOnce {
-        RoomStoreStartup.withRoomStore(source, destination, owner, shutdown, openRoom, useRoom)
+        RoomStoreStartup.withRoomStore(source, destination, owner, shutdown, openRoom,
+            verifyFreshSource = {
+                check(legacyDatabases.all { Files.notExists(it, LinkOption.NOFOLLOW_LINKS) }) {
+                    "Legacy Room database or sidecar exists; recovery or migration is required"
+                }
+            }, useRoom = useRoom)
     }
 
     /** Migrates database and assets under the held source lease and the independent platform fences. */
@@ -99,11 +107,17 @@ internal class AndroidRoomCutoverHost private constructor(
         suspend fun create(context: Context, source: Path, destination: Path,
             proofs: AndroidRoomCutoverProofs, stopAndJoinRoomUsers: suspend () -> Unit,
             openRoom: (Path) -> LocalDatabase): AndroidRoomCutoverHost {
+            val legacyDatabases = listOf("messenger_database", "messenger_database.db").flatMap { name ->
+                val database = context.getDatabasePath(name).toPath().toAbsolutePath().normalize()
+                listOf("", "-wal", "-shm", "-journal").map { suffix ->
+                    database.resolveSibling(database.fileName.toString() + suffix)
+                }
+            }
             val owner = AndroidRoomDirectoryOwner.acquire(context, destination,
                 RoomWritersStoppedProof { proofs.verifyPreviousWriters() },
                 RoomWritersStoppedProof { proofs.verifyAllWriters() })
             return AndroidRoomCutoverHost(source, destination, owner, proofs,
-                RoomManagedShutdown(stopAndJoinRoomUsers), openRoom)
+                RoomManagedShutdown(stopAndJoinRoomUsers), openRoom, legacyDatabases)
         }
     }
 }

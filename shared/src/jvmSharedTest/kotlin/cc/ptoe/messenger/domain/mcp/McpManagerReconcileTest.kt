@@ -49,6 +49,7 @@ class McpManagerReconcileTest {
         val blockA = AtomicBoolean(false)
         val holdC = AtomicBoolean(false)
         private val callbacks = ConcurrentHashMap<String, (String) -> Unit>()
+        private val closeCallbacks = ConcurrentHashMap<String, (Int) -> Unit>()
         private val initializeIds = ConcurrentHashMap<String, Long>()
 
         fun bridge(): McpProcessBridge = object : McpProcessBridge {
@@ -57,6 +58,7 @@ class McpManagerReconcileTest {
                 onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean {
                 this.command = command
                 callbacks[command] = onLine
+                closeCallbacks[command] = onClose
                 starts.add(command)
                 return true
             }
@@ -83,10 +85,33 @@ class McpManagerReconcileTest {
         }
 
         fun finishC() = replyInitialize("c", checkNotNull(initializeIds["c"]))
+        fun disconnect(command: String) = checkNotNull(closeCallbacks[command]).invoke(1)
         private fun replyInitialize(command: String, id: Long) {
             callbacks[command]?.invoke("""{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
         }
         override fun close() { allowClose.complete(Unit) }
+    }
+
+    @Test fun unexpectedDisconnectWithdrawsOnlyThatServersTools(): Unit = runBlocking {
+        val appPreferences = AppPreferences(MemoryPreferences())
+        val initial = listOf(config("a"), config("b"))
+        appPreferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), initial))
+        val servers = Servers()
+        val manager = McpManager(appPreferences) { servers.bridge() }
+        try {
+            withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+            assertEquals(setOf("a_tool", "b_tool"), manager.activeTools.value.map { it.name }.toSet())
+
+            servers.disconnect("a")
+            withTimeout(5_000) { manager.activeTools.first { tools -> tools.map { it.name }.toSet() == setOf("b_tool") } }
+            assertTrue(manager.toolInventoryReady.value)
+
+            manager.saveServers(listOf(config("a", "new-a"), config("b")))
+            withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+            assertEquals(setOf("a_tool", "b_tool"), manager.activeTools.value.map { it.name }.toSet())
+            servers.disconnect("a") // A late close belongs to the replaced client.
+            assertEquals(setOf("a_tool", "b_tool"), manager.getActiveTools().map { it.name }.toSet())
+        } finally { servers.close(); manager.shutdown() }
     }
 
     @Test fun failedMultiEditWithdrawsEveryChangedClientAndLateConnectCannotMarkReady(): Unit = runBlocking {

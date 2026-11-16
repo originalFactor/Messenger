@@ -8,6 +8,7 @@ import cc.ptoe.messenger.data.chat.KotlinRoomToolCatalogBridge
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.domain.chat.KotlinTurnLifecycle
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
@@ -32,9 +33,26 @@ internal class KotlinRoomBridgeComposition private constructor(
     private val shutdownMutex = Mutex()
     private var stopped = false
     @Volatile private var chatWorkers: Job? = null
+    private val foregroundLock = Any()
+    private val foregroundEnds = mutableMapOf<String, () -> Unit>()
 
     val chatLifecycle: KotlinTurnLifecycle = object : KotlinTurnLifecycle {
+        override fun begin(conversationId: String) {
+            val begin = ForegroundTaskRegistry.begin ?: return
+            val end = ForegroundTaskRegistry.end ?: return
+            synchronized(foregroundLock) {
+                check(conversationId !in foregroundEnds) { "Chat foreground lease already exists" }
+                foregroundEnds[conversationId] = end
+            }
+            try { begin() } catch (failure: Throwable) {
+                synchronized(foregroundLock) { foregroundEnds.remove(conversationId) }
+                throw failure
+            }
+        }
         override fun status(conversationId: String, status: String) = events.chatTaskStatus(conversationId, status)
+        override fun end(conversationId: String) {
+            synchronized(foregroundLock) { foregroundEnds.remove(conversationId) }?.invoke()
+        }
     }
 
     /** Bind before exposing chat; a failed worker stop must not close its event subscribers. */
