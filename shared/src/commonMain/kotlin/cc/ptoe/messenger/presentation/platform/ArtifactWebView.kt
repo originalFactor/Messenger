@@ -22,6 +22,8 @@ expect fun ArtifactWebView(
     bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
     onDisposeBinding: () -> Unit = {},
+    /** A managed host uses this to replace a stopped binding before reopening a native helper. */
+    onRestartBinding: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 )
 

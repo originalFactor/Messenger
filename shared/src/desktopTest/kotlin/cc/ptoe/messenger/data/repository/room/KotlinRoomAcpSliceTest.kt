@@ -1,0 +1,163 @@
+/* Copyright 2026 originalFactor. Licensed under the Apache License, Version 2.0. */
+package cc.ptoe.messenger.data.repository.room
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.data.local.ThemePreferences
+import cc.ptoe.messenger.data.local.acp.*
+import cc.ptoe.messenger.data.local.room.KeyValueRow
+import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.local.room.ProjectRow
+import cc.ptoe.messenger.data.migration.RoomManagedShutdown
+import cc.ptoe.messenger.domain.model.Agent
+import java.nio.file.Files
+import java.util.Collections
+import java.util.UUID
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class KotlinRoomAcpSliceTest {
+    private class MemoryPreferences : DataStore<Preferences> {
+        private val state = MutableStateFlow(emptyPreferences())
+        override val data: Flow<Preferences> = state
+        override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences = transform(state.value).also { state.value = it }
+    }
+    private class Fence : AcpConfigurationFence {
+        private val mutex = Mutex()
+        override suspend fun acquire(binding: AcpWorkerBinding): AcpConfigurationLease {
+            mutex.lock()
+            return AcpConfigurationLease { mutex.unlock() }
+        }
+    }
+    private class Transport : AcpLineTransport {
+        private val output = Channel<String>(Channel.UNLIMITED)
+        private var promptId: JsonElement? = null
+        var stopped = false
+        var loads = 0
+        override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) = Unit
+        override suspend fun readLine(): String? = output.receiveCatching().getOrNull()
+        override suspend fun sendLine(line: String) {
+            val packet = Json.parseToJsonElement(line).jsonObject
+            val method = packet["method"]?.jsonPrimitive?.contentOrNull
+            val id = packet["id"]
+            suspend fun reply(result: JsonObject) {
+                output.send(buildJsonObject { put("jsonrpc", "2.0"); put("id", checkNotNull(id)); put("result", result) }.toString())
+            }
+            when (method) {
+                "initialize" -> reply(buildJsonObject {
+                    put("protocolVersion", 1)
+                    put("agentCapabilities", buildJsonObject { put("loadSession", true); put("mcpCapabilities", JsonObject(emptyMap())) })
+                })
+                "session/new" -> reply(buildJsonObject { put("sessionId", "worker-session") })
+                "session/load" -> { loads++; reply(JsonObject(emptyMap())) }
+                "session/prompt" -> {
+                    promptId = id
+                    output.send(buildJsonObject {
+                        put("jsonrpc", "2.0"); put("id", "permission-1"); put("method", "session/request_permission")
+                        put("params", buildJsonObject {
+                            put("sessionId", "worker-session")
+                            put("toolCall", buildJsonObject { put("title", "Read file") })
+                            put("options", buildJsonArray { add(buildJsonObject { put("optionId", "allow"); put("name", "Allow"); put("kind", "allow_once") }) })
+                        })
+                    }.toString())
+                }
+                null -> if (id?.jsonPrimitive?.contentOrNull == "permission-1") {
+                    output.send(buildJsonObject {
+                        put("jsonrpc", "2.0"); put("method", "session/update")
+                        put("params", buildJsonObject {
+                            put("sessionId", "worker-session")
+                            put("update", buildJsonObject { put("sessionUpdate", "agent_message_chunk"); put("content", buildJsonObject { put("type", "text"); put("text", "answer") }) })
+                        })
+                    }.toString())
+                    output.send(buildJsonObject { put("jsonrpc", "2.0"); put("id", checkNotNull(promptId)); put("result", buildJsonObject { put("stopReason", "end_turn") }) }.toString())
+                }
+                else -> Unit
+            }
+        }
+        override suspend fun stopAndAwait() { stopped = true; output.close() }
+    }
+
+    @Test fun sliceCreatesPromptsApprovesAndReplaysAcpWithoutRust(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-acp-slice")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val workspace = Files.createDirectory(dir.resolve("project")).toString()
+        val assetRoot = Files.createDirectory(dir.resolve("assets"))
+        val prefs = MemoryPreferences()
+        val transports = Collections.synchronizedList(mutableListOf<Transport>())
+        val workerConfig = AcpWorkerConfiguration("fake", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("default", "Agent", systemPrompt = "prompt", defaultModelId = null,
+                temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
+            db.rows().upsertProjects(listOf(ProjectRow("project", "Project", workspace, "device", 1, 1)))
+            db.rows().upsertValues(listOf(KeyValueRow("device_id", "device"), KeyValueRow("device_control_config",
+                """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"fake","args":[],"env":{}}]}""")))
+            val id = "acp:${UUID.randomUUID()}"
+            val draft = AcpWorkerBinding(id, "agent", "project", workspace, "", false)
+            val source = AcpSessionConfigurationSource { session ->
+                val root = Json.parseToJsonElement(db.rows().getValue("local_acp_sessions")!!.value).jsonObject
+                val record = root.getValue(session).jsonObject
+                draft.copy(conversationId = session, agentSessionId = record.getValue("agent_session").jsonPrimitive.content) to workerConfig
+            }
+            val config = IsolatedAcpConfig(dir.resolve("room.db"), AcpPriorOwnerBarrier { }, Fence(), source,
+                AcpNewSessionSource { _, _ -> AcpNewSessionDraft(draft, workerConfig, "Agent") }, AcpPublishedMcpCatalog { emptyList() }, { Transport().also { transports.add(it) } })
+            val backend = KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs), assetRoot,
+                dir.resolve("avatars"), dir.resolve("images"), acpConfig = config)
+            val bridge = backend.bridge
+            var catalog: JsonObject? = null
+            bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "catalog") }) { catalog = it }
+            assertTrue(checkNotNull(catalog).getValue("agents").jsonArray.any { it.jsonObject["id"]?.jsonPrimitive?.content == "acp:agent" })
+            var created: JsonObject? = null
+            bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "create"); put("agentId", "acp:agent"); put("projectId", "project") }) { created = it }
+            assertEquals(id, checkNotNull(created).getValue("sessionId").jsonPrimitive.content)
+            assertEquals(1, transports.size)
+            assertTrue(transports.single().stopped)
+            val requestId = UUID.randomUUID().toString()
+            bridge.startBackgroundAcp(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", id)
+                put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "hello") }) }) })
+            val permission = withTimeout(5_000) {
+                var found: JsonObject? = null
+                while (found == null) {
+                    val batch = bridge.backgroundAcpEvents(requestId, 0)
+                    found = batch.getValue("events").jsonArray.map { it.jsonObject }
+                        .firstOrNull { it["type"]?.jsonPrimitive?.content == "Permission" }
+                    check(found != null || !batch.getValue("done").jsonPrimitive.boolean) { "ACP prompt ended before requesting permission: $batch" }
+                    if (found == null) delay(10)
+                }
+                checkNotNull(found)
+            }
+            assertEquals(2, transports.size)
+            assertEquals(1, transports[1].loads)
+            assertTrue(bridge.hasActiveTasks())
+            assertEquals(requestId, bridge.backgroundAcpBySession(id)?.get("requestId")?.jsonPrimitive?.content)
+            bridge.controlPermission(requestId, permission.getValue("options").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content)
+            val done = withTimeout(5_000) {
+                var batch = bridge.backgroundAcpEvents(requestId, 0)
+                while (!batch.getValue("done").jsonPrimitive.boolean) { delay(10); batch = bridge.backgroundAcpEvents(requestId, 0) }
+                batch
+            }
+            assertTrue(done.getValue("events").jsonArray.any { it.jsonObject["type"]?.jsonPrimitive?.content == "Finished" })
+            var history: JsonObject? = null
+            bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "history"); put("sessionId", id) }) { history = it }
+            assertEquals(listOf("hello", "answer"), checkNotNull(history).getValue("messages").jsonArray.map { it.jsonObject.getValue("text").jsonPrimitive.content })
+            assertFalse(bridge.hasActiveTasks())
+            assertTrue(transports.all { it.stopped })
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+}

@@ -18,6 +18,11 @@ import org.jetbrains.compose.resources.stringResource
 
 @Composable
 internal fun ArtifactInlinePreview(id: String, modifier: Modifier = Modifier) {
+    val managedHost = AppContainerHolder.instance.artifactUiHost
+    if (managedHost != null) {
+        ManagedArtifactInlinePreview(id, managedHost, modifier)
+        return
+    }
     val signal by AppContainerHolder.instance.learningRevision.collectAsState()
     val scope = rememberCoroutineScope()
     var artifact by remember(id) { mutableStateOf<JsonObject?>(null) }

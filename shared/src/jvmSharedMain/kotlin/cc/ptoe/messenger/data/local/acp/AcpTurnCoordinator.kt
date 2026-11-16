@@ -144,9 +144,20 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
         val broker = gate.withLock { turns[turnId]?.takeUnless { it.completed }?.broker } ?: return false
         return broker.choose(turnId, option)
     }
+
+    /** End observation without asserting that an unproven worker or its side effects stopped. */
+    suspend fun abandonUnsettled(turnId: String) = gate.withLock {
+        val turn = turns[turnId]?.takeUnless { it.completed } ?: return@withLock
+        turn.completed = true
+        turn.replay.complete()
+        if (mutableActive.value[turn.binding.conversationId] == turnId) mutableActive.value = mutableActive.value - turn.binding.conversationId
+    }
     suspend fun snapshot(turnId: String, after: Long): AcpEventSnapshot =
         (gate.withLock { turns[turnId]?.replay } ?: error("ACP turn is unavailable")).snapshot(after)
     suspend fun changes(turnId: String): StateFlow<Long> = gate.withLock { turns[turnId]?.replay?.changes ?: error("ACP turn is unavailable") }
+
+    /** Distinguishes a worker that has not started recording from an invalid replay cursor. */
+    suspend fun contains(turnId: String): Boolean = gate.withLock { turnId in turns }
 }
 
 /** Adds durable input, transcript and replay without changing the ACP wire implementation. */

@@ -8,6 +8,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.sync.Mutex
@@ -17,6 +19,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -32,8 +35,8 @@ internal data class ArtifactSandboxPackage(val files: Map<String, String>, val e
  * message never selects an artifact or receives an execution capability or native credential.
  */
 internal class ArtifactSandboxHost(private val executions: ArtifactExecutionService, private val assets: CoreAssetService) {
-    suspend fun open(id: String): ArtifactSandboxBinding {
-        val session = executions.open(id)
+    suspend fun open(id: String, expectedRevision: Long? = null): ArtifactSandboxBinding {
+        val session = executions.open(id, expectedRevision)
         try {
             val (revision, _) = session.packageSnapshot()
             val files = revision.files.toMutableMap()
@@ -48,10 +51,26 @@ internal class ArtifactSandboxHost(private val executions: ArtifactExecutionServ
             }
             // Recheck revision authorization after all asset reads before handing out a package.
             val (_, currentState) = session.packageSnapshot()
+            currentCoroutineContext().ensureActive()
             return ArtifactSandboxBinding(session, ArtifactSandboxPackage(files.toMap(), revision.entry, currentState.toString()), revision.stateVersion)
         } catch (failure: Throwable) {
             try { withContext(NonCancellable) { session.close() } } catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
             throw failure
+        }
+    }
+
+    /** Trusted UI reset, checked against the authorized revision and expected state version. */
+    suspend fun resetState(id: String, revision: Long, stateVersion: Long) {
+        val session = executions.open(id, revision)
+        var failure: Throwable? = null
+        try {
+            val (snapshot, _) = session.packageSnapshot()
+            check(snapshot.stateVersion == stateVersion) { "Artifact state version changed" }
+            session.setState(JsonNull)
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
+            try { withContext(NonCancellable) { session.close() } }
+            catch (cleanup: Throwable) { if (failure == null) throw cleanup else if (failure !== cleanup) failure.addSuppressed(cleanup) }
         }
     }
 

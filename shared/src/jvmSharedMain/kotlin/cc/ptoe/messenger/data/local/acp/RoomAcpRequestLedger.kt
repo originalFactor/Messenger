@@ -68,6 +68,12 @@ internal class RoomAcpRequestLedger(private val db: LocalDatabase) {
         }
     }
 
+    /** A retained ID must not be routed to a different task owner after its ACP turn ends. */
+    suspend fun contains(requestId: String): Boolean {
+        if (!runCatching { UUID.fromString(requestId).toString() == requestId }.getOrDefault(false)) return false
+        return transaction { db.rows().getValue(requestKey(requestId))?.let { decode(it.value); true } ?: false }
+    }
+
     /** Uncertain effects keep the session blocked until an explicit proof-backed recovery. */
     suspend fun markUncertain(requestId: String, sessionId: String): AcpAdmissionState {
         validateId(requestId); validateSession(sessionId)

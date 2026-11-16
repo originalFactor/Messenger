@@ -39,6 +39,7 @@ actual fun ArtifactWebView(
     bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
     onDisposeBinding: () -> Unit,
+    onRestartBinding: (() -> Unit)?,
     modifier: Modifier,
 ) {
     val callbacks = remember(ArtifactBindingIdentity(bindingIdentity)) { ArtifactViewCallbacks(onMessage, onDisposeBinding) }

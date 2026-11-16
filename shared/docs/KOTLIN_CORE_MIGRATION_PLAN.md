@@ -71,6 +71,15 @@ receipt still match. Under exclusive ownership, validate the restored database's
 current asset references and their hashes before any restore rebind. This is an
 explicit restore check, not a requirement to scan every asset on normal startup.
 
+The current Kotlin backend slice exercises Room-backed chat, selected local tools,
+optional scheduling, Skills and image jobs in isolation. It is not an AppBackend
+and is not selected by Android or Desktop. Cutover still needs platform ownership
+and recovery proofs, ACP and Runtime integration, generated-app execution,
+workspace relay, migrated-store clear-all, complete Cloud/session wiring, and
+end-to-end validation. Unsupported slice paths must remain visible failures until
+their replacements are complete. Windows storage has additional open issues in
+[WINDOWS_ROOM_STORAGE.md](WINDOWS_ROOM_STORAGE.md).
+
 ## Renderer and submodule
 
 The root repository embeds the maintained `llm-typewriter` submodule and uses

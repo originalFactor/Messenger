@@ -20,6 +20,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @Serializable internal data class ArtifactRevision(
     val revision: Long, val files: Map<String, String>, val assets: Map<String, String> = emptyMap(),
@@ -69,6 +73,14 @@ internal class RoomArtifactService(private val db: LocalDatabase, private val as
         invalidate(id)
     }
 
+    /** Does not grant execution; a stale revision is an error rather than a false result. */
+    suspend fun isExecutionAuthorized(id: String, revision: Long): Boolean = assets.withExclusive {
+        val artifact = load(id)
+        check(artifact.revisions.last().revision == revision) { "Artifact revision changed" }
+        artifact.trustedOnDevice &&
+            db.learningBundle().value(EXECUTION_PREFIX + id) == executionFingerprint(artifact.revisions.last())
+    }
+
     /** The shared gate serializes authorization checks/dispatch with updates and revocation. */
     internal suspend fun <T> withExecutionAuthorization(id: String, revision: Long?, block: suspend (ArtifactData) -> T): T = assets.withExclusive {
         val artifact = load(id)
@@ -82,6 +94,27 @@ internal class RoomArtifactService(private val db: LocalDatabase, private val as
     internal fun removeListener(id: String, listener: () -> Unit) { listeners[id]?.remove(listener) }
 
     suspend fun get(id: String): ArtifactData = assets.withExclusive { load(id) }
+
+    /** Observe only this artifact; ordinary saved-state changes do not recreate its native view. */
+    internal fun observeUiChanges(id: String): Flow<Unit> {
+        UUID.fromString(id)
+        val artifact = db.rows().observeValue("artifact:$id").distinctUntilChanged().map { row ->
+            row?.value?.let { raw -> json.decodeFromString<ArtifactData>(raw) }?.let { artifact ->
+                UiSnapshot(artifact.id, artifact.title, artifact.description, artifact.revisions,
+                    artifact.requestedDomains, artifact.approvedDomains, artifact.stateVersion,
+                    artifact.trustedOnDevice, artifact.updatedAt)
+            }
+        }.distinctUntilChanged()
+        val authorization = db.rows().observeValue(EXECUTION_PREFIX + id).map { it?.value }.distinctUntilChanged()
+        return combine(artifact, authorization) { snapshot, fingerprint -> snapshot to fingerprint }
+            .distinctUntilChanged().map { Unit }
+    }
+
+    private data class UiSnapshot(
+        val id: String, val title: String, val description: String, val revisions: List<ArtifactRevision>,
+        val requestedDomains: List<String>, val approvedDomains: List<String>, val stateVersion: Long,
+        val trustedOnDevice: Boolean, val updatedAt: Long,
+    )
 
     suspend fun list(): List<ArtifactData> = assets.withExclusive {
         db.assetMetadata().artifacts().sortedBy { it.key }.map { row ->
@@ -157,7 +190,8 @@ internal class RoomArtifactService(private val db: LocalDatabase, private val as
     suspend fun authorizeRun(id: String): ArtifactData = mutate(id) { it.copy(trustedOnDevice = true) }
 
     /** Explicit user approval; requests cannot grant more than the artifact declared. */
-    suspend fun grantDomains(id: String, domains: List<String>): ArtifactData = mutate(id) { current ->
+    suspend fun grantDomains(id: String, domains: List<String>, expectedRevision: Long? = null): ArtifactData = mutate(id) { current ->
+        check(expectedRevision == null || current.revisions.last().revision == expectedRevision) { "Artifact revision changed" }
         require(domains.size <= 16 && domains.distinct().size == domains.size && domains.all { validDomain(it) && it in current.requestedDomains }) { "Invalid network grant" }
         current.copy(approvedDomains = domains)
     }

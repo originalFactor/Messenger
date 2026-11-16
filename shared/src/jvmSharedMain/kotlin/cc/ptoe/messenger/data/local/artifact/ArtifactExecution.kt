@@ -87,8 +87,8 @@ internal class ArtifactExecutionService(
     private val transport: ArtifactTransport = PinnedArtifactTransport,
     private val limiter: ArtifactRequestLimiter = ArtifactRequestLimiter.shared,
 ) {
-    suspend fun open(id: String): ArtifactExecutionSession {
-        return artifacts.withExecutionAuthorization(id, null) { artifact ->
+    suspend fun open(id: String, revision: Long? = null): ArtifactExecutionSession {
+        return artifacts.withExecutionAuthorization(id, revision) { artifact ->
             val revision = artifact.revisions.last()
             ArtifactExecutionSession(artifacts, assets, dns, transport, limiter, id, revision.revision, artifact.stateVersion).also { it.register() }
         }

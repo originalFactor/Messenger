@@ -2,6 +2,7 @@
 package cc.ptoe.messenger.di
 
 import cc.ptoe.messenger.core.CoreBridge
+import cc.ptoe.messenger.domain.artifact.ArtifactUiHost
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
@@ -30,4 +31,6 @@ class AppBackend(
     /** Stop and join backend-owned turns, cloud, schedulers and other workers before Room closes. */
     val shutdown: suspend () -> Unit,
     val clearLocalData: suspend () -> Unit,
+    /** Optional trusted-UI sandbox host, owned and stopped by this same backend. */
+    val artifactUiHost: ArtifactUiHost? = null,
 )

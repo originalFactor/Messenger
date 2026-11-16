@@ -90,6 +90,8 @@ class AppContainer(
     val themePreferences = stores.themePreferences
 
     val cloud: CloudFacade = stores.cloud
+    /** Trusted UI uses this only when the complete backend owns its sandbox lifecycle. */
+    val artifactUiHost = backend?.artifactUiHost
 
     init {
         // Some existing consumers still obtain the bridge through the registry. Refuse a

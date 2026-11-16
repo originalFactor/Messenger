@@ -45,6 +45,7 @@ actual fun ArtifactWebView(
     bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
     onDisposeBinding: () -> Unit,
+    onRestartBinding: (() -> Unit)?,
     modifier: Modifier,
 ) {
     val identity = ArtifactBindingIdentity(bindingIdentity)
@@ -88,7 +89,9 @@ actual fun ArtifactWebView(
             }
         }
         Button(enabled = ready || closed || error != null, onClick = {
-            if (ready && !closed && error == null) host?.focus() else restart++
+            if (ready && !closed && error == null) host?.focus()
+            else if (onRestartBinding != null) { callbacks.close(); onRestartBinding() }
+            else restart++
         }) { Text(stringResource(Res.string.artifact_host_open)) }
     }
 }

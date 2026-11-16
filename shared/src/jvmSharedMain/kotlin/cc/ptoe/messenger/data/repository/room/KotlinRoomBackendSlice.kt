@@ -11,7 +11,16 @@ import cc.ptoe.messenger.data.cloud.RoomCloudHttpClient
 import cc.ptoe.messenger.data.cloud.defaultCloudServerUrl
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ThemePreferences
+import cc.ptoe.messenger.data.local.acp.AcpGatewayBackend
+import cc.ptoe.messenger.data.local.acp.AcpGatewayTool
+import cc.ptoe.messenger.data.local.acp.AcpSkillsGatewayBackend
+import cc.ptoe.messenger.data.local.acp.AcpStdioWorker
+import cc.ptoe.messenger.data.local.acp.KotlinAcpBackgroundBridge
+import cc.ptoe.messenger.data.local.acp.RoomAcpBackgroundOwner
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
+import cc.ptoe.messenger.data.local.artifact.ArtifactExecutionService
+import cc.ptoe.messenger.data.local.artifact.ArtifactSandboxHost
+import cc.ptoe.messenger.data.local.artifact.RoomArtifactUiHost
 import cc.ptoe.messenger.data.local.asset.CoreAssetService
 import cc.ptoe.messenger.data.local.asset.LearningBundleService
 import cc.ptoe.messenger.data.local.asset.RoomAssetGate
@@ -31,6 +40,8 @@ import cc.ptoe.messenger.data.repository.LearningOwnership
 import cc.ptoe.messenger.data.repository.RoomLearningRepository
 import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.di.LocalStores
+import cc.ptoe.messenger.domain.artifact.ArtifactUiHost
+import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,14 +58,17 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import okio.Path.Companion.toPath
 
 /**
  * Partial, unconnected Room-only backend. The enclosing owner must exclude Rust and other Room
  * owners, stop all UI/other database users, and retain Room until [shutdown] has completed.
- * This is not an AppBackend: Runtime/ACP tools and media execution remain unavailable.
+ * This is not an AppBackend: Runtime tools, ACP Core tools and several media routes remain unavailable.
  * Only opted-in learning and artifact Core tools can execute; the optional scheduler and
- * trusted-UI image jobs require explicit previous-worker stop proofs.
+ * trusted-UI image jobs require explicit previous-worker stop proofs. Optional ACP requires a
+ * platform owner and a configuration fence shared by all project, settings and MCP writers.
+ * The optional artifact host requires trusted device-user consent and a native sandbox owner.
  */
 internal class KotlinRoomBackendSlice private constructor(
     val stores: LocalStores,
@@ -70,6 +84,8 @@ internal class KotlinRoomBackendSlice private constructor(
     val assetGate: RoomAssetGate,
     val scheduler: IsolatedRoomScheduler?,
     val imageOwner: RoomImageJobOwner?,
+    val acpOwner: RoomAcpBackgroundOwner?,
+    val artifactUiHost: ArtifactUiHost?,
 ) {
     companion object {
         /** Call only inside a managed, exclusive Room owner after previous workers have stopped. */
@@ -86,6 +102,8 @@ internal class KotlinRoomBackendSlice private constructor(
             now: () -> Long = ::currentTimeMillis,
             schedulerRecovery: ScheduledRecoveryBarrier? = null,
             imageJobs: IsolatedImageJobsConfig? = null,
+            acpConfig: IsolatedAcpConfig? = null,
+            artifactUi: IsolatedArtifactUiConfig? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             val gate = RoomAssetGate()
@@ -95,6 +113,10 @@ internal class KotlinRoomBackendSlice private constructor(
             val learningOwnership = LearningOwnership(db, assets)
             val learning = RoomLearningRepository(db.learningReview(), learningOwnership, assets, packages, now)
             val artifacts = RoomArtifactService(db, assets)
+            val artifactHost = artifactUi?.let { config ->
+                RoomArtifactUiHost.attach(artifacts, ArtifactSandboxHost(ArtifactExecutionService(artifacts, assets), assets),
+                    config.consent, shutdown)
+            }
 
             val transport = RoomCloudHttpClient()
             try { withContext(NonCancellable) { shutdown.registerStop { transport.close() } } }
@@ -108,7 +130,20 @@ internal class KotlinRoomBackendSlice private constructor(
                 })
             val composition = KotlinRoomBridgeComposition.attach(db, shutdown, catalogUrl = catalogUrl,
                 syncBuiltinModels = cloud::syncBuiltinModels)
-            val acp = RoomAcpConversationStore(db, object : AcpSessionMutationGate {
+            val skillStore = RoomSkillStore(db)
+            val acpOwner = acpConfig?.let { config ->
+                val unsupported = object : AcpGatewayBackend {
+                    override suspend fun liveTools(): List<AcpGatewayTool> = emptyList()
+                    override suspend fun execute(turnId: String, name: String, arguments: JsonObject) =
+                        ToolExecutionResult("ACP tool is unavailable", isError = true)
+                }
+                RoomAcpBackgroundOwner.attach(db, config.databasePath, shutdown, config.previousOwner,
+                    config.configurationFence, config.sessions, config.mcpCatalog, AcpSkillsGatewayBackend(skillStore, unsupported),
+                    { skillStore.discovery(permitted = true) != null }, { binding, events ->
+                        AcpStdioWorker(config.transport(binding), config.endpoints, { skillStore.discovery(permitted = true) }, events)
+                    }, now)
+            }
+            val acp = RoomAcpConversationStore(db, acpOwner?.mutationGate ?: object : AcpSessionMutationGate {
                 override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T =
                     error("ACP session mutations require the Kotlin ACP host")
             })
@@ -123,8 +158,9 @@ internal class KotlinRoomBackendSlice private constructor(
             val messages = RoomMessageRepository(db) { cloud.requestLocalSync() }
             val selected = RoomCurrentAgentRepository(db, agents)
 
-            val skills = KotlinSkillBridge(composition.bridge, RoomSkillStore(db), remote = null)
+            val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = null)
             val controls = KotlinControlSettingsBridge(skills, db)
+            val acpBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession) else controls
             var modelImageTool: IsolatedModelImageTool? = null
             var sharedImageService: ImageGenerationService? = null
             val imageOwner = imageJobs?.let { config ->
@@ -142,14 +178,14 @@ internal class KotlinRoomBackendSlice private constructor(
                 modelImageTool = config.modelAuthorization?.let { IsolatedModelImageTool(service, it) }
                 owner
             }
-            val media = KotlinRoomMediaBridge(controls, db, assets, artifacts, imageOwner = imageOwner, now = now)
+            val media = KotlinRoomMediaBridge(acpBridge, db, assets, artifacts, imageOwner = imageOwner, now = now)
             val scheduledTasks = schedulerRecovery?.let { RoomScheduledTasks(db) }
             val scheduledBridge = scheduledTasks?.let { ScheduledCoreBridge(media, RoomScheduledTaskBridge(it)) } ?: media
             val processJob = SupervisorJob()
             val processScope = CoroutineScope(processJob + Dispatchers.IO)
             val rawBridge = IsolatedCoreTurnBridge(scheduledBridge, db, learningOwnership, artifacts, cloud.providerGate, processScope, now, modelImageTool)
             val admissions = PartialChatCalls()
-            val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, admissions)
+            val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions)
             try { withContext(NonCancellable) { shutdown.registerStop { bridge.shutdown() } } }
             catch (failure: Throwable) {
                 try { bridge.shutdown() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
@@ -160,7 +196,8 @@ internal class KotlinRoomBackendSlice private constructor(
                     .also { scheduler -> scheduler.start() }
             }
             return KotlinRoomBackendSlice(LocalStores(cloud, appPreferences, themePreferences), bridge,
-                providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner)
+                providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
+                artifactHost)
         }
     }
 }
@@ -172,6 +209,7 @@ private class PartialChatBridge(
     private val scheduledTasks: RoomScheduledTasks?,
     private val imageOwner: RoomImageJobOwner?,
     private val imageService: ImageGenerationService?,
+    private val acpOwner: RoomAcpBackgroundOwner?,
     private val calls: PartialChatCalls,
 ) : CoreBridge by delegate {
     private suspend fun <T> admitted(block: suspend () -> T): T = calls.run(block)
@@ -185,7 +223,7 @@ private class PartialChatBridge(
     override suspend fun respondToolApproval(callId: String, approved: Boolean) = admitted { delegate.respondToolApproval(callId, approved) }
     override suspend fun toolApprovalSettings(method: String, body: String?) = admitted { delegate.toolApprovalSettings(method, body) }
     override suspend fun hasActiveTasks() = admitted {
-        delegate.hasActiveTasks() || scheduledTasks?.hasActiveRuns() == true || imageOwner?.hasActiveJobs() == true
+        delegate.hasActiveTasks() || scheduledTasks?.hasActiveRuns() == true || imageOwner?.hasActiveJobs() == true || acpOwner?.hasActiveTasks() == true
     }
     override suspend fun learningRequest(method: String, path: String, body: String?) =
         admitted { delegate.learningRequest(method, path, body) }

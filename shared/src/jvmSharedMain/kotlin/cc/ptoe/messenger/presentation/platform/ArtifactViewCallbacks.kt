@@ -17,8 +17,11 @@ internal class ArtifactViewCallbacks(
 
     val active: Boolean get() = synchronized(lock) { !closed }
 
-    fun dispatch(raw: String, reply: (String) -> Unit) = synchronized(lock) {
-        if (!closed) handler(raw) { value -> synchronized(lock) { if (!closed) reply(value) } }
+    fun dispatch(raw: String, reply: (String) -> Unit) {
+        if (synchronized(lock) { closed }) return
+        // The handler may acquire a binding lock while a reply holds that binding lock and
+        // enters this callback. Never invoke the handler while holding this monitor.
+        handler(raw) { value -> synchronized(lock) { if (!closed) reply(value) } }
     }
 
     fun close() {
