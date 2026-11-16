@@ -5,7 +5,16 @@ import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.local.room.ConversationRow
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
+import cc.ptoe.messenger.data.repository.room.RoomAgentRepository
+import cc.ptoe.messenger.data.repository.room.RoomMessageRepository
+import cc.ptoe.messenger.data.repository.room.RoomProjectRepository
+import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.Message
+import cc.ptoe.messenger.domain.model.MessageRole
+import cc.ptoe.messenger.domain.model.MessageStatus
+import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
@@ -17,15 +26,87 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RuntimeWorkspaceFenceTest {
+    @Test fun replacingTheAdapterCannotDiscardAnUncertainOperation(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-fence-owner")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val host = object : TrackedWorkspaceHost {
+            override val protocolAvailable = true
+            override val supportedOperations = setOf("read")
+            override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("must not replay")
+            override suspend fun status(token: String) = TrackedWorkspaceStatus.STOPPED
+        }
+        try {
+            suspend fun dispatchFromDiscardedAdapter() {
+                val fence = RuntimeWorkspaceFence.forDatabase(db)
+                assertFailsWith<IllegalStateException> { fence.execute("c".repeat(64), host) { it(); error("connection lost") } }
+            }
+            dispatchFromDiscardedAdapter()
+            // The adapter and its fence are no longer referenced by the caller, but Room is live.
+            repeat(3) { System.gc() }
+            val replacement = RuntimeWorkspaceFence.forDatabase(db)
+            assertFailsWith<IllegalStateException> { replacement.mutate { Unit } }
+            replacement.recover(host)
+            assertFailsWith<IllegalStateException> { replacement.execute("c".repeat(64), host) { it(); Unit } }
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun projectWritesShareTheOwnerFenceAndWaitForStopEvidence(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-project-fence")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            assertSame(fence, RuntimeWorkspaceFence.forDatabase(db))
+            val repository = RoomProjectRepository(db)
+            val entered = CompletableDeferred<Unit>()
+            var stopped = false
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = if (stopped) TrackedWorkspaceStatus.STOPPED else TrackedWorkspaceStatus.UNKNOWN
+            }
+            val operation = async { fence.execute("a".repeat(64), host) { dispatch ->
+                dispatch(); entered.complete(Unit); release.await()
+            } }
+            withTimeout(5_000) { entered.await() }
+            val write = async(start = CoroutineStart.UNDISPATCHED) {
+                repository.insert(Project("project", "Project", "/workspace", 1, 1))
+            }
+            assertFalse(write.isCompleted)
+            assertEquals(null, db.rows().project("project"))
+            release.complete(Unit)
+            withTimeout(5_000) { operation.await(); write.await() }
+            assertEquals("/workspace", db.rows().project("project")?.workspace)
+
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("agent", "Agent", systemPrompt = "prompt", defaultModelId = null,
+                temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
+            db.rows().upsertConversations(listOf(ConversationRow("chat", "Chat", "provider", "agent", "project",
+                null, null, null, null, null, null, null, true, 1, 1, null, null, null, 0, 0, 0)))
+            assertFailsWith<IllegalStateException> { fence.execute("b".repeat(64), host) { it(); error("connection lost") } }
+            assertFailsWith<IllegalStateException> { repository.update(Project("project", "Changed", "/new", 1, 2)) }
+            assertEquals("/workspace", db.rows().project("project")?.workspace)
+            RoomMessageRepository(db).insert(Message("error", "chat", MessageRole.ASSISTANT, "Connection lost",
+                timestamp = 2, status = MessageStatus.ERROR, errorMessage = "Connection lost"))
+            assertEquals("Connection lost", db.rows().message("error")?.errorMessage)
+            stopped = true
+            fence.recover(host)
+            repository.update(Project("project", "Changed", "/new", 1, 2))
+            assertEquals("/new", db.rows().project("project")?.workspace)
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
     @Test fun mutationWaitsForTheActualOperationAndUnknownStopBlocksFurtherWork(): Unit = runBlocking {
         val dir = Files.createTempDirectory("workspace-fence")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
             .setDriver(BundledSQLiteDriver()).build()
         try {
-            val fence = RuntimeWorkspaceFence(db)
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
             val started = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             val token = "a".repeat(64)

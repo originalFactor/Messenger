@@ -20,7 +20,9 @@ import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -65,18 +67,28 @@ private data class Snapshot(val source: GithubSource, val revision: String, val 
         .map { it.removeSuffix("SKILL.md").trimEnd('/') }.sorted().toList()
 }
 
-/** GitHub REST only. No clone, checkout, scripts, credentials, redirects, or ambient proxy. */
-internal class RemoteSkillImport(private val http: RemoteSkillHttp = GithubHttp) {
-    companion object {
-        private val operations = Semaphore(2)
-        private val starts = ArrayDeque<Long>()
-        @Synchronized private fun admitRate() {
-            val now = System.nanoTime()
-            while (starts.isNotEmpty() && now - starts.first >= TimeUnit.MINUTES.toNanos(1)) starts.removeFirst()
-            check(starts.size < 20) { "Remote skill operation rate exceeded" }
-            starts.addLast(now)
-        }
+/** The default limiter is process-wide; tests may provide an independent limiter. */
+internal class RemoteSkillLimiter {
+    private val operations = Semaphore(2)
+    private val starts = ArrayDeque<Long>()
+    @Synchronized private fun admitRate() {
+        val now = System.nanoTime()
+        while (starts.isNotEmpty() && now - starts.first >= TimeUnit.MINUTES.toNanos(1)) starts.removeFirst()
+        check(starts.size < 20) { "Remote skill operation rate exceeded" }
+        starts.addLast(now)
     }
+    suspend fun <T> run(block: suspend () -> T): T {
+        check(operations.tryAcquire()) { "Too many remote skill operations" }
+        return try { admitRate(); withTimeout(90_000) { block() } } finally { operations.release() }
+    }
+}
+private val defaultRemoteSkillLimiter = RemoteSkillLimiter()
+
+/** GitHub REST only. No clone, checkout, scripts, credentials, redirects, or ambient proxy. */
+internal class RemoteSkillImport(
+    private val http: RemoteSkillHttp = GithubHttp,
+    private val limiter: RemoteSkillLimiter = defaultRemoteSkillLimiter,
+) {
 
     suspend fun discover(request: RemoteSkillRequest): RemoteSkillCatalog = limited {
         val budget = Budget(http)
@@ -145,10 +157,7 @@ internal class RemoteSkillImport(private val http: RemoteSkillHttp = GithubHttp)
         return store.create(name, data)
     }
 
-    private suspend fun <T> limited(block: suspend () -> T): T {
-        check(operations.tryAcquire()) { "Too many remote skill operations" }
-        return try { admitRate(); withTimeout(90_000) { block() } } finally { operations.release() }
-    }
+    private suspend fun <T> limited(block: suspend () -> T): T = limiter.run(block)
 
     private suspend fun snapshot(request: RemoteSkillRequest, budget: Budget, requirePinned: Boolean): Snapshot {
         val source = parseGithub(request.source)
@@ -286,23 +295,46 @@ private object GithubHttp : RemoteSkillHttp {
         val accept = if (url.pathSegments.size == 6 && url.pathSegments[3] == "git" && url.pathSegments[4] == "blobs") "application/vnd.github.raw+json" else "application/vnd.github+json"
         val call = base.newBuilder().dns(dns).build().newCall(Request.Builder().url(url)
             .header("User-Agent", "Messenger-Skills-Import").header("Accept", accept).get().build())
+        return awaitRemoteSkillCall(call, limit)
+    }
+}
+
+/** Cancellation closes the socket and waits until OkHttp finishes its callback and body cleanup. */
+internal suspend fun awaitRemoteSkillCall(call: Call, limit: Int): ByteArray {
+    require(limit >= 0) { "Invalid response limit" }
+    val finished = CompletableDeferred<Unit>()
+    try {
         return suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) { if (continuation.isActive) continuation.resumeWithException(e) }
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        val data = response.use {
-                            check(it.isSuccessful && it.code !in 300..399) { "GitHub HTTP ${it.code}" }
-                            val source = it.body.source()
-                            source.request(limit.toLong() + 1)
-                            require(source.buffer.size <= limit) { "Remote response exceeds size limit" }
-                            source.readByteArray()
-                        }
-                        if (continuation.isActive) continuation.resume(data)
-                    } catch (e: Exception) { if (continuation.isActive) continuation.resumeWithException(e) }
-                }
-            })
+            try {
+                call.enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        try { if (continuation.isActive) continuation.resumeWithException(e) }
+                        finally { finished.complete(Unit) }
+                    }
+                    override fun onResponse(call: Call, response: Response) {
+                        try {
+                            val data = response.use {
+                                check(it.isSuccessful && it.code !in 300..399) { "GitHub HTTP ${it.code}" }
+                                val source = it.body.source()
+                                source.request(limit.toLong() + 1)
+                                require(source.buffer.size <= limit) { "Remote response exceeds size limit" }
+                                source.readByteArray()
+                            }
+                            if (continuation.isActive) continuation.resume(data)
+                        } catch (e: Exception) { if (continuation.isActive) continuation.resumeWithException(e) }
+                        finally { finished.complete(Unit) }
+                    }
+                })
+            } catch (failure: Throwable) {
+                finished.complete(Unit)
+                throw failure
+            }
+        }
+    } finally {
+        withContext(NonCancellable) {
+            if (!finished.isCompleted) call.cancel()
+            finished.await()
         }
     }
 }

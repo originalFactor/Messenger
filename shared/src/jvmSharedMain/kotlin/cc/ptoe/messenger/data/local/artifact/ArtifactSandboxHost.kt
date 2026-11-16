@@ -36,7 +36,14 @@ internal data class ArtifactSandboxPackage(val files: Map<String, String>, val e
  */
 internal class ArtifactSandboxHost(private val executions: ArtifactExecutionService, private val assets: CoreAssetService) {
     suspend fun open(id: String, expectedRevision: Long? = null): ArtifactSandboxBinding {
-        val session = executions.open(id, expectedRevision)
+        return prepare(executions.open(id, expectedRevision))
+    }
+
+    /** A historical grant is created only by the trusted UI host after explicit consent. */
+    suspend fun openHistorical(grant: HistoricalArtifactGrant): ArtifactSandboxBinding =
+        prepare(executions.openHistorical(grant))
+
+    private suspend fun prepare(session: ArtifactExecutionSession): ArtifactSandboxBinding {
         try {
             val (revision, _) = session.packageSnapshot()
             val files = revision.files.toMutableMap()

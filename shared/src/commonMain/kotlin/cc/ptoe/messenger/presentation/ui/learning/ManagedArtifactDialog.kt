@@ -32,7 +32,6 @@ internal fun ManagedArtifactDialog(id: String, host: ArtifactUiHost, onDismiss: 
     var edit by remember(id) { mutableStateOf(false) }
     var save by remember(id) { mutableStateOf(false) }
     var showNetwork by remember(id) { mutableStateOf(false) }
-    var confirmRun by remember(id) { mutableStateOf(false) }
     var busy by remember(id) { mutableStateOf(false) }
     var grants by remember(id) { mutableStateOf<Set<String>>(emptySet()) }
     var refresh by remember(id) { mutableIntStateOf(0) }
@@ -54,10 +53,10 @@ internal fun ManagedArtifactDialog(id: String, host: ArtifactUiHost, onDismiss: 
     val revision = current?.get("revision")?.jsonPrimitive?.longOrNull
     val latest = index >= 0 && index == revisions.lastIndex
     val stateVersion = artifact?.get("stateVersion")?.jsonPrimitive?.longOrNull
-    var authorized by remember(id, revision, latest) { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(id, revision, latest, refresh) {
+    var authorized by remember(host, id, revision, current, latest) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(host, id, revision, current, latest, refresh) {
         authorized = null
-        if (latest && revision != null) {
+        if (revision != null) {
             try { authorized = host.isRevisionAuthorized(id, revision) }
             catch (cancel: CancellationException) { throw cancel }
             catch (failure: Exception) { error = failure.message }
@@ -76,7 +75,7 @@ internal fun ManagedArtifactDialog(id: String, host: ArtifactUiHost, onDismiss: 
                     Text(stringResource(Res.string.media_version, index + 1), modifier = Modifier.padding(top = 12.dp))
                     TextButton(enabled = index >= 0 && index < revisions.lastIndex,
                         onClick = { selected = if (index + 1 == revisions.lastIndex) -1 else index + 1 }) { Text(stringResource(Res.string.media_next)) }
-                    TextButton(onClick = { showNetwork = !showNetwork }) { Text(stringResource(Res.string.media_network)) }
+                    TextButton(enabled = latest, onClick = { showNetwork = !showNetwork }) { Text(stringResource(Res.string.media_network)) }
                     TextButton(enabled = artifact != null, onClick = { edit = true }) { Text(stringResource(Res.string.media_edit)) }
                     TextButton(enabled = artifact != null, onClick = { save = true }) { Text(stringResource(Res.string.learning_save)) }
                     TextButton(enabled = latest && authorized == true && revision != null && stateVersion != null && !busy, onClick = {
@@ -90,7 +89,7 @@ internal fun ManagedArtifactDialog(id: String, host: ArtifactUiHost, onDismiss: 
                     }) { Text(stringResource(Res.string.media_reset)) }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (showNetwork) {
+                if (showNetwork && latest) {
                     Text(stringResource(Res.string.media_network_description), style = MaterialTheme.typography.bodySmall)
                     val requested = artifact?.list("requestedDomains").orEmpty().map { it.jsonPrimitive.content }
                     if (requested.isEmpty()) Text(stringResource(Res.string.media_no_network))
@@ -109,35 +108,53 @@ internal fun ManagedArtifactDialog(id: String, host: ArtifactUiHost, onDismiss: 
                         }
                     }) { Text(stringResource(Res.string.media_apply_network)) }
                 }
+                if (!latest && current != null) Text(stringResource(Res.string.media_previous_preview_readonly))
                 when {
-                    !latest && current != null -> Text(stringResource(Res.string.media_previous_preview_unavailable))
                     error != null && (revision == null || authorized == null) -> Unit
                     revision == null || authorized == null -> CircularProgressIndicator()
-                    authorized == false -> Button(enabled = !busy, onClick = { confirmRun = true }) {
-                        Text(stringResource(Res.string.media_run_authorize))
+                    authorized == false -> ArtifactRunConfirmation(
+                        id = id, revision = revision, content = checkNotNull(current), latest = latest,
+                        changeToken = signal to refresh, busy = busy,
+                    ) { targetId, targetRevision, targetContent ->
+                        scope.launch {
+                            busy = true
+                            try { host.authorizeRevision(targetId, targetRevision, targetContent); authorized = true }
+                            catch (cancel: CancellationException) { throw cancel }
+                            catch (failure: Exception) { error = failure.message }
+                            finally { busy = false }
+                        }
                     }
                     else -> ManagedArtifactPreview(host, id, revision, Modifier.fillMaxWidth().weight(1f))
                 }
             }
         }
     }
-    if (confirmRun && revision != null) {
-        AlertDialog(onDismissRequest = { if (!busy) confirmRun = false },
-            title = { Text(stringResource(Res.string.media_run_authorize_title)) },
-            text = { Text(stringResource(Res.string.media_run_authorize_message)) },
-            dismissButton = { TextButton(enabled = !busy, onClick = { confirmRun = false }) { Text(stringResource(Res.string.media_cancel)) } },
-            confirmButton = { TextButton(enabled = !busy, onClick = {
-                scope.launch {
-                    busy = true
-                    try { host.authorizeRevision(id, revision); authorized = true; confirmRun = false }
-                    catch (cancel: CancellationException) { throw cancel }
-                    catch (failure: Exception) { error = failure.message }
-                    finally { busy = false }
-                }
-            }) { Text(stringResource(Res.string.media_run_authorize)) } })
-    }
     if (save && artifact != null) SaveMediaDialog(title = artifact!!.text("title"), artifactId = id, onDismiss = { save = false })
     if (edit && artifact != null) ArtifactEditor(existing = artifact, onDismiss = { edit = false }, onSaved = { edit = false; selected = -1; refresh++ })
+}
+
+/** A pending decision belongs to the exact content and selection visible when it was requested. */
+@Composable
+internal fun ArtifactRunConfirmation(
+    id: String, revision: Long, content: JsonObject, latest: Boolean, changeToken: Any?, busy: Boolean,
+    onAuthorize: (String, Long, JsonObject) -> Unit,
+) {
+    data class Selection(val id: String, val revision: Long, val content: JsonObject)
+    var pending by remember(id, revision, content, latest, changeToken) { mutableStateOf<Selection?>(null) }
+    Button(enabled = !busy, onClick = { pending = Selection(id, revision, content) }) {
+        Text(stringResource(Res.string.media_run_authorize))
+    }
+    val target = pending
+    if (target != null) {
+        AlertDialog(onDismissRequest = { if (!busy) pending = null },
+            title = { Text(stringResource(Res.string.media_run_authorize_title)) },
+            text = { Text(stringResource(Res.string.media_run_authorize_message)) },
+            dismissButton = { TextButton(enabled = !busy, onClick = { pending = null }) { Text(stringResource(Res.string.media_cancel)) } },
+            confirmButton = { TextButton(enabled = !busy, onClick = {
+                pending = null
+                onAuthorize(target.id, target.revision, target.content)
+            }) { Text(stringResource(Res.string.media_run_authorize)) } })
+    }
 }
 
 /** Inline content never grants authorization; users must explicitly open and approve it. */

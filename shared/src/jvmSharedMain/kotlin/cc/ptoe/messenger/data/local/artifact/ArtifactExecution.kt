@@ -93,6 +93,14 @@ internal class ArtifactExecutionService(
             ArtifactExecutionSession(artifacts, assets, dns, transport, limiter, id, revision.revision, artifact.stateVersion).also { it.register() }
         }
     }
+
+    /** Opens only a host-approved historical package, with no state or network authority. */
+    suspend fun openHistorical(grant: HistoricalArtifactGrant): ArtifactExecutionSession =
+        artifacts.withHistoricalGrant(grant) { artifact ->
+            val selected = artifact.revisions.single { it.revision == grant.revision }
+            ArtifactExecutionSession(artifacts, assets, dns, transport, limiter, grant.id, selected.revision,
+                selected.stateVersion, grant).also { it.register() }
+        }
 }
 
 /** This capability contains no provider credentials; it is never exposed directly to generated code. */
@@ -100,6 +108,7 @@ internal class ArtifactExecutionSession internal constructor(
     private val artifacts: RoomArtifactService, private val assets: CoreAssetService,
     private val dns: ArtifactDns, private val transport: ArtifactTransport, private val limiter: ArtifactRequestLimiter,
     private val id: String, private val revision: Long, private val stateVersion: Long,
+    private val historical: HistoricalArtifactGrant? = null,
 ) {
     private val closed = AtomicBoolean(false)
     private val stateLock = Mutex()
@@ -119,26 +128,37 @@ internal class ArtifactExecutionSession internal constructor(
         artifacts.removeListener(id, invalidated)
     }
 
-    private suspend fun current(): ArtifactData = artifacts.withExecutionAuthorization(id, revision) { value ->
-        check(!closed.get() && value.stateVersion == stateVersion) { "Artifact session is closed or state version changed" }
-        value
+    private suspend fun current(): ArtifactData {
+        val validate: suspend (ArtifactData) -> ArtifactData = { value ->
+            check(!closed.get() && (historical != null || value.stateVersion == stateVersion)) { "Artifact session is closed or state version changed" }
+            value
+        }
+        return if (historical == null) artifacts.withExecutionAuthorization(id, revision, validate)
+        else artifacts.withHistoricalGrant(historical, validate)
     }
 
+    private fun selected(value: ArtifactData): ArtifactRevision =
+        value.revisions.single { it.revision == revision }
+
     /** Only the host receives the package, and must serve it within the opaque sandbox. */
-    suspend fun packageSnapshot(): Pair<ArtifactRevision, JsonElement> = current().let { it.revisions.last() to it.state }
-    suspend fun getState(): JsonElement = current().state
+    suspend fun packageSnapshot(): Pair<ArtifactRevision, JsonElement> = current().let {
+        selected(it) to if (historical == null) it.state else kotlinx.serialization.json.JsonNull
+    }
+    suspend fun getState(): JsonElement = current().let { if (historical == null) it.state else kotlinx.serialization.json.JsonNull }
     suspend fun setState(value: JsonElement): JsonElement = stateLock.withLock {
+        check(historical == null) { "Historical artifact previews are read-only" }
         current()
         artifacts.saveState(id, revision, stateVersion, value).state
     }
     suspend fun readAsset(path: String): ByteArray {
         val artifact = current()
-        val assetId = artifact.revisions.last().assets[path] ?: error("Asset is not part of this revision")
+        val assetId = selected(artifact).assets[path] ?: error("Asset is not part of this revision")
         val bytes = assets.read(assetId)
         current()
         return bytes
     }
     suspend fun fetch(request: ArtifactFetchRequest): ArtifactFetchResponse = coroutineScope {
+        check(historical == null) { "Historical artifact previews cannot use network access" }
         val task = async(start = CoroutineStart.LAZY) {
             withTimeout(20_000) {
                 val artifact = current()

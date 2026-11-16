@@ -30,6 +30,7 @@ import cc.ptoe.messenger.data.local.image.RoomImageJobOwner
 import cc.ptoe.messenger.data.local.image.SafeImageDownloader
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.skill.KotlinSkillBridge
+import cc.ptoe.messenger.data.local.skill.RemoteSkillImport
 import cc.ptoe.messenger.data.local.skill.RoomSkillStore
 import cc.ptoe.messenger.data.local.schedule.RoomScheduledTaskBridge
 import cc.ptoe.messenger.data.local.schedule.RoomScheduledTasks
@@ -104,6 +105,7 @@ internal class KotlinRoomBackendSlice private constructor(
             imageJobs: IsolatedImageJobsConfig? = null,
             acpConfig: IsolatedAcpConfig? = null,
             artifactUi: IsolatedArtifactUiConfig? = null,
+            remoteSkills: RemoteSkillImport? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             val gate = RoomAssetGate()
@@ -158,7 +160,7 @@ internal class KotlinRoomBackendSlice private constructor(
             val messages = RoomMessageRepository(db) { cloud.requestLocalSync() }
             val selected = RoomCurrentAgentRepository(db, agents)
 
-            val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = null)
+            val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = remoteSkills)
             val controls = KotlinControlSettingsBridge(skills, db)
             val acpBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession) else controls
             var modelImageTool: IsolatedModelImageTool? = null

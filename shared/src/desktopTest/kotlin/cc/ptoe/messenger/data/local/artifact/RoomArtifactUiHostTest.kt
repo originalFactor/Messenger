@@ -4,17 +4,24 @@ package cc.ptoe.messenger.data.local.artifact
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.local.asset.CoreAssetService
+import cc.ptoe.messenger.data.local.asset.CoreAssetOwner
 import cc.ptoe.messenger.data.local.asset.RoomAssetGate
+import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.presentation.platform.ArtifactViewCallbacks
 import java.net.InetAddress
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.Base64
+import javax.imageio.ImageIO
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -26,7 +33,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -50,6 +59,40 @@ class RoomArtifactUiHostTest {
         val artifacts = RoomArtifactService(db, assets)
         val shutdown = RoomManagedShutdown { }
         override fun close() { db.close(); path.toFile().deleteRecursively() }
+    }
+
+    @Test fun bothConsentEntryPointsRejectReplacementWhileDeviceDecisionIsPending(): Unit = runBlocking {
+        val fixture = Fixture(Files.createTempDirectory("artifact-ui-content-consent"))
+        try {
+            val app = fixture.artifacts.submit(ArtifactDraft(title = "App", files = mapOf("index.html" to "reviewed")), 1)
+            val reviewed = Json { encodeDefaults = true }.encodeToJsonElement(app.revisions.single()).jsonObject
+            var calls = 0
+            val consent = object : ArtifactUiConsent {
+                override suspend fun authorizeRevision(id: String, revision: Long) {
+                    calls++
+                    val replaced = app.copy(revisions = listOf(app.revisions.single().copy(files = mapOf("index.html" to "replacement"))))
+                    fixture.gate.withExclusiveAssets {
+                        fixture.db.rows().upsertValues(listOf(KeyValueRow("artifact:$id", Json { encodeDefaults = true }.encodeToString(replaced))))
+                    }
+                }
+                override suspend fun grantDomains(id: String, revision: Long, domains: List<String>) = Unit
+            }
+            val host = RoomArtifactUiHost.attach(fixture.artifacts,
+                ArtifactSandboxHost(ArtifactExecutionService(fixture.artifacts, fixture.assets), fixture.assets), consent, fixture.shutdown)
+            fixture.shutdown.enter()
+            assertFailsWith<IllegalStateException> { host.authorizeRevision(app.id, 1) }
+            assertEquals(1, calls)
+            assertFalse(host.isRevisionAuthorized(app.id, 1))
+            fixture.gate.withExclusiveAssets {
+                fixture.db.rows().upsertValues(listOf(KeyValueRow("artifact:${app.id}", Json { encodeDefaults = true }.encodeToString(app))))
+            }
+            assertFailsWith<IllegalStateException> { host.authorizeRevision(app.id, 1, reviewed) }
+            assertEquals(2, calls)
+            assertFalse(host.isRevisionAuthorized(app.id, 1))
+            assertFailsWith<IllegalStateException> { host.authorizeRevision(app.id, 1, reviewed) }
+            assertEquals(2, calls) // The stale package is rejected before another device prompt.
+            fixture.shutdown.stopAndAwait()
+        } finally { fixture.close() }
     }
 
     @Test fun explicitConsentAndRevisionAreRecheckedBeforeMutations(): Unit = runBlocking {
@@ -84,11 +127,79 @@ class RoomArtifactUiHostTest {
             changeDuringConsent = true
             assertFailsWith<IllegalStateException> { host.grantDomains(artifact.id, 2, listOf("example.com")) }
             assertFalse(bound.active.value)
-            assertFailsWith<IllegalStateException> { host.isRevisionAuthorized(artifact.id, 2) }
+            assertFalse(host.isRevisionAuthorized(artifact.id, 2))
             assertFailsWith<IllegalStateException> { host.restart(bound) }
             assertTrue(fixture.artifacts.get(artifact.id).approvedDomains.isEmpty())
             fixture.shutdown.stopAndAwait()
             assertFailsWith<IllegalStateException> { host.open(artifact.id, 3) }
+        } finally { fixture.close() }
+    }
+
+    @Test fun historicalPreviewRequiresItsOwnConsentAndCannotWriteStateOrAccessNetwork(): Unit = runBlocking {
+        val fixture = Fixture(Files.createTempDirectory("artifact-ui-history"))
+        try {
+            val png = ByteArrayOutputStream().use { out ->
+                check(ImageIO.write(BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", out)); out.toByteArray()
+            }
+            val oldAsset = fixture.assets.importFile(png, "image/png", CoreAssetOwner("learning", "history"), 1)
+            val draft = ArtifactDraft(title = "App", files = mapOf("index.html" to "old"),
+                assets = mapOf("old.png" to oldAsset.id), requestedDomains = listOf("example.com"))
+            val app = fixture.artifacts.submit(draft, 1)
+            fixture.artifacts.submit(draft.copy(id = app.id, expectedRevision = 1, files = mapOf("index.html" to "new"), assets = emptyMap()), 2)
+            val approvals = mutableListOf<Long>()
+            val consent = object : ArtifactUiConsent {
+                override suspend fun authorizeRevision(id: String, revision: Long) { approvals.add(revision) }
+                override suspend fun grantDomains(id: String, revision: Long, domains: List<String>) = Unit
+            }
+            val networkCalls = AtomicInteger()
+            val executions = ArtifactExecutionService(fixture.artifacts, fixture.assets,
+                ArtifactDns { listOf(InetAddress.getByName("8.8.8.8")) },
+                ArtifactTransport { _, _, _ -> networkCalls.incrementAndGet(); ArtifactFetchResponse(200, "unexpected") })
+            val host = RoomArtifactUiHost.attach(fixture.artifacts, ArtifactSandboxHost(executions, fixture.assets), consent, fixture.shutdown)
+            fixture.shutdown.enter()
+            host.authorizeRevision(app.id, 2)
+            host.grantDomains(app.id, 2, listOf("example.com"))
+            assertFalse(host.isRevisionAuthorized(app.id, 1))
+            assertFailsWith<IllegalStateException> { host.open(app.id, 1) }
+            host.authorizeRevision(app.id, 1)
+            assertEquals(listOf(2L, 1L), approvals)
+            assertTrue(host.isRevisionAuthorized(app.id, 1))
+            val historical = host.open(app.id, 1)
+            assertEquals("old", historical.files.getValue("index.html"))
+            assertEquals("data:image/png;base64,${Base64.getEncoder().encodeToString(png)}", historical.files.getValue("old.png"))
+            assertEquals("null", historical.stateJson)
+            suspend fun message(raw: String): kotlinx.serialization.json.JsonObject {
+                val response = CompletableDeferred<String>()
+                historical.onMessage(raw) { response.complete(it) }
+                return Json.parseToJsonElement(withTimeout(5_000) { response.await() }).jsonObject
+            }
+            assertEquals("null", message("""{"id":"read","method":"getState","params":{}}""").getValue("data").toString())
+            assertTrue("error" in message("""{"id":"write","method":"setState","params":{"state":"bad"}}"""))
+            assertTrue("error" in message("""{"id":"fetch","method":"fetch","params":{"url":"https://example.com"}}"""))
+            assertEquals(0, networkCalls.get())
+            assertEquals("null", fixture.artifacts.get(app.id).state.toString())
+            assertFailsWith<IllegalStateException> { host.grantDomains(app.id, 1, listOf("example.com")) }
+            // Historical grants are held only by this owner and are not durable or portable.
+            assertEquals(1, fixture.db.rows().valuesByPrefix("artifact_execution_authorization:").size)
+            // Replacing an old package cannot reuse the approval for its previous contents.
+            val original = fixture.artifacts.get(app.id)
+            val replaced = original.copy(revisions = original.revisions.map {
+                if (it.revision == 1L) it.copy(files = mapOf("index.html" to "replacement")) else it
+            })
+            fixture.gate.withExclusiveAssets {
+                fixture.db.rows().upsertValues(listOf(KeyValueRow("artifact:${app.id}", Json { encodeDefaults = true }.encodeToString(replaced))))
+            }
+            assertFalse(host.isRevisionAuthorized(app.id, 1))
+            assertFailsWith<IllegalStateException> { host.open(app.id, 1) }
+            assertTrue("error" in message("""{"id":"replaced","method":"getState","params":{}}"""))
+            fixture.shutdown.stopAndAwait()
+            assertFalse(historical.active.value)
+            val nextLifecycle = RoomManagedShutdown { }
+            val nextHost = RoomArtifactUiHost.attach(fixture.artifacts, ArtifactSandboxHost(executions, fixture.assets), consent, nextLifecycle)
+            nextLifecycle.enter()
+            assertFalse(nextHost.isRevisionAuthorized(app.id, 1))
+            assertFailsWith<IllegalStateException> { nextHost.open(app.id, 1) }
+            nextLifecycle.stopAndAwait()
         } finally { fixture.close() }
     }
 

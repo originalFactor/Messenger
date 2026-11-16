@@ -45,7 +45,7 @@ class KotlinRuntimeToolAdapterTest {
                 override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult { runs++; return ToolExecutionResult("output") }
                 override suspend fun status(token: String) = if (stopped) TrackedWorkspaceStatus.STOPPED else TrackedWorkspaceStatus.UNKNOWN
             }
-            val fence = RuntimeWorkspaceFence(db)
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
             lateinit var store: RoomKotlinTurnStore
             val adapter = KotlinRuntimeToolAdapter(db, grant, RuntimeWorkspaceVerifier { true }, { store }, host, fence, { listOf(tool) }, { true })
             store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(adapter), adapter)
@@ -93,7 +93,7 @@ class KotlinRuntimeToolAdapterTest {
                 override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult { executions++; return ToolExecutionResult("done") }
                 override suspend fun status(token: String) = TrackedWorkspaceStatus.STOPPED
             }
-            val fence = RuntimeWorkspaceFence(db)
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
             lateinit var store: RoomKotlinTurnStore
             val adapter = KotlinRuntimeToolAdapter(db, grant, RuntimeWorkspaceVerifier { true }, { store }, host, fence, { listOf(tool) }, { true })
             store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(adapter), adapter)
@@ -158,7 +158,7 @@ class KotlinRuntimeToolAdapterTest {
                 override suspend fun status(token: String) = if (stopped) TrackedWorkspaceStatus.STOPPED else TrackedWorkspaceStatus.RUNNING
             }
             val adapter = KotlinRuntimeToolAdapter(db, grant, RuntimeWorkspaceVerifier { it.hostIdentity == "host-build" }, { store }, host,
-                RuntimeWorkspaceFence(db), { listOf(tool) }, { true })
+                RuntimeWorkspaceFence.forDatabase(db), { listOf(tool) }, { true })
             store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(adapter), adapter)
             val call = ToolCallData("tool", "edit", "{}")
             var leases = 0

@@ -27,6 +27,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.put
 
 /** Implemented by trusted UI; each call must represent the device user's explicit decision. */
@@ -51,6 +52,8 @@ internal class RoomArtifactUiHost private constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val admitted = mutableSetOf<Job>()
     private val bindings = mutableSetOf<Binding>()
+    // Historical consent is intentionally process-local and is never exported or restored.
+    private val historicalGrants = mutableMapOf<Pair<String, Long>, HistoricalArtifactGrant>()
     private var stopping = false
     private var stopped = false
     private var cleanupFailure: Throwable? = null
@@ -86,14 +89,31 @@ internal class RoomArtifactUiHost private constructor(
 
     override suspend fun isRevisionAuthorized(id: String, revision: Long): Boolean = admission {
         require(revision > 0) { "Invalid artifact revision" }
-        artifacts.isExecutionAuthorized(id, revision)
+        if (artifacts.isHistorical(id, revision)) {
+            val current = artifacts.historicalGrant(id, revision)
+            synchronized(lock) { historicalGrants[id to revision] == current }
+        } else artifacts.isExecutionAuthorized(id, revision)
     }
 
-    override suspend fun authorizeRevision(id: String, revision: Long) = admission {
+    override suspend fun authorizeRevision(id: String, revision: Long) = authorize(id, revision, null)
+
+    override suspend fun authorizeRevision(id: String, revision: Long, expectedContent: JsonObject) =
+        authorize(id, revision, Json.decodeFromJsonElement<ArtifactRevision>(expectedContent))
+
+    private suspend fun authorize(id: String, revision: Long, expected: ArtifactRevision?) = admission {
         require(revision > 0) { "Invalid artifact revision" }
+        val snapshot = expected ?: artifacts.revisionSnapshot(id, revision)
+        artifacts.verifyRevision(id, revision, snapshot)
+        val historical = if (artifacts.isHistorical(id, revision)) artifacts.historicalGrant(id, revision, snapshot) else null
         consent.authorizeRevision(id, revision)
         currentCoroutineContext().ensureActive()
-        artifacts.authorizeExecution(id, revision)
+        if (historical == null) artifacts.authorizeExecution(id, revision, snapshot)
+        else artifacts.withHistoricalGrant(historical) {
+            synchronized(lock) {
+                check(!stopping && cleanupFailure == null) { "Artifact host is shutting down" }
+                historicalGrants[id to revision] = historical
+            }
+        }
     }
 
     override suspend fun grantDomains(id: String, revision: Long, domains: List<String>) = admission {
@@ -114,7 +134,8 @@ internal class RoomArtifactUiHost private constructor(
 
     private suspend fun openBinding(id: String, revision: Long): Binding {
         require(revision > 0) { "Invalid artifact revision" }
-        val native = sandbox.open(id, revision)
+        val historical = synchronized(lock) { historicalGrants[id to revision] }
+        val native = if (historical == null) sandbox.open(id, revision) else sandbox.openHistorical(historical)
         val binding = Binding(this, id, revision, native)
         try {
             binding.listenForInvalidation()
@@ -124,7 +145,13 @@ internal class RoomArtifactUiHost private constructor(
                 bindings.add(binding)
             }
             // A revision can change between package preparation and listener registration.
-            artifacts.withExecutionAuthorization(id, revision) { check(binding.active.value) { "Artifact binding changed" } }
+            if (historical == null) {
+                artifacts.withExecutionAuthorization(id, revision) { check(binding.active.value) { "Artifact binding changed" } }
+            } else artifacts.withHistoricalGrant(historical) {
+                synchronized(lock) {
+                    check(historicalGrants[id to revision] == historical && !stopping && binding.active.value) { "Artifact binding changed" }
+                }
+            }
             currentCoroutineContext().ensureActive()
             return binding
         } catch (failure: Throwable) {
@@ -167,7 +194,11 @@ internal class RoomArtifactUiHost private constructor(
     suspend fun shutdown() = withContext(NonCancellable) {
         shutdownLock.withLock {
             if (stopped) return@withLock
-            val (calls, beforeJoin) = synchronized(lock) { stopping = true; admitted.toList() to bindings.toList() }
+            val (calls, beforeJoin) = synchronized(lock) {
+                stopping = true
+                historicalGrants.clear()
+                admitted.toList() to bindings.toList()
+            }
             // Native callbacks lose authority immediately, even while an admitted UI call drains.
             beforeJoin.forEach { it.stop() }
             calls.forEach { it.cancel() }

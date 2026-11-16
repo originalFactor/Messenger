@@ -40,6 +40,8 @@ internal data class ArtifactDraft(
     val assets: Map<String, String> = emptyMap(), val entry: String = "index.html", val expectedRevision: Long = 0,
     val stateVersion: Long = 0, val requestedDomains: List<String> = emptyList(),
 )
+/** Process-local approval identity for one immutable, non-current revision. */
+internal data class HistoricalArtifactGrant(val id: String, val revision: Long, val fingerprint: String)
 
 /** Metadata and resource ownership only. Never executes or grants direct network/native access. */
 internal class RoomArtifactService(private val db: LocalDatabase, private val assets: CoreAssetService) {
@@ -58,12 +60,38 @@ internal class RoomArtifactService(private val db: LocalDatabase, private val as
         return MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
+    /** Resolve the precise package to be reviewed; historical authorization is never persisted. */
+    internal suspend fun historicalGrant(id: String, revision: Long, expected: ArtifactRevision? = null): HistoricalArtifactGrant = assets.withExclusive {
+        val artifact = load(id)
+        require(revision > 0 && revision < artifact.revisions.last().revision) { "Artifact revision is not historical" }
+        val selected = artifact.revisions.singleOrNull { it.revision == revision } ?: error("Artifact revision not found")
+        check(expected == null || selected == expected) { "Artifact revision content changed" }
+        HistoricalArtifactGrant(id, revision, executionFingerprint(selected))
+    }
+
+    /** Revalidate the exact historical package while holding the shared mutation gate. */
+    internal suspend fun <T> withHistoricalGrant(grant: HistoricalArtifactGrant, block: suspend (ArtifactData) -> T): T =
+        assets.withExclusive {
+            val artifact = load(grant.id)
+            val selected = artifact.revisions.singleOrNull { it.revision == grant.revision }
+            check(grant.revision < artifact.revisions.last().revision && selected != null &&
+                executionFingerprint(selected) == grant.fingerprint) { "Historical artifact revision changed" }
+            block(artifact)
+        }
+
+    internal suspend fun isHistorical(id: String, revision: Long): Boolean = assets.withExclusive {
+        val artifact = load(id)
+        require(artifact.revisions.any { it.revision == revision }) { "Artifact revision not found" }
+        revision < artifact.revisions.last().revision
+    }
+
     /** Caller must be a trusted device UI, after reviewing precisely this revision. */
-    suspend fun authorizeExecution(id: String, revision: Long) = assets.withExclusive {
+    suspend fun authorizeExecution(id: String, revision: Long, expected: ArtifactRevision? = null) = assets.withExclusive {
         db.useWriterConnection { connection ->
             connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
                 val artifact = load(id)
                 check(artifact.revisions.last().revision == revision) { "Artifact revision changed" }
+                check(expected == null || artifact.revisions.last() == expected) { "Artifact revision content changed" }
                 db.rows().upsertValues(listOf(
                     KeyValueRow("artifact:$id", json.encodeToString(artifact.copy(trustedOnDevice = true))),
                     KeyValueRow(EXECUTION_PREFIX + id, executionFingerprint(artifact.revisions.last())),
@@ -71,6 +99,16 @@ internal class RoomArtifactService(private val db: LocalDatabase, private val as
             }
         }
         invalidate(id)
+    }
+
+    internal suspend fun verifyRevision(id: String, revision: Long, expected: ArtifactRevision) = assets.withExclusive {
+        check(expected.revision == revision && load(id).revisions.singleOrNull { it.revision == revision } == expected) {
+            "Artifact revision content changed"
+        }
+    }
+
+    internal suspend fun revisionSnapshot(id: String, revision: Long): ArtifactRevision = assets.withExclusive {
+        load(id).revisions.singleOrNull { it.revision == revision } ?: error("Artifact revision not found")
     }
 
     /** Does not grant execution; a stale revision is an error rather than a false result. */

@@ -6,13 +6,20 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.domain.model.RemoteSkillRequest
 import java.nio.file.Files
+import java.io.IOException
+import java.lang.reflect.Proxy
 import java.security.MessageDigest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl
+import okhttp3.Call
+import okhttp3.Callback
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -22,6 +29,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RemoteSkillImportTest {
+    @Test fun cancelledHttpCallWaitsForCallbackCleanup(): Unit = runBlocking {
+        val callback = CompletableDeferred<Callback>()
+        val cancelled = CompletableDeferred<Unit>()
+        val call = Call::class.java.cast(Proxy.newProxyInstance(Call::class.java.classLoader, arrayOf(Call::class.java)) { _, method, args ->
+            when (method.name) {
+                "enqueue" -> { callback.complete(args[0] as Callback); null }
+                "cancel" -> { cancelled.complete(Unit); null }
+                else -> error("Unexpected call: ${method.name}")
+            }
+        })
+        val request = async { awaitRemoteSkillCall(call, 1024) }
+        val registered = withTimeout(5_000) { callback.await() }
+        request.cancel()
+        withTimeout(5_000) { cancelled.await() }
+        assertFalse(request.isCompleted)
+        registered.onFailure(call, IOException("cancelled"))
+        withTimeout(5_000) { request.join() }
+        assertTrue(request.isCancelled)
+    }
     private val commit = "a".repeat(40)
     private val skillsTree = "b".repeat(40)
     private val rootTree = "c".repeat(40)
@@ -69,7 +95,7 @@ class RemoteSkillImportTest {
 
     @Test fun discoveryPinsCommitPreviewKeepsOnlySelectedPackageAndImportNeverOverwrites(): Unit = runBlocking {
         val fake = fixture()
-        val remote = RemoteSkillImport(fake)
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
         val discovery = remote.discover(RemoteSkillRequest("owner/repo", "skills/review", "main"))
         assertEquals(commit, discovery.revision)
         assertEquals("https://github.com/owner/repo.git", discovery.source)
@@ -99,7 +125,7 @@ class RemoteSkillImportTest {
 
     @Test fun unsafeSourcesMovingPreviewAndUnsupportedGitFailBeforeNetwork(): Unit = runBlocking {
         val fake = fixture()
-        val remote = RemoteSkillImport(fake)
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
         for (source in listOf("http://github.com/a/b", "https://user:pass@github.com/a/b", "https://github.com/a/b?token=x",
             "https://github.com/a/b/tree/main/%2e%2e/x", "https://github.com/a/b/tree/main/a%5Cb", "file:///tmp/repo",
             "https://example.com/group/repo.git", "https://github.com/a/.git")) {
@@ -112,7 +138,7 @@ class RemoteSkillImportTest {
 
     @Test fun rejectsTruncatedTreesSymlinksTraversalTamperedBlobsAndUnboundedResponses(): Unit = runBlocking {
         val fake = fixture()
-        val remote = RemoteSkillImport(fake)
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
         val path = "/repos/owner/repo/git/trees/$rootTree?recursive=1"
         val original = fake.responses.getValue(path)
         val request = RemoteSkillRequest("owner/repo", "skills/review", commit)

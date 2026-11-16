@@ -2,6 +2,7 @@
 package cc.ptoe.messenger.domain.artifact
 
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.JsonObject
 
 /** The package and message capability belong to one native sandbox instance. */
 interface ArtifactUiBinding {
@@ -25,11 +26,16 @@ interface ArtifactUiHost {
     /** Observe changes to this application's metadata and permissions until cancelled. */
     suspend fun observeChanges(id: String, onChange: () -> Unit)
 
-    /** Reads authorization for the current revision without starting its code. */
+    /** Reads device authorization for a specific revision without starting its code. */
     suspend fun isRevisionAuthorized(id: String, revision: Long): Boolean
 
-    /** Requires explicit device-user approval for the specified current revision. */
+    /** Requires explicit device-user approval for the specified revision. */
     suspend fun authorizeRevision(id: String, revision: Long)
+
+    /** Approve only the exact revision content shown by the trusted UI. */
+    suspend fun authorizeRevision(id: String, revision: Long, expectedContent: JsonObject) {
+        error("Content-bound artifact authorization is unavailable")
+    }
 
     /** Requires a separate device-user decision for the requested domains. */
     suspend fun grantDomains(id: String, revision: Long, domains: List<String>)
@@ -37,7 +43,7 @@ interface ArtifactUiHost {
     /** Trusted UI reset; a stale revision or state version must fail. */
     suspend fun resetState(id: String, revision: Long, stateVersion: Long)
 
-    /** Fails unless this precise current revision is authorized on this device. */
+    /** Historical previews are read-only and have no network access. */
     suspend fun open(id: String, revision: Long): ArtifactUiBinding
 
     /** Stops and joins [previous] before creating a new native sandbox capability. */

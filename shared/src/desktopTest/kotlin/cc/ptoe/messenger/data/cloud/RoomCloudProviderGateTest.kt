@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import cc.ptoe.messenger.data.local.room.*
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
@@ -87,6 +88,8 @@ class RoomCloudProviderGateTest {
             val client = RoomCloudHttpClient()
             val scope = CoroutineScope(Dispatchers.Default + Job())
             val mayStop = CompletableDeferred<Unit>()
+            val releaseWorkspace = CompletableDeferred<Unit>()
+            val workspaceEntered = CompletableDeferred<Unit>()
             val started = CompletableDeferred<Unit>()
             val stopping = CompletableDeferred<Unit>()
             val dispatched = AtomicInteger()
@@ -118,10 +121,18 @@ class RoomCloudProviderGateTest {
                 val turn = assertIs<KotlinTurnAdmission.Accepted>(runner.submit(KotlinTurnCommand.Send("conversation", "hi", null))).turnId
                 withTimeout(5000) { started.await() }
                 val staleRound = store.snapshot(turn)
+                val workspace = async {
+                    RuntimeWorkspaceFence.forDatabase(db).mutate {
+                        workspaceEntered.complete(Unit)
+                        releaseWorkspace.await()
+                    }
+                }
+                withTimeout(5000) { workspaceEntered.await() }
                 val revoke = async(Dispatchers.Default) { if (logout) auth.logout(host) else auth.expireIfCurrent(session) }
                 withTimeout(5000) { stopping.await() }
                 assertNull(dao.currentSession())
                 assertNull(dao.value("cloud_session"))
+                assertFalse(workspace.isCompleted, "session revocation must not wait for the workspace fence")
                 assertEquals("", dao.providerRow(BUILTIN_PROVIDER_ID)?.apiKey)
                 assertNull(withTimeoutOrNull(200) { revoke.await() }, "revocation must wait until the request has stopped")
                 assertFailsWith<IllegalStateException> { store.providerStream(staleRound, upstream).toList() }
@@ -145,6 +156,7 @@ class RoomCloudProviderGateTest {
                 assertFailsWith<IllegalStateException> { store.providerStream(staleRound, upstream).toList() }
                 assertEquals(1, dispatched.get())
             } finally {
+                releaseWorkspace.complete(Unit)
                 mayStop.complete(Unit)
                 scope.cancel()
                 gate.shutdown()

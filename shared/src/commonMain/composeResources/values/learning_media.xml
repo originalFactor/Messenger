@@ -24,6 +24,7 @@
     <string name="media_run_authorize_message">This version can run its own code on this device. Network access requires a separate decision.</string>
     <string name="media_open_to_authorize">Open this application to authorize its current version.</string>
     <string name="media_previous_preview_unavailable">Previewing an older version is not available yet.</string>
+    <string name="media_previous_preview_readonly">This older version is read-only and cannot access the network.</string>
     <string name="media_version">Version %1$d</string>
     <string name="media_previous">Previous version</string>
     <string name="media_next">Next version</string>

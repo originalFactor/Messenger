@@ -7,6 +7,7 @@ package cc.ptoe.messenger.data.repository.room
 import androidx.room.Transactor
 import androidx.room.useWriterConnection
 import cc.ptoe.messenger.data.chat.ACTIVE_TURN_KEY_PREFIX
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import cc.ptoe.messenger.data.cloud.SyncCollection
 import cc.ptoe.messenger.data.cloud.SyncMutation
 import cc.ptoe.messenger.data.local.room.LocalDatabase
@@ -28,8 +29,11 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 /** Queue synchronized changes in the same database transaction as the local write. */
-private suspend fun <T> LocalDatabase.writeLocal(block: suspend (LocalRowsDao, suspend (SyncCollection, String, SyncMutation) -> Unit) -> T): T =
-    useWriterConnection { connection ->
+private suspend fun <T> LocalDatabase.writeLocal(
+    workspaceAuthority: Boolean = true,
+    block: suspend (LocalRowsDao, suspend (SyncCollection, String, SyncMutation) -> Unit) -> T,
+): T {
+    suspend fun commit(): T = useWriterConnection { connection ->
         connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
             val sync = cloudSync()
             check(sync.value(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
@@ -38,6 +42,8 @@ private suspend fun <T> LocalDatabase.writeLocal(block: suspend (LocalRowsDao, s
             }
         }
     }
+    return if (workspaceAuthority) RuntimeWorkspaceFence.forDatabase(this).mutate { commit() } else commit()
+}
 
 private suspend fun LocalRowsDao.requireNoActiveTurn(conversationId: String) {
     check(getValue(ACTIVE_TURN_KEY_PREFIX + conversationId) == null) { "Cannot change messages with an active turn" }
@@ -92,7 +98,7 @@ class RoomAgentRepository(
     private val rows get() = db.rows()
     /** Complete startup before exposing an empty or imported database to application code. */
     suspend fun ensureDefaultAgent(seed: cc.ptoe.messenger.domain.model.Agent): cc.ptoe.messenger.domain.model.Agent =
-        rows.ensureDefaultAgent(seed.row()).domain()
+        RuntimeWorkspaceFence.forDatabase(db).mutate { rows.ensureDefaultAgent(seed.row()).domain() }
     override fun getAll() = rows.observeAgents().map { list -> list.map { it.domain() } }
     override fun getById(id: String) = rows.observeAgent(id).map { it?.domain() }
     override fun getDefaultAgent() = rows.observeDefaultAgent().map { it?.domain() }
@@ -297,7 +303,7 @@ class RoomMessageRepository(private val db: LocalDatabase, private val onChanged
     override suspend fun getByConversationIds(conversationIds: List<String>) = if (conversationIds.isEmpty()) emptyList() else rows.messagesFor(conversationIds).groupBy { it.conversationId }.let { byConversation -> conversationIds.flatMap { id -> byConversation[id].orEmpty().map { it.domain() } } }
     override suspend fun insert(message: cc.ptoe.messenger.domain.model.Message) = insertAll(listOf(message))
     override suspend fun insertAll(messages: List<cc.ptoe.messenger.domain.model.Message>) {
-        db.writeLocal { dao, mark ->
+        db.writeLocal(workspaceAuthority = false) { dao, mark ->
             val previous = messages.mapNotNull { dao.message(it.id)?.conversationId }
             (previous + messages.map { it.conversationId }).distinct().forEach { dao.requireNoActiveTurn(it) }
             dao.upsertMessagesPreservingUnknownParts(messages.map { it.row() })
@@ -306,11 +312,11 @@ class RoomMessageRepository(private val db: LocalDatabase, private val onChanged
         messages.map { it.conversationId }.distinct().forEach(onChanged)
     }
     override suspend fun update(message: cc.ptoe.messenger.domain.model.Message) = insert(message)
-    override suspend fun delete(id: String) { val previous = db.writeLocal { dao, mark ->
+    override suspend fun delete(id: String) { val previous = db.writeLocal(workspaceAuthority = false) { dao, mark ->
         val old = dao.message(id); old?.let { dao.requireNoActiveTurn(it.conversationId) }; dao.deleteMessage(id)
         old?.let { mark(SyncCollection.CONVERSATION, it.conversationId, SyncMutation.UPSERT) }; old
     }; previous?.let { onChanged(it.conversationId) } }
-    override suspend fun deleteByConversationId(conversationId: String) { db.writeLocal { dao, mark -> dao.requireNoActiveTurn(conversationId); dao.deleteMessagesFor(conversationId); mark(SyncCollection.CONVERSATION, conversationId, SyncMutation.UPSERT) }; onChanged(conversationId) }
+    override suspend fun deleteByConversationId(conversationId: String) { db.writeLocal(workspaceAuthority = false) { dao, mark -> dao.requireNoActiveTurn(conversationId); dao.deleteMessagesFor(conversationId); mark(SyncCollection.CONVERSATION, conversationId, SyncMutation.UPSERT) }; onChanged(conversationId) }
     override suspend fun getConversationIdById(id: String) = rows.message(id)?.conversationId
 }
 

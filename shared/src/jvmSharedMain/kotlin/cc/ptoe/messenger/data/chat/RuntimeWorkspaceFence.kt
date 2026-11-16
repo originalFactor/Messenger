@@ -2,6 +2,8 @@
 package cc.ptoe.messenger.data.chat
 
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -11,14 +13,25 @@ import kotlinx.coroutines.sync.withLock
  * conversation, Agent, Cloud/session, sync and restore writers through this same instance and
  * independently exclude other Room/Core owners. No production caller currently does so.
  */
-class RuntimeWorkspaceFence(private val db: LocalDatabase) {
+class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
+    private val owner = WeakReference(db)
+    companion object {
+        // The value must survive while its Room owner does, including after an adapter is replaced.
+        // The fence holds only a weak reference back to the key so the registry cannot retain Room.
+        private val owners = WeakHashMap<LocalDatabase, RuntimeWorkspaceFence>()
+
+        /** Every participant using this Room instance must retain and use this same fence. */
+        fun forDatabase(db: LocalDatabase): RuntimeWorkspaceFence = synchronized(owners) {
+            owners[db] ?: RuntimeWorkspaceFence(db).also { owners[db] = it }
+        }
+    }
     private val mutex = Mutex()
-    private data class Uncertain(val token: String, val host: TrackedWorkspaceHost)
+    private data class Uncertain(val token: String, val host: WeakReference<TrackedWorkspaceHost>)
     private var uncertain: Uncertain? = null
     private val dispatchedTokens = mutableSetOf<String>()
 
     internal fun requireOwner(candidate: LocalDatabase) {
-        require(candidate === db) { "Workspace fence belongs to another Room owner" }
+        require(candidate === owner.get()) { "Workspace fence belongs to another Room owner" }
     }
 
     /** All authority-changing writers must use this gate, including Cloud restore. */
@@ -40,7 +53,7 @@ class RuntimeWorkspaceFence(private val db: LocalDatabase) {
             dispatchedTokens.add(token)
         } }
         catch (failure: Throwable) {
-            if (dispatched) uncertain = Uncertain(token, host)
+            if (dispatched) uncertain = Uncertain(token, WeakReference(host))
             throw failure
         }
     }
@@ -48,7 +61,7 @@ class RuntimeWorkspaceFence(private val db: LocalDatabase) {
     /** Only the same live tracked host can provide stop evidence; unknown never permits replay. */
     suspend fun recover(host: TrackedWorkspaceHost) = mutex.withLock {
         val pending = checkNotNull(uncertain) { "No uncertain workspace operation" }
-        check(pending.host === host && host.protocolAvailable && host.status(pending.token) == TrackedWorkspaceStatus.STOPPED) {
+        check(pending.host.get() === host && host.protocolAvailable && host.status(pending.token) == TrackedWorkspaceStatus.STOPPED) {
             "Workspace operation stop is unverified"
         }
         uncertain = null
