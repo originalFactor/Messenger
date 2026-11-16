@@ -15,6 +15,7 @@ import cc.ptoe.messenger.domain.chat.KotlinChatTurnRunner
 import cc.ptoe.messenger.domain.chat.KotlinTurnPhase
 import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
+import cc.ptoe.messenger.domain.chat.KotlinTurnLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -34,6 +35,7 @@ internal class IsolatedCoreTurnBridge(
     private val now: () -> Long,
     private val imageTool: IsolatedModelImageTool? = null,
     private val provider: KotlinTurnProvider? = null,
+    private val lifecycle: KotlinTurnLifecycle = object : KotlinTurnLifecycle {},
     private val afterActivitySnapshot: suspend () -> Unit = {},
     private val afterCancellationCapture: suspend () -> Unit = {},
     private val afterLegacyCancellationCapture: suspend () -> Unit = {},
@@ -47,7 +49,7 @@ internal class IsolatedCoreTurnBridge(
     private val legacy = mutableSetOf<String>()
     @Volatile private var currentLegacyInvocation: KotlinBackgroundTurnBridge.LegacyInvocation? = null
     private var generation = 0L
-    private val adminStore = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false }, cloudGate)
+    internal val adminStore = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false }, cloudGate)
     private val adminBridge = KotlinBackgroundTurnBridge(delegate, adminStore,
         KotlinChatTurnRunner(adminStore, KotlinTurnToolExecutor { _, _ -> error("Tool is unavailable") }, scope), scope)
 
@@ -71,8 +73,8 @@ internal class IsolatedCoreTurnBridge(
         val bundle = IsolatedCoreTools.create(db, conversationId, learning, artifacts, names, now, imageTool)
         val store = RoomKotlinTurnStore(db, bundle.preparer, bundle.tools, cloudGate)
         bundle.bind(store)
-        val runner = provider?.let { KotlinChatTurnRunner(store, it, bundle.tools, scope) }
-            ?: KotlinChatTurnRunner(store, bundle.tools, scope)
+        val runner = provider?.let { KotlinChatTurnRunner(store, it, bundle.tools, scope, lifecycle) }
+            ?: KotlinChatTurnRunner(store, bundle.tools, scope, lifecycle)
         return Runtime(store, runner, KotlinBackgroundTurnBridge(delegate, store, runner, scope))
     }
 

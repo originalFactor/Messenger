@@ -148,7 +148,10 @@ interface LocalRowsDao {
         upsertProjects(listOf(row.copy(deviceId = existing?.deviceId ?: row.deviceId)))
     }
     @Query("SELECT * FROM kv WHERE `key` LIKE 'kotlin_turn_active_v1:%'") fun observeActiveTurnKeys(): Flow<List<KeyValueRow>>
-    @Query("SELECT * FROM kv WHERE `key` LIKE 'kotlin_turn_error_v1:%'") fun observeTurnErrorKeys(): Flow<List<KeyValueRow>>
+    @Query("SELECT * FROM kv WHERE substr(`key`, 1, length('kotlin_turn_active_v1:')) = 'kotlin_turn_active_v1:' ORDER BY `key`")
+    suspend fun activeTurnKeys(): List<KeyValueRow>
+    @Query("SELECT * FROM kv WHERE substr(`key`, 1, length('kotlin_turn_error_v1:')) = 'kotlin_turn_error_v1:' OR substr(`key`, 1, length('kotlin_turn_error_v2:')) = 'kotlin_turn_error_v2:' ORDER BY rowid")
+    fun observeTurnErrorKeys(): Flow<List<KeyValueRow>>
     @Query("SELECT * FROM kv WHERE `key` = :key") fun observeValue(key: String): Flow<KeyValueRow?>
     @Query("SELECT * FROM kv WHERE `key` = :key") suspend fun getValue(key: String): KeyValueRow?
     @Query("SELECT * FROM kv WHERE substr(`key`, 1, length(:prefix)) = :prefix ORDER BY `key`") suspend fun valuesByPrefix(prefix: String): List<KeyValueRow>

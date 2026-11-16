@@ -75,6 +75,7 @@ private data class StoredTurn(
     val userMessageId: String? = null,
     val title: StoredTitle? = null,
     val titleFailure: String? = null,
+    val titleFailureHasDurableNotice: Boolean = false,
     val summaryPlan: StoredSummaryPlan? = null,
     val summaryFailure: String? = null,
     val remoteScope: KotlinRemoteControlScope? = null,
@@ -88,13 +89,25 @@ private data class StoredTurn(
     val approvalFailure: String? = null,
     val approvalSettingsRevision: String? = null,
 )
-data class KotlinTurnFailure(val turnId: String, val detail: String)
+data class KotlinTurnFailure(
+    val noticeId: String, val turnId: String, val detail: String,
+    val conversationId: String? = null, val conversationTitle: String? = null,
+)
+
+@Serializable
+private data class StoredTurnFailure(val turnId: String, val detail: String, val conversationId: String? = null)
+
+/** Platform evidence that every previous native chat worker and its side effects have stopped. */
+internal fun interface PreviousChatWorkersStopped {
+    suspend fun verify()
+}
 
 private const val TURN = "kotlin_turn_v1:"
 internal const val ACTIVE_TURN_KEY_PREFIX = "kotlin_turn_active_v1:"
 private const val ACTIVE = ACTIVE_TURN_KEY_PREFIX
 private const val LATEST = "kotlin_turn_latest_v1:"
-private const val NOTICE = "kotlin_turn_error_v1:"
+private const val LEGACY_NOTICE = "kotlin_turn_error_v1:"
+private const val NOTICE = "kotlin_turn_error_v2:"
 private const val APPROVAL_SETTINGS_REVISION = "kotlin_tool_approval_settings_revision_v1"
 private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
 
@@ -122,6 +135,11 @@ class RoomKotlinTurnStore(
     private suspend fun LocalRowsDao.read(id: String) = getValue(TURN + id)?.value?.let { json.decodeFromString<StoredTurn>(it) }
         ?: error("Turn not found")
     private suspend fun LocalRowsDao.write(turn: StoredTurn) = upsertValues(listOf(KeyValueRow(TURN + turn.id, json.encodeToString(turn))))
+    private suspend fun LocalRowsDao.addTurnFailure(turn: StoredTurn, detail: String) {
+        val key = NOTICE + randomUuid()
+        check(getValue(key) == null) { "Turn notice identity collision" }
+        upsertValues(listOf(KeyValueRow(key, json.encodeToString(StoredTurnFailure(turn.id, detail, turn.conversationId)))))
+    }
     private fun StoredTurn.phase() = KotlinTurnPhase.valueOf(phase)
     private suspend fun LocalRowsDao.snapshot(turn: StoredTurn): KotlinTurnSnapshot {
         val row = provider(turn.providerId)
@@ -366,7 +384,8 @@ class RoomKotlinTurnStore(
                 require(turn.conversationId == conversationId) { "Turn belongs to another conversation" }
                 val assistant = checkNotNull(db.rows().message(turn.assistantId)) { "Turn message is missing" }
                 KotlinTurnPresentation(turn.id, turn.conversationId, turn.phase(), turn.assistantId,
-                    assistant.content, turn.detail, turn.calls.getOrNull(turn.index)?.domain(), turn.userMessageId, turn.titleFailure, turn.summaryFailure, turn.approvalFailure)
+                    assistant.content, turn.detail, turn.calls.getOrNull(turn.index)?.domain(), turn.userMessageId, turn.titleFailure, turn.summaryFailure, turn.approvalFailure,
+                    turn.titleFailureHasDurableNotice)
             } }
         }
     override suspend fun beginSummary(turnId: String): KotlinSummaryWork? = transaction { rows, _ ->
@@ -413,7 +432,7 @@ class RoomKotlinTurnStore(
             upsertMessages(listOf(MessageRow(randomUuid(), turn.conversationId, "assistant", detail, null,
                 nextMessageTimestamp(turn.conversationId), "error", detail)))
             upsertMessages(listOf(assistant.copy(timestamp = nextMessageTimestamp(turn.conversationId))))
-            upsertValues(listOf(KeyValueRow(NOTICE + turn.id, detail)))
+            addTurnFailure(turn, detail)
             failure = detail
         }
         write(turn.copy(phase = KotlinTurnPhase.READY_PROVIDER.name, request = request, summaryFailure = failure))
@@ -484,12 +503,13 @@ class RoomKotlinTurnStore(
         mark(turn.conversationId)
     } }
 
-    private suspend fun LocalRowsDao.finishTitle(turn: StoredTurn, result: KotlinTitleResult?, mark: suspend (String) -> Unit) {
+    private suspend fun LocalRowsDao.finishTitle(turn: StoredTurn, result: KotlinTitleResult?, mark: suspend (String) -> Unit,
+        durableNotice: Boolean = false) {
         val conversation = conversation(turn.conversationId)
         if (conversation != null && result != null && result.title.isNotBlank() && KotlinConversationTitle.isUntitled(conversation.title)) {
             upsertConversations(listOf(conversation.copy(title = result.title)))
         }
-        write(turn.copy(phase = KotlinTurnPhase.FINISHED.name, titleFailure = result?.failure))
+        write(turn.copy(phase = KotlinTurnPhase.FINISHED.name, titleFailure = result?.failure, titleFailureHasDurableNotice = durableNotice))
         deleteValue(ACTIVE + turn.conversationId)
         refreshConversationPreview(turn.conversationId)
         mark(turn.conversationId)
@@ -590,7 +610,7 @@ class RoomKotlinTurnStore(
             val detail = "Automatic approval failed: ${result.failure}"
             upsertMessages(listOf(MessageRow(randomUuid(), turn.conversationId, "assistant", detail, null,
                 nextMessageTimestamp(turn.conversationId), "error", detail)))
-            upsertValues(listOf(KeyValueRow(NOTICE + turn.id, detail)))
+            addTurnFailure(turn, detail)
             next = turn.copy(approvalFailure = detail)
         }
         completeToolResult(next, call, ToolExecutionResult(result.failure?.let { "Automatic approval failed: $it" }
@@ -666,7 +686,7 @@ class RoomKotlinTurnStore(
         val assistant = checkNotNull(rows.message(turn.assistantId))
         rows.upsertMessages(listOf(assistant.copy(status = if (cancelled) "sent" else "error", errorMessage = if (cancelled) null else detail)))
         rows.write(turn.copy(phase = if (cancelled) KotlinTurnPhase.CANCELLED.name else KotlinTurnPhase.FAILED.name, detail = if (cancelled) null else detail))
-        if (!cancelled) rows.upsertValues(listOf(KeyValueRow(NOTICE + turn.id, detail)))
+        if (!cancelled) rows.addTurnFailure(turn, detail)
         rows.deleteValue(ACTIVE + turn.conversationId)
         rows.refreshConversationPreview(turn.conversationId)
         mark(turn.conversationId)
@@ -686,19 +706,60 @@ class RoomKotlinTurnStore(
         }
     }
 
-    override suspend fun fail(turnId: String, detail: String) { transaction { rows, mark ->
-        val turn = rows.read(turnId)
-        if (turn.phase() in terminal) return@transaction
-        val assistant = checkNotNull(rows.message(turn.assistantId))
-        rows.upsertMessages(listOf(assistant.copy(status = "error", errorMessage = detail)))
+    private suspend fun LocalRowsDao.failTurn(turn: StoredTurn, detail: String, mark: suspend (String) -> Unit) {
+        if (turn.phase() in terminal) return
+        val assistant = checkNotNull(message(turn.assistantId))
+        check(assistant.conversationId == turn.conversationId && assistant.role.equals("assistant", ignoreCase = true)) { "Invalid turn message" }
+        upsertMessages(listOf(assistant.copy(status = "error", errorMessage = detail)))
         val interruptedTool = turn.phase() == KotlinTurnPhase.EXECUTING_TOOL || turn.phase() == KotlinTurnPhase.CANCELLING_TOOL
-        rows.write(turn.copy(phase = if (interruptedTool) KotlinTurnPhase.INTERRUPTED_TOOL.name else KotlinTurnPhase.FAILED.name, detail = detail))
+        write(turn.copy(phase = if (interruptedTool) KotlinTurnPhase.INTERRUPTED_TOOL.name else KotlinTurnPhase.FAILED.name, detail = detail))
         // Persisted separately for a snackbar observer; the assistant row is the bubble.
-        rows.upsertValues(listOf(KeyValueRow(NOTICE + turn.id, detail)))
-        if (!interruptedTool) rows.deleteValue(ACTIVE + turn.conversationId)
-        rows.refreshConversationPreview(turn.conversationId)
+        addTurnFailure(turn, detail)
+        if (!interruptedTool) deleteValue(ACTIVE + turn.conversationId)
+        refreshConversationPreview(turn.conversationId)
         mark(turn.conversationId)
+    }
+    override suspend fun fail(turnId: String, detail: String) { transaction { rows, mark ->
+        rows.failTurn(rows.read(turnId), detail, mark)
     } }
+
+    /**
+     * Run only before exposing this Room owner. No provider or tool operation is resumed.
+     * An interrupted tool keeps its reservation until separate stop evidence permits recovery.
+     */
+    internal suspend fun reconcilePreviousChats(proof: PreviousChatWorkersStopped?) {
+        proof?.verify()
+        transaction { rows, mark ->
+            val active = rows.activeTurnKeys()
+            check(active.size <= 10_000) { "Too many interrupted chat turns" }
+            check(proof != null || active.isEmpty()) { "Previous chat workers require stop proof" }
+            check(rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
+            for (entry in active) {
+                val turn = rows.read(entry.value)
+                check(entry.key == ACTIVE + turn.conversationId && entry.value == turn.id) { "Invalid active turn identity" }
+                check(!turn.scheduledRun && !turn.delegatedRun) {
+                    "Scheduled or delegated chat requires its owning service to reconcile before startup"
+                }
+                when (turn.phase()) {
+                    KotlinTurnPhase.INTERRUPTED_TOOL -> Unit // Keep the existing evidence and reservation.
+                    KotlinTurnPhase.FINISHED, KotlinTurnPhase.FAILED, KotlinTurnPhase.CANCELLED ->
+                        error("Terminal turn still has an active reservation")
+                    else -> {
+                        if (turn.phase() == KotlinTurnPhase.TITLE_PENDING || turn.phase() == KotlinTurnPhase.TITLE_REQUESTING) {
+                            val detail = "Title request was interrupted when the app stopped."
+                            rows.finishTitle(turn, KotlinTitleResult("", detail), mark, durableNotice = true)
+                            rows.addTurnFailure(turn, detail)
+                        } else {
+                            val detail = if (turn.phase() == KotlinTurnPhase.EXECUTING_TOOL || turn.phase() == KotlinTurnPhase.CANCELLING_TOOL)
+                                "Chat was interrupted while a tool was running; its outcome is unknown and requires recovery."
+                            else "Chat was interrupted when the app stopped; the previous request may have completed. Retry manually."
+                            rows.failTurn(turn, detail, mark)
+                        }
+                    }
+                }
+            }
+        }
+    }
     private suspend fun LocalRowsDao.applyCancellation(turn: StoredTurn, mark: suspend (String) -> Unit) {
         if (turn.phase() in terminal) return
         if (turn.phase() == KotlinTurnPhase.EXECUTING_TOOL || turn.phase() == KotlinTurnPhase.CANCELLING_TOOL) {
@@ -878,13 +939,33 @@ class RoomKotlinTurnStore(
     }
 
     /** Failure messages survive process death until presented and acknowledged. */
-    fun observeFailures(): Flow<List<KotlinTurnFailure>> = db.rows().observeTurnErrorKeys().map { rows ->
-        rows.map { KotlinTurnFailure(it.key.removePrefix(NOTICE), it.value) }
+    fun observeFailures(): Flow<List<KotlinTurnFailure>> = combine(
+        db.rows().observeTurnErrorKeys(), db.rows().observeAllConversations(),
+    ) { notices, conversations ->
+        notices.map { row ->
+            val event = if (row.key.startsWith(LEGACY_NOTICE))
+                StoredTurnFailure(row.key.removePrefix(LEGACY_NOTICE), row.value)
+            else json.decodeFromString<StoredTurnFailure>(row.value)
+            // Older notices did not carry a conversation ID. A missing or unreadable
+            // turn only removes attribution; the original failure must remain visible.
+            val turnData = if (event.conversationId == null) db.rows().getValue(TURN + event.turnId)?.value else null
+            val conversationId = event.conversationId ?: turnData?.let { data ->
+                runCatching { json.decodeFromString<StoredTurn>(data) }.getOrNull()
+                    ?.takeIf { it.id == event.turnId }?.conversationId
+            }
+            val conversation = conversations.firstOrNull { it.id == conversationId }
+            KotlinTurnFailure(row.key, event.turnId, event.detail, conversation?.id, conversation?.title)
+        }
     }
 
     /** A snackbar consumer can observe this until it has displayed and acknowledged it. */
-    fun observeFailure(turnId: String): Flow<String?> = db.rows().observeValue(NOTICE + turnId).map { it?.value }
-    suspend fun acknowledgeFailure(turnId: String) { transaction { rows, _ -> rows.deleteValue(NOTICE + turnId) } }
+    fun observeFailure(turnId: String): Flow<String?> = observeFailures().map { failures -> failures.firstOrNull { it.turnId == turnId }?.detail }
+    suspend fun acknowledgeFailure(noticeId: String, expectedDetail: String) { transaction { rows, _ ->
+        require(noticeId.startsWith(NOTICE) || noticeId.startsWith(LEGACY_NOTICE)) { "Invalid turn notice identity" }
+        val value = rows.getValue(noticeId)?.value ?: return@transaction
+        val detail = if (noticeId.startsWith(LEGACY_NOTICE)) value else json.decodeFromString<StoredTurnFailure>(value).detail
+        if (detail == expectedDetail) rows.deleteValue(noticeId)
+    } }
 
     private companion object {
         val terminal = setOf(KotlinTurnPhase.FINISHED, KotlinTurnPhase.FAILED, KotlinTurnPhase.CANCELLED, KotlinTurnPhase.INTERRUPTED_TOOL)

@@ -92,6 +92,7 @@ class AppContainer(
     val cloud: CloudFacade = stores.cloud
     /** Trusted UI uses this only when the complete backend owns its sandbox lifecycle. */
     val artifactUiHost = backend?.artifactUiHost
+    val turnFailureNotices = backend?.turnFailureNotices
 
     init {
         // Some existing consumers still obtain the bridge through the registry. Refuse a

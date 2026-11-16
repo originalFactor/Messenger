@@ -634,6 +634,13 @@
     <string name="tools_approval_deny">Deny</string>
     <string name="background_replay_gap">Some live task updates are no longer available. The saved transcript will refresh when the task finishes.</string>
     <string name="notification_conversation_unavailable">This conversation is unavailable on this device.</string>
+    <string name="notification_conversation_open_failed">Couldn’t open the conversation</string>
+    <string name="chat_failure_named">Chat “%1$s”: %2$s</string>
+    <string name="chat_failure_generic">Chat error: %1$s</string>
+    <string name="chat_failure_open">Open chat</string>
+    <string name="chat_failure_storage_error">Unable to load or acknowledge chat errors</string>
+    <string name="chat_failure_review">Review chat error delivery</string>
+    <string name="action_not_now">Not now</string>
     <string name="remote_notification_unavailable">The remote device or conversation is unavailable. Check that the device is online and remote control is enabled.</string>
     <string name="remote_notification_title">Remote conversation</string>
     <string name="remote_notification_read_only">Conversation on another device. New messages can be sent from that device.</string>

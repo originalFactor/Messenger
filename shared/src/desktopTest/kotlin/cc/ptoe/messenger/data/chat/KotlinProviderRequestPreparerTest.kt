@@ -16,6 +16,49 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class KotlinProviderRequestPreparerTest {
+    @Test fun unrelatedErrorDoesNotJoinAnInterruptedToolExchange() {
+        val conversation = ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)
+        val call = MessageRow("call", "c", "assistant", "", ContentPartCodec.encode(listOf(
+            ContentPart.ToolCall("a1", "lookup", "{}"), ContentPart.ToolCall("a2", "lookup", "{}"))), 1, "sent", null)
+        val result = MessageRow("a1", "c", "tool", "ok", ContentPartCodec.encode(listOf(
+            ContentPart.ToolResult("a1", "lookup", "ok", false))), 2, "sent", null)
+        val failure = MessageRow("failed", "c", "assistant", "Automatic approval failed: interrupted", null, 3, "error", "Automatic approval failed: interrupted")
+        val unrelated = MessageRow("a2", "c", "tool", "different failure", ContentPartCodec.encode(listOf(
+            ContentPart.ToolResult("a2", "lookup", "different failure", true))), 4, "sent", null)
+        val user = MessageRow("user", "c", "user", "continue", null, 5, "sent", null)
+        val request = KotlinProviderRequestPreparer().rebuildContext(conversation, listOf(call, result, failure, unrelated, user), "")
+        assertEquals(listOf("user"), request.map { it.role })
+        assertEquals("continue", request.single().content.jsonPrimitive.content)
+    }
+
+    @Test fun interruptedLaterToolGroupKeepsEarlierCompleteExchange() {
+        val conversation = ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)
+        fun row(id: String, role: String, parts: List<ContentPart>, time: Long, status: String = "sent") =
+            MessageRow(id, "c", role, "", ContentPartCodec.encode(parts), time, status, null)
+        val first = row("first", "assistant", listOf(
+            ContentPart.ToolCall("a1", "lookup", "{}"), ContentPart.ToolCall("a2", "lookup", "{}"),
+        ), 1)
+        val firstResults = listOf(
+            row("a1", "tool", listOf(ContentPart.ToolResult("a1", "lookup", "first result", false)), 2),
+            row("a2", "tool", listOf(ContentPart.ToolResult("a2", "lookup", "second result", false)), 3),
+        )
+        val failed = row("second", "assistant", listOf(
+            ContentPart.ToolCall("b1", "lookup", "{}"), ContentPart.ToolCall("b2", "lookup", "{}"),
+        ), 4, "error")
+        val orphan = row("b1", "tool", listOf(ContentPart.ToolResult("b1", "lookup", "partial result", false)), 5)
+        val user = MessageRow("user", "c", "user", "retry", null, 6, "sent", null)
+        val preparer = KotlinProviderRequestPreparer()
+
+        // Manual retry can remove the failed assistant row, leaving its result behind.
+        for (boundary in listOf(listOf(failed), emptyList())) {
+            val request = preparer.rebuildContext(conversation, listOf(first) + firstResults + boundary + orphan + user, "")
+            assertEquals(listOf("assistant", "tool", "tool", "user"), request.map { it.role })
+            assertEquals(listOf("a1", "a2"), request.first().toolCalls!!.map { it.id })
+            assertEquals(listOf("a1", "a2"), request.drop(1).take(2).map { it.toolCallId })
+            assertTrue(request.none { it.toolCallId == "b1" })
+        }
+    }
+
     @Test fun artifactHistoryCompactsOnlyCommittedWritesAndOldReadResults() {
         val conversation = ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)
         val source = "<html>private source</html>"
@@ -45,9 +88,9 @@ class KotlinProviderRequestPreparerTest {
             assertEquals(arguments, wire[0].toolCalls!!.single().function!!.arguments)
             assertEquals(source, wire[1].content.jsonPrimitive.content)
         }
-        assertEquals(arguments, request(listOf(assistant))[0].toolCalls!!.single().function!!.arguments)
+        assertTrue(request(listOf(assistant)).isEmpty())
         val unrelated = row("other", "tool", ContentPart.ToolResult("other", "messenger_artifacts", source, false, ref), 2)
-        assertEquals(arguments, request(listOf(assistant, unrelated))[0].toolCalls!!.single().function!!.arguments)
+        assertTrue(request(listOf(assistant, unrelated)).isEmpty())
     }
 
     @Test fun buildsImagesReasoningAndToolHistoryAndFailsClosed() = runBlocking {

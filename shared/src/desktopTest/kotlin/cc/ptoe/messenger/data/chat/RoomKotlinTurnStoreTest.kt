@@ -25,10 +25,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -54,6 +57,71 @@ class RoomKotlinTurnStoreTest {
         rows.upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 100, null, null, null, null, "text", "text", false, false, false, false, 1, null, null)))
         RoomAgentRepository(db).ensureDefaultAgent(Agent("a", "Agent", systemPrompt = "prompt", defaultModelId = if (model) "m" else null, temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
         rows.upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+    }
+
+    @Test fun multipleFailuresOfOneTurnRemainQueuedAndLegacyAcknowledgementIsConditional() = runBlocking {
+        val dir = Files.createTempDirectory("turn-error-queue")
+        val db = open(dir.resolve("store.db").toString())
+        try {
+            seed(db, model = true)
+            val store = RoomKotlinTurnStore(db, preparer, policy)
+            store.setToolApprovalMode("automatic")
+            val turn = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "hello", null))).turnId
+            assertTrue(store.claim(turn, false)); store.beginProvider(turn)
+            val call = ToolCallData("call", "write", "{}")
+            store.completeProvider(turn, listOf(call), null)
+            assertNotNull(store.beginAutomaticApproval(turn))
+            store.completeAutomaticApproval(turn, call.callId, KotlinApprovalResult(false, "review failed"))
+            val notices = TurnFailureNotices(store.observeFailures().map { failures ->
+                failures.map { TurnFailureNotice(it.noticeId, it.turnId, it.detail) }
+            }, { store.acknowledgeFailure(it.noticeId, it.detail) })
+            val shown = Channel<String>(Channel.UNLIMITED)
+            val releaseFirst = CompletableDeferred<Unit>()
+            var count = 0
+            val presenter = launch {
+                notices.present { detail ->
+                    shown.send(detail.detail)
+                    if (count++ == 0) releaseFirst.await()
+                }
+            }
+            try {
+                assertTrue(withTimeout(5_000) { shown.receive() }.contains("review failed"))
+                store.fail(turn, "provider failed")
+                val queued = store.observeFailures().first()
+                assertEquals(2, queued.size)
+                assertEquals(2, queued.map { it.noticeId }.distinct().size)
+                assertTrue(queued.all { it.turnId == turn })
+                assertTrue(queued.all { it.conversationId == "c" && it.conversationTitle == "Chat" })
+                releaseFirst.complete(Unit)
+                assertEquals("provider failed", withTimeout(5_000) { shown.receive() })
+                withTimeout(5_000) { store.observeFailures().first { it.isEmpty() } }
+            } finally { releaseFirst.complete(Unit); presenter.cancelAndJoin(); shown.close() }
+
+            db.rows().upsertValues(listOf(KeyValueRow("kotlin_turn_error_v1:old-turn", "old error")))
+            val legacy = store.observeFailures().first().single()
+            assertEquals("old-turn", legacy.turnId)
+            db.rows().upsertValues(listOf(KeyValueRow(legacy.noticeId, "new error")))
+            store.acknowledgeFailure(legacy.noticeId, legacy.detail)
+            assertEquals("new error", db.rows().getValue(legacy.noticeId)?.value)
+            store.acknowledgeFailure(legacy.noticeId, "new error")
+            assertNull(db.rows().getValue(legacy.noticeId))
+
+            // Existing v1 and earlier v2 notices have no embedded conversation ID.
+            db.rows().upsertValues(listOf(
+                KeyValueRow("kotlin_turn_error_v1:$turn", "legacy failure"),
+                KeyValueRow("kotlin_turn_error_v2:old", """{"turnId":"$turn","detail":"old v2 failure"}"""),
+                KeyValueRow("kotlin_turn_error_v1:broken", "broken turn failure"),
+                KeyValueRow("kotlin_turn_v1:broken", "not a turn"),
+            ))
+            val attributed = store.observeFailures().first().associateBy { it.detail }
+            assertEquals("c", attributed.getValue("legacy failure").conversationId)
+            assertEquals("Chat", attributed.getValue("old v2 failure").conversationTitle)
+            assertNull(attributed.getValue("broken turn failure").conversationId)
+            db.rows().deleteConversation("c")
+            val deleted = store.observeFailures().first()
+            assertEquals(3, deleted.size)
+            assertTrue(deleted.all { it.conversationId == null && it.conversationTitle == null })
+        } finally { db.close(); dir.toFile().deleteRecursively() }
     }
 
     @Test fun admittedTurnStartsAfterSubmittingCallerIsCancelled() = runBlocking {
@@ -317,8 +385,26 @@ class RoomKotlinTurnStoreTest {
             assertEquals("HTTP 429: quota", assistant.errorMessage)
             assertEquals("partial", assistant.content)
             assertNull(db.rows().getValue("kotlin_turn_active_v1:c"))
-            restored.acknowledgeFailure(accepted.turnId)
-            assertNull(restored.observeFailure(accepted.turnId).first())
+            db.rows().deleteValue("kotlin_turn_v1:${accepted.turnId}")
+            val persistedNotice = restored.observeFailures().first().single()
+            assertEquals("c", persistedNotice.conversationId)
+            assertEquals("Chat", persistedNotice.conversationTitle)
+            val notices = TurnFailureNotices(restored.observeFailures().map { failures ->
+                failures.map { TurnFailureNotice(it.noticeId, it.turnId, it.detail) }
+            }, { restored.acknowledgeFailure(it.noticeId, it.detail) })
+            val displayed = CompletableDeferred<String>()
+            val hold = CompletableDeferred<Unit>()
+            val firstHost = launch { notices.present { displayed.complete(it.detail); hold.await() } }
+            assertEquals("HTTP 429: quota", withTimeout(5000) { displayed.await() })
+            val secondDisplay = CompletableDeferred<String>()
+            val secondHost = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                notices.present { secondDisplay.complete(it.detail) }
+            }
+            assertFalse(secondDisplay.isCompleted)
+            firstHost.cancelAndJoin() // Interrupted presentation must remain pending.
+            assertEquals("HTTP 429: quota", withTimeout(5000) { secondDisplay.await() })
+            withTimeout(5000) { restored.observeFailure(accepted.turnId).first { it == null } }
+            secondHost.cancelAndJoin()
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }
 

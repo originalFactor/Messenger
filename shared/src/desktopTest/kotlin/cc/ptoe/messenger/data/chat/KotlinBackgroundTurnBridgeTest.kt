@@ -270,6 +270,7 @@ class KotlinBackgroundTurnBridgeTest {
             withTimeout(5000) { bridge.observeBackgroundTurn("c") { events.add(it) } }
             assertEquals("Finished", eventType(events.last()))
             assertTrue(events.any { eventType(it) == "TitleFailed" && it.contains("rate limit") })
+            assertTrue(events.filter { eventType(it) == "TitleFailed" }.none { it.contains("durableNotice") })
             assertEquals("hello", db.rows().conversation("c")?.title)
             assertTrue(db.rows().messagesFor(listOf("c")).any { it.role == "assistant" && it.content == "answer" && it.status == "sent" })
             withTimeout(5000) { runner.awaitStopped(checkNotNull(store.latestTurn("c"))) }

@@ -116,6 +116,7 @@ class ChatViewModel(
     private val cloud: CloudFacade? = null,
     private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
     private val platformToolsEnabled: Boolean = true,
+    private val durableTurnFailureNotices: Boolean = false,
 ) : ViewModel() {
 
     private val _conversationId = MutableStateFlow<String?>(null)
@@ -832,10 +833,10 @@ class ChatViewModel(
             }
             "SummaryFailed", "ApprovalFailed" -> {
                 val message = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (message.isNotBlank()) setError(message)
+                if (message.isNotBlank() && !durableTurnFailureNotices) setError(message)
             }
             "TitleFailed" -> {
-                viewModelScope.launch {
+                if (!(durableTurnFailureNotices && root["durableNotice"]?.jsonPrimitive?.contentOrNull == "true")) viewModelScope.launch {
                     val code = root["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     setError(code)
                 }
@@ -843,7 +844,7 @@ class ChatViewModel(
             "Error" -> {
                 val msg = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (msg.isNotBlank()) {
-                    setError(msg)
+                    if (!durableTurnFailureNotices) setError(msg)
                     val convId = _conversationId.value
                     val streamingId = _streamingMessageId.value
                     if (convId != null && streamingId == null) {
@@ -898,6 +899,7 @@ class ChatViewModel(
             cloud: CloudFacade? = null,
             coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
             platformToolsEnabled: Boolean = true,
+            durableTurnFailureNotices: Boolean = false,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -912,7 +914,8 @@ class ChatViewModel(
                     projectRepository,
                     cloud,
                     coreBridge,
-                    platformToolsEnabled
+                    platformToolsEnabled,
+                    durableTurnFailureNotices
                 ) as T
             }
         }

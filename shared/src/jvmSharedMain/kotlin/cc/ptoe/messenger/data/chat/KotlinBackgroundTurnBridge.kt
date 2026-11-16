@@ -35,6 +35,7 @@ data class KotlinTurnPresentation(
     val titleFailure: String?,
     val summaryFailure: String?,
     val approvalFailure: String?,
+    val titleFailureHasDurableNotice: Boolean = false,
 )
 
 /** Chat-only bridge; the caller must supply the same Room owner used by every other repository. */
@@ -199,7 +200,11 @@ class KotlinBackgroundTurnBridge(
             if (old == null) emit(event("ReplayComplete"))
             when (current.phase) {
                 KotlinTurnPhase.FINISHED -> {
-                    if (current.titleFailure != null) emit(event("TitleFailed", "code", "error_title_generate_failed:${current.titleFailure}"))
+                    if (current.titleFailure != null) emit(buildJsonObject {
+                        put("type", "TitleFailed")
+                        put("code", "error_title_generate_failed:${current.titleFailure}")
+                        if (current.titleFailureHasDurableNotice) put("durableNotice", true)
+                    }.toString())
                     emit(event("Finished", "messageId", current.messageId))
                 }
                 KotlinTurnPhase.CANCELLED -> emit(event("Cancelled"))

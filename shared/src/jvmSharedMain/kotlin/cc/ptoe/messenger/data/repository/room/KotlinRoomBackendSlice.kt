@@ -3,6 +3,9 @@ package cc.ptoe.messenger.data.repository.room
 
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.TurnConfigBridge
+import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
+import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
+import cc.ptoe.messenger.data.chat.PreviousChatWorkersStopped
 import cc.ptoe.messenger.data.cloud.CloudImageRehydrator
 import cc.ptoe.messenger.data.cloud.KotlinControlSettingsBridge
 import cc.ptoe.messenger.data.cloud.RoomAvatarCache
@@ -10,6 +13,7 @@ import cc.ptoe.messenger.data.cloud.RoomCloudFacade
 import cc.ptoe.messenger.data.cloud.RoomCloudHttpClient
 import cc.ptoe.messenger.data.cloud.defaultCloudServerUrl
 import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHost
 import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHostConfig
 import cc.ptoe.messenger.di.AppBackend
@@ -45,6 +49,8 @@ import cc.ptoe.messenger.data.repository.RoomLearningRepository
 import cc.ptoe.messenger.data.util.currentTimeMillis
 import cc.ptoe.messenger.di.LocalStores
 import cc.ptoe.messenger.domain.artifact.ArtifactUiHost
+import cc.ptoe.messenger.domain.chat.TurnFailureNotice
+import cc.ptoe.messenger.domain.chat.TurnFailureNotices
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -59,6 +65,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -76,6 +83,7 @@ import okio.Path.Companion.toPath
  */
 internal class KotlinRoomBackendSlice private constructor(
     private val shutdownOwner: RoomManagedShutdown,
+    private val turnStore: RoomKotlinTurnStore,
     val stores: LocalStores,
     val bridge: CoreBridge,
     val providers: RoomProviderRepository,
@@ -102,7 +110,10 @@ internal class KotlinRoomBackendSlice private constructor(
         return AppBackend(stores, bridge, providers, models, agents, conversations, projects, messages,
             currentAgent, learning, shutdown = { shutdownOwner.stopAndAwait() },
             clearLocalData = { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") },
-            artifactUiHost = artifactUiHost, platformToolsEnabled = false)
+            artifactUiHost = artifactUiHost, platformToolsEnabled = false,
+            turnFailureNotices = TurnFailureNotices(turnStore.observeFailures().map { failures ->
+                failures.map { TurnFailureNotice(it.noticeId, it.turnId, it.detail, it.conversationId, it.conversationTitle) }
+            }, { notice -> turnStore.acknowledgeFailure(notice.noticeId, notice.detail) }))
     }
 
     companion object {
@@ -124,8 +135,11 @@ internal class KotlinRoomBackendSlice private constructor(
             artifactUi: IsolatedArtifactUiConfig? = null,
             remoteSkills: RemoteSkillImport? = null,
             deviceHost: IsolatedRoomDeviceHostConfig? = null,
+            previousChatWorkersStopped: PreviousChatWorkersStopped? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
+            RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+                .reconcilePreviousChats(previousChatWorkersStopped)
             val gate = RoomAssetGate()
             withContext(NonCancellable) { shutdown.registerStop { gate.shutdown() } }
             val assets = CoreAssetService(assetRoot, db.assetMetadata(), gate)
@@ -203,7 +217,8 @@ internal class KotlinRoomBackendSlice private constructor(
             val scheduledBridge = scheduledTasks?.let { ScheduledCoreBridge(media, RoomScheduledTaskBridge(it)) } ?: media
             val processJob = SupervisorJob()
             val processScope = CoroutineScope(processJob + Dispatchers.IO)
-            val rawBridge = IsolatedCoreTurnBridge(scheduledBridge, db, learningOwnership, artifacts, cloud.providerGate, processScope, now, modelImageTool)
+            val rawBridge = IsolatedCoreTurnBridge(scheduledBridge, db, learningOwnership, artifacts, cloud.providerGate,
+                processScope, now, modelImageTool, lifecycle = composition.chatLifecycle)
             val admissions = PartialChatCalls()
             val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions)
             try { withContext(NonCancellable) { shutdown.registerStop { bridge.shutdown() } } }
@@ -211,12 +226,13 @@ internal class KotlinRoomBackendSlice private constructor(
                 try { bridge.shutdown() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
                 throw failure
             }
+            composition.bindChatWorkers(processJob)
             val scheduler = schedulerRecovery?.let {
                 IsolatedRoomScheduler(db, checkNotNull(scheduledTasks), learningOwnership, artifacts, cloud.providerGate, processScope, it, now, admissions)
                     .also { scheduler -> scheduler.start() }
             }
             val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it) }
-            return KotlinRoomBackendSlice(shutdown, LocalStores(cloud, appPreferences, themePreferences), bridge,
+            return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
                 artifactHost, attachedDeviceHost)
         }

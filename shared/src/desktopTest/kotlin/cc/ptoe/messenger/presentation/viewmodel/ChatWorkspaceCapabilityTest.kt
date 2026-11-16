@@ -44,7 +44,7 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatWorkspaceCapabilityTest {
-    @Test fun sendsUseOnlyTheBackendWorkspaceCapability() = runBlocking {
+    @Test fun sendsUseOnlyTheBackendWorkspaceCapability(): Unit = runBlocking {
         Dispatchers.setMain(Dispatchers.Unconfined)
         val dir = Files.createTempDirectory("chat-workspace-capability")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString())
@@ -75,6 +75,8 @@ class ChatWorkspaceCapabilityTest {
             conversations.insert(Conversation("project-chat", "Chat", "p", "a", projectId = "project", createdAt = 1, updatedAt = 1, lastMessage = null))
 
             val sent = Channel<TurnConfigBridge>(Channel.UNLIMITED)
+            val observed = Channel<Unit>(Channel.UNLIMITED)
+            var turnEvents = listOf("""{"type":"Finished"}""")
             val stub = Proxy.newProxyInstance(CoreBridge::class.java.classLoader, arrayOf(CoreBridge::class.java)) { _, _, _ ->
                 error("Unexpected Core call")
             } as CoreBridge
@@ -82,24 +84,30 @@ class ChatWorkspaceCapabilityTest {
                 override suspend fun backgroundTurnActive(conversationId: String) = false
                 override suspend fun startBackgroundTurn(config: TurnConfigBridge) { sent.send(config) }
                 override suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) {
-                    onEventJson("""{"type":"Finished"}""")
+                    turnEvents.forEach(onEventJson)
+                    observed.send(Unit)
                 }
             }
             val images = object : ChatImageStore {
                 override suspend fun importImage(bytes: ByteArray, extension: String): MessageImage = error("Unexpected image")
                 override fun deleteIfExists(path: String?) = Unit
             }
-            suspend fun send(id: String, platformToolsEnabled: Boolean): TurnConfigBridge {
+            suspend fun send(id: String, platformToolsEnabled: Boolean, durableNotices: Boolean = false,
+                events: List<String> = listOf("""{"type":"Finished"}"""), expectedError: String? = null): TurnConfigBridge {
+                turnEvents = events
                 val vm = ChatViewModel(messages, conversations, agents, modelRepository, providers, images,
                     builtinTools = { emptyList() }, projectRepository = projects, coreBridge = bridge,
-                    platformToolsEnabled = platformToolsEnabled)
+                    platformToolsEnabled = platformToolsEnabled, durableTurnFailureNotices = durableNotices)
                 viewModels.put("$id-$platformToolsEnabled", vm)
                 vm.loadConversation(id)
                 val collector = launch { vm.agent.collect() }
                 try {
                     withTimeout(5_000) { vm.agent.first { it?.id == "a" } }
                     vm.sendMessage("hello")
-                    return withTimeout(5_000) { sent.receive() }
+                    val config = withTimeout(5_000) { sent.receive() }
+                    withTimeout(5_000) { observed.receive() }
+                    assertEquals(expectedError, vm.errorMessage.value)
+                    return config
                 } finally { collector.cancel() }
             }
 
@@ -114,6 +122,16 @@ class ChatWorkspaceCapabilityTest {
             assertTrue(production.hasWorkspace)
             assertTrue(production.workspaceNote.contains("/workspace"))
             assertFalse(production.disableTools)
+            for (type in listOf("SummaryFailed", "ApprovalFailed", "Error")) {
+                val events = listOf("""{"type":"StreamingStarted","messageId":"assistant"}""",
+                    """{"type":"$type","message":"failure detail"}""", """{"type":"Finished"}""")
+                send("plain", false, durableNotices = true, events = events)
+                send("plain", false, events = events, expectedError = "failure detail")
+            }
+            send("plain", false, durableNotices = true, events = listOf(
+                """{"type":"TitleFailed","code":"title warning","durableNotice":true}""", """{"type":"Finished"}"""))
+            send("plain", false, durableNotices = true, events = listOf(
+                """{"type":"TitleFailed","code":"title warning"}""", """{"type":"Finished"}"""), expectedError = "title warning")
         } finally {
             viewModels.clear()
             db.close()

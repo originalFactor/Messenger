@@ -3,6 +3,7 @@ package cc.ptoe.messenger.di
 
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.domain.artifact.ArtifactUiHost
+import cc.ptoe.messenger.domain.chat.TurnFailureNotices
 import cc.ptoe.messenger.domain.repository.AgentRepository
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
@@ -35,4 +36,6 @@ class AppBackend(
     val artifactUiHost: ArtifactUiHost? = null,
     /** Platform and MCP tools need their own authority and lifetime proof. */
     val platformToolsEnabled: Boolean = true,
+    /** Durable turn failures are presented by the application scaffold. */
+    val turnFailureNotices: TurnFailureNotices? = null,
 )

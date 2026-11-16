@@ -633,6 +633,13 @@
     <string name="tools_approval_deny">拒绝</string>
     <string name="background_replay_gap">部分实时任务更新已不可用。任务结束后将刷新已保存的对话记录。</string>
     <string name="notification_conversation_unavailable">此设备上无法打开该会话。</string>
+    <string name="notification_conversation_open_failed">无法打开会话</string>
+    <string name="chat_failure_named">会话“%1$s”：%2$s</string>
+    <string name="chat_failure_generic">会话错误：%1$s</string>
+    <string name="chat_failure_open">打开会话</string>
+    <string name="chat_failure_storage_error">无法读取或确认会话错误</string>
+    <string name="chat_failure_review">查看会话错误提示问题</string>
+    <string name="action_not_now">暂不处理</string>
     <string name="remote_notification_unavailable">无法打开远程设备或会话。请检查设备是否在线并已开启远程控制。</string>
     <string name="remote_notification_title">远程会话</string>
     <string name="remote_notification_read_only">此会话位于另一台设备。请在该设备上发送新消息。</string>

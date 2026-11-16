@@ -58,11 +58,15 @@ class KotlinProviderRequestPreparer(private val catalog: KotlinToolCatalog? = nu
     }
 
     private fun contextMessages(conversation: ConversationRow, history: List<MessageRow>, prompt: String): List<ChatMessageDto> {
-        val sent = history.filter { it.status.equals("sent", ignoreCase = true) && it.timestamp >= conversation.contextSummaryUntil }
+        val eligible = history.filter { it.timestamp >= conversation.contextSummaryUntil }
+        val sent = eligible.withIndex().filter { it.value.status.equals("sent", ignoreCase = true) }
         val hasSummary = conversation.contextSummaryUntil > 0 && !conversation.contextSummary.isNullOrBlank()
         val includeSummary = hasSummary && sent.size < 20
-        val recent = sent.takeLast(20).let { if (includeSummary) it else it.dropWhile { row -> row.role == "tool" } }
-        val decoded = recent.map { it to parts(it) }
+        // Keep unsent rows as boundaries, while counting only sent rows against the context limit.
+        val recent = sent.takeLast(20).firstOrNull()?.let { eligible.drop(it.index) }.orEmpty()
+        val decoded = completeToolGroups(recent.map { row ->
+            row to if (row.status.equals("sent", ignoreCase = true)) parts(row) else emptyList()
+        })
         val context = buildList {
             if (includeSummary) add(ChatMessageDto(role = "system", content = JsonPrimitive("[Summary of earlier conversation]\n${conversation.contextSummary}")))
             decoded.forEachIndexed { index, (row, parts) ->
@@ -70,6 +74,46 @@ class KotlinProviderRequestPreparer(private val catalog: KotlinToolCatalog? = nu
             }
         }
         return (if (prompt.isNotBlank()) listOf(ChatMessageDto(role = "system", content = JsonPrimitive(prompt))) else emptyList()) + context
+    }
+
+    /** Never send a partial tool exchange after an interrupted turn or a clipped history window. */
+    private fun completeToolGroups(rows: List<Pair<MessageRow, List<ContentPart>>>): List<Pair<MessageRow, List<ContentPart>>> = buildList {
+        var index = 0
+        while (index < rows.size) {
+            val row = rows[index]
+            if (!row.first.status.equals("sent", ignoreCase = true)) { index++; continue }
+            if (row.first.role == "tool") { index++; continue }
+            val calls = if (row.first.role == "assistant") row.second.filterIsInstance<ContentPart.ToolCall>() else emptyList()
+            if (calls.isEmpty()) { add(row); index++; continue }
+            var end = index + 1
+            val callIds = calls.map { it.callId }
+            val group = mutableListOf(row)
+            val matched = mutableSetOf<String>()
+            // A retry may already have removed the failed assistant row. Stop after
+            // this call group's expected result count so later orphans cannot erase it.
+            val validCalls = calls.all { it.callId.isNotBlank() && it.name.isNotBlank() } && callIds.distinct().size == calls.size
+            while (validCalls && end < rows.size && matched.size < calls.size) {
+                val warning = rows[end].first
+                if (warning.role == "assistant" && warning.status.equals("error", ignoreCase = true) &&
+                    warning.partsJson.isNullOrBlank() && warning.content.startsWith("Automatic approval failed: ") &&
+                    warning.errorMessage == warning.content && end + 1 < rows.size) {
+                    val next = rows[end + 1]
+                    val result = next.second.filterIsInstance<ContentPart.ToolResult>().singleOrNull()
+                    if (next.first.role == "tool" && next.first.status.equals("sent", ignoreCase = true) &&
+                        result != null && result.isError && result.output == warning.content &&
+                        result.callId !in matched && calls.any { it.callId == result.callId && it.name == result.name }) end++
+                }
+                val candidate = rows[end]
+                val result = candidate.second.filterIsInstance<ContentPart.ToolResult>().singleOrNull()
+                if (candidate.first.role != "tool" || !candidate.first.status.equals("sent", ignoreCase = true) ||
+                    result == null || result.callId in matched || calls.none { it.callId == result.callId && it.name == result.name }) break
+                group.add(candidate)
+                matched.add(result.callId)
+                end++
+            }
+            if (validCalls && matched.size == calls.size) addAll(group)
+            index = end
+        }
     }
 
     private fun parts(row: MessageRow): List<ContentPart> {

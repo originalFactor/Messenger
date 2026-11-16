@@ -3,6 +3,8 @@ package cc.ptoe.messenger.data.repository.room
 
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.presentation.platform.TaskPushEvent
+import cc.ptoe.messenger.presentation.platform.TaskPushNotifications
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,20 @@ internal class KotlinRoomEventsBridge(
                 }
             }
         }
+    }
+
+    /** Called only by backend-owned turn workers; they stop before this event owner shuts down. */
+    fun chatTaskStatus(conversationId: String, status: String) {
+        require(status in setOf("approval", "approvalResolved", "completed", "failed", "cancelled"))
+        val subscribers = synchronized(lock) {
+            if (closed) return
+            listeners.toList()
+        }
+        if (status in setOf("approval", "completed", "failed")) {
+            runCatching { TaskPushNotifications.notify(TaskPushEvent(status, conversationId, "chat")) }
+        }
+        val ids = listOf(status, "chat", conversationId)
+        for (subscriber in subscribers) runCatching { subscriber("taskStatus", ids) }
     }
 
     /** The database owner must call this and wait before closing Room. */

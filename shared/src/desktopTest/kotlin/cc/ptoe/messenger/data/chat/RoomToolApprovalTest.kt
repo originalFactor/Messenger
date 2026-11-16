@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.*
 
 class RoomToolApprovalTest {
@@ -50,6 +51,49 @@ class RoomToolApprovalTest {
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
         val scope = CoroutineScope(Dispatchers.Default + Job())
         try { seed(db); return block(db, scope) } finally { scope.cancel(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun automaticApprovalWarningKeepsCompleteMultiToolHistory(): Unit = runBlocking {
+        for (failureFirst in listOf(true, false)) database { db, scope ->
+            val store = RoomKotlinTurnStore(db, preparer("write"), policy)
+            store.setToolApprovalMode("automatic")
+            var streams = 0
+            var reviews = 0
+            var executions = 0
+            val calls = listOf(ToolCallData("call-1", "write", "{}"), ToolCallData("call-2", "write", "{}"))
+            val provider = object : KotlinTurnProvider {
+                override fun stream(provider: Provider, request: ChatCompletionRequestDto): Flow<ChatStreamEvent> = flow {
+                    if (++streams == 1) emit(ChatStreamEvent.Done("tool_calls", toolCalls = calls))
+                    else { emit(ChatStreamEvent.Content("answer")); emit(ChatStreamEvent.Done("stop")) }
+                }
+                override fun complete(provider: Provider, request: ChatCompletionRequestDto): Flow<ChatStreamEvent> {
+                    val fail = (++reviews == 1) == failureFirst
+                    val decision = if (fail) """{"approved":false,"approved":true}""" else """{"approved":true}"""
+                    return flowOf(ChatStreamEvent.Content(decision), ChatStreamEvent.Done("stop"))
+                }
+            }
+            val runner = KotlinChatTurnRunner(store, provider, KotlinTurnToolExecutor { id, call ->
+                executions++
+                store.claimToolInvocation(id, call)
+                ToolExecutionResult("executed ${call.callId}")
+            }, scope)
+            val turn = assertIs<KotlinTurnAdmission.Accepted>(runner.submit(KotlinTurnCommand.Send("c", "request", null))).turnId
+            withTimeout(5_000) { runner.awaitStopped(turn) }
+            assertEquals(KotlinTurnPhase.FINISHED, store.snapshot(turn).phase)
+            assertEquals(2, reviews)
+            assertEquals(1, executions)
+            val history = db.rows().messagesFor(listOf("c"))
+            val warning = history.single { it.status == "error" }
+            assertTrue(warning.errorMessage.orEmpty().startsWith("Automatic approval failed: "))
+            val request = KotlinProviderRequestPreparer().rebuildContext(checkNotNull(db.rows().conversation("c")), history, "")
+            assertEquals(listOf("user", "assistant", "tool", "tool", "assistant"), request.map { it.role })
+            assertEquals(listOf("call-1", "call-2"), request[1].toolCalls!!.map { it.id })
+            assertEquals(listOf("call-1", "call-2"), request.subList(2, 4).map { it.toolCallId })
+            val failedResult = request[if (failureFirst) 2 else 3]
+            val successfulResult = request[if (failureFirst) 3 else 2]
+            assertEquals(warning.content, failedResult.content.jsonPrimitive.content)
+            assertTrue(successfulResult.content.jsonPrimitive.content.startsWith("executed call-"))
+        }
     }
 
     @Test fun readOnlyBypassesApprovalButWriteWithoutUiIsDenied() = runBlocking {

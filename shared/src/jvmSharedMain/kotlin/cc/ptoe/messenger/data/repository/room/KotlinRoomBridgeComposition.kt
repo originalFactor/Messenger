@@ -7,6 +7,7 @@ import cc.ptoe.messenger.data.chat.KotlinModelDiscoveryBridge
 import cc.ptoe.messenger.data.chat.KotlinRoomToolCatalogBridge
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
+import cc.ptoe.messenger.domain.chat.KotlinTurnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
@@ -30,11 +31,23 @@ internal class KotlinRoomBridgeComposition private constructor(
 ) {
     private val shutdownMutex = Mutex()
     private var stopped = false
+    @Volatile private var chatWorkers: Job? = null
+
+    val chatLifecycle: KotlinTurnLifecycle = object : KotlinTurnLifecycle {
+        override fun status(conversationId: String, status: String) = events.chatTaskStatus(conversationId, status)
+    }
+
+    /** Bind before exposing chat; a failed worker stop must not close its event subscribers. */
+    fun bindChatWorkers(job: Job) {
+        check(chatWorkers == null) { "Chat workers already bound" }
+        chatWorkers = job
+    }
 
     /** Blocks new discovery calls and joins admitted calls and event observers before returning. */
     suspend fun shutdown() = withContext(NonCancellable) {
         shutdownMutex.withLock {
             if (stopped) return@withLock
+            check(chatWorkers?.isCompleted != false) { "Chat workers have not stopped" }
             requests.stopAndJoin()
             events.shutdown()
             discovery.close()
