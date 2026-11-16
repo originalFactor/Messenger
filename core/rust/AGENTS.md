@@ -1,6 +1,6 @@
 # core — Rust Agent Core and local API
 
-`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android, Desktop, and the Python TUI use the loopback `/api/v1` REST/SSE service in `messenger-http`.
+`core/rust` is a Cargo workspace (resolver 2, release LTO + strip) with 9 crates. `core/bindings` and `core/bindings-desktop` build the native library and generate the lifecycle-only UniFFI surface used by Android/Desktop. Android and Desktop use the loopback `/api/v1` REST/SSE service in `messenger-http`.
 
 ## Crates
 
@@ -11,7 +11,7 @@
 - `messenger-sync` — paged delta sync, cloud auth/session handling, avatar caching, market/card APIs and model discovery.
 - `messenger-mcp` — JSON-RPC MCP client, configuration codec, pluggable stdio / SSE+HTTP transports and tool lifecycle. Kotlin also retains its platform MCP manager; do not assume this crate replaces the native UI inventory.
 - `messenger-remote` — cross-device project routing: `RemoteHub` holds the per-device cloud relay SSE connection (`/api/remote/*`), tracks which devices are online, forwards workspace tool calls to the project's owner and validates/executes inbound ones. Contract: `crates/messenger-http/docs/REMOTE.md`.
-- `messenger-http` — axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation. Its `messenger-core-server` binary is the TUI’s lifecycle bridge. It opens a dedicated SQLite store under an advisory lock, ensures the default Agent exists before serving, writes the loopback URL and bearer token to the child’s stdout pipe, and shuts down on stdin EOF.
+- `messenger-http` — axum loopback REST/SSE server covering CRUD, pagination, chat turns, tool results, cloud sync and cancellation. Its `messenger-core-server` binary also hosts the standalone stdio and ACP adapters. The stdio server opens a dedicated SQLite store under an advisory lock, ensures the default Agent exists before serving, writes the loopback URL and bearer token to the child’s stdout pipe, and shuts down on stdin EOF.
 - `messenger-ffi` — lifecycle-only `CoreHandle.open`, `start_http_server`, `HttpServerHandle.local_addr/token/stop` and `CoreError`.
 
 The Rust core does not contain a Document Engine, Markdown parser, LaTeX renderer, syntax highlighter, browser boundary or TUI crate. Android/Desktop render Markdown, code and LaTeX in Kotlin with `cc.ptoe:llm-typewriter`.
@@ -26,9 +26,9 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 - **Tool approval**: `/tools/approval` selects device-local `manual` (default) or `automatic` review. Core gates calls before local, remote and Core dispatch; trusted read-only calls bypass review, while terminal, write and unclassified calls require approval. Manual-capable clients advertise `supportsToolApproval`, answer the SSE request, and fail closed on cancellation/timeout/disconnect. Automatic review uses a separate tool-free model request with the current model, user request and call; invalid decisions, errors, cancellation and timeout deny. Approval never widens Agent policy or writable mode. Keep `openapi.yaml` and `docs/SSE.md` current.
 - `messenger-http` owns request validation, default-Agent protection, model-required checks and cloud error mapping.
 - `/cloud/builtin-models/sync` provisions Messenger Cloud AI from the saved account before fetching its catalog. Clearing the Cloud session removes that provider and its models. Public Provider/model CRUD (including enabled and reparenting) rejects the built-in catalog with 409 `builtin_catalog_read_only`; internal provisioning/sync writes remain allowed. Manual native Sync uses this endpoint, importing authoritative Messenger Extended Models Protocol `/v1/models` metadata and rates without local overrides, stale-rate retention or models.dev enrichment.
-- `/cloud/conversations/push` uploads standalone TUI conversations without applying Cloud data. It stores the account/server binding and last uploaded digest/version, checks for newer Cloud changes before updates, and maps local-only Agent IDs to the Cloud default. Keep provider credentials and unrelated entities out of these uploads.
-- Model rows persist capability metadata separately from explicit overrides. Provider discovery reads Messenger extensions from `/models`. TUI discovery opts out of models.dev; Python `tui/messenger_tui/model_metadata.py` fills missing capabilities from pi-catalog. Built-in models persist only Cloud-supplied capabilities.
-- Tool policy stays in Rust. Kotlin and the TUI execute platform tools and post results to `/turns/tools/{callId}/result`. The TUI's `/tools` command persists conversation overrides; its local executor uses the trusted project's workspace.
+- `/cloud/conversations/push` uploads individual standalone conversations without applying Cloud data. It stores the account/server binding and last uploaded digest/version, checks for newer Cloud changes before updates, and maps local-only Agent IDs to the Cloud default. Keep provider credentials and unrelated entities out of these uploads.
+- Model rows persist capability metadata separately from explicit overrides. Provider discovery reads Messenger extensions from `/models`. Built-in models persist only Cloud-supplied capabilities.
+- Tool policy stays in Rust. Kotlin executes platform tools and posts results to `/turns/tools/{callId}/result`.
 - Projectless streamed turns can supply an execution-host-created `workspacePath` as their temporary working directory. Core appends its path and temporary nature directly to the system prompt and declares eligible workspace tools; project paths take precedence. The client owns directory lifetime and must execute in the same path. Detached turns do not accept this client-supplied path.
 - Dropping a legacy chat SSE cancels its turn and pending tool host. Core-owned background chat and ACP streams survive observer disconnect; explicit cancel and shutdown terminate them. Background turns use bounded replay and the app-wide platform tool host; reconnect restores pending approval without silently retrying a model call.
 - **`ServerHandle::stop` must close the endless streams**: axum's graceful shutdown resolves only after every in-flight response ends, and `/events` never ends on its own — so `ServerHandle`'s `CancellationToken` is handed to `ApiState`, whose `/events` handler wraps the feed in `ShutdownStream`. Without that, `stop()` never returns and the desktop app freezes on window close. Any future long-lived (SSE/websocket) route needs the same treatment.
@@ -51,7 +51,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 
 ## Versioning
 
-`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. The TUI packaging workflow reads the version from `messenger-core-server --version`. Rust never uses `CARGO_PKG_VERSION` as the product version. Unlike Gradle, the current build script accepts non-empty version text without a semantic-version check and warns/falls back to `0.0.0` when VERSION is missing/empty; its commit count falls back to 0 without git. TUI release packaging validates the reported semantic version; release tags must still match root VERSION.
+`messenger-core` reads the repository-root `VERSION` and exposes the semantic name plus git commit count. Rust never uses `CARGO_PKG_VERSION` as the product version. Unlike Gradle, the current build script accepts non-empty version text without a semantic-version check and warns/falls back to `0.0.0` when VERSION is missing/empty; its commit count falls back to 0 without git. Release tags must still match root VERSION.
 
 ## Native bindings
 
@@ -80,7 +80,7 @@ The Rust core does not contain a Document Engine, Markdown parser, LaTeX rendere
 ## Testing / CI
 
 - `cargo test --workspace` is the workspace verification; `cargo test -p messenger-http` runs the API contract suite.
-- The current GitHub workflows compile/package native clients; they do not run `cargo test` or the TUI test workflow automatically. Run the relevant tests locally.
+- The current GitHub workflows compile/package native clients; they do not run `cargo test` automatically. Run the relevant tests locally.
 - Native client builds use cargo-ndk for Android and host Cargo for Desktop. There is no Web/Wasm build.
 
 ## ACP and device control

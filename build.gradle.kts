@@ -50,7 +50,7 @@ fun loadDotEnv() {
 loadDotEnv()
 
 /**
- * 版本方案：Android(androidApp/wear/runtime) / Desktop / TUI 使用同一套
+ * 版本方案：Android(androidApp/wear/runtime) / Desktop 使用同一套
  * 语义化版本名 + git commit 计数版本号。
  *
  * - versionName: 仓库根目录 `VERSION` 文件里的语义化版本（MAJOR.MINOR.PATCH），
