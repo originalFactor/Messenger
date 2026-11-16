@@ -118,6 +118,12 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
     override suspend fun status(token: String): TrackedWorkspaceStatus =
         if (protocolAvailable) workspaceTracker.status(token) else TrackedWorkspaceStatus.UNKNOWN
 
+    override suspend fun cancelAndAwaitStopped(token: String): TrackedWorkspaceStatus {
+        if (!protocolAvailable) return TrackedWorkspaceStatus.UNKNOWN
+        val status = workspaceTracker.cancelAndAwaitStopped(token)
+        return if (protocolAvailable) status else TrackedWorkspaceStatus.UNKNOWN
+    }
+
     private fun workspaceDisconnected() {
         protocolAvailable = false
         safeGrepAvailable = false

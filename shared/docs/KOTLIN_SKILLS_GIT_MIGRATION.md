@@ -2,6 +2,8 @@
 
 本文件记录调研结论，不代表生产能力。当前 Kotlin `RemoteSkillImport` 只支持公开 GitHub HTTPS API；通用 Git HTTPS、私有仓库凭证、界面与生产接线均未实现。Rust Core 的通用 Git 导入在切换前仍须保留，不能将 Kotlin 的 GitHub 实现当成完整替代。
 
+GitHub tree/blob 链接按路径从长到短查询精确的分支和标签引用，支持包含斜杠的名称；同名分支优先，附注标签按不可变对象 ID 解析到提交。显式指定 ref 和路径时直接使用用户选择。仅 404 表示候选引用不存在，其他失败会直接显示；每次查询都计入现有请求次数和时间预算，成功响应另受流量上限约束。精确查询避免引用列表分页或截断造成错误匹配，但较深路径会产生更多请求，可能触发 GitHub 未认证访问的速率限制；遇限时导入失败，不会选择较短引用。查询之间引用可能变化，因此不是原子引用快照；发现后返回固定提交，预览仍必须使用该提交。
+
 ## JGit 的实际成本和限制
 
 JGit 是 [纯 Java 实现](https://github.com/eclipse-jgit/jgit)，但其默认 Git 传输不满足本项目对不可信仓库的限制。本机 Gradle 缓存中的 `org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r` 核心 JAR 为 3,448,442 字节；其 POM 还依赖 JavaEWAH 1.2.3（170,567 字节）、SLF4J API 2.0.18（69,982 字节）和 commons-codec 1.22.1（422,738 字节），合计约 3.92 MiB 的 JAR 文件。它们可能与现有依赖重叠；这是依赖文件大小，不是 APK、R8 或 Desktop 安装包的实际增量，也不能推断编译时间变化。7.8 的本地 manifest 要求 Java 17；上游 [已决定 JGit 8 改用 Java 25](https://github.com/eclipse-jgit/jgit/issues/292)。Android ART、D8/R8 及目标 API 的兼容性仍需实机和发布构建验证，不能由纯 Java 推断。

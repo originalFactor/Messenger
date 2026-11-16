@@ -44,6 +44,40 @@ class InMemoryWorkspaceTrackerTest {
         assertEquals(TrackedWorkspaceStatus.STOPPED, tracker.status("token"))
     }
 
+    @Test fun cancelAndAwaitRequiresTheRealCallToReturn() = runBlocking {
+        val tracker = InMemoryWorkspaceTracker()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val call = launch(Dispatchers.Default) {
+            tracker.run("token") { started.complete(Unit); release.await() }
+        }
+        withTimeout(5000) { started.await() }
+        val stop = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { tracker.cancelAndAwaitStopped("token") }
+        assertFalse(stop.isCompleted)
+        assertFalse(call.isCompleted)
+        assertEquals(TrackedWorkspaceStatus.RUNNING, tracker.status("token"))
+        release.complete(Unit)
+        assertEquals(TrackedWorkspaceStatus.STOPPED, withTimeout(5000) { stop.await() })
+        withTimeout(5000) { call.join() }
+        assertEquals(TrackedWorkspaceStatus.UNKNOWN, tracker.cancelAndAwaitStopped("missing"))
+    }
+
+    @Test fun cancelAndAwaitReturnsUnknownOnDisconnect() = runBlocking {
+        val tracker = InMemoryWorkspaceTracker()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val call = launch(Dispatchers.Default) {
+            runCatching { tracker.run("token") { started.complete(Unit); release.await() } }
+        }
+        withTimeout(5000) { started.await() }
+        val stop = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { tracker.cancelAndAwaitStopped("token") }
+        tracker.disconnected()
+        assertEquals(TrackedWorkspaceStatus.UNKNOWN, withTimeout(5000) { stop.await() })
+        release.complete(Unit)
+        withTimeout(5000) { call.join() }
+        assertEquals(TrackedWorkspaceStatus.UNKNOWN, tracker.status("token"))
+    }
+
     @Test fun disconnectAndExceptionsRemainUnknownEvenAfterALateReturn() = runBlocking {
         val tracker = InMemoryWorkspaceTracker()
         tracker.run("completed") { Unit }

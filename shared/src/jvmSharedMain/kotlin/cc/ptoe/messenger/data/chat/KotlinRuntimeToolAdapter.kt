@@ -33,6 +33,8 @@ interface TrackedWorkspaceHost {
     val supportedOperations: Set<String>
     suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult
     suspend fun status(token: String): TrackedWorkspaceStatus
+    /** Request cancellation and return STOPPED only on independently verified completion. */
+    suspend fun cancelAndAwaitStopped(token: String): TrackedWorkspaceStatus = TrackedWorkspaceStatus.UNKNOWN
 }
 enum class TrackedWorkspaceStatus { UNKNOWN, RUNNING, STOPPED }
 

@@ -69,13 +69,18 @@ class RemoteSkillImportTest {
     private class Http : RemoteSkillHttp {
         val calls = mutableListOf<String>()
         val responses = mutableMapOf<String, ByteArray>()
+        val failures = mutableMapOf<String, Int>()
         override suspend fun get(url: HttpUrl, limit: Int): ByteArray {
             assertEquals("api.github.com", url.host)
             val key = url.encodedPath + (url.encodedQuery?.let { "?$it" } ?: "")
             calls += key
+            failures[key]?.let { throw RemoteSkillHttpFailure(it) }
+            if ("/git/ref/" in key && key !in responses) throw RemoteSkillHttpFailure(404)
             return responses[key] ?: error("Unexpected request $key")
         }
     }
+    private fun ref(kind: String, name: String, id: String, type: String = "commit"): ByteArray =
+        """{"ref":"refs/$kind/$name","object":{"type":"$type","sha":"$id"}}""".toByteArray()
     private fun fixture(): Http = Http().apply {
         val prefix = "/repos/owner/repo"
         responses["$prefix/commits/main"] = """{"sha":"$commit"}""".toByteArray()
@@ -128,12 +133,72 @@ class RemoteSkillImportTest {
         val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
         for (source in listOf("http://github.com/a/b", "https://user:pass@github.com/a/b", "https://github.com/a/b?token=x",
             "https://github.com/a/b/tree/main/%2e%2e/x", "https://github.com/a/b/tree/main/a%5Cb", "file:///tmp/repo",
-            "https://example.com/group/repo.git", "https://github.com/a/.git")) {
+            "https://example.com/group/repo.git", "https://127.0.0.1/repo.git",
+            "https://[::1]/repo.git", "https://10.0.0.1/repo.git", "https://169.254.169.254/latest/meta-data",
+            "https://localhost/repo.git", "https://github.com.example.com/a/b",
+            "https://github.com@127.0.0.1/a/b", "https://github.com:8443/a/b",
+            "https://github.com/a/.git")) {
             assertFails(source) { remote.discover(RemoteSkillRequest(source)) }
         }
         assertFails { remote.preview(RemoteSkillRequest("owner/repo", "skills/review", "main")) }
-        assertFails { remote.discover(RemoteSkillRequest("https://github.com/owner/repo/tree/feature/slash/skills/review")) }
         assertTrue(fake.calls.isEmpty())
+    }
+
+    @Test fun githubUrlUsesLongestExactBranchAndPinsPreview(): Unit = runBlocking {
+        val fake = fixture()
+        val prefix = "/repos/owner/repo/git/ref"
+        fake.responses["$prefix/heads/feature"] = ref("heads", "feature", "d".repeat(40))
+        fake.responses["$prefix/heads/feature/slash"] = ref("heads", "feature/slash", commit)
+        fake.responses["$prefix/tags/feature/slash"] = ref("tags", "feature/slash", "e".repeat(40))
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
+        val catalog = remote.discover(RemoteSkillRequest("https://github.com/owner/repo/tree/feature%2Fslash/skills/review"))
+        assertEquals(commit, catalog.revision)
+        assertEquals("skills/review", catalog.items.first { it.name == "review" }.path)
+        assertTrue("$prefix/heads/feature/slash/skills/review" in fake.calls)
+        assertTrue("$prefix/heads/feature/slash" in fake.calls)
+        assertFalse("$prefix/tags/feature/slash" in fake.calls)
+        fake.calls.clear()
+        val preview = remote.preview(RemoteSkillRequest(catalog.source, "skills/review", catalog.revision))
+        assertContentEquals(binary, java.util.Base64.getDecoder().decode(preview.detail.packageData.binaryFiles["assets/icon.bin"]))
+        assertTrue(fake.calls.first().endsWith("/commits/$commit"))
+        assertFalse(fake.calls.any { "/git/ref/" in it })
+    }
+
+    @Test fun githubBlobUrlPeelsAnnotatedSlashedTagAndExplicitSelectionSkipsRefSearch(): Unit = runBlocking {
+        val fake = fixture()
+        val tagId = "d".repeat(40)
+        fake.responses["/repos/owner/repo/git/ref/tags/v1/release"] = ref("tags", "v1/release", tagId, "tag")
+        fake.responses["/repos/owner/repo/git/tags/$tagId"] = """{"sha":"$tagId","object":{"type":"commit","sha":"$commit"}}""".toByteArray()
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
+        val url = "https://github.com/owner/repo/blob/v1/release/skills/review/SKILL.md"
+        val catalog = remote.discover(RemoteSkillRequest(url))
+        assertEquals(commit, catalog.revision)
+        assertEquals("skills/review", catalog.items.first { it.name == "review" }.path)
+        assertTrue("/repos/owner/repo/git/tags/$tagId" in fake.calls)
+        fake.calls.clear()
+        val explicit = remote.discover(RemoteSkillRequest(url, "skills/review", "main"))
+        assertEquals(commit, explicit.revision)
+        assertFalse(fake.calls.any { "/git/ref/" in it || "/git/tags/" in it })
+        assertTrue(fake.calls.first().endsWith("/commits/main"))
+    }
+
+    @Test fun githubRefLookupFailureAndMalformedTagFailWithoutChoosingShorterRef(): Unit = runBlocking {
+        val fake = fixture()
+        val prefix = "/repos/owner/repo/git/ref"
+        fake.responses["$prefix/heads/feature"] = ref("heads", "feature", commit)
+        fake.failures["$prefix/heads/feature/slash/skills/review"] = 403
+        val remote = RemoteSkillImport(fake, RemoteSkillLimiter())
+        assertFailsWith<RemoteSkillHttpFailure> {
+            remote.discover(RemoteSkillRequest("https://github.com/owner/repo/tree/feature/slash/skills/review"))
+        }
+        assertFalse("$prefix/heads/feature" in fake.calls)
+        fake.failures.clear()
+        fake.calls.clear()
+        val tagId = "d".repeat(40)
+        fake.responses["$prefix/tags/v1"] = ref("tags", "v1", tagId, "tag")
+        fake.responses["/repos/owner/repo/git/tags/$tagId"] = """{"sha":"$tagId","object":{"type":"tag","sha":"$tagId"}}""".toByteArray()
+        assertFails { remote.discover(RemoteSkillRequest("https://github.com/owner/repo/tree/v1/skills/review")) }
+        assertFalse(fake.calls.any { "/git/trees/" in it })
     }
 
     @Test fun rejectsTruncatedTreesSymlinksTraversalTamperedBlobsAndUnboundedResponses(): Unit = runBlocking {

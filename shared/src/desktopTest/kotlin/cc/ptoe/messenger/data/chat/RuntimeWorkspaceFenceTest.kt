@@ -19,9 +19,12 @@ import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -30,6 +33,161 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RuntimeWorkspaceFenceTest {
+    @Test fun invalidationCancelsWithoutWaitingAndRecoveryWaitsForRealStop(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-cancel")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val tracker = InMemoryWorkspaceTracker()
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = tracker.status(token)
+                override suspend fun cancelAndAwaitStopped(token: String) = tracker.cancelAndAwaitStopped(token)
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            val started = CompletableDeferred<Unit>()
+            val token = "d".repeat(64)
+            val invocation = launch {
+                runCatching { fence.execute(token, host) { dispatch ->
+                    dispatch(); tracker.run(token) { started.complete(Unit); release.await() }
+                } }
+            }
+            withTimeout(5000) { started.await() }
+            fence.invalidateAdmissions()
+            assertFalse(invocation.isCompleted)
+            val recovery = async(start = CoroutineStart.UNDISPATCHED) { fence.cancelAndRecover(host) }
+            assertFalse(recovery.isCompleted)
+            release.complete(Unit)
+            withTimeout(5000) { invocation.join(); recovery.await() }
+            assertTrue(fence.mutate { true })
+            assertFailsWith<IllegalStateException> { fence.execute(token, host) { it(); Unit } }
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun invalidationBeforeDispatchClosesAdmissionEvenWhenCallerIgnoresCancellation(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-admission")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = TrackedWorkspaceStatus.UNKNOWN
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            val entered = CompletableDeferred<Unit>()
+            var dispatched = false
+            val invocation = launch {
+                runCatching { fence.execute("e".repeat(64), host) { mark ->
+                    withContext(NonCancellable) { entered.complete(Unit); release.await(); mark(); dispatched = true }
+                } }
+            }
+            withTimeout(5000) { entered.await() }
+            fence.invalidateAdmissions()
+            release.complete(Unit)
+            withTimeout(5000) { invocation.join() }
+            assertFalse(dispatched)
+            assertFailsWith<IllegalStateException> { fence.mutate { Unit } }
+            fence.recover(host)
+            assertTrue(fence.mutate { true })
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun disconnectDuringCancellationCannotReleaseTheFence(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-disconnect")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val tracker = InMemoryWorkspaceTracker()
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = tracker.status(token)
+                override suspend fun cancelAndAwaitStopped(token: String) = tracker.cancelAndAwaitStopped(token)
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            val started = CompletableDeferred<Unit>()
+            val invocation = launch {
+                runCatching { fence.execute("f".repeat(64), host) { mark ->
+                    mark(); tracker.run("f".repeat(64)) { started.complete(Unit); release.await() }
+                } }
+            }
+            withTimeout(5000) { started.await() }
+            fence.invalidateAdmissions()
+            tracker.disconnected()
+            assertFailsWith<IllegalStateException> { fence.cancelAndRecover(host) }
+            release.complete(Unit)
+            withTimeout(5000) { invocation.join() }
+            assertFailsWith<IllegalStateException> { fence.recover(host) }
+            assertFailsWith<IllegalStateException> { fence.mutate { Unit } }
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun anotherInvalidationDuringStopVerificationCannotReopenAdmission(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-recovery-race")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        try {
+            val checking = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String): TrackedWorkspaceStatus {
+                    checking.complete(Unit); release.await(); return TrackedWorkspaceStatus.STOPPED
+                }
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            assertFailsWith<IllegalStateException> { fence.execute("1".repeat(64), host) { it(); error("unknown") } }
+            val recovery = async { runCatching { fence.recover(host) } }
+            withTimeout(5000) { checking.await() }
+            fence.invalidateAdmissions()
+            release.complete(Unit)
+            assertTrue(withTimeout(5000) { recovery.await() }.isFailure)
+            assertFailsWith<IllegalStateException> { fence.mutate { Unit } }
+            fence.recover(host)
+            assertTrue(fence.mutate { true })
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun anotherInvalidationDuringHostCancellationCannotReopenAdmission(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-cancel-race")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        try {
+            val cancelling = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = TrackedWorkspaceStatus.STOPPED
+                override suspend fun cancelAndAwaitStopped(token: String): TrackedWorkspaceStatus {
+                    cancelling.complete(Unit); release.await(); return TrackedWorkspaceStatus.STOPPED
+                }
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            assertFailsWith<IllegalStateException> { fence.execute("2".repeat(64), host) { it(); error("unknown") } }
+            fence.invalidateAdmissions()
+            val recovery = async { runCatching { fence.cancelAndRecover(host) } }
+            withTimeout(5000) { cancelling.await() }
+            fence.invalidateAdmissions()
+            release.complete(Unit)
+            assertTrue(withTimeout(5000) { recovery.await() }.isFailure)
+            assertFailsWith<IllegalStateException> { fence.mutate { Unit } }
+            fence.recover(host)
+            assertTrue(fence.mutate { true })
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun replacingTheAdapterCannotDiscardAnUncertainOperation(): Unit = runBlocking {
         val dir = Files.createTempDirectory("workspace-fence-owner")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())

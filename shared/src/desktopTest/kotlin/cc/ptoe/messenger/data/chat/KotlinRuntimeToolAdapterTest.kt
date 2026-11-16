@@ -12,15 +12,82 @@ import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlin.test.*
 
 class KotlinRuntimeToolAdapterTest {
+    @Test fun runnerRevocationCancelsHostButKeepsErrorAndReservationUntilStop(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("turn-runtime-revocation")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val rows = db.rows()
+            rows.upsertProviders(listOf(ProviderRow("p", "P", "https://example.test", "key", "chat", false, 1, 1)))
+            rows.upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 10000, null, null, null, null, "text", "text", true, false, false, true, 1, null, null)))
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("a", "A", systemPrompt = "prompt", defaultModelId = "m", temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, toolsEnabled = true, createdAt = 1, updatedAt = 1))
+            rows.upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, true, 1, 1, null, null, null, 0, 0, 0)))
+            val started = CompletableDeferred<Unit>()
+            val cancelled = CompletableDeferred<Unit>()
+            val stopped = CompletableDeferred<Unit>()
+            val tool = object : ChatTool {
+                override val name = "read"
+                override val description = "read"
+                override val parametersJson = """{"type":"object"}"""
+                override suspend fun execute(argumentsJson: String): ToolExecutionResult = error("Host only")
+            }
+            var runs = 0
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult {
+                    runs++
+                    try { started.complete(Unit); awaitCancellation() }
+                    finally { withContext(NonCancellable) { cancelled.complete(Unit); release.await(); stopped.complete(Unit) } }
+                }
+                override suspend fun status(token: String) = if (stopped.isCompleted) TrackedWorkspaceStatus.STOPPED else TrackedWorkspaceStatus.RUNNING
+                override suspend fun cancelAndAwaitStopped(token: String): TrackedWorkspaceStatus {
+                    stopped.await(); return TrackedWorkspaceStatus.STOPPED
+                }
+            }
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            val grant = KotlinRuntimeToolGrant("c", null, "/workspace", null, "host-build", listOf("read"))
+            lateinit var store: RoomKotlinTurnStore
+            val adapter = KotlinRuntimeToolAdapter(db, grant, RuntimeWorkspaceVerifier { true }, { store }, host, fence, { listOf(tool) }, { true })
+            store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(adapter), adapter)
+            val call = ToolCallData("tool", "read", "{}")
+            val runner = KotlinChatTurnRunner(store, KotlinTurnProvider { _, _ -> flowOf(ChatStreamEvent.Done("tool_calls", toolCalls = listOf(call))) }, adapter, this)
+            val id = assertIs<KotlinTurnAdmission.Accepted>(runner.submit(KotlinTurnCommand.Send("c", "hi", null))).turnId
+            withTimeout(5000) { started.await() }
+            fence.invalidateAdmissions()
+            withTimeout(5000) { cancelled.await() }
+            assertEquals(KotlinTurnPhase.EXECUTING_TOOL, store.snapshot(id).phase)
+            assertIs<KotlinTurnAdmission.Rejected>(store.admit(KotlinTurnCommand.Send("c", "too early", null)))
+            val recovery = async(start = CoroutineStart.UNDISPATCHED) { fence.cancelAndRecover(host) }
+            assertFalse(recovery.isCompleted)
+            release.complete(Unit)
+            withTimeout(5000) { recovery.await(); runner.awaitStopped(id) }
+            assertEquals(KotlinTurnPhase.INTERRUPTED_TOOL, store.snapshot(id).phase)
+            val detail = assertNotNull(store.observeFailure(id).first())
+            assertTrue(detail.contains("Workspace authority revoked"))
+            val assistant = rows.messagesFor(listOf("c")).single { it.role == "assistant" }
+            assertEquals("error", assistant.status)
+            assertEquals(detail, assistant.errorMessage)
+            assertIs<KotlinTurnAdmission.Rejected>(store.admit(KotlinTurnCommand.Send("c", "still reserved", null)))
+            assertTrue(store.reconcileInterruptedTool(id, host))
+            assertEquals(1, runs)
+            assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "after", null)))
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun returnedToolWithoutStopProofKeepsTurnAndFenceReserved(): Unit = runBlocking {
         val dir = Files.createTempDirectory("turn-runtime-unknown")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()

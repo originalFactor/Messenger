@@ -4,6 +4,11 @@ package cc.ptoe.messenger.data.chat
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -26,8 +31,14 @@ class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
         }
     }
     private val mutex = Mutex()
+    private val admissionLock = Any()
     private data class Uncertain(val token: String, val host: WeakReference<TrackedWorkspaceHost>)
+    private data class Active(val token: String, val host: TrackedWorkspaceHost, val job: Job?,
+        var dispatched: Boolean = false, var revoked: Boolean = false)
     private var uncertain: Uncertain? = null
+    private var active: Active? = null
+    private var invalidated = false
+    private var generation = 0L
     private val dispatchedTokens = mutableSetOf<String>()
 
     internal fun requireOwner(candidate: LocalDatabase) {
@@ -36,34 +47,96 @@ class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
 
     /** All authority-changing writers must use this gate, including Cloud restore. */
     suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
-        check(uncertain == null) { "Workspace execution requires recovery" }
+        synchronized(admissionLock) { check(!invalidated && uncertain == null) { "Workspace execution requires recovery" } }
         block()
+    }
+
+    /** Close admissions without waiting for an executing host. Credential revocation must not
+     * wait for a potentially stuck Binder/process call. Recovery requires actual stop evidence. */
+    fun invalidateAdmissions() {
+        val job = synchronized(admissionLock) {
+            generation++
+            invalidated = true
+            active?.also {
+                it.revoked = true
+                if (it.dispatched) uncertain = Uncertain(it.token, WeakReference(it.host))
+            }?.job
+        }
+        job?.cancel(CancellationException("Workspace authority revoked"))
     }
 
     /** An exception after dispatch is unknown until the exact host proves the token stopped. */
     internal suspend fun <T> execute(token: String, host: TrackedWorkspaceHost,
-        block: suspend (markDispatched: () -> Unit) -> T): T = mutex.withLock {
-        require(token.matches(Regex("[0-9a-f]{64}"))) { "Invalid workspace operation token" }
-        check(uncertain == null) { "Workspace execution requires recovery" }
-        check(token !in dispatchedTokens && dispatchedTokens.size < 10_000) { "Workspace operation was already dispatched or tracking is full" }
-        var dispatched = false
-        try { block {
-            check(!dispatched) { "Workspace operation was already dispatched" }
-            dispatched = true
-            dispatchedTokens.add(token)
-        } }
-        catch (failure: Throwable) {
-            if (dispatched) uncertain = Uncertain(token, WeakReference(host))
-            throw failure
+        block: suspend (markDispatched: () -> Unit) -> T): T {
+        var admitted: Active? = null
+        try {
+            return coroutineScope {
+                mutex.withLock {
+                    // A fresh scope has its own cancellable Job even when the runner deliberately
+                    // invokes tools under NonCancellable. It still waits for host cleanup.
+                    require(token.matches(Regex("[0-9a-f]{64}"))) { "Invalid workspace operation token" }
+                    val job = currentCoroutineContext()[Job]
+                    val invocation = synchronized(admissionLock) {
+                        check(!invalidated && uncertain == null) { "Workspace execution requires recovery" }
+                        check(token !in dispatchedTokens && dispatchedTokens.size < 10_000) { "Workspace operation was already dispatched or tracking is full" }
+                        Active(token, host, job).also { active = it; admitted = it }
+                    }
+                    try {
+                        block { synchronized(admissionLock) {
+                            invocation.job?.ensureActive()
+                            check(!invalidated) { "Workspace authority revoked" }
+                            check(!invocation.dispatched) { "Workspace operation was already dispatched" }
+                            invocation.dispatched = true
+                            dispatchedTokens.add(token)
+                        } }
+                    } catch (failure: Throwable) {
+                        synchronized(admissionLock) { if (invocation.dispatched) uncertain = Uncertain(token, WeakReference(host)) }
+                        throw failure
+                    } finally {
+                        synchronized(admissionLock) { if (active === invocation) active = null }
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            // Revocation is an interrupted operation, not user cancellation: the turn must keep
+            // its reservation and surface the error until the host can prove it stopped.
+            if (synchronized(admissionLock) { admitted?.revoked == true }) {
+                throw IllegalStateException("Workspace authority revoked; operation outcome requires verification", cancelled)
+            }
+            throw cancelled
         }
     }
 
     /** Only the same live tracked host can provide stop evidence; unknown never permits replay. */
-    suspend fun recover(host: TrackedWorkspaceHost) = mutex.withLock {
-        val pending = checkNotNull(uncertain) { "No uncertain workspace operation" }
-        check(pending.host.get() === host && host.protocolAvailable && host.status(pending.token) == TrackedWorkspaceStatus.STOPPED) {
-            "Workspace operation stop is unverified"
+    suspend fun recover(host: TrackedWorkspaceHost) = recover(host, null)
+
+    private suspend fun recover(host: TrackedWorkspaceHost, expectedGeneration: Long?) = mutex.withLock {
+        val (pending, observedGeneration) = synchronized(admissionLock) {
+            check(invalidated || uncertain != null) { "No uncertain workspace operation" }
+            check(expectedGeneration == null || generation == expectedGeneration) { "Workspace authority changed during recovery" }
+            uncertain to generation
         }
-        uncertain = null
+        if (pending != null) {
+            check(pending.host.get() === host && host.protocolAvailable && host.status(pending.token) == TrackedWorkspaceStatus.STOPPED) {
+                "Workspace operation stop is unverified"
+            }
+        }
+        synchronized(admissionLock) {
+            check(generation == observedGeneration && uncertain === pending) { "Workspace authority changed during recovery" }
+            uncertain = null
+            invalidated = false
+        }
+    }
+
+    /** Request host cancellation without taking the workspace mutex; UNKNOWN remains fenced. */
+    suspend fun cancelAndRecover(host: TrackedWorkspaceHost) {
+        val (pending, observedGeneration) = synchronized(admissionLock) { uncertain to generation }
+        if (pending != null) {
+            check(pending.host.get() === host && host.protocolAvailable &&
+                host.cancelAndAwaitStopped(pending.token) == TrackedWorkspaceStatus.STOPPED) {
+                "Workspace operation stop is unverified"
+            }
+        }
+        recover(host, observedGeneration)
     }
 }

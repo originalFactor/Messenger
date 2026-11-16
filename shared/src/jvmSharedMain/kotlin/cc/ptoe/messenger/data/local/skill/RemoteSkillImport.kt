@@ -57,9 +57,11 @@ internal class RemoteSkillPreview internal constructor(val source: String, val r
     internal fun reviewedPackage() = reviewed
 }
 internal fun interface RemoteSkillHttp { suspend fun get(url: HttpUrl, limit: Int): ByteArray }
-private data class GithubSource(val owner: String, val repo: String, val ref: String?, val root: String) {
+internal class RemoteSkillHttpFailure(val status: Int) : IOException("GitHub HTTP $status")
+private data class GithubSource(val owner: String, val repo: String, val tail: List<String>?, val blob: Boolean = false) {
     val canonical: String get() = "https://github.com/$owner/$repo.git"
 }
+private data class GitRef(val id: String, val type: String)
 private data class GitEntry(val path: String, val mode: String, val id: String)
 private data class Snapshot(val source: GithubSource, val revision: String, val root: String, val entries: List<GitEntry>) {
     val roots: List<String> get() = entries.asSequence().map { it.path }
@@ -150,7 +152,7 @@ internal class RemoteSkillImport(
     /** Explicit local action after preview; conflicting names fail without modifying local data. */
     suspend fun install(preview: RemoteSkillPreview, store: RoomSkillStore): SkillDetail {
         val source = parseGithub(preview.source)
-        require(source.ref == null && source.root.isEmpty() && oid(preview.revision)) { "Invalid preview identity" }
+        require(source.tail == null && oid(preview.revision)) { "Invalid preview identity" }
         checkedPath(preview.path)
         val data = preview.reviewedPackage()
         val name = parseSkillFrontmatter(data.files["SKILL.md"] ?: error("SKILL.md is required")).name
@@ -161,16 +163,15 @@ internal class RemoteSkillImport(
 
     private suspend fun snapshot(request: RemoteSkillRequest, budget: Budget, requirePinned: Boolean): Snapshot {
         val source = parseGithub(request.source)
-        require(source.ref == null || oid(source.ref) || (request.revision != null && request.path != null)) {
-            "Branch URLs are ambiguous; provide an explicit ref and path"
-        }
         request.path?.let { checkedPath(it) }
-        val requestedRef = request.revision ?: source.ref ?: "HEAD"
-        require(requestedRef.isNotBlank() && requestedRef.toByteArray(Charsets.UTF_8).size <= 512 && requestedRef.none(Character::isISOControl)) { "Invalid Git ref" }
+        request.revision?.let { require(it.isNotBlank() && it.toByteArray(Charsets.UTF_8).size <= 512 && it.none(Character::isISOControl)) { "Invalid Git ref" } }
         if (requirePinned) require(oid(request.revision.orEmpty())) { "Preview requires a pinned commit" }
+        // An explicit ref and path already disambiguate the URL; preserve that shortcut.
+        val selected = if (source.tail != null && (request.revision == null || request.path == null)) resolveUrl(source, budget) else null
+        val requestedRef = request.revision ?: selected?.first ?: "HEAD"
         val commit = budget.json(api(source, "commits", requestedRef), 256 * 1024).string("sha").lowercase()
         require(oid(commit) && (!oid(requestedRef) || commit == requestedRef.lowercase())) { "Invalid or changed commit" }
-        val root = request.path ?: source.root
+        val root = request.path ?: selected?.second.orEmpty()
         checkedPath(root)
         var treeId = commit
         for (component in root.split('/').filter(String::isNotEmpty)) {
@@ -196,6 +197,67 @@ internal class RemoteSkillImport(
             output += GitEntry(full, if (kind == "blob") mode else "unsupported", id)
         }
         return Snapshot(source, commit, root, output)
+    }
+
+    /** Resolve the longest advertised path-component prefix before reading any tree. */
+    private suspend fun resolveUrl(source: GithubSource, budget: Budget): Pair<String, String> {
+        val parts = checkNotNull(source.tail)
+        var selected: GitRef? = null
+        var selectedLength = 0
+        for (length in parts.size downTo 1) {
+            val name = parts.take(length).joinToString("/")
+            require(name.toByteArray(Charsets.UTF_8).size <= 2048) { "Git ref is too long" }
+            // Exact lookups avoid paginated or truncated listings selecting a shorter ref.
+            selected = when {
+                oid(name) -> GitRef(name.lowercase(), "commit")
+                name == "HEAD" -> GitRef(budget.json(api(source, "commits", "HEAD"), 256 * 1024).string("sha").lowercase(), "commit")
+                else -> {
+                    val direct = when {
+                        name.startsWith("refs/heads/") -> exactRef(source, "heads", name.removePrefix("refs/heads/"), budget)
+                        name.startsWith("refs/tags/") -> exactRef(source, "tags", name.removePrefix("refs/tags/"), budget)
+                        else -> null
+                    }
+                    direct ?: exactRef(source, "heads", name, budget) ?: exactRef(source, "tags", name, budget)
+                }
+            }
+            if (selected != null) { selectedLength = length; break }
+        }
+        val match = selected ?: error("GitHub URL does not contain a known branch, tag or commit")
+        var id = match.id
+        var type = match.type
+        require(oid(id)) { "Invalid Git ref object" }
+        val seen = mutableSetOf<String>()
+        while (type == "tag") {
+            require(seen.size < 8 && seen.add(id)) { "Tag chain exceeds limit" }
+            val tag = budget.json(api(source, "git", "tags", id), 256 * 1024)
+            require(tag.string("sha").equals(id, ignoreCase = true)) { "Tag object changed" }
+            val target = tag["object"] as? JsonObject ?: error("Invalid tag object")
+            id = target.string("sha").lowercase()
+            type = target.string("type")
+            require(oid(id) && type in setOf("commit", "tag")) { "Tag does not point to a commit" }
+        }
+        var root = parts.drop(selectedLength).joinToString("/")
+        if (source.blob) {
+            require(root == "SKILL.md" || root.endsWith("/SKILL.md")) { "GitHub blob must refer to SKILL.md" }
+            root = root.removeSuffix("SKILL.md").trimEnd('/')
+        }
+        checkedPath(root)
+        return id to root
+    }
+
+    private suspend fun exactRef(source: GithubSource, kind: String, name: String, budget: Budget): GitRef? {
+        val value = try {
+            budget.json(api(source, "git", "ref", kind, *name.split('/').toTypedArray()), 256 * 1024)
+        } catch (failure: RemoteSkillHttpFailure) {
+            if (failure.status == 404) return null
+            throw failure
+        }
+        require(value.string("ref") == "refs/$kind/$name") { "Git ref response does not match request" }
+        val objectValue = value["object"] as? JsonObject ?: error("Invalid Git ref object")
+        val id = objectValue.string("sha").lowercase()
+        val type = objectValue.string("type")
+        require(oid(id) && type in setOf("commit", "tag") && (kind != "heads" || type == "commit")) { "Invalid Git ref object" }
+        return GitRef(id, type)
     }
 
     private suspend fun tree(source: GithubSource, id: String, recursive: Boolean, budget: Budget): List<JsonObject> {
@@ -267,16 +329,11 @@ private fun parseGithub(input: String): GithubSource {
     val repo = parts[1].removeSuffix(".git")
     require(owner.isNotEmpty() && owner.all { it.isAscii() && (it.isLetterOrDigit() || it == '-') } && repo.isNotEmpty() &&
         repo.all { it.isAscii() && (it.isLetterOrDigit() || it in "-_.") }) { "Invalid GitHub repository" }
-    if (parts.size == 2) return GithubSource(owner, repo, null, "")
+    if (parts.size == 2) return GithubSource(owner, repo, null)
     require(parts.size >= 4 && parts[2] in setOf("tree", "blob")) { "Invalid GitHub repository URL" }
-    val ref = parts[3]
-    var root = parts.drop(4).joinToString("/")
-    if (parts[2] == "blob") {
-        require(root == "SKILL.md" || root.endsWith("/SKILL.md")) { "GitHub blob must refer to SKILL.md" }
-        root = root.removeSuffix("SKILL.md").trimEnd('/')
-    }
-    checkedPath(root)
-    return GithubSource(owner, repo, ref, root)
+    val tail = parts.drop(3)
+    if (parts[2] == "blob") require(tail.size >= 2 && tail.last() == "SKILL.md") { "GitHub blob must refer to SKILL.md" }
+    return GithubSource(owner, repo, tail, parts[2] == "blob")
 }
 private fun Char.isAscii() = code < 128
 
@@ -315,7 +372,7 @@ internal suspend fun awaitRemoteSkillCall(call: Call, limit: Int): ByteArray {
                     override fun onResponse(call: Call, response: Response) {
                         try {
                             val data = response.use {
-                                check(it.isSuccessful && it.code !in 300..399) { "GitHub HTTP ${it.code}" }
+                                if (!it.isSuccessful) throw RemoteSkillHttpFailure(it.code)
                                 val source = it.body.source()
                                 source.request(limit.toLong() + 1)
                                 require(source.buffer.size <= limit) { "Remote response exceeds size limit" }
