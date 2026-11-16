@@ -22,10 +22,15 @@ import cc.ptoe.messenger.data.remote.dto.ChatCompletionResponseDto
 import cc.ptoe.messenger.data.remote.dto.ModelsResponseDto
 import cc.ptoe.messenger.data.remote.format.ApiFormatRequests
 import cc.ptoe.messenger.data.remote.format.ApiFormatStreamParser
+import cc.ptoe.messenger.data.remote.format.hostedSearchError
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.SSEParser
 import cc.ptoe.messenger.domain.model.ApiFormat
 import io.ktor.client.call.body
+import io.ktor.client.plugins.expectSuccess
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
+import kotlinx.serialization.json.jsonObject
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -48,14 +53,14 @@ import cc.ptoe.messenger.data.util.ioDispatcher
  * auth headers, and the response/SSE decoding; callers only see the
  * format-agnostic [ChatStreamEvent] flow.
  *
- * Non-2xx responses surface as [io.ktor.client.plugins.ResponseException]
- * (see `expectSuccess` in [NetworkClient]); callers can read the error body
- * from it.
+ * Non-streaming calls use Ktor's response exceptions. Streaming calls bound and
+ * redact non-success responses before surfacing their status and details.
  */
 class OpenAiClient(
     baseUrl: String,
     apiKey: String,
     val format: ApiFormat = ApiFormat.CHAT,
+    private val nativeWebSearch: Boolean = false,
 ) {
 
     private val client = NetworkClient.clientFor(baseUrl, apiKey)
@@ -70,14 +75,22 @@ class OpenAiClient(
         }.body()
 
     suspend fun createChatCompletion(request: ChatCompletionRequestDto): ChatCompletionResponseDto {
-        val payload = client.post("$root${ApiFormatRequests.path(format)}") {
+        val payload = client.preparePost("$root${ApiFormatRequests.path(format)}") {
+            expectSuccess = false
             contentType(ContentType.Application.Json)
-            ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) ->
-                header(name, value)
-            }
-            setBody(ApiFormatRequests.encode(format, request))
-        }.body<JsonObject>()
-        return if (format == ApiFormat.CHAT) {
+            ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) -> header(name, value) }
+            setBody(ApiFormatRequests.encode(format, request.copy(stream = false), nativeWebSearch))
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw IllegalStateException(describeProviderError(response, apiKey))
+            val bytes = response.bodyAsChannel().readRemaining(1_048_577).readByteArray()
+            require(bytes.size <= 1_048_576) { "Provider completion exceeded size limit" }
+            NetworkClient.json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true)).jsonObject
+        }
+        hostedSearchError(payload)?.let { throw IllegalStateException(it) }
+        if ((payload["stop_reason"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "pause_turn") {
+            throw IllegalStateException("Native web search paused by provider (pause_turn); automatic continuation is not enabled.")
+        }
+        return if (format == ApiFormat.CHAT || format == ApiFormat.AUTO) {
             NetworkClient.json.decodeFromJsonElement(ChatCompletionResponseDto.serializer(), payload)
         } else {
             ApiFormatStreamParser.decodeCompletion(format, payload)
@@ -92,7 +105,7 @@ class OpenAiClient(
      */
     fun createChatCompletionStream(request: ChatCompletionRequestDto): Flow<ChatStreamEvent> = flow {
         val sse = streamSse(request)
-        val events = if (format == ApiFormat.CHAT) {
+        val events = if (format == ApiFormat.CHAT || format == ApiFormat.AUTO) {
             cc.ptoe.messenger.data.remote.sse.ChatStreamParser.parseToEvents(sse)
         } else {
             ApiFormatStreamParser.parseToEvents(format, sse)
@@ -103,11 +116,13 @@ class OpenAiClient(
     /** Raw SSE `data:` payloads (including the terminal `[DONE]`). */
     fun streamSse(request: ChatCompletionRequestDto): Flow<String> = flow {
         client.preparePost("$root${ApiFormatRequests.path(format)}") {
+            // Read failures here, with a size/time bound, before Ktor buffers an error body.
+            expectSuccess = false
             contentType(ContentType.Application.Json)
             ApiFormatRequests.authHeaders(format, apiKey).forEach { (name, value) ->
                 header(name, value)
             }
-            setBody(ApiFormatRequests.encode(format, request))
+            setBody(ApiFormatRequests.encode(format, request, nativeWebSearch))
             timeout {
                 // Reasoning models can think for minutes before the first
                 // token arrives — disable the overall request timeout.
@@ -115,8 +130,7 @@ class OpenAiClient(
             }
         }.execute { response ->
             if (!response.status.isSuccess()) {
-                // expectSuccess throws before we get here, but guard anyway.
-                throw IllegalStateException("HTTP ${response.status.value}")
+                throw IllegalStateException(describeProviderError(response, apiKey))
             }
             SSEParser.parse(response.bodyAsChannel()).collect { emit(it) }
         }

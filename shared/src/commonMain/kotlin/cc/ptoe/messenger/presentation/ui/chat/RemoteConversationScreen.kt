@@ -35,14 +35,23 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
     val snackbar = remember { SnackbarHostState() }
     var snapshot by remember(deviceId, sessionId) { mutableStateOf<JsonObject?>(null) }
     var failure by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
+    var actionFailure by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
     var retry by remember { mutableIntStateOf(0) }
     var actionBusy by remember { mutableStateOf(false) }
     var olderRows by remember(deviceId, sessionId) { mutableStateOf<List<JsonObject>>(emptyList()) }
     var before by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
     var historyInitialized by remember(deviceId, sessionId) { mutableStateOf(false) }
     var historyBusy by remember { mutableStateOf(false) }
+    var warning by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
+    var taskFailure by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
+    var issueTask by remember(deviceId, sessionId) { mutableStateOf<String?>(null) }
+    val seenIssues = remember(deviceId, sessionId) { linkedSetOf<String>() }
     val unavailable = stringResource(Res.string.remote_notification_unavailable)
     val copied = stringResource(Res.string.chat_copied_toast)
+    val summaryLabel = stringResource(Res.string.remote_summary_failed)
+    val titleLabel = stringResource(Res.string.remote_title_failed)
+    val approvalLabel = stringResource(Res.string.remote_approval_failed)
+    val taskErrorLabel = stringResource(Res.string.chat_send_failed)
 
     suspend fun call(action: String, optionId: String? = null, before: String? = null, taskRequestId: String? = null): JsonObject {
         var result: JsonObject? = null
@@ -90,14 +99,15 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
         if (actionBusy) return
         val taskRequestId = (snapshot?.get("requestId") as? JsonPrimitive)?.contentOrNull ?: return
         actionBusy = true
+        actionFailure = null
         scope.launch {
             try {
                 call(action, optionId, taskRequestId = taskRequestId)
                 retry++
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (error: Exception) {
-                failure = error.message?.takeIf { it.isNotBlank() } ?: unavailable
-                snackbar.showSnackbar(failure.orEmpty())
+                actionFailure = error.message?.takeIf { it.isNotBlank() } ?: unavailable
+                snackbar.showSnackbar(actionFailure.orEmpty())
             } finally { actionBusy = false }
         }
     }
@@ -105,19 +115,42 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
     val rows = (olderRows + snapshot?.objects("messages").orEmpty()).distinctBy { it.text("id") }
     val events = snapshot?.objects("events").orEmpty()
     val running = (snapshot?.get("active") as? JsonPrimitive)?.booleanOrNull == true
-    val canControl = (snapshot?.get("requestId") as? JsonPrimitive)?.contentOrNull != null
+    val taskId = (snapshot?.get("requestId") as? JsonPrimitive)?.contentOrNull
+    val canControl = taskId != null
+    val issues = remember(events, rows, running, summaryLabel, titleLabel, taskErrorLabel, approvalLabel) {
+        remoteTaskIssues(events, summaryLabel, titleLabel, taskErrorLabel, rows, running, approvalLabel)
+    }
+    LaunchedEffect(taskId, issues) {
+        if (taskId != null && taskId != issueTask) {
+            taskFailure = null
+            issueTask = taskId
+        }
+        issues.forEach { issue ->
+            val key = "$taskId|${issue.type}|${issue.message}"
+            if (seenIssues.add(key)) {
+                if (seenIssues.size > 64) seenIssues.remove(seenIssues.first())
+                if (issue.type == "Error") taskFailure = issue.message else warning = issue.message
+                snackbar.showSnackbar(issue.message)
+            }
+        }
+    }
     val permission = events.lastOrNull { it.text("type") == "Permission" }
     val live = events.filter { it.text("type") == "TextDelta" }.joinToString("") { it.text("text") }
-    val messages = remember(rows, live, running) {
+    val messages = remember(sessionId, rows, live, running, taskFailure, taskId) {
         val history = acpChatMessages(sessionId, rows).let { existing ->
             if (running && live.isNotBlank() && existing.lastOrNull()?.let { it.role == MessageRole.ASSISTANT && it.content.isBlank() } == true)
                 existing.dropLast(1)
             else existing
         }
-        if (running && live.isNotBlank()) history + Message(
+        val withLive = if (running && live.isNotBlank()) history + Message(
             id = "remote-live-$sessionId", conversationId = sessionId, role = MessageRole.ASSISTANT,
             content = live, timestamp = 0L, status = MessageStatus.SENDING,
         ) else history
+        val error = taskFailure
+        if (error != null && withLive.none { it.status == MessageStatus.ERROR && (it.content == error || it.errorMessage == error) }) {
+            withLive + Message(id = "remote-error-$taskId", conversationId = sessionId, role = MessageRole.ASSISTANT,
+                content = error, timestamp = 0L, status = MessageStatus.ERROR, errorMessage = error)
+        } else withLive
     }
     val title = snapshot?.text("title").orEmpty().ifBlank { stringResource(Res.string.remote_notification_title) }
     Scaffold(
@@ -151,6 +184,18 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            warning?.let { message ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { warning = null }) { Text(stringResource(Res.string.action_close)) }
+                }
+            }
+            actionFailure?.let { message ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { actionFailure = null }) { Text(stringResource(Res.string.action_close)) }
+                }
+            }
             failure?.let { error ->
                 Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
                 TextButton(onClick = { retry++ }) { Text(stringResource(Res.string.action_retry)) }
@@ -167,6 +212,7 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
                     val cursor = before
                     if (cursor != null && !historyBusy) {
                         historyBusy = true
+                        actionFailure = null
                         scope.launch {
                             try {
                                 val result = call("notificationOpen", before = cursor)
@@ -175,8 +221,8 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
                                 before = (result["before"] as? JsonPrimitive)?.contentOrNull
                             } catch (cancelled: CancellationException) { throw cancelled
                             } catch (error: Exception) {
-                                failure = error.message?.takeIf { it.isNotBlank() } ?: unavailable
-                                snackbar.showSnackbar(failure.orEmpty())
+                                actionFailure = error.message?.takeIf { it.isNotBlank() } ?: unavailable
+                                snackbar.showSnackbar(actionFailure.orEmpty())
                             } finally { historyBusy = false }
                         }
                     }

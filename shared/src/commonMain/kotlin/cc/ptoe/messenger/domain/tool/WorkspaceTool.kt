@@ -39,7 +39,12 @@ class WorkspaceTool(
 
     override val parametersJson: String = SCHEMAS.getValue(name)
 
-    override suspend fun execute(argumentsJson: String): ToolExecutionResult {
+    override suspend fun execute(argumentsJson: String): ToolExecutionResult =
+        executeWith(argumentsJson) { operation, root -> executeWorkspaceOperation(operation, root) }
+
+    /** Reuse the exact argument validation with an explicitly selected workspace host. */
+    suspend fun executeWith(argumentsJson: String,
+        executeOperation: suspend (WorkspaceOperation, String) -> ToolExecutionResult): ToolExecutionResult {
         val json = try {
             Json.parseToJsonElement(argumentsJson) as? JsonObject
                 ?: return invalidArguments()
@@ -84,7 +89,7 @@ class WorkspaceTool(
             )
             else -> return ToolExecutionResult("Unknown workspace tool: $name", isError = true)
         }
-        return executeWorkspaceOperation(operation, workspaceRoot)
+        return executeOperation(operation, workspaceRoot)
     }
 
     private fun invalidArguments() = ToolExecutionResult("Invalid arguments for $name.", isError = true)

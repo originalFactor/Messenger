@@ -216,6 +216,8 @@ android {
 
     packaging {
         jniLibs {
+            // Tracked grep executes the immutable package-installed binary, not a writable copy.
+            useLegacyPackaging = true
             // The Termux bootstrap zip is packaged under jniLibs/<abi>/libbootstrap.zip.so
             // so AGP's per-ABI split filter includes only the target ABI's archive; skip
             // llvm-strip on it since it is a zip archive, not an ELF shared object.

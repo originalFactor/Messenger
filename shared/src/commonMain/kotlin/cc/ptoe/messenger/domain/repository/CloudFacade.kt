@@ -33,9 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The cloud SaaS surface the UI consumes — login, sync, market, avatars.
  *
- * The single implementation is `RustCloudFacade`, which delegates to the Rust
- * sync engine through [cc.ptoe.messenger.core.CoreBridge] on every platform.
- * The interface stays as the seam the screens depend on.
+ * Production uses `RustCloudFacade`, which delegates to the Rust sync engine.
+ * An isolated Room implementation is being developed behind the same interface.
  */
 interface CloudFacade {
     val user: Flow<CloudUser?>
@@ -65,6 +64,8 @@ interface CloudFacade {
 
     suspend fun login(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
     suspend fun register(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
+    /** Recover a data-source choice interrupted after authentication, when supported. */
+    suspend fun pendingLoginChoice(): CloudLoginOutcome? = null
     suspend fun refreshUser(): CloudUser
     suspend fun logout()
 

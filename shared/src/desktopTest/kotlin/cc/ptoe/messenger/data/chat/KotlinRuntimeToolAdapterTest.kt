@@ -1,0 +1,86 @@
+/* Copyright 2026 originalFactor. Licensed under the Apache License, Version 2.0. */
+package cc.ptoe.messenger.data.chat
+
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import cc.ptoe.messenger.data.local.room.*
+import cc.ptoe.messenger.data.remote.sse.*
+import cc.ptoe.messenger.data.repository.room.RoomAgentRepository
+import cc.ptoe.messenger.domain.chat.*
+import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.tool.ChatTool
+import cc.ptoe.messenger.domain.tool.ToolExecutionResult
+import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlin.test.*
+
+class KotlinRuntimeToolAdapterTest {
+    @Test fun approvalDispatchAndCancellationHoldReservationUntilToolReturns() = runBlocking {
+        val dir = Files.createTempDirectory("turn-runtime")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        try {
+            val rows = db.rows()
+            rows.upsertProviders(listOf(ProviderRow("p", "P", "https://example.test", "key", "chat", false, 1, 1)))
+            rows.upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 10000, null, null, null, null, "text", "text", true, false, false, true, 1, null, null)))
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("a", "A", systemPrompt = "prompt", defaultModelId = "m", temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, toolsEnabled = true, createdAt = 1, updatedAt = 1))
+            rows.upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, true, 1, 1, null, null, null, 0, 0, 0)))
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            var runs = 0
+            val tool = object : ChatTool {
+                override val name = "edit"
+                override val description = "edit"
+                override val writeAccess = true
+                override val parametersJson = """{"type":"object"}"""
+                override suspend fun execute(argumentsJson: String): ToolExecutionResult { runs++; started.complete(Unit); finish.await(); return ToolExecutionResult("done") }
+            }
+            val grant = KotlinRuntimeToolGrant("c", null, "/workspace", null, "host-build", listOf("edit"))
+            lateinit var store: RoomKotlinTurnStore
+            val host = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("glob", "read", "edit", "create")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData) = tool.execute(call.arguments)
+                override suspend fun status(token: String) = TrackedWorkspaceStatus.RUNNING
+            }
+            val adapter = KotlinRuntimeToolAdapter(db, grant, RuntimeWorkspaceVerifier { it.hostIdentity == "host-build" }, { store }, host, { listOf(tool) }, { true })
+            store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(adapter), adapter)
+            val call = ToolCallData("tool", "edit", "{}")
+            var leases = 0
+            val ended = CompletableDeferred<Unit>()
+            val statuses = mutableListOf<String>()
+            val lifecycle = object : KotlinTurnLifecycle {
+                override fun begin(conversationId: String) { leases++ }
+                override fun status(conversationId: String, status: String) { statuses.add(status) }
+                override fun end(conversationId: String) { leases--; ended.complete(Unit) }
+            }
+            val runner = KotlinChatTurnRunner(store, KotlinTurnProvider { _, _ -> flowOf(ChatStreamEvent.Done("tool_calls", toolCalls = listOf(call))) }, adapter, this, lifecycle)
+            val id = assertIs<KotlinTurnAdmission.Accepted>(runner.submit(KotlinTurnCommand.Send("c", "hi", null))).turnId
+            withTimeout(5000) { store.observe(id).first { it.phase == KotlinTurnPhase.WAITING_APPROVAL } }
+            assertEquals(0, runs)
+            assertEquals(1, leases)
+            assertTrue("approval" in statuses)
+            runner.approve(id, "tool", true)
+            withTimeout(5000) { started.await() }
+            assertEquals(KotlinTurnPhase.EXECUTING_TOOL, store.snapshot(id).phase)
+            assertFailsWith<IllegalStateException> { adapter.execute(id, call) }
+            val cancel = async { runner.cancel(id) }
+            cancel.await()
+            assertEquals(KotlinTurnPhase.CANCELLING_TOOL, store.snapshot(id).phase)
+            assertEquals(1, leases)
+            assertIs<KotlinTurnAdmission.Rejected>(store.admit(KotlinTurnCommand.Send("c", "too early", null)))
+            finish.complete(Unit)
+            withTimeout(5000) { store.observe(id).first { it.phase == KotlinTurnPhase.CANCELLED } }
+            withTimeout(5000) { ended.await() }
+            assertEquals(0, leases)
+            assertTrue("cancelled" in statuses)
+            assertEquals(1, runs)
+            assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "after", null)))
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+        Unit
+    }
+}

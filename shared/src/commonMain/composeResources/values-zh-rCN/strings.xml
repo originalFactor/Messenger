@@ -636,4 +636,7 @@
     <string name="remote_notification_read_only">此会话位于另一台设备。请在该设备上发送新消息。</string>
     <string name="remote_notification_approval">需要审批</string>
     <string name="remote_notification_cancel">停止任务</string>
+    <string name="remote_summary_failed">上下文压缩失败</string>
+    <string name="remote_title_failed">标题生成失败</string>
+    <string name="remote_approval_failed">自动审批失败</string>
 </resources>

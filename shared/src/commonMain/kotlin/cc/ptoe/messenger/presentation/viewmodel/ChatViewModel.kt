@@ -829,6 +829,10 @@ class ChatViewModel(
                 _streamingDiff.value = null
                 _isGenerating.value = false
             }
+            "SummaryFailed", "ApprovalFailed" -> {
+                val message = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (message.isNotBlank()) setError(message)
+            }
             "TitleFailed" -> {
                 viewModelScope.launch {
                     val code = root["code"]?.jsonPrimitive?.contentOrNull.orEmpty()

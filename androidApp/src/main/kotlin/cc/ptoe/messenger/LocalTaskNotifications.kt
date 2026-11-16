@@ -13,6 +13,8 @@ import android.os.Build
 import android.net.Uri
 import android.util.Log
 import cc.ptoe.messenger.core.CoreBridge
+import cc.ptoe.messenger.presentation.platform.KotlinTurnTaskEvents
+import cc.ptoe.messenger.presentation.platform.KotlinScheduledTaskEvents
 
 /** Presents Core task outcomes locally, independently of cloud push. */
 object LocalTaskNotifications {
@@ -25,22 +27,22 @@ object LocalTaskNotifications {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, app.getString(R.string.task_update_channel), NotificationManager.IMPORTANCE_DEFAULT)
         )
-        core.subscribe { kind, ids ->
-            val action = taskNotificationAction(kind, ids) ?: return@subscribe
+        val handle: (String, List<String>) -> Unit = handle@{ kind, ids ->
+            val action = taskNotificationAction(kind, ids) ?: return@handle
             if (action is TaskNotificationAction.Clear) {
                 manager.cancel(action.tag, NOTIFICATION_ID)
-                return@subscribe
+                return@handle
             }
             action as TaskNotificationAction.Show
             val text = when (action.status) {
                 "approval" -> R.string.task_update_approval
                 "completed" -> R.string.task_update_completed
                 "failed" -> R.string.task_update_failed
-                else -> return@subscribe
+                else -> return@handle
             }
             if (!manager.areNotificationsEnabled() ||
                 (Build.VERSION.SDK_INT >= 33 && app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            ) return@subscribe
+            ) return@handle
 
             val openIntent = Intent(app, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -72,6 +74,13 @@ object LocalTaskNotifications {
                 // Permission may have been revoked after the check above.
                 Log.w("TaskNotifications", "Unable to show task update", failure)
             }
+        }
+        core.subscribe(handle)
+        KotlinTurnTaskEvents.onEvent = { status, conversationId ->
+            handle("localTaskStatus", listOf(status, "chat", conversationId))
+        }
+        KotlinScheduledTaskEvents.onEvent = { status, taskId ->
+            handle("localTaskStatus", listOf(status, "scheduled", taskId))
         }
     }
 }

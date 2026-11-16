@@ -93,6 +93,28 @@ class ShellService : Service() {
             active.remove(requestId)?.cancel()
         }
 
+        // The Runtime shell and workspace operations share this UID and can modify the
+        // prototype journal. Do not expose its markers as trustworthy stop evidence.
+        override fun trackedWorkspaceProtocol(): Int = 0
+
+        override fun trackedWorkspaceStatus(token: String?): Int = TrackedWorkspaceOperations.UNKNOWN
+
+        override fun trackedWorkspaceOperation(token: String?, root: String?, operation: String?, argumentsJson: String?): ToolResult =
+            ToolResult("Tracked workspace operations are unavailable.", isError = true)
+
+        // This protocol exposes no Runtime-owned status journal. The caller tracks a synchronous
+        // reply and must treat Binder death as unknown; the packaged rg is joined before return.
+        override fun safeWorkspaceProtocol(): Int =
+            if (isCallerAllowed() && TermuxRuntime.supportsSafeWorkspaceGrep(applicationContext)) 1 else 0
+
+        override fun safeWorkspaceGrep(root: String?, pattern: String?, path: String?, fileGlob: String?,
+            caseSensitive: Boolean, fixedString: Boolean, maxResults: Int): ToolResult = ifCallerAllowed(root) {
+            runBlocking {
+                TermuxRuntime.trackedWorkspaceGrep(applicationContext, root, pattern.orEmpty(), path.orEmpty(), fileGlob,
+                    caseSensitive, fixedString, maxResults.coerceIn(1, 1000)) { }
+            }
+        }
+
         override fun workspaceGlob(root: String?, pattern: String?, maxResults: Int): ToolResult? =
             ifCallerAllowed(root) {
                 runBlocking { TermuxRuntime.workspaceGlob(applicationContext, root, pattern.orEmpty(), maxResults) }

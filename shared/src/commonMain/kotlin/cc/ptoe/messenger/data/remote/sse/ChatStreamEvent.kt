@@ -26,8 +26,7 @@ sealed class ChatStreamEvent {
         val usage: UsageDto? = null,
         /**
          * 本轮流式响应累积完成的工具调用（finish_reason 为 "tool_calls" 时非空）。
-         * 注意现有解析器在 finish_reason 块和 [DONE] 各发一次 Done，两次都会携带
-         * 相同的工具调用列表 — 调用方以收集结束后的最终事件为准，不会重复执行。
+         * 每个流最多发出一个 Done，包含最终用量和完整工具调用。
          */
         val toolCalls: List<ToolCallData> = emptyList()
     ) : ChatStreamEvent()

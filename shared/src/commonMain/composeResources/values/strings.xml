@@ -637,4 +637,7 @@
     <string name="remote_notification_read_only">Conversation on another device. New messages can be sent from that device.</string>
     <string name="remote_notification_approval">Approval needed</string>
     <string name="remote_notification_cancel">Stop task</string>
+    <string name="remote_summary_failed">Context compression failed</string>
+    <string name="remote_title_failed">Title generation failed</string>
+    <string name="remote_approval_failed">Automatic approval failed</string>
 </resources>

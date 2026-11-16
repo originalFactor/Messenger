@@ -13,12 +13,13 @@ import android.webkit.WebViewClient
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
@@ -35,11 +36,14 @@ actual fun ArtifactWebView(
     files: Map<String, String>,
     entry: String,
     stateJson: String,
+    bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
+    onDisposeBinding: () -> Unit,
     modifier: Modifier,
 ) {
-    val callback = rememberUpdatedState(onMessage)
-    val sessionResult = remember(files, entry) {
+    val callbacks = remember(ArtifactBindingIdentity(bindingIdentity)) { ArtifactViewCallbacks(onMessage, onDisposeBinding) }
+    DisposableEffect(callbacks) { onDispose { callbacks.close() } }
+    val sessionResult = remember(callbacks, files, entry) {
         runCatching {
             check(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                 "The installed Android WebView does not support secure messaging"
@@ -53,6 +57,7 @@ actual fun ArtifactWebView(
     val session = sessionResult.getOrNull()
     var failure by remember(session) { mutableStateOf(sessionResult.exceptionOrNull()?.message) }
     if (session == null || failure != null) {
+        LaunchedEffect(callbacks) { callbacks.close() }
         Text(stringResource(Res.string.artifact_host_unavailable,
             failure.orEmpty()), modifier,
             color = MaterialTheme.colorScheme.error)
@@ -112,14 +117,15 @@ actual fun ArtifactWebView(
                         if (!isMainFrame || sourceOrigin.toString() != session.origin || !session.validMessage(raw)) {
                             return@addWebMessageListener
                         }
-                        session.dispatchMessage(raw, callback.value) { response ->
-                            view.post { if (view.url == session.url) reply.postMessage(response) }
+                        session.dispatchMessage(raw, callbacks::dispatch) { response ->
+                            view.post { if (callbacks.active && view.url == session.url) reply.postMessage(response) }
                         }
                     }
                     loadUrl(session.url)
                 }
             },
             onRelease = { view ->
+                callbacks.close()
                 WebViewCompat.removeWebMessageListener(view, "artifactHost")
                 view.stopLoading()
                 view.removeAllViews()

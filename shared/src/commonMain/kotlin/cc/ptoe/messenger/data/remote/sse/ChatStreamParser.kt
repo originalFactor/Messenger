@@ -22,11 +22,13 @@ import cc.ptoe.messenger.data.remote.dto.ChatDeltaDto
 import cc.ptoe.messenger.data.remote.dto.UsageDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 
 object ChatStreamParser {
@@ -44,18 +46,40 @@ object ChatStreamParser {
         // 用量统计块在 [DONE] 之前到达（choices 为空、只有 usage），先暂存，
         // 随终止事件一起抛给调用方做上下文用量记账。
         var lastUsage: UsageDto? = null
+        var finishReason: String? = null
+        var receivedDone = false
+        var failed = false
         val toolCallAccumulators = linkedMapOf<Int, ToolCallAccumulator>()
-        jsonFlow.collect { json ->
+        jsonFlow.transformWhile { json ->
             if (json == "[DONE]") {
                 if (inThinkBlock) {
                     emit(ChatStreamEvent.Content("</think>\n"))
                     inThinkBlock = false
                 }
-                emit(ChatStreamEvent.Done(null, lastUsage, accumulatedToolCalls(toolCallAccumulators)))
-                return@collect
+                receivedDone = true
+                return@transformWhile false
             }
-            try {
-                val chunk = NetworkClient.json.decodeFromString<ChatCompletionChunkDto>(json)
+            val payload = try {
+                NetworkClient.json.parseToJsonElement(json)
+            } catch (error: IllegalArgumentException) {
+                failed = true
+                emit(ChatStreamEvent.Error("Invalid provider stream response: ${error.message}"))
+                return@transformWhile false
+            }
+            val providerError = (payload as? JsonObject)?.get("error")
+            if (providerError != null) {
+                failed = true
+                emit(ChatStreamEvent.Error(providerError.toString()))
+                return@transformWhile false
+            }
+            val chunk = try {
+                NetworkClient.json.decodeFromJsonElement<ChatCompletionChunkDto>(payload)
+            } catch (error: IllegalArgumentException) {
+                failed = true
+                emit(ChatStreamEvent.Error("Invalid provider stream response: ${error.message}"))
+                return@transformWhile false
+            }
+            run {
                 if (chunk.usage != null) {
                     lastUsage = chunk.usage
                 }
@@ -106,21 +130,20 @@ object ChatStreamParser {
                         fragment.function?.name?.takeIf { it.isNotEmpty() }?.let { acc.name = it }
                         fragment.function?.arguments?.let { acc.arguments.append(it) }
                     }
-                    val finishReason = choice.finishReason
-                    if (finishReason != null) {
+                    val reason = choice.finishReason
+                    if (reason != null) {
+                        finishReason = reason
                         if (inThinkBlock) {
                             emit(ChatStreamEvent.Content("</think>\n"))
                             inThinkBlock = false
                         }
-                        emit(ChatStreamEvent.Done(finishReason, lastUsage, accumulatedToolCalls(toolCallAccumulators)))
                     }
                 }
-            } catch (e: IllegalArgumentException) {
-                // Malformed chunk (unexpected shape) — skip silently like
-                // the old Gson JsonSyntaxException path.
-            } catch (e: Exception) {
-                emit(ChatStreamEvent.Error(e.message ?: "Unknown error"))
             }
+            true
+        }.collect { emit(it) }
+        if (!failed && (finishReason != null || receivedDone)) {
+            emit(ChatStreamEvent.Done(finishReason, lastUsage, accumulatedToolCalls(toolCallAccumulators)))
         }
     }
 
@@ -128,8 +151,12 @@ object ChatStreamParser {
         var inThinkBlock = false
         jsonFlow.collect { json ->
             if (json == "[DONE]") return@collect
-            try {
-                val chunk = NetworkClient.json.decodeFromString<ChatCompletionChunkDto>(json)
+            val chunk = try {
+                NetworkClient.json.decodeFromString<ChatCompletionChunkDto>(json)
+            } catch (_: IllegalArgumentException) {
+                return@collect
+            }
+            run {
                 val choice = chunk.choices.firstOrNull()
                 val reasoning = choice?.delta?.incomingReasoning
                 if (reasoning != null) {
@@ -154,7 +181,6 @@ object ChatStreamParser {
                         }
                     }
                 }
-            } catch (_: Exception) {
             }
         }
     }

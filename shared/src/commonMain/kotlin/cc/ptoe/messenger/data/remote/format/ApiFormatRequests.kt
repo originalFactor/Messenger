@@ -53,11 +53,27 @@ object ApiFormatRequests {
         else -> emptyMap()
     }
 
-    fun encode(format: ApiFormat, request: ChatCompletionRequestDto): JsonObject = when (format) {
-        ApiFormat.CHAT, ApiFormat.AUTO -> encodeChat(request)
-        ApiFormat.RESPONSES -> encodeResponses(request)
-        ApiFormat.MESSAGES -> encodeMessages(request)
-        ApiFormat.INTERACTIONS -> encodeInteractions(request)
+    fun encode(format: ApiFormat, request: ChatCompletionRequestDto, nativeWebSearch: Boolean = false): JsonObject {
+        require(!nativeWebSearch || format == ApiFormat.RESPONSES || format == ApiFormat.MESSAGES) {
+            "Provider native web search is unsupported for $format"
+        }
+        val body = when (format) {
+            ApiFormat.CHAT, ApiFormat.AUTO -> encodeChat(request)
+            ApiFormat.RESPONSES -> encodeResponses(request)
+            ApiFormat.MESSAGES -> encodeMessages(request)
+            ApiFormat.INTERACTIONS -> encodeInteractions(request)
+        }
+        if (!nativeWebSearch) return body
+        val search = when (format) {
+            ApiFormat.RESPONSES -> buildJsonObject { put("type", JsonPrimitive("web_search")) }
+            ApiFormat.MESSAGES -> buildJsonObject {
+                put("type", JsonPrimitive("web_search_20250305"))
+                put("name", JsonPrimitive("web_search"))
+                put("max_uses", JsonPrimitive(5))
+            }
+            else -> error("Unsupported search format")
+        }
+        return JsonObject(body + ("tools" to JsonArray((body["tools"] as? JsonArray).orEmpty() + search)))
     }
 
     /**
@@ -72,6 +88,8 @@ object ApiFormatRequests {
             .toMutableMap()
         if (request.stream) {
             body["stream_options"] = buildJsonObject { put("include_usage", JsonPrimitive(true)) }
+        } else {
+            body["stream"] = JsonPrimitive(false)
         }
         return JsonObject(body)
     }

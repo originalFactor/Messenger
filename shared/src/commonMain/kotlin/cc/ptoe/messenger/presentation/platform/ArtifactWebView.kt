@@ -8,13 +8,20 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Replies are JSON objects containing the request id and either data or error. */
+/**
+ * [bindingIdentity] identifies one host capability; replace it whenever the package, artifact,
+ * revision or handler authority changes. [onDisposeBinding] must synchronously revoke new work;
+ * any asynchronous cleanup must be tracked and joined by the owning backend.
+ * Replies are JSON objects containing the request id and either data or error.
+ */
 @Composable
 expect fun ArtifactWebView(
     files: Map<String, String>,
     entry: String,
     stateJson: String,
+    bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
+    onDisposeBinding: () -> Unit = {},
     modifier: Modifier = Modifier,
 )
 

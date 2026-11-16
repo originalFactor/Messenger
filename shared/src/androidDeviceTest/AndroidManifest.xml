@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Device tests use only a private loopback HTTP fixture. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

@@ -162,6 +162,28 @@ internal object TermuxRuntime {
         )
     }
 
+    /** Only the package-installed executable is trusted to complete without spawning children. */
+    fun supportsSafeWorkspaceGrep(context: Context): Boolean = safeRipgrep(context) != null
+
+    private fun safeRipgrep(context: Context): File? {
+        val executable = File(context.applicationInfo.nativeLibraryDir, "librg.so")
+        val directory = executable.parentFile ?: return null
+        return executable.takeIf {
+            it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) && it.canExecute() && !java.nio.file.Files.isWritable(it.toPath()) &&
+                !java.nio.file.Files.isWritable(directory.toPath())
+        }
+    }
+
+    /** Tracked grep runs only the immutable executable installed with this APK. */
+    suspend fun trackedWorkspaceGrep(
+        context: Context, root: String?, pattern: String, path: String, fileGlob: String?,
+        caseSensitive: Boolean, fixedString: Boolean, maxResults: Int, onStarted: (Long) -> Unit,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        val executable = safeRipgrep(context)
+            ?: return@withContext ToolResult("Tracked grep requires the immutable packaged ripgrep binary.", isError = true)
+        WorkspaceOps.grep(workspaceRoot(context, root), pattern, path, fileGlob, caseSensitive, fixedString, maxResults, executable, onStarted)
+    }
+
     suspend fun workspaceRead(
         context: Context,
         root: String?,

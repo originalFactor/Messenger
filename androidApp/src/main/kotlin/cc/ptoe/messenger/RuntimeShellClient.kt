@@ -21,7 +21,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.RemoteException
 import cc.ptoe.messenger.core.AcpProcessChannel
+import cc.ptoe.messenger.data.chat.InMemoryWorkspaceTracker
+import cc.ptoe.messenger.data.chat.TrackedWorkspaceHost
+import cc.ptoe.messenger.data.chat.TrackedWorkspaceStatus
+import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.runtime.IMcpCallback
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -30,6 +35,8 @@ import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
 import cc.ptoe.messenger.domain.tool.ShellResult
 import cc.ptoe.messenger.domain.tool.ShellRuntimeBridge
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
+import cc.ptoe.messenger.domain.tool.WorkspaceOperation
+import cc.ptoe.messenger.domain.tool.WorkspaceTool
 import cc.ptoe.messenger.runtime.IShellCallback
 import cc.ptoe.messenger.runtime.IShellService
 import cc.ptoe.messenger.runtime.ToolResult
@@ -49,7 +56,72 @@ import kotlinx.coroutines.withTimeoutOrNull
  * companion is absent — the terminal reports a not-installed state and the
  * agent tools are disabled.
  */
-class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
+class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, TrackedWorkspaceHost {
+
+    private val workspaceTracker = InMemoryWorkspaceTracker()
+    @Volatile private var safeGrepAvailable = false
+    override val supportedOperations: Set<String>
+        get() = if (safeGrepAvailable) setOf("glob", "grep", "read", "edit", "create")
+                else setOf("glob", "read", "edit", "create")
+
+    @Volatile
+    override var protocolAvailable: Boolean = false
+        private set
+
+    /** Synchronous workspace AIDL is tracked in this process, never by Runtime's journal. */
+    suspend fun refreshTrackedProtocol(): Boolean = withContext(Dispatchers.IO) {
+        val remote = try { service() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        val grep = try { remote?.safeWorkspaceProtocol() == 1 }
+            catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
+        synchronized(connectLock) {
+            val available = remote != null && cached === remote && remote.asBinder().isBinderAlive
+            if (available) { safeGrepAvailable = grep; protocolAvailable = true } else workspaceDisconnected()
+            available
+        }
+    }
+
+    override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult {
+        check(protocolAvailable) { "Runtime workspace connection is unavailable" }
+        return workspaceTracker.run(token) {
+            check(protocolAvailable) { "Runtime workspace connection is unavailable" }
+            val remote = service() ?: error("Runtime workspace connection is unavailable")
+            check(protocolAvailable && remote.asBinder().isBinderAlive) { "Runtime workspace connection is unavailable" }
+            require(call.name in supportedOperations) { "Unsupported workspace operation" }
+            WorkspaceTool(call.name, workspace).executeWith(call.arguments) { operation, root ->
+                withContext(Dispatchers.IO) {
+                    check(protocolAvailable && remote.asBinder().isBinderAlive) { "Runtime workspace connection is unavailable" }
+                    val result = try {
+                        when (operation) {
+                            is WorkspaceOperation.Glob -> remote.workspaceGlob(root, operation.pattern, operation.maxResults)
+                            is WorkspaceOperation.Grep -> {
+                                check(safeGrepAvailable) { "Runtime safe grep is unavailable" }
+                                remote.safeWorkspaceGrep(root, operation.pattern, operation.path, operation.fileGlob,
+                                    operation.caseSensitive, operation.fixedString, operation.maxResults)
+                            }
+                            is WorkspaceOperation.Read -> remote.workspaceRead(root, operation.path, operation.startLine, operation.maxLines)
+                            is WorkspaceOperation.Edit -> remote.workspaceEdit(root, operation.path, operation.oldText, operation.newText, operation.replaceAll)
+                            is WorkspaceOperation.Create -> remote.workspaceCreate(root, operation.path, operation.content, operation.overwrite)
+                        }
+                    } catch (error: RemoteException) {
+                        workspaceDisconnected()
+                        throw error
+                    }
+                    requireNotNull(result) { "Runtime workspace operation was rejected" }
+                    ToolExecutionResult(result.output, result.isError)
+                }
+            }
+        }
+    }
+
+    override suspend fun status(token: String): TrackedWorkspaceStatus =
+        if (protocolAvailable) workspaceTracker.status(token) else TrackedWorkspaceStatus.UNKNOWN
+
+    private fun workspaceDisconnected() {
+        protocolAvailable = false
+        safeGrepAvailable = false
+        workspaceTracker.disconnected()
+    }
 
     private val requestIds = AtomicInteger(1)
 
@@ -79,6 +151,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             synchronized(connectLock) {
+                workspaceDisconnected()
                 cached = null
                 connectLatch = null
             }
@@ -87,6 +160,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         override fun onBindingDied(name: ComponentName?) {
             // The framework cleans up the dead binding; the next call re-binds.
             synchronized(connectLock) {
+                workspaceDisconnected()
                 cached = null
                 connectLatch = null
             }
