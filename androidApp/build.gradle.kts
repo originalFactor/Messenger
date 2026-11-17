@@ -29,6 +29,7 @@ val releaseAbis = (rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterI
 val debugAbis = (rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
 
 android {
+    sourceSets.getByName("main").kotlin.srcDirs(rootProject.file("runtime/workspace-transfer-shared/src/main/kotlin"))
     namespace = "cc.ptoe.messenger"
     compileSdk {
         version = release(37)

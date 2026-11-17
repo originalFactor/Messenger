@@ -190,6 +190,7 @@ plugins {
 }
 
 android {
+    sourceSets.getByName("main").kotlin.srcDirs("workspace-transfer-shared/src/main/kotlin")
     namespace = "cc.ptoe.messenger.runtime"
     compileSdk {
         version = release(37)
