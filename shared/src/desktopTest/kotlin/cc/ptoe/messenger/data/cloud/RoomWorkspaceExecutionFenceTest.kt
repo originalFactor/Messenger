@@ -16,6 +16,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -69,6 +70,29 @@ class RoomWorkspaceExecutionFenceTest {
             assertFailsWith<IllegalStateException> { gate.executeDurable(scope, "messenger_session=secret", call) { _, _ -> WorkspaceExecutionOutcome.Unknown } }
             assertFailsWith<IllegalStateException> { gate.mutate { Unit } }
             assertFailsWith<IllegalStateException> { gate.executeDurable(scope, "messenger_session=secret", call.copy(callId = "new")) { _, _ -> WorkspaceExecutionOutcome.Stopped("unexpected", false) } }
+        }
+    }
+
+    @Test fun cloudSessionInvalidationCancelsInFlightWorkWithoutWaitingForTheFence(): Unit = runBlocking {
+        fixture { _, gate ->
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val work = async {
+                gate.executeDurable(scope, "messenger_session=secret", call) { _, _ ->
+                    try { entered.complete(Unit); release.await(); WorkspaceExecutionOutcome.Stopped("unobserved", false) }
+                    finally { withContext(kotlinx.coroutines.NonCancellable) { release.complete(Unit) } }
+                }
+            }
+            withTimeout(5_000) { entered.await() }
+            gate.invalidateSession("account", "generation")
+            withTimeout(5_000) { work.cancelAndJoin() }
+            assertFailsWith<IllegalStateException> {
+                gate.executeDurable(scope, "messenger_session=secret", call.copy(callId = "after-401")) { _, _ ->
+                    WorkspaceExecutionOutcome.Stopped("must not dispatch", false)
+                }
+            }
+            assertFailsWith<IllegalStateException> { gate.mutate { Unit } }
+            assertNotNull(gate.pendingRecovery())
         }
     }
 

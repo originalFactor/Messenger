@@ -28,6 +28,8 @@
 
 `shared/docs/RUST_CORE_DEPENDENCY_AUDIT.md` 与 `.github/scripts/audit-rust-core-dependencies.sh` 提供最终删除前的源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物扫描。当前扫描仍列出 Android/Desktop 生产启动、绑定模块、Cargo/UniFFI CI 与 native 库，确认不能执行“单独删除 Rust Core”的最终提交。
 
+隔离 workspace relay 原型新增精确 Cloud session 失效入口：`RoomWorkspaceExecutionFence.invalidateSession` 在等待 fence 前记录失效、取消已注册的 in-flight 调用，并阻止后续 admission/mutation；新增 1 项定向测试，`:shared:allTests` 全量再次通过（901 项，1 skipped）。该入口仍未由真实 Cloud 401 回调调用，不认证 sender，也没有所有写入者围栏或平台 worker-stop 证明；生产 Relay 仍保持 Core。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。

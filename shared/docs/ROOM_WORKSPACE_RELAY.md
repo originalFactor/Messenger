@@ -42,14 +42,17 @@ permission to execute an external operation.
   not hold an unfenced database transaction across a potentially long external
   call or assume a prior snapshot still authorizes a later side effect.
 - `RoomWorkspaceExecutionFence` is an unconnected in-process prototype: it
-  serializes admission and execution with participating mutations, refuses a
-  duplicate sender/call ID, and permanently blocks that owner when an executor
-  throws or reports an unknown outcome. A trusted executor may return `Stopped`
-  only after all work and children actually stop. The Room owner must retain the
-  same fence for its full lifetime. Existing Cloud, sync, project and conversation
-  writers do not yet use it; process restart loses both its replay set and poison
-  state. It cannot protect against another database instance, the legacy Core,
-  or an executor that asserts stop without proof, and is not installed.
+  serializes durable admission and execution with participating mutations,
+  refuses a duplicate sender/call ID, and retains an unresolved reservation
+  when an executor throws, reports an unknown outcome or is cancelled. An exact
+  Cloud session invalidation cancels registered in-flight work without waiting
+  for the fence and blocks subsequent admission until proof-backed recovery;
+  a newer session needs a fresh fence instance. A trusted executor may return
+  `Stopped` only after all work and children actually stop. The Room owner must
+  retain the same fence for its full lifetime. Existing Cloud 401 callbacks,
+  sync, project and conversation writers do not yet use it. It cannot protect
+  against another database instance, the legacy Core, or an executor that
+  asserts stop without proof, and is not installed.
 - A token/record must be bound to the session, sender routing ID, call ID,
   project, conversation, tool, arguments and captured workspace. A duplicate
   must never start a second invocation, including after an interrupted or

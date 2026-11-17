@@ -4,11 +4,16 @@ package cc.ptoe.messenger.data.cloud
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 import java.lang.ref.WeakReference
+import java.util.Collections
 import java.util.WeakHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Supplied only by a trusted executor after all work and children are known to have stopped. */
 internal sealed interface WorkspaceExecutionOutcome {
@@ -45,9 +50,25 @@ internal class RoomWorkspaceExecutionFence private constructor(db: LocalDatabase
     }
     private val ledger = RoomWorkspaceInvocationLedger(db)
     private val mutex = Mutex()
+    private val invalidated = Collections.synchronizedSet(mutableSetOf<SyncSession>())
+    private val inFlight = Collections.synchronizedMap(mutableMapOf<WorkspaceInvocationRef, Job>())
+
+    /** Invalidates admission for one exact Cloud session before waiting for any worker or fence. */
+    internal fun invalidateSession(accountId: String, generation: String) {
+        val session = SyncSession(accountId, generation)
+        val jobs = synchronized(invalidated) {
+            invalidated.add(session)
+            inFlight.values.toList()
+        }
+        jobs.forEach { it.cancel(CancellationException("Cloud session revoked")) }
+    }
+
+    private fun requireValid(scope: KotlinRemoteControlScope) {
+        check(SyncSession(scope.accountId, scope.generation) !in invalidated) { "Cloud session expired" }
+    }
 
     suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
-        check(ledger.pending() == null) { "Workspace execution requires recovery" }
+        check(ledger.pending() == null && invalidated.isEmpty()) { "Workspace execution requires recovery" }
         block()
     }
 
@@ -65,23 +86,29 @@ internal class RoomWorkspaceExecutionFence private constructor(db: LocalDatabase
      */
     suspend fun executeDurable(scope: KotlinRemoteControlScope, cookie: String, call: RoomInboundWorkspaceCall,
         runner: DurableWorkspaceExecutionRunner): DurableWorkspaceExecutionResult = mutex.withLock {
+        requireValid(scope)
         val admission = when (val result = ledger.admit(scope, cookie, call)) {
             is WorkspaceInvocationAdmission.Admitted -> result
             WorkspaceInvocationAdmission.Busy -> error("Workspace execution requires recovery")
             WorkspaceInvocationAdmission.Duplicate -> error("Workspace request was already admitted")
         }
         currentCoroutineContext().ensureActive()
-        when (val outcome = runner.executeAndAwaitStop(admission.ref, admission.grant)) {
-            WorkspaceExecutionOutcome.Unknown -> error("Workspace execution outcome is unknown; recovery is required")
-            is WorkspaceExecutionOutcome.Stopped -> {
-                currentCoroutineContext().ensureActive()
-                DurableWorkspaceExecutionResult(admission.ref, outcome)
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        inFlight[admission.ref] = job
+        try {
+            when (val outcome = runner.executeAndAwaitStop(admission.ref, admission.grant)) {
+                WorkspaceExecutionOutcome.Unknown -> error("Workspace execution outcome is unknown; recovery is required")
+                is WorkspaceExecutionOutcome.Stopped -> {
+                    currentCoroutineContext().ensureActive()
+                    DurableWorkspaceExecutionResult(admission.ref, outcome)
+                }
             }
-        }
+        } finally { withContext(NonCancellable) { inFlight.remove(admission.ref, job) } }
     }
 
     /** Call only after the result is received. The barrier must hold exact-worker exclusion. */
     suspend fun confirmResultDelivered(ref: WorkspaceInvocationRef, barrier: WorkspaceInvocationStopBarrier) = mutex.withLock {
+        check(invalidated.isEmpty()) { "Cloud session expired" }
         ledger.complete(ref, barrier)
     }
 
