@@ -24,7 +24,9 @@
 2. `RoomWorkspaceExecutionFence.kt`、`RoomWorkspaceInvocationLedger.kt` 和对应测试（`ac0f9c5`）：持久 workspace invocation ledger 与隔离执行 fence 组合，旧仅内存执行入口禁用，完成结果保留 reservation 直到明确确认；取消或异常保留 reservation 直到 stop barrier 支持的显式确认。5 项 fence 测试、4 项 ledger 测试及关联的 ACP/控制设置/授权测试均通过。仍缺 Cloud 401 同步失效、所有写入者围栏、可信 sender 身份和真实 worker 进程树停止证明，不能接入生产。
 3. `workspace-transfer-shared/WorkspaceArchive.kt`、`WorkspaceTransfer.kt`、`AndroidWorkspaceCandidateStager.kt`、设备测试及两个 Gradle/AGENTS 文件（`32c01a6`）：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。共用源码注册到两个 Kotlin source set；Runtime 单元测试、Runtime/Android debug APK 和 instrumentation APK 构建通过。隔离 `emulator-5562` 上跨 UID 候选设备测试 1/1 通过，Runtime 工作区设备测试 5/5 通过（含 adbd root 创建后交给普通 Runtime UID 的真实硬链接夹具，已清理）。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束、来源快照一致或全局元数据无损。
 
-续作检查点：`1f1ba9b` 修复 `:shared:allTests` 的 5 项既有失败（委派 ACP 未知结果、Core sidecar 别名、scheduler proof 计数、image recovery 顺序及 Compose 测试污染），901 项测试通过、1 skipped。`core/rust/crates/messenger-http/src/lib.rs` 已让 `ServerHandle.stop()` join 随服务器启动的 remote-control 与 scheduler 循环，并有 1 项 Rust 回归测试；`cargo test --workspace` 通过（其中 `messenger-http` 143 项通过、2 ignored）。这仍不证明所有请求级任务、ACP/Runtime 后代或旧进程停止；Android 生产切换仍不可执行。Wine 11.21 的简单 Windows 文件创建/读取/删除检查通过，仅作为有限环境证据，不证明 NTFS ACL、持久化、链接或目录 fsync。
+续作检查点：`1f1ba9b` 修复 `:shared:allTests` 的 5 项既有失败（委派 ACP 未知结果、Core sidecar 别名、scheduler proof 计数、image recovery 顺序及 Compose 测试污染），901 项测试通过、1 skipped。`c491be6` 让 `ServerHandle.stop()` join 随服务器启动的 remote-control 与 scheduler 循环，并有 1 项 Rust 回归测试；`cargo test --workspace` 通过（其中 `messenger-http` 143 项通过、2 ignored）。这仍不证明所有请求级任务、ACP/Runtime 后代或旧进程停止；Android 生产切换仍不可执行。Wine 11.21 的简单 Windows 文件创建/读取/删除检查通过，`icacls`、硬链接和 file-ID 命令在该 Wine 环境中不可用；这些结果仅作为有限环境证据，不证明 NTFS ACL、持久化、链接、句柄身份或目录 fsync。
+
+`shared/docs/RUST_CORE_DEPENDENCY_AUDIT.md` 与 `.github/scripts/audit-rust-core-dependencies.sh` 提供最终删除前的源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物扫描。当前扫描仍列出 Android/Desktop 生产启动、绑定模块、Cargo/UniFFI CI 与 native 库，确认不能执行“单独删除 Rust Core”的最终提交。
 
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
@@ -50,7 +52,7 @@
 3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
 4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
 5. **Desktop 与存储。** Windows 存储的 ACL、链接/路径和持久化及旧 Core/资源独占问题未解决；参见 `shared/docs/WINDOWS_ROOM_STORAGE.md`。macOS/Linux/Windows 都需真实设备或 CI 验证。Android 系统 SQLite 的事务、游标和 WAL 语义尚待真实设备验证，不能仅为减小包而替换 driver。
-6. **切换及删除。** 先建立真实 owner 和恢复机制，在保留功能及用户数据下接入 Android/Desktop；运行基础测试及受影响设备测试；扫描源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物的 Rust Core 依赖。确认没有依赖并验证构建后，按用户要求单独提交删除 Rust Core；更新相关 `AGENTS.md`。release/R8 按仓库规则仅在确有必要时运行。
+6. **切换及删除。** 先建立真实 owner 和恢复机制，在保留功能及用户数据下接入 Android/Desktop；运行基础测试及受影响设备测试；运行 `bash .github/scripts/audit-rust-core-dependencies.sh` 扫描源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物的 Rust Core 依赖。确认没有依赖并验证构建后，按用户要求单独提交删除 Rust Core；更新相关 `AGENTS.md`。release/R8 按仓库规则仅在确有必要时运行。
 
 ## 构建与验证
 
