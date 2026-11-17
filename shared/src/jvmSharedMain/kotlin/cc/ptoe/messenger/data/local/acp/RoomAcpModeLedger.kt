@@ -14,7 +14,7 @@ import kotlinx.serialization.json.*
 
 /** A pending mode change is never retried; the user must explicitly inspect the agent's state. */
 internal class RoomAcpModeLedger(private val db: LocalDatabase) {
-    data class Pending(val id: String, val configId: String?)
+    data class Pending(val id: String, val configId: String?, val boolean: Boolean)
     private fun key(sessionId: String): String = "kotlin_acp_mode_pending_v1:" +
         MessageDigest.getInstance("SHA-256").digest(sessionId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
 
@@ -28,7 +28,8 @@ internal class RoomAcpModeLedger(private val db: LocalDatabase) {
 
     suspend fun pending(sessionId: String): Boolean = pendingValue(sessionId) != null
 
-    suspend fun begin(sessionId: String, mode: String, configId: String? = null): String = db.useWriterConnection { connection ->
+    suspend fun begin(sessionId: String, mode: String, configId: String? = null, boolean: Boolean = false): String = db.useWriterConnection { connection ->
+        require(!boolean || configId != null && mode in setOf("true", "false")) { "Invalid ACP boolean setting" }
         val databasePath = connection.usePrepared("PRAGMA database_list") { statement ->
             check(statement.step() && statement.getText(1) == "main") { "ACP database is unavailable" }
             statement.getText(2).takeIf { it.isNotBlank() } ?: error("ACP mode changes require a persistent database")
@@ -38,7 +39,11 @@ internal class RoomAcpModeLedger(private val db: LocalDatabase) {
         val id = connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
             check(pendingValue(sessionId) == null) { "Check the previous ACP mode change before trying again" }
             val id = randomUuid()
-            val value = buildJsonObject { put("id", id); put("sessionId", sessionId); put("modeId", mode); if (configId != null) put("configId", configId) }
+            val value = buildJsonObject {
+                put("id", id); put("sessionId", sessionId); put("modeId", mode)
+                if (configId != null) put("configId", configId)
+                if (boolean) put("valueType", "boolean")
+            }
             db.rows().upsertValues(listOf(KeyValueRow(key(sessionId), value.toString())))
             id
         }
@@ -62,6 +67,12 @@ internal class RoomAcpModeLedger(private val db: LocalDatabase) {
         val id = (value["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid pending ACP mode change")
         val configId = value["configId"]?.let { (it as? JsonPrimitive)?.takeIf { field -> field.isString }?.contentOrNull
             ?.takeIf { field -> field.isNotBlank() } ?: error("Invalid pending ACP configuration") }
-        return Pending(id, configId)
+        val boolean = when (value["valueType"]) {
+            null -> false // Existing legacy-mode and select markers.
+            JsonPrimitive("boolean") -> true
+            else -> error("Invalid pending ACP setting type")
+        }
+        check(!boolean || configId != null) { "Invalid pending ACP boolean setting" }
+        return Pending(id, configId, boolean)
     }
 }

@@ -35,6 +35,11 @@ internal fun interface RoomRemoteTaskCancel {
     suspend fun cancel(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String)
 }
 
+/** Uses the exact live worker and rechecks the relay cookie before deciding. */
+internal fun interface RoomRemoteTaskDecision {
+    suspend fun decide(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String, option: String)
+}
+
 /**
  * Remote read-only commands over the same Room owner as chat and Cloud. Each database
  * snapshot checks the account-scoped explicit control grant. Notification access is
@@ -51,6 +56,7 @@ internal class RoomDeviceControlDispatcher(
     private val modeGate: RoomCloudProviderGate? = null,
     private val onModeChanged: () -> Unit = {},
     private val remoteCancel: RoomRemoteTaskCancel? = null,
+    private val remoteDecision: RoomRemoteTaskDecision? = null,
 ) : RoomDeviceCommandDispatcher {
     private class Failure(val code: String, override val message: String) : IllegalStateException(message)
     private data class SessionPage(val title: String, val writable: Boolean?, val messages: List<JsonObject>, val before: String?)
@@ -97,7 +103,8 @@ internal class RoomDeviceControlDispatcher(
                     val turnId = command.requiredText("requestId").validatedId()
                     val option = command.requiredText("optionId").validatedId()
                     transaction(scope) { rows -> requireSession(rows, id, requireOwnedProject = false) }
-                    (operations ?: throw Failure("unavailable", "Remote task decisions are unavailable")).decide(scope, id, turnId, option)
+                    if (remoteDecision != null) remoteDecision.decide(scope, stored.cookie, id, turnId, option)
+                    else (operations ?: throw Failure("unavailable", "Remote task decisions are unavailable")).decide(scope, id, turnId, option)
                     buildJsonObject { put("type", "DecisionAccepted") }
                 }
                 "notificationCancel" -> {

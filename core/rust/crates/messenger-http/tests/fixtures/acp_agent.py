@@ -11,6 +11,7 @@ session_id = "fixture-session"
 pending = None
 permissions = "read-only"
 current_mode = "plan"
+network_enabled = False
 mcp_url = None
 
 
@@ -23,7 +24,7 @@ def session_settings():
                      {"value": "read-only", "name": "Read only"},
                      {"value": "workspace-write", "name": "Workspace write"},
                      {"value": "full-access", "name": "Full access"}]}]},
-            {"id": "network", "name": "Network", "type": "boolean", "currentValue": False}
+            {"id": "network", "name": "Network", "type": "boolean", "currentValue": network_enabled}
         ],
         "modes": {"currentModeId": current_mode, "availableModes": [
             {"id": "plan", "name": "Plan"}, {"id": "code", "name": "Code"}]}
@@ -78,7 +79,9 @@ for line in sys.stdin:
     if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
         mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "settings-mode-after", "settings-mode-option", "settings-mode-option-after", "settings-select-after", "mcp-load")}
+        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "settings-mode-after", "settings-mode-option", "settings-mode-option-after", "settings-select-after", "settings-boolean", "settings-boolean-after", "mcp-load")}
+        if mode.startswith("settings-boolean"):
+            assert packet["params"]["clientCapabilities"]["session"]["configOptions"]["boolean"] == {}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
@@ -129,7 +132,14 @@ for line in sys.stdin:
         params = packet["params"]
         if mode == "settings-hang" and params.get("value") == "full-access":
             continue  # Deliberately unanswered request for cancellation coverage.
-        if params["configId"] == "network":
+        if params["configId"] == "network" and mode.startswith("settings-boolean"):
+            assert params.get("type") == "boolean" and isinstance(params["value"], bool)
+            network_enabled = params["value"]
+            send(id=request_id, result={"configOptions": session_settings()["configOptions"]})
+            if mode == "settings-boolean-after":
+                network_enabled = False
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "config_option_update", "configOptions": session_settings()["configOptions"]}})
+        elif params["configId"] == "network":
             send(id=request_id, error={"code": -32000, "message": "Network access is unavailable"})
         else:
             permissions = "workspace-write" if params["value"] == "full-access" else params["value"]

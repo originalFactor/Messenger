@@ -81,12 +81,19 @@ internal class AcpStdioWorker(
         }
     }
 
-    override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject {
+    override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject =
+        setConfigOption(configId, JsonPrimitive(value), permit)
+
+    override suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject =
+        setConfigOption(configId, JsonPrimitive(value), permit)
+
+    private suspend fun setConfigOption(configId: String, value: JsonPrimitive, permit: () -> Unit): JsonObject {
         val connection = checkNotNull(peer) { "ACP worker is unavailable" }
         val sessionId = checkNotNull(session) { "ACP session is unavailable" }
         val before = gate.withLock { configRevision }
         val response = try { withTimeout(30_000) { connection.request("session/set_config_option", buildJsonObject {
             put("sessionId", sessionId); put("configId", configId); put("value", value)
+            if (!value.isString) put("type", "boolean")
         }, permit) } } catch (timeout: TimeoutCancellationException) {
             currentCoroutineContext().ensureActive()
             throw IllegalStateException("ACP mode change timed out; its outcome is unknown", timeout)
@@ -106,7 +113,10 @@ internal class AcpStdioWorker(
         connection.start(binding, configuration)
         val initialized = connection.request("initialize", buildJsonObject {
             put("protocolVersion", 1)
-            put("clientCapabilities", buildJsonObject { put("fs", buildJsonObject { put("readTextFile", false); put("writeTextFile", false) }); put("terminal", false) })
+            put("clientCapabilities", buildJsonObject {
+                put("fs", buildJsonObject { put("readTextFile", false); put("writeTextFile", false) }); put("terminal", false)
+                put("session", buildJsonObject { put("configOptions", buildJsonObject { put("boolean", buildJsonObject {}) }) })
+            })
             put("clientInfo", buildJsonObject { put("name", "Messenger"); put("version", "1") })
         }) as? JsonObject ?: error("Invalid ACP initialization")
         check((initialized["protocolVersion"] as? JsonPrimitive)?.intOrNull == 1) { "Unsupported ACP protocol version" }

@@ -87,3 +87,13 @@ ownership or source identity proof.
 Nonempty rollback journals are rejected before opening the scratch database;
 they require separate offline recovery because a read-only SQLite open cannot
 be relied on to recover a hot journal. The original journal is retained.
+
+`LegacyRecoveryReviewScreen` is an isolated, bilingual review component for the
+session callback. It shows the legacy, Core and current Room values, starts with
+no selections, requires explicit confirmation and identifies the owner device
+when a selected project would be created. Missing or changed destination rows,
+unsupported protocols, foreign projects and associations without an eligible
+project cannot be selected. The apply transaction still validates all choices;
+the screen is not an ownership proof. No production host or navigation entry
+currently opens it, and its selected-field comparison is not a complete account
+of differences in older data.

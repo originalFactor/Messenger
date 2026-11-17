@@ -215,6 +215,43 @@ class AcpSessionSettingsScreenTest {
     }
 
     @Test
+    fun isolatedBooleanUsesTypedValueAndConfirmsInspectedState() = runComposeUiTest {
+        val snapshot = mutableStateOf(Json.parseToJsonElement("""{
+            "_messengerCapabilities":{"settingsWritable":false,"modeWritable":false,"writableConfigIds":["fast"]},
+            "configOptions":[{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]
+        }""").jsonObject)
+        var submitted: JsonObject? = null
+        var confirmed: Pair<String, String>? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(snapshot.value, false, {}, { submitted = it },
+            onConfirmPendingMode = { id, value -> confirmed = id to value }) } }
+        onNode(isToggleable()).assertIsOff().performClick()
+        assertEquals("fast", submitted?.text("configId"))
+        assertEquals(JsonPrimitive(true), submitted?.get("value"))
+        onNode(isToggleable()).assertIsOff()
+        runOnIdle { snapshot.value = JsonObject(snapshot.value + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modePending", true); put("modeInspected", true)
+            put("modePendingId", "marker"); put("modeConfigId", "fast"); put("writableConfigIds", JsonArray(emptyList()))
+        })) }
+        onNode(isToggleable()).assertIsNotEnabled()
+        onNodeWithText("Current setting: Off. Confirm it before continuing.").assertExists()
+        onNodeWithText("Confirm current setting").performClick()
+        assertEquals("marker" to "false", confirmed)
+    }
+
+    @Test
+    fun isolatedBooleanComposerUsesTypedValue() = runComposeUiTest {
+        val settings = Json.parseToJsonElement("""{
+            "_messengerCapabilities":{"settingsWritable":false,"writableConfigIds":["fast"]},
+            "configOptions":[{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]
+        }""").jsonObject
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionControls(settings, false) { submitted = it } } }
+        onNodeWithText("Fast mode").performClick()
+        assertEquals("fast", submitted?.text("configId"))
+        assertEquals(JsonPrimitive(true), submitted?.get("value"))
+    }
+
+    @Test
     fun booleanListItemHasOneToggleTargetAndKeepsTheConfirmedValue() = runComposeUiTest {
         val snapshot = Json.parseToJsonElement("""{"configOptions":[{"id":"fast","name":"Fast mode","description":"Use faster responses","type":"boolean","currentValue":false}]}""").jsonObject
         var submitted: JsonObject? = null

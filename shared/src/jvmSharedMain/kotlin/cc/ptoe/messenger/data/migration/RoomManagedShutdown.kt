@@ -39,6 +39,11 @@ internal class RoomManagedShutdown(private val stopAndJoin: suspend () -> Unit) 
     private val mutableState = MutableStateFlow<RoomShutdownState>(RoomShutdownState.Ready)
     val state: StateFlow<RoomShutdownState> = mutableState.asStateFlow()
 
+    /** Runs only after this lifecycle has reached Stopped, including after a successful retry. */
+    internal fun onStopped(action: () -> Unit) {
+        stopped.invokeOnCompletion { failure -> if (failure == null) runCatching(action) }
+    }
+
     /** Register before starting the corresponding worker or exposing it to other code. */
     suspend fun registerStop(action: suspend () -> Unit) = mutex.withLock {
         check(mutableState.value == RoomShutdownState.Ready || mutableState.value == RoomShutdownState.Running) {

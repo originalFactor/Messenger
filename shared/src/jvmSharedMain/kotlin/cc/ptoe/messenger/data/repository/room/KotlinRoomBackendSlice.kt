@@ -239,7 +239,8 @@ internal class KotlinRoomBackendSlice private constructor(
                 mcpManager = { if (mcpConnections?.enableExecution == true) ownedMcpManager else null },
                 afterMcpSelection = mcpConnections?.afterSelection ?: {})
             val admissions = PartialChatCalls()
-            val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions)
+            val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions,
+                recordStoppedMcp = { rawBridge.recordStoppedMcpWorkers(shutdown, processJob) })
             try { withContext(NonCancellable) { shutdown.registerStop { bridge.shutdown() } } }
             catch (failure: Throwable) {
                 try { bridge.shutdown() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
@@ -267,7 +268,8 @@ internal class KotlinRoomBackendSlice private constructor(
                     taskStatus = composition::scheduledTaskStatus)
                     .also { scheduler -> scheduler.start() }
             }
-            val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it, remoteCancel = rawBridge.remoteCancel) }
+            val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it,
+                remoteCancel = rawBridge.remoteCancel, remoteDecision = rawBridge.remoteDecision) }
             return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
                 artifactHost, attachedDeviceHost, mcpOwner, mcpConnections?.enableExecution == true)
@@ -288,6 +290,7 @@ private class PartialChatBridge(
     private val imageService: ImageGenerationService?,
     private val acpOwner: RoomAcpBackgroundOwner?,
     private val calls: PartialChatCalls,
+    private val recordStoppedMcp: suspend () -> Unit,
 ) : CoreBridge by delegate {
     private suspend fun <T> admitted(block: suspend () -> T): T = calls.run(block)
     private suspend fun <T> withForegroundAdmission(block: suspend () -> T): T {
@@ -352,6 +355,7 @@ private class PartialChatBridge(
         imageService?.stopAndJoin()
         calls.stopAndJoin()
         processJob.cancelAndJoin()
+        recordStoppedMcp()
     }
 }
 

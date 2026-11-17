@@ -156,7 +156,7 @@ class LegacyRoomRecoveryApplyTest {
                     assertTrue(owner.held)
                     assertEquals("/committed-wal", review.source.projects.single { it.id == "old" }.legacy?.workspace)
                     assertFalse(review.toString().contains("SECRET"))
-                    selection()
+                    LegacyRecoveryChoices(review).selection(setOf("old"), setOf("c"), setOf("p"))
                 }
                 assertEquals(LegacyRecoveryApplied(1, 1, 1), result)
                 assertTrue(sourceBefore.contentEquals(Files.readAllBytes(f.legacy)))

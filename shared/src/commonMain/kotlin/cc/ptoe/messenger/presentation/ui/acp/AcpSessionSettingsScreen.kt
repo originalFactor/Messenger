@@ -45,10 +45,11 @@ private fun acpConfigWritable(settings: JsonObject, option: JsonObject): Boolean
     val capabilities = settings["_messengerCapabilities"] as? JsonObject
     if ((capabilities?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true) return false
     if (acpBackendAllows(settings, "settingsWritable")) return true
-    if (option.text("type") != "select") return false
+    if (option.text("type") !in listOf("select", "boolean")) return false
     val ids = capabilities?.get("writableConfigIds") as? JsonArray
     if (ids != null) return ids.any { (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull == option.text("id") }
-    return (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true && option.text("category") == "mode"
+    return (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true &&
+        option.text("category") == "mode" && option.text("type") == "select"
 }
 
 /** ACP select options may be flat or grouped; IDs are opaque, never inferred from labels. */
@@ -126,10 +127,15 @@ internal fun AcpSessionSettingsScreen(
                         if (modeInspected) {
                             val value = if (modeConfigId == null) modes?.get("currentModeId") else
                                 settings.objects("configOptions").singleOrNull { it.text("id") == modeConfigId }?.get("currentValue")
-                            val current = ((value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull).orEmpty()
-                            Text(stringResource(if (pendingIsMode) Res.string.acp_mode_current else Res.string.acp_setting_current, current), style = MaterialTheme.typography.bodyMedium)
-                            TextButton(enabled = !busy && !modePendingId.isNullOrBlank() && current.isNotBlank(),
-                                onClick = { onConfirmPendingMode(checkNotNull(modePendingId), current) }) { Text(stringResource(if (pendingIsMode) Res.string.acp_confirm_mode else Res.string.acp_confirm_setting)) }
+                            val primitive = value as? JsonPrimitive
+                            val observedBoolean = primitive?.takeUnless { it.isString }?.booleanOrNull
+                            val current = if (primitive?.isString == true) primitive.contentOrNull else observedBoolean?.toString()
+                            val displayed = if (observedBoolean != null)
+                                stringResource(if (observedBoolean) Res.string.acp_setting_on else Res.string.acp_setting_off)
+                            else current.orEmpty()
+                            Text(stringResource(if (pendingIsMode) Res.string.acp_mode_current else Res.string.acp_setting_current, displayed), style = MaterialTheme.typography.bodyMedium)
+                            TextButton(enabled = !busy && !modePendingId.isNullOrBlank() && !current.isNullOrBlank(),
+                                onClick = { onConfirmPendingMode(checkNotNull(modePendingId), checkNotNull(current)) }) { Text(stringResource(if (pendingIsMode) Res.string.acp_confirm_mode else Res.string.acp_confirm_setting)) }
                         } else {
                             Text(stringResource(if (pendingIsMode) Res.string.acp_mode_uncertain else Res.string.acp_setting_uncertain), style = MaterialTheme.typography.bodyMedium)
                             TextButton(enabled = !busy, onClick = onInspectPendingMode) { Text(stringResource(Res.string.acp_check_mode)) }
@@ -164,7 +170,7 @@ internal fun AcpSessionSettingsScreen(
                                     if (option.text("description").isNotBlank()) Text(option.text("description"), style = MaterialTheme.typography.bodyMedium)
                                 } },
                                 trailingContent = {
-                                    if (boolean) Switch(checked, null, enabled = editable && !busy, modifier = Modifier.clearAndSetSemantics {}, thumbContent = {
+                                    if (boolean) Switch(checked, null, enabled = acpConfigWritable(settings, option) && !busy, modifier = Modifier.clearAndSetSemantics {}, thumbContent = {
                                         Icon(if (checked) Icons.Default.Check else Icons.Default.Close, null, Modifier.size(SwitchDefaults.IconSize))
                                     }) else Icon(Icons.Default.ExpandMore, null)
                                 },
@@ -217,7 +223,6 @@ internal fun AcpSessionSettingsScreen(
 @Composable
 internal fun AcpSessionControls(settings: JsonObject, busy: Boolean, onChange: (JsonObject) -> Unit) {
     val options = settings.objects("configOptions")
-    val editable = acpBackendAllows(settings, "settingsWritable")
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.sortedBy { when (it.text("category")) { "model" -> 0; "thought_level" -> 1; else -> 2 } }.forEach { option ->
@@ -226,7 +231,7 @@ internal fun AcpSessionControls(settings: JsonObject, busy: Boolean, onChange: (
                     "select" -> AcpSettingSelector(option, acpConfigWritable(settings, option) && !busy, onChange)
                     "boolean" -> FilterChip(
                         selected = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true,
-                        enabled = editable && !busy,
+                        enabled = acpConfigWritable(settings, option) && !busy,
                         onClick = { onChange(buildJsonObject {
                             put("configId", option.text("id"))
                             put("value", (option["currentValue"] as? JsonPrimitive)?.booleanOrNull != true)

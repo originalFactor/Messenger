@@ -53,6 +53,7 @@ internal interface AcpWorkerSettings {
     /** Invoke permit immediately before the first write; a passed permit means outcome may be unknown. */
     suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject = error("ACP mode changes are unavailable")
     suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject = error("ACP mode changes are unavailable")
+    suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject = error("ACP boolean changes are unavailable")
 }
 
 /**

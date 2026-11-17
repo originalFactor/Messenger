@@ -74,6 +74,36 @@ class KotlinRemoteTurnAuthorizationTest {
         } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
     }
 
+    @Test fun authenticatedDecisionRequiresExactOwnerCookieEpochAndUnexpiredSession(): Unit = runBlocking {
+        for (expire in listOf(false, true)) {
+            val dir = Files.createTempDirectory("remote-approval-authority")
+            val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
+            val gate = RoomCloudProviderGate.forDao(db.cloudSync())
+            try {
+                seed(db)
+                val owner = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+                val other = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+                val id = assertIs<KotlinTurnAdmission.Accepted>(owner.admit(KotlinTurnCommand.Send("c", "hello", null))).turnId
+                assertTrue(owner.claim(id, false)); owner.beginProvider(id)
+                owner.completeProvider(id, listOf(ToolCallData("call", "write", "{}")), null)
+                assertFailsWith<IllegalStateException> { other.decideRemoteApprovalAuthenticated(scope, "messenger_session=secret", "c", id, "call", true) }
+                assertFailsWith<IllegalStateException> { owner.decideRemoteApprovalAuthenticated(scope, "messenger_session=other", "c", id, "call", true) }
+                assertFailsWith<IllegalStateException> { owner.decideRemoteApprovalAuthenticated(scope.copy(grantEpoch = 2), "messenger_session=secret", "c", id, "call", true) }
+                assertFailsWith<IllegalStateException> { owner.decideRemoteApprovalAuthenticated(scope, "messenger_session=secret", "c", "stale", "call", true) }
+                assertFailsWith<IllegalArgumentException> { owner.decideRemoteApprovalAuthenticated(scope, "messenger_session=secret", "c", id, "other", true) }
+                if (expire) {
+                    gate.invalidate(SyncSession("account", "generation"))
+                    assertFailsWith<IllegalStateException> { owner.decideRemoteApprovalAuthenticated(scope, "messenger_session=secret", "c", id, "call", true) }
+                    assertEquals(KotlinTurnPhase.WAITING_APPROVAL, owner.snapshot(id).phase)
+                } else {
+                    owner.decideRemoteApprovalAuthenticated(scope, "messenger_session=secret", "c", id, "call", false)
+                    assertTrue(db.rows().messagesFor(listOf("c")).any { it.role == "tool" && it.content.contains("denied") })
+                }
+                owner.cancel(id); owner.release(id)
+            } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+        }
+    }
+
     @Test fun revokeThenReenableNeverRestoresOldTurnOrApproval() = runBlocking {
         val dir = Files.createTempDirectory("remote-turn-epoch")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()

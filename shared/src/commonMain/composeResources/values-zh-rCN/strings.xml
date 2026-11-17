@@ -591,10 +591,12 @@
     <string name="acp_check_mode">检查当前设置</string>
     <string name="acp_mode_current">当前模式：%1$s。请确认后继续。</string>
     <string name="acp_confirm_mode">确认当前模式</string>
-    <string name="acp_settings_select_only">可以更改受支持的选项；此设备上的其他设置仅供查看。</string>
+    <string name="acp_settings_select_only">可以更改受支持的设置；此设备上的其他设置仅供查看。</string>
     <string name="acp_setting_uncertain">上次设置更改可能已完成。继续之前请检查当前设置。</string>
     <string name="acp_setting_current">当前设置：%1$s。请确认后继续。</string>
     <string name="acp_confirm_setting">确认当前设置</string>
+    <string name="acp_setting_on">开启</string>
+    <string name="acp_setting_off">关闭</string>
     <string name="settings_animated_shape_license">圆角动画：Copyright 2024 The Android Open Source Project。采用 Apache License 2.0，移植自 BakaSU manager 中保留 Apache 许可声明的 AnimatedShape.kt（548d1dda）。</string>
     <string name="settings_github">GitHub</string>
     <string name="settings_github_desc">查看源码、反馈问题与参与贡献</string>

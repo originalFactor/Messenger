@@ -695,6 +695,18 @@ class RoomKotlinTurnStore(
         check(turn.conversationId == conversationId && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
         rows.applyApproval(turn, callId, allow, mark)
     } }
+    /** Relay decisions must retain the exact cookie, live session and local turn owner. */
+    internal suspend fun decideRemoteApprovalAuthenticated(scope: KotlinRemoteControlScope, cookie: String,
+        conversationId: String, turnId: String, callId: String, allow: Boolean) { transaction { rows, mark ->
+        rows.requireRemoteControl(scope, conversationId, requireOwnedProject = false)
+        check(rows.getValue("cloud_session")?.value == cookie) { "Cloud session changed" }
+        checkNotNull(cloudGate) { "Cloud provider dispatch gate is unavailable" }.requireValid(SyncSession(scope.accountId, scope.generation))
+        check(rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Turn is no longer active" }
+        val turn = rows.read(turnId)
+        turn.requireOwner()
+        check(turn.conversationId == conversationId && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
+        rows.applyApproval(turn, callId, allow, mark)
+    } }
     override suspend fun beginTool(turnId: String): ToolCallData = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_TOOL)
         rows.requireTurnCloudSession(turn)
@@ -862,11 +874,13 @@ class RoomKotlinTurnStore(
         transaction { rows, mark ->
             val active = rows.activeTurnKeys()
             check(active.size <= 10_000) { "Too many interrupted chat turns" }
-            check(proof != null || active.isEmpty()) { "Previous chat workers require stop proof" }
             check(rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
             for (entry in active) {
                 val turn = rows.read(entry.value)
                 check(entry.key == ACTIVE + turn.conversationId && entry.value == turn.id) { "Invalid active turn identity" }
+                if (proof == null) check(turn.mcpExclusionKey()?.let { LocalMcpWorkerExclusion.provesStopped(db, it) } == true) {
+                    "Previous chat workers require stop proof"
+                }
                 check(!turn.scheduledRun && !turn.delegatedRun) {
                     "Scheduled or delegated chat requires its owning service to reconcile before startup"
                 }
@@ -959,24 +973,44 @@ class RoomKotlinTurnStore(
         it.mcpGrant.takeIf { _ -> it.mcpOwner == owner }
     }
 
+    private fun StoredTurn.mcpExclusionKey(): LocalMcpWorkerExclusion.Key? {
+        if (phase() != KotlinTurnPhase.INTERRUPTED_TOOL || !invocationStarted) return null
+        val previousOwner = mcpOwner?.takeIf { it.isNotBlank() } ?: return null
+        val call = calls.getOrNull(index)?.domain() ?: return null
+        if (mcpGrant?.let { it.conversationId == conversationId && it.tools.count { binding -> binding.name == call.name } == 1 } != true) return null
+        return LocalMcpWorkerExclusion.Key(previousOwner, id, call.callId)
+    }
+
+    /** Only this store can register the calls its own stopped worker tree previously admitted. */
+    internal suspend fun localMcpExclusionKey(conversationId: String): LocalMcpWorkerExclusion.Key? {
+        val rows = db.rows()
+        val id = rows.getValue(ACTIVE + conversationId)?.value ?: return null
+        val turn = rows.read(id)
+        if (turn.conversationId != conversationId || turn.mcpOwner != owner || turn.owner != null) return null
+        return turn.mcpExclusionKey()
+    }
+
     /** Previous-owner calls are visible but cannot be acknowledged without a local stop proof. */
     internal suspend fun uncertainMcpCall(conversationId: String): UncertainMcpCall? {
         val rows = db.rows()
         val turnId = rows.getValue(ACTIVE + conversationId)?.value ?: return null
         val turn = rows.read(turnId)
-        if (turn.conversationId != conversationId || turn.mcpOwner == null ||
-            turn.phase() != KotlinTurnPhase.INTERRUPTED_TOOL || !turn.invocationStarted) return null
+        if (turn.conversationId != conversationId) return null
+        val key = turn.mcpExclusionKey() ?: return null
         val call = turn.calls.getOrNull(turn.index)?.domain() ?: return null
-        if (turn.mcpGrant?.let { it.conversationId == conversationId && it.tools.count { binding -> binding.name == call.name } == 1 } != true) return null
         return UncertainMcpCall(turnId, call.callId, call.name, call.arguments.take(16_384),
-            argumentsTruncated = call.arguments.length > 16_384, canAcknowledge = turn.mcpOwner == owner)
+            argumentsTruncated = call.arguments.length > 16_384,
+            canAcknowledge = turn.mcpOwner == owner || LocalMcpWorkerExclusion.provesStopped(db, key))
     }
 
     /** Acknowledgement records uncertainty, not completion, and never invokes the remote tool. */
     internal suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String) {
+        var priorKey: LocalMcpWorkerExclusion.Key? = null
         transaction { rows, _ ->
             val turn = rows.read(turnId)
-            check(turn.conversationId == conversationId && turn.mcpOwner == owner && turn.owner == null &&
+            val evidence = turn.mcpExclusionKey() ?: error("Uncertain MCP call is unavailable")
+            check(turn.conversationId == conversationId &&
+                (turn.mcpOwner == owner || LocalMcpWorkerExclusion.provesStopped(db, evidence)) && turn.owner == null &&
                 turn.phase() == KotlinTurnPhase.INTERRUPTED_TOOL && turn.invocationStarted &&
                 rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Uncertain MCP call changed" }
             val call = turn.calls.getOrNull(turn.index)?.domain() ?: error("Uncertain MCP call is unavailable")
@@ -991,7 +1025,9 @@ class RoomKotlinTurnStore(
                 conversationId, turnId, callId, serverIdHash, call.name, clock())))))
             rows.write(turn.copy(phase = KotlinTurnPhase.FAILED.name))
             rows.deleteValue(ACTIVE + conversationId)
+            if (turn.mcpOwner != owner) priorKey = evidence
         }
+        priorKey?.let { LocalMcpWorkerExclusion.forget(db, it) }
     }
     private suspend fun LocalRowsDao.requireActiveDelegation(parent: KotlinDelegationParent, childId: String, admitted: Boolean): StoredTurn {
         val turn = read(parent.turnId)

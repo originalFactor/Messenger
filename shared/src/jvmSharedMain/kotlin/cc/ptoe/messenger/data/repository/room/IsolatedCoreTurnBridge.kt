@@ -7,8 +7,11 @@ import cc.ptoe.messenger.data.chat.KotlinBackgroundTurnBridge
 import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
+import cc.ptoe.messenger.data.chat.LocalMcpWorkerExclusion
+import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
 import cc.ptoe.messenger.data.cloud.RoomRemoteTaskCancel
+import cc.ptoe.messenger.data.cloud.RoomRemoteTaskDecision
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
 import cc.ptoe.messenger.data.local.room.LocalDatabase
@@ -163,6 +166,19 @@ internal class IsolatedCoreTurnBridge(
         runner.cancelRemoteAuthenticatedAndAwait(scope, cookie, conversationId, turnId)
     }
 
+    /** Bind the decision to the exact runner; transactionally recheck relay authority and call. */
+    val remoteDecision = RoomRemoteTaskDecision { scope, cookie, conversationId, turnId, option ->
+        require(!conversationId.startsWith("acp:")) { "ACP task decisions are unavailable" }
+        val (verb, callId) = option.split(':', limit = 2).let { require(it.size == 2 && it[1].isNotBlank()); it[0] to it[1] }
+        val allow = when (verb) { "approve" -> true; "deny" -> false; else -> error("Invalid approval option") }
+        val runtime = lock.withLock {
+            val owner = runtimes[conversationId] ?: error("Active turn belongs to another owner")
+            check(owner.runner.ownsRunningJob(turnId)) { "Active turn belongs to another owner" }
+            owner
+        }
+        runtime.store.decideRemoteApprovalAuthenticated(scope, cookie, conversationId, turnId, callId, allow)
+    }
+
     override suspend fun respondToolApproval(callId: String, approved: Boolean) {
         val runtime = lock.withLock {
             val matching = adminStore.observeActiveTurns().first().filter {
@@ -188,11 +204,23 @@ internal class IsolatedCoreTurnBridge(
     }
 
     override suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String) {
-        val runtime = lock.withLock { runtimes[conversationId] } ?: error("The local MCP worker is unavailable")
-        val call = runtime.store.uncertainMcpCall(conversationId) ?: error("Uncertain MCP call is unavailable")
+        val runtime = lock.withLock { runtimes[conversationId] }
+        val store = runtime?.store ?: adminStore
+        val call = store.uncertainMcpCall(conversationId) ?: error("Uncertain MCP call is unavailable")
         check(call.canAcknowledge && call.turnId == turnId && call.callId == callId) { "Uncertain MCP call changed" }
-        runtime.runner.awaitStopped(turnId)
-        runtime.store.acknowledgeUncertainMcpCall(conversationId, turnId, callId)
+        runtime?.runner?.awaitStopped(turnId)
+        store.acknowledgeUncertainMcpCall(conversationId, turnId, callId)
+    }
+
+    /** Called only after this bridge's process job has actually been cancelled and joined. */
+    internal suspend fun recordStoppedMcpWorkers(shutdown: RoomManagedShutdown, job: Job) {
+        check(job.isCompleted) { "Local chat workers are still running" }
+        val snapshot = lock.withLock { runtimes.toMap() }
+        for ((conversationId, runtime) in snapshot) {
+            runtime.store.localMcpExclusionKey(conversationId)?.let { key ->
+                LocalMcpWorkerExclusion.record(db, key, job, shutdown)
+            }
+        }
     }
 
     override suspend fun hasActiveTasks(): Boolean {

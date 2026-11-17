@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -60,11 +61,13 @@ internal class KotlinAcpBackgroundBridge(
         } else if (action == "setSessionConfig" && session?.startsWith("acp:") == true) {
             val mode = (command["modeId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
             val config = (command["configId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-            val value = (command["value"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val value = command["value"] as? JsonPrimitive
             val deliver: (JsonObject) -> Unit = { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
             if (mode != null && command["configId"] == null && command["value"] == null) owner.setMode(session, mode, deliver)
-            else if (config != null && value != null && command["modeId"] == null) owner.setModeOption(session, config, value, deliver)
-            else error("Only ACP mode changes are available")
+            else if (config != null && value != null && command["modeId"] == null) {
+                if (value.isString) owner.setModeOption(session, config, value.content, deliver)
+                else owner.setBooleanOption(session, config, value.booleanOrNull ?: error("Unsupported ACP setting value"), deliver)
+            } else error("Unsupported ACP setting change")
         } else if (action == "inspectPendingMode" && session?.startsWith("acp:") == true) {
             owner.inspectPendingMode(session) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
         } else if (action == "confirmPendingMode" && session?.startsWith("acp:") == true) {

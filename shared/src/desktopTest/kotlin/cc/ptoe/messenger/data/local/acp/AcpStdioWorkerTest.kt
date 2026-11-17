@@ -128,6 +128,24 @@ class AcpStdioWorkerTest {
         } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
     }
 
+    @Test fun laterBooleanNotificationWinsOverTheResponse(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-boolean-response-order")
+        val updateSeen = CompletableDeferred<Unit>()
+        val worker = AcpStdioWorker(FixtureTransport(dir, "settings-boolean-after"), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {
+            override suspend fun settings(turnId: String?, settings: JsonObject) {
+                val current = (settings["configOptions"] as? JsonArray)?.getOrNull(1)?.jsonObject?.get("currentValue")?.jsonPrimitive?.booleanOrNull
+                if (current == false) updateSeen.complete(Unit)
+            }
+        }, beforeModeResultMerge = { withTimeout(5_000) { updateSeen.await() } })
+        val gateway = AcpGatewayCore(backend, false, emptySet())
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "fixture-session", false)
+        try {
+            worker.start(binding, configuration(), gateway)
+            val changed = worker.setBooleanOption("network", true) {}
+            assertEquals(false, changed.getValue("configOptions").jsonArray[1].jsonObject.getValue("currentValue").jsonPrimitive.boolean)
+        } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun cancelledModeRequestWaitingForWireDoesNotObtainDispatchPermit(): Unit = runBlocking {
         val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         val writes = java.util.concurrent.atomic.AtomicInteger()

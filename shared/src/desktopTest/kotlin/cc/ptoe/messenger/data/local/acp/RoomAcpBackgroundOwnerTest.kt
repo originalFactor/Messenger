@@ -273,7 +273,7 @@ class RoomAcpBackgroundOwnerTest {
                     AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
             }, source = AcpSessionConfigurationSource { binding to config })
             val initial = owner.sessionSettings(binding.conversationId)
-            assertEquals(listOf("permissions"), initial.getValue("_messengerCapabilities").jsonObject.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(listOf("permissions", "network"), initial.getValue("_messengerCapabilities").jsonObject.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
             assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "network", "true") {} }
             assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "permissions", "not-offered") {} }
             assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
@@ -323,12 +323,76 @@ class RoomAcpBackgroundOwnerTest {
                 override suspend fun stopAndAwait() = Unit
             } })
             val flags = owner.sessionSettings(binding.conversationId).getValue("_messengerCapabilities").jsonObject
-            assertEquals(listOf("model"), flags.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(listOf("model", "switch"), flags.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
             for (id in listOf("duplicate", "bad-value", "switch")) {
                 assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, id, "a") {} }
             }
             assertEquals(0, calls.get())
             assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun booleanSettingUsesRealAgentAndExplicitlyConfirmsInspectedValue(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-boolean-setting")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings-boolean"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
+                arrayOf(CoreBridge::class.java)) { _, _, _ -> error("Unexpected delegate call") })
+            val bridge = KotlinAcpBackgroundBridge(delegate, owner, AcpNewSessionSource { _, _ -> error("Unexpected creation") })
+            var changed: JsonObject? = null
+            withTimeout(10_000) { bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                put("action", "setSessionConfig"); put("sessionId", binding.conversationId); put("configId", "network"); put("value", true)
+            }) { changed = it.getValue("settings").jsonObject } }
+            val response = checkNotNull(changed)
+            assertTrue(response.getValue("configOptions").jsonArray[1].jsonObject.getValue("currentValue").jsonPrimitive.boolean)
+            val marker = response.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            assertTrue(RoomAcpModeLedger(db).pendingRecord(binding.conversationId)!!.boolean)
+            assertFailsWith<IllegalStateException> { owner.confirmPendingMode(binding.conversationId, marker, "true") {} }
+            val inspected = owner.inspectPendingMode(binding.conversationId) {}
+            assertFalse(inspected.getValue("configOptions").jsonArray[1].jsonObject.getValue("currentValue").jsonPrimitive.boolean)
+            owner.confirmPendingMode(binding.conversationId, marker, "false") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun booleanMarkerCannotBeConfirmedAgainstStringOptionWithSameValue(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-boolean-type")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val changedType = java.util.concurrent.atomic.AtomicBoolean(false)
+        val calls = AtomicInteger()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+                override suspend fun sessionSettings(): JsonObject = if (changedType.get())
+                    kotlinx.serialization.json.Json.parseToJsonElement("""{"configOptions":[{"id":"flag","type":"select","currentValue":"true","options":[{"value":"true"}]}]}""").jsonObject
+                else kotlinx.serialization.json.Json.parseToJsonElement("""{"configOptions":[{"id":"flag","type":"boolean","currentValue":true}]}""").jsonObject
+                override suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject {
+                    permit(); calls.incrementAndGet(); error("response lost")
+                }
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() = Unit
+            } })
+            assertFailsWith<IllegalStateException> { owner.setBooleanOption(binding.conversationId, "flag", true) {} }
+            changedType.set(true)
+            assertFailsWith<IllegalStateException> { owner.inspectPendingMode(binding.conversationId) {} }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            changedType.set(false)
+            val inspected = owner.inspectPendingMode(binding.conversationId) {}
+            val marker = inspected.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            owner.confirmPendingMode(binding.conversationId, marker, "true") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertEquals(1, calls.get())
             lifecycle.stopAndAwait()
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }

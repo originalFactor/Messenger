@@ -19,6 +19,7 @@ import cc.ptoe.messenger.data.repository.room.KotlinRoomBackendSlice
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
+import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -268,6 +269,94 @@ class IsolatedRoomDeviceHostTest {
                 withTimeout(8_000) { lifecycle.stopAndAwait() }
             } finally {
                 allowStop.complete(Unit)
+                if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
+                db.close(); dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun remoteDecisionUsesLiveLocalOwnerAndRejectsStaleCalls(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-remote-approval")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val lifecycle = RoomManagedShutdown { }
+        val providerCalls = java.util.concurrent.atomic.AtomicInteger()
+        val provider = KotlinTurnProvider { _, _ -> flow {
+            if (providerCalls.getAndIncrement() % 2 == 0) emit(cc.ptoe.messenger.data.remote.sse.ChatStreamEvent.Done("tool_calls",
+                toolCalls = listOf(ToolCallData("call-1", "messenger_learning", """{"action":"upsert","record":{"id":"note","title":"Notes","source":{"kind":"manual","snapshot":"source"},"content":{"kind":"item","itemKind":"note"}}}"""))))
+            else emit(cc.ptoe.messenger.data.remote.sse.ChatStreamEvent.Done("stop"))
+        } }
+        Relay().use { relay ->
+            try {
+                db.rows().upsertValues(listOf(
+                    KeyValueRow("cloud_session", "messenger_session=one"), KeyValueRow("cloud_session_host", relay.base),
+                    KeyValueRow("cloud_user_json", """{"id":"account"}"""), KeyValueRow("device_id", "device-1"),
+                    KeyValueRow("device_control_grant", """["${relay.base}","account"]"""),
+                    KeyValueRow("device_control_config", config(true).toString()), KeyValueRow(REMOTE_CONTROL_EPOCH_KEY, "1"),
+                    KeyValueRow("learning_tools_enabled", "true"),
+                ))
+                db.rows().upsertProviders(listOf(ProviderRow("p", "Provider", "https://example.test", "key", "chat", false, 1, 1)))
+                db.rows().upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 1000, null, null, null, null, "text", "text", true, false, false, false, 1, null, null)))
+                db.rows().upsertAgents(listOf(AgentRow("a", "Agent", null, "prompt", "", "m", 0.7, 1.0, null, null,
+                    true, false, false, false, false, false, false, null, null, null, "chat", true, false, "", 1, 1)))
+                db.rows().upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null,
+                    null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+                lifecycle.enter()
+                val prefs = MemoryPreferences()
+                val slice = KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs),
+                    Files.createDirectory(dir.resolve("assets"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))),
+                    dir.resolve("avatars"), dir.resolve("images"), defaultServer = relay.base, catalogUrl = "${relay.base}/models.json",
+                    deviceHost = IsolatedRoomDeviceHostConfig { "Phone" }, turnProvider = provider)
+                eventually { relay.packets.any { it.second["enabled"]?.jsonPrimitive?.content == "true" } }
+                val turn = TurnConfigBridge("c", "model", "", "", "chat", "", null, null, null, null,
+                    emptyList(), false, 0, "", null, null, null, false, "", operation = "send", content = "hello",
+                    disableTools = false, supportsToolApproval = true)
+                slice.bridge.startBackgroundTurn(turn)
+                val approval = CompletableDeferred<Unit>()
+                val observer = async { slice.bridge.observeBackgroundTurn("c") { event ->
+                    if (Json.parseToJsonElement(event).jsonObject["type"]?.jsonPrimitive?.content == "ToolApprovalRequested") approval.complete(Unit)
+                } }
+                withTimeout(8_000) { approval.await() }
+                val active = checkNotNull(db.rows().getValue("kotlin_turn_active_v1:c")).value
+                fun decision(turnId: String, option: String) = buildJsonObject {
+                    put("action", "notificationDecision"); put("sessionId", "c"); put("requestId", turnId); put("optionId", option)
+                }
+                for ((id, option) in listOf("stale" to "deny:call-1", active to "deny:other")) {
+                    val request = relay.command("messenger_session=one", decision(id, option))
+                    eventually { relay.reply(request) != null }
+                    assertEquals("Error", relay.reply(request)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                    assertEquals(1, providerCalls.get())
+                }
+                val request = relay.command("messenger_session=one", decision(active, "deny:call-1"))
+                eventually { relay.reply(request) != null }
+                assertEquals("DecisionAccepted", relay.reply(request)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                withTimeout(8_000) { observer.await() }
+                assertEquals(2, providerCalls.get())
+                assertFalse(db.rows().messagesFor(listOf("c")).none { it.role == "tool" && it.content.contains("denied", ignoreCase = true) })
+
+                // A second actual turn proves that a valid remote approval reaches the running
+                // tool and that the same decision cannot be accepted or executed twice.
+                assertFailsWith<IllegalArgumentException> { slice.learning.get("item", "note") }
+                withTimeout(8_000) { while (slice.bridge.hasActiveTasks()) delay(10) }
+                slice.bridge.startBackgroundTurn(turn)
+                val secondApproval = CompletableDeferred<Unit>()
+                val secondObserver = async { slice.bridge.observeBackgroundTurn("c") { event ->
+                    if (Json.parseToJsonElement(event).jsonObject["type"]?.jsonPrimitive?.content == "ToolApprovalRequested") secondApproval.complete(Unit)
+                } }
+                withTimeout(8_000) { secondApproval.await() }
+                val secondTurn = checkNotNull(db.rows().getValue("kotlin_turn_active_v1:c")).value
+                val approveRequest = relay.command("messenger_session=one", decision(secondTurn, "approve:call-1"))
+                eventually { relay.reply(approveRequest) != null }
+                assertEquals("DecisionAccepted", relay.reply(approveRequest)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                withTimeout(8_000) { secondObserver.await() }
+                assertEquals("Notes", slice.learning.get("item", "note").title)
+                assertEquals(4, providerCalls.get())
+                val repeated = relay.command("messenger_session=one", decision(secondTurn, "approve:call-1"))
+                eventually { relay.reply(repeated) != null }
+                assertEquals("Error", relay.reply(repeated)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                assertEquals(2, db.rows().messagesFor(listOf("c")).count { it.role == "tool" })
+                assertEquals(4, providerCalls.get())
+                lifecycle.stopAndAwait()
+            } finally {
                 if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
                 db.close(); dir.toFile().deleteRecursively()
             }

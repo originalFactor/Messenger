@@ -37,6 +37,7 @@ internal class IsolatedRoomDeviceHost private constructor(
             shutdown: RoomManagedShutdown,
             config: IsolatedRoomDeviceHostConfig,
             remoteCancel: RoomRemoteTaskCancel? = null,
+            remoteDecision: RoomRemoteTaskDecision? = null,
         ): IsolatedRoomDeviceHost {
             cloud.requireDeviceHostOwner(db)
             val ownerJob = SupervisorJob()
@@ -68,7 +69,8 @@ internal class IsolatedRoomDeviceHost private constructor(
                             { session -> session == stored.session && source.stillCurrent(stored) },
                             { session -> if (session == stored.session) cloud.rejectDeviceHostSession(db, stored) },
                             fence.replies(db, stored, deviceId), RoomDeviceControlDispatcher(db, stored, deviceId, snapshots,
-                                modeGate = cloud.providerGate, onModeChanged = cloud::requestLocalSync, remoteCancel = remoteCancel))
+                                modeGate = cloud.providerGate, onModeChanged = cloud::requestLocalSync, remoteCancel = remoteCancel,
+                                remoteDecision = remoteDecision))
                     }, { failure.value = it })
                     manager = hostManager
                     scope.launch {

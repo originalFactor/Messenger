@@ -16,7 +16,6 @@ import cc.ptoe.messenger.data.chat.ACKNOWLEDGED_MCP_UNCERTAINTY
 import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
-import cc.ptoe.messenger.data.chat.PreviousChatWorkersStopped
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
@@ -208,18 +207,30 @@ class KotlinRoomAppBackendTest {
                     if (scenario == "restart-unknown") {
                         app.shutdown()
                         container = null
+                        val otherDb = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+                            .setDriver(BundledSQLiteDriver()).build()
+                        val otherLifecycle = RoomManagedShutdown { }; otherLifecycle.enter()
+                        try {
+                            assertFailsWith<IllegalStateException> {
+                                KotlinRoomBackendSlice.attach(otherDb, otherLifecycle, preferences, ThemePreferences(prefs),
+                                    dir.resolve("assets"), dir.resolve("avatars"), dir.resolve("images"))
+                            }
+                        } finally { otherLifecycle.stopAndAwait(); otherDb.close() }
                         val nextLifecycle = RoomManagedShutdown { }; nextLifecycle.enter()
                         var nextContainer: AppContainer? = null
                         try {
                             val reopened = KotlinRoomBackendSlice.attach(db, nextLifecycle, preferences, ThemePreferences(prefs),
-                                dir.resolve("assets"), dir.resolve("avatars"), dir.resolve("images"),
-                                previousChatWorkersStopped = PreviousChatWorkersStopped {})
+                                dir.resolve("assets"), dir.resolve("avatars"), dir.resolve("images"))
                             nextContainer = AppContainer(AppDirs(dir.toString().toPath(), dir.resolve("cache").toString().toPath()), images, reopened.asAppBackend())
                             val pendingFromPrevious = assertNotNull(nextContainer.coreBridge.uncertainMcpCall("c"))
-                            assertFalse(pendingFromPrevious.canAcknowledge)
+                            assertTrue(pendingFromPrevious.canAcknowledge)
                             assertEquals(uncertain.argumentsJson, pendingFromPrevious.argumentsJson)
-                            assertFailsWith<IllegalStateException> { nextContainer.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId) }
-                            assertNotNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                            assertFailsWith<IllegalStateException> { nextContainer.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, "wrong") }
+                            nextContainer.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId)
+                            assertNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                            val persisted = assertNotNull(db.rows().getValue(ACKNOWLEDGED_MCP_UNCERTAINTY + uncertain.turnId))
+                            assertFalse(persisted.value.contains("private-test"))
+                            assertEquals(1, calls.get())
                         } finally { nextContainer?.shutdown(); nextLifecycle.stopAndAwait() }
                         continue
                     }
