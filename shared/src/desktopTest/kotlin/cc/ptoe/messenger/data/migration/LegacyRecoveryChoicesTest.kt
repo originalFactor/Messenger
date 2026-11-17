@@ -17,7 +17,7 @@ class LegacyRecoveryChoicesTest {
     private fun review(roomProject: LegacyRecoveryProject? = null, coreProject: LegacyRecoveryProject? = null,
         device: String? = "device", roomConversation: LegacyRecoveryConversation? = coreConversation,
         roomProvider: LegacyRecoveryProvider? = coreProvider, oldFormat: String? = "responses") = LegacyRecoveryReview(
-        LegacyRoomRecoveryPreview(22,
+        LegacyRoomRecoveryPreview(22, true,
             listOf(LegacyRecoveryPair("p", oldProject, coreProject)),
             listOf(LegacyRecoveryPair("c", oldConversation, coreConversation)),
             listOf(LegacyRecoveryPair("provider", oldProvider.copy(apiFormat = oldFormat), coreProvider))),

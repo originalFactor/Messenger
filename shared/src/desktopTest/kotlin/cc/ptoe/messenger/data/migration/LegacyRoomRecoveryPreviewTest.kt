@@ -30,12 +30,20 @@ class LegacyRoomRecoveryPreviewTest {
     }
 
     private fun legacy(db: SQLiteConnection, version: Int) {
-        db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, workspace TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
-        db.exec("CREATE TABLE conversations(id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, projectId TEXT)")
+        if (version >= 21) {
+            db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, workspace TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+            db.exec("CREATE TABLE conversations(id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, projectId TEXT)")
+        } else {
+            db.exec("CREATE TABLE conversations(id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL)")
+        }
         db.exec("CREATE TABLE providers(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, apiKey TEXT NOT NULL${if (version >= 22) ", apiFormat TEXT NOT NULL" else ""})")
         db.exec("PRAGMA user_version=$version")
-        db.exec("INSERT INTO projects VALUES ('p1','Old name','/old',1,2),('legacy-only','Old only','/legacy',2,3)")
-        db.exec("INSERT INTO conversations VALUES ('c','Old title','p1'),('legacy-only','Old only','legacy-only')")
+        if (version >= 21) {
+            db.exec("INSERT INTO projects VALUES ('p1','Old name','/old',1,2),('legacy-only','Old only','/legacy',2,3)")
+            db.exec("INSERT INTO conversations VALUES ('c','Old title','p1'),('legacy-only','Old only','legacy-only')")
+        } else {
+            db.exec("INSERT INTO conversations VALUES ('c','Old title'),('legacy-only','Old only')")
+        }
         db.exec(if (version >= 22) "INSERT INTO providers VALUES ('p','Old provider','SECRET-LEGACY','responses'),('legacy-only','Old only','SECRET-LEGACY','messages')"
             else "INSERT INTO providers VALUES ('p','Old provider','SECRET-LEGACY'),('legacy-only','Old only','SECRET-LEGACY')")
     }
@@ -78,15 +86,44 @@ class LegacyRoomRecoveryPreviewTest {
         try {
             val corePath = dir.resolve("core.db"); core(corePath)
             CoreSourceSqliteLease.acquire(corePath).use { lease ->
-                for (version in listOf(20, 22)) {
+                for (version in listOf(19, 23)) {
                     val oldPath = dir.resolve("legacy-$version.db")
                     BundledSQLiteDriver().open(oldPath.toString()).use { db ->
                         db.exec("PRAGMA user_version=$version")
                         db.exec("CREATE TABLE providers(id TEXT PRIMARY KEY, name TEXT)")
                     }
                     val failure = assertFails { lease.previewLegacySnapshot(oldPath) }
-                    if (version == 20) assertTrue(failure.message.orEmpty().contains("Unsupported legacy Room schema version"))
+                    assertTrue(failure.message.orEmpty().contains("Unsupported legacy Room schema version"))
                 }
+            }
+        } finally { dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun v20PreviewKeepsProviderAndTitleComparisonWithoutProjectRecovery(): Unit {
+        val dir = Files.createTempDirectory("legacy-room-v20")
+        try {
+            val corePath = dir.resolve("core.db"); core(corePath)
+            val oldPath = dir.resolve("legacy-20.db")
+            BundledSQLiteDriver().open(oldPath.toString()).use { legacy(it, 20) }
+            CoreSourceSqliteLease.acquire(corePath).use { lease ->
+                val preview = lease.previewLegacySnapshot(oldPath)
+                assertEquals(20L, preview.legacyVersion)
+                assertFalse(preview.projectsAvailable)
+                assertTrue(preview.projects.all { it.legacy == null })
+                val conversation = preview.conversations.single { it.id == "c" }
+                assertEquals("Old title", conversation.legacy?.title)
+                assertNull(conversation.legacy?.projectId)
+                assertEquals("New title", conversation.core?.title)
+                val provider = preview.providers.single { it.id == "p" }
+                assertEquals("Old provider", provider.legacy?.name)
+                assertNull(provider.legacy?.apiFormat)
+                assertEquals("chat", provider.core?.apiFormat)
+                assertFalse(preview.toString().contains("SECRET"))
+                val review = LegacyRecoveryReview(preview, "device", emptyMap(), emptyMap(), emptyMap())
+                val choices = LegacyRecoveryChoices(review)
+                assertFalse(choices.canRestoreProject("p1"))
+                assertFalse(choices.canRestoreAssociation("c", setOf("p1")))
+                assertNull(choices.selection(setOf("p1"), emptySet(), emptySet()))
             }
         } finally { dir.toFile().deleteRecursively() }
     }

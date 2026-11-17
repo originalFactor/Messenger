@@ -116,11 +116,17 @@ class McpManager(
         check(enabled && !stopped && !started) { "MCP manager cannot be started" }
         started = true
         scope.launch {
-            loadServers()
-            delegationMutex.withLock {
-                bridgeProvider()?.let {
-                    _agentDelegationEnabled.value = it.agentDelegationEnabled()
+            try {
+                loadServers()
+                delegationMutex.withLock {
+                    bridgeProvider()?.let {
+                        _agentDelegationEnabled.value = it.agentDelegationEnabled()
+                    }
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: IllegalStateException) {
+                if (!synchronizedBlock(startLock) { stopped }) throw failure
             }
         }
     }

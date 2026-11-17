@@ -9,6 +9,7 @@ internal class LegacyRecoveryChoices(private val review: LegacyRecoveryReview) {
     private val formats = setOf("chat", "responses", "messages", "interactions")
 
     fun canRestoreProject(id: String): Boolean {
+        if (!review.source.projectsAvailable) return false
         val pair = projects[id] ?: return false
         if (pair.legacy == null || !review.roomProjects.containsKey(id)) return false
         val current = review.roomProjects[id]
@@ -17,6 +18,7 @@ internal class LegacyRecoveryChoices(private val review: LegacyRecoveryReview) {
     }
 
     fun canRestoreAssociation(id: String, selectedProjects: Set<String>): Boolean {
+        if (!review.source.projectsAvailable) return false
         val pair = conversations[id] ?: return false
         val projectId = pair.legacy?.projectId ?: return false
         if (pair.core == null || !review.roomConversations.containsKey(id) || review.roomConversations[id] != pair.core) return false

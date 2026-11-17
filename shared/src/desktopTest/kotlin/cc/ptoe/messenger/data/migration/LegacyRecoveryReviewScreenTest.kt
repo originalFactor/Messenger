@@ -14,7 +14,7 @@ class LegacyRecoveryReviewScreenTest {
         val project = LegacyRecoveryProject("Older project", "/workspace", 1, 2, null, false)
         val oldChat = LegacyRecoveryConversation("Chat", "p")
         val newChat = LegacyRecoveryConversation("Chat", null)
-        val review = LegacyRecoveryReview(LegacyRoomRecoveryPreview(22,
+        val review = LegacyRecoveryReview(LegacyRoomRecoveryPreview(22, true,
             listOf(LegacyRecoveryPair("p", project, null)), listOf(LegacyRecoveryPair("c", oldChat, newChat)), emptyList()),
             "this-device", mapOf("p" to null), mapOf("c" to newChat), emptyMap())
         var submitted: LegacyRecoverySelection? = null
@@ -34,7 +34,7 @@ class LegacyRecoveryReviewScreenTest {
     }
 
     @Test fun keepingAllCurrentValuesRequiresASeparateConfirmation() = runComposeUiTest {
-        val review = LegacyRecoveryReview(LegacyRoomRecoveryPreview(22, emptyList(), emptyList(), emptyList()),
+        val review = LegacyRecoveryReview(LegacyRoomRecoveryPreview(22, true, emptyList(), emptyList(), emptyList()),
             "device", emptyMap(), emptyMap(), emptyMap())
         var submitted: LegacyRecoverySelection? = null
         setContent { MaterialTheme { LegacyRecoveryReviewScreen(review, {}, { submitted = it }) } }

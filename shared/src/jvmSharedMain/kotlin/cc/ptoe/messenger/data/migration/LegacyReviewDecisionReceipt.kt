@@ -52,7 +52,7 @@ internal fun legacyReviewDigest(review: LegacyRecoveryReview): String {
         if (value != null) { digest.add(value.name); digest.add(value.apiFormat) }
     }
     digest.add("legacy-review-comparison-v1")
-    digest.add(review.source.legacyVersion); digest.add(review.roomDeviceId)
+    digest.add(review.source.legacyVersion); digest.add(review.source.projectsAvailable); digest.add(review.roomDeviceId)
     digest.add(review.source.projects.size)
     for (pair in review.source.projects.sortedBy { it.id }) {
         digest.add(pair.id); project(pair.legacy); project(pair.core)

@@ -15,6 +15,7 @@ internal data class LegacyRecoveryConversation(val title: String, val projectId:
 internal data class LegacyRecoveryProvider(val name: String, val apiFormat: String?)
 internal data class LegacyRoomRecoveryPreview(
     val legacyVersion: Long,
+    val projectsAvailable: Boolean,
     val projects: List<LegacyRecoveryPair<LegacyRecoveryProject>>,
     val conversations: List<LegacyRecoveryPair<LegacyRecoveryConversation>>,
     val providers: List<LegacyRecoveryPair<LegacyRecoveryProvider>>,
@@ -35,31 +36,42 @@ internal object LegacyRoomRecoveryInspection {
     fun compare(legacy: SQLiteConnection, core: SQLiteConnection): LegacyRoomRecoveryPreview {
         check(legacy.inTransaction() && core.inTransaction()) { "Recovery preview requires held transactions" }
         val version = legacy.prepare("PRAGMA user_version").use { row -> check(row.step()); row.getLong(0) }
-        require(version == 21L || version == 22L) { "Unsupported legacy Room schema version" }
+        require(version in 20L..22L) { "Unsupported legacy Room schema version" }
+        val projectsAvailable = version >= 21L
         legacy.prepare("PRAGMA quick_check").use { row ->
             check(row.step() && row.getText(0) == "ok" && !row.step()) { "Legacy Room integrity check failed" }
         }
         CoreStoreInspector.inspectTransaction(core)
         val hasFormat = legacy.prepare("SELECT 1 FROM pragma_table_info('providers') WHERE name='apiFormat' LIMIT 1").use { it.step() }
         check(version != 22L || hasFormat) { "Legacy Room provider format is missing" }
+        check(projectsAvailable || !tableExists(legacy, "projects") && !columnExists(legacy, "conversations", "projectId")) {
+            "Legacy Room v20 schema unexpectedly contains project data"
+        }
         val budget = Budget()
 
         // Bound data in SQLite before getText materializes any potentially enormous field on the JVM.
-        preflight(legacy, "projects", listOf("id", "name", "workspace"), budget)
-        preflight(core, "projects", listOf("id", "name", "workspace", "deviceId"), budget)
-        preflight(legacy, "conversations", listOf("id", "title", "projectId"), budget)
-        preflight(core, "conversations", listOf("id", "title", "projectId"), budget)
+        if (projectsAvailable) {
+            preflight(legacy, "projects", listOf("id", "name", "workspace"), budget)
+            preflight(core, "projects", listOf("id", "name", "workspace", "deviceId"), budget)
+            preflight(legacy, "conversations", listOf("id", "title", "projectId"), budget)
+            preflight(core, "conversations", listOf("id", "title", "projectId"), budget)
+        } else {
+            preflight(core, "projects", listOf("id", "name", "workspace", "deviceId"), budget)
+            preflight(legacy, "conversations", listOf("id", "title"), budget)
+            preflight(core, "conversations", listOf("id", "title", "projectId"), budget)
+        }
         preflight(legacy, "providers", listOfNotNull("id", "name", "apiFormat".takeIf { hasFormat }), budget)
         preflight(core, "providers", listOf("id", "name", "apiFormat"), budget)
         budget.bytes = 0
 
-        val oldProjects = rows(legacy, "SELECT id,name,workspace,createdAt,updatedAt FROM projects ORDER BY id") { row ->
+        val oldProjects = if (!projectsAvailable) emptyMap() else rows(legacy, "SELECT id,name,workspace,createdAt,updatedAt FROM projects ORDER BY id") { row ->
             row.text(0, budget) to LegacyRecoveryProject(row.text(1, budget), row.text(2, budget), row.integer(3), row.integer(4), null, false)
         }
         val newProjects = rows(core, "SELECT id,name,workspace,createdAt,updatedAt,deviceId FROM projects ORDER BY id") { row ->
             row.text(0, budget) to LegacyRecoveryProject(row.text(1, budget), row.text(2, budget), row.integer(3), row.integer(4), row.optionalText(5, budget), true)
         }
-        val oldConversations = rows(legacy, "SELECT id,title,projectId FROM conversations ORDER BY id") { row ->
+        val oldConversations = rows(legacy, if (projectsAvailable) "SELECT id,title,projectId FROM conversations ORDER BY id"
+        else "SELECT id,title,NULL FROM conversations ORDER BY id") { row ->
             row.text(0, budget) to LegacyRecoveryConversation(row.text(1, budget), row.optionalText(2, budget))
         }
         val newConversations = rows(core, "SELECT id,title,projectId FROM conversations ORDER BY id") { row ->
@@ -71,8 +83,19 @@ internal object LegacyRoomRecoveryInspection {
         val newProviders = rows(core, "SELECT id,name,apiFormat FROM providers ORDER BY id") { row ->
             row.text(0, budget) to LegacyRecoveryProvider(row.text(1, budget), row.text(2, budget))
         }
-        return LegacyRoomRecoveryPreview(version, pair(oldProjects, newProjects), pair(oldConversations, newConversations), pair(oldProviders, newProviders))
+        return LegacyRoomRecoveryPreview(version, projectsAvailable, pair(oldProjects, newProjects),
+            pair(oldConversations, newConversations), pair(oldProviders, newProviders))
     }
+
+    private fun tableExists(db: SQLiteConnection, name: String): Boolean =
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1").use { row ->
+            row.bindText(1, name); row.step()
+        }
+
+    private fun columnExists(db: SQLiteConnection, table: String, column: String): Boolean =
+        db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name=? LIMIT 1").use { row ->
+            row.bindText(1, table); row.bindText(2, column); row.step()
+        }
 
     private fun preflight(db: SQLiteConnection, table: String, fields: List<String>, budget: Budget) {
         val lengths = fields.map { "coalesce(length(CAST(\"$it\" AS BLOB)),0)" }
