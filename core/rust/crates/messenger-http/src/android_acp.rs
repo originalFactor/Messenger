@@ -43,9 +43,10 @@ pub(crate) async fn spawn(
         ));
     }
     let processes = state.acp_processes.clone();
+    let tasks = state.tasks.clone();
     let cancel = lifetime.clone();
     let (read, mut write) = tokio::io::split(platform);
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let mut lines = FramedRead::new(read, LinesCodec::new_with_max_length(192_000));
         let outgoing = async {
             while let Some(Ok(line)) = lines.next().await {

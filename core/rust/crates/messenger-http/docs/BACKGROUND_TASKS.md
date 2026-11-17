@@ -31,6 +31,10 @@ cutover.
   the in-process stdio/ACP bridge only; OS subprocess trees, Android Runtime
   descendants, per-worker MCP listeners and remote side effects still need a
   platform stop proof.
+- Per-worker ACP MCP listener/RPC tasks and Android ACP local duplex bridge
+  tasks now use `ApiState.tasks` and are abort-joined with the server. This
+  joins only local forwarding tasks; an ACP child process tree, an Android
+  Runtime child under another UID, or a remote side effect remains unproven.
 
 ## Request-spawned tasks still needing an owner
 
@@ -43,7 +47,7 @@ cutover.
 | `scheduled_tasks.rs` | one task execution per tick | now tracked/abort-joined; externally dispatched work needs its durable claim and recovery. |
 | `image_generation.rs` | one provider job per admitted image request | local worker is now cancelled and joined; a paid/remote generation or charge may still remain ambiguous and is retained as such. |
 | `delegation.rs` | ACP delegation event drain | awaited by the delegating request, but external ACP descendants are separate. |
-| `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | local ACP bridge tasks are now cancelled/joined; direct child exit does not prove OS descendants, Android Runtime children or per-worker MCP listeners stopped. |
+| `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | local ACP bridges, MCP listener/RPC tasks and Android duplex forwarding tasks are now tracked/joined; direct child exit does not prove OS descendants or Android Runtime children stopped. |
 | `agent_relay.rs` | model relay listener and SSE conversion workers | loopback listener is now taken and joined by relay stop / server stop; upstream SSE conversion workers still rely on the shutdown token and a provider-side stream ending. |
 
 Tasks that only forward bytes or settle a local channel can be joined by a

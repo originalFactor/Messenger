@@ -44,6 +44,8 @@ Rust 生命周期本轮提交：`b362dbc`（`ApiState.tasks` 跟踪并 join 本�
 
 `ExternalSessions::stop_and_join()` 已把 Rust 进程内的 external-ACP worker task 取消并 join 到 `ServerHandle.stop()`，并有 `stop_joins_local_acp_worker_tasks` 回归测试；`cargo test --workspace` 通过。它仍不证明 OS 子进程树、Android Runtime 独立 UID 后代、per-worker MCP listener、upstream/provider 流或远程副作用停止。
 
+`acp_mcp` 的 per-worker listener/RPC 与 `android_acp` 的本地 duplex 转发任务现已登记到 `ApiState.tasks` 并由 `ServerHandle.stop()` abort/join；`cargo test --workspace` 再次通过。仍未证明 OS 子进程树、Android Runtime 独立 UID 后代、upstream/provider 流或远程副作用停止，生产切换仍禁止。
+
 本轮后续检查点：`46f2bf9`（迁移后 Room clear-all 的精确 Core 源退休证明与持久回执）、`4d5a0de`（`AppContainer.shutdownCompleted` 与关闭后 clear 拒绝）、`95ff79d`（Rust 请求级后台任务 stop 清单）均在本地仓库提交；`server` 子模块另有 `9b6a41b`，为硬禁用 workspace relay v2 增加 durable device enrollment verifier 接口，缺少真实 verifier 时关闭连接，父仓库 gitlink 未提交。`:shared:allTests` 在本轮每项主要改动后通过（901 项，1 skipped），`cargo test --workspace` 通过，server `pnpm lint` / `pnpm typecheck` / workspace+control relay 测试（5 项）通过，CI selector fixture 与 Wine 简单 FS 检查仍见前述结果。Rust 依赖审计脚本当前仍列出 326 行生产/构建/文档引用；Android/Desktop 仍启动 Rust，`asAppBackend()` 仍拒绝 ACP/device host 且 clear-all 抛错，`core/rust` 未删除。生产切换、真实平台 worker 证明、功能对等、Windows/真实设备验证及最终单独删除 commit 仍未完成。
 
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
