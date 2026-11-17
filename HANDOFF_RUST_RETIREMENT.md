@@ -32,6 +32,8 @@
 
 `RoomClearAll` 的隔离原型现在支持迁移后 store 的 proof-gated reset：显式 `RoomCoreSourceRetirement` 必须验证精确 Core 源/发布/内容身份；原子重置保存退休回执、移除迁移身份，中断恢复重做同一证明；未知或伪造状态仍 fail-closed，且没有生产平台实现。新增 `RoomClearAllTest` 覆盖无证明拒绝、中断恢复和回执保留。它不证明 Core 源文件、sidecar、备份、凭据或 flash 已被安全擦除，也不构成生产 clear-all。
 
+`AppContainer` 新增 `shutdownCompleted` 状态：失败关闭仍可重试，成功关闭后拒绝 clear/reinit；新增 `AppBackendTest` 覆盖失败/成功状态转换。`shared:allTests` 再次通过（901 项，1 skipped）。这只是注入 backend 的生命周期合同，不切换任何 app shell，也不提供平台 worker-stop 证明。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。

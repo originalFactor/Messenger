@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import okio.Path.Companion.toPath
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -71,5 +73,36 @@ class AppBackendTest {
             assertSame(core, CoreBridgeRegistry.bridge)
             assertTrue(shutdowns == 2)
         } finally { CoreBridgeRegistry.bridge = previous }
+    }
+
+    @Test fun failedShutdownDoesNotPoisonOwnerButStoppedOwnerRejectsClear(): Unit = runBlocking {
+        val prefs = object : DataStore<Preferences> {
+            private val state = MutableStateFlow<Preferences>(emptyPreferences())
+            override val data: Flow<Preferences> = state
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+                transform(state.value).also { state.value = it }
+        }
+        val cloud = fake<CloudFacade> { if (it == "getUser") flowOf(null) else null }
+        val agent = Agent("default", "Default", systemPrompt = "", defaultModelId = null, temperature = 0.7f, topP = 1f,
+            maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1)
+        var failShutdown = true
+        var shutdowns = 0
+        val backend = AppBackend(LocalStores(cloud, AppPreferences(prefs), ThemePreferences(prefs)),
+            fake<CoreBridge> { if (it == "learningRequest") "{\"tools\":[]}" else null },
+            fake(), fake(), fake<AgentRepository> { if (it == "getAll") flowOf(listOf(agent)) else null },
+            fake(), fake(), fake(), fake(), fake(),
+            shutdown = { shutdowns++; check(!failShutdown) { "worker stop is unverified" } },
+            clearLocalData = { error("clear must not run after shutdown") })
+        val container = AppContainer(AppDirs("/unused/files".toPath(), "/unused/cache".toPath()),
+            fake<ChatImageStore>(), backend)
+        assertFalse(container.shutdownCompleted.value)
+        assertFailsWith<IllegalStateException> { container.shutdown() }
+        assertFalse(container.shutdownCompleted.value)
+        failShutdown = false
+        container.shutdown()
+        assertTrue(container.shutdownCompleted.value)
+        container.shutdown()
+        assertFailsWith<IllegalStateException> { container.clearAllDataAndReinit() }
+        assertTrue(shutdowns == 2)
     }
 }

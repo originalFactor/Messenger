@@ -51,6 +51,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import cc.ptoe.messenger.presentation.platform.defaultWorkspaceRoot
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -194,7 +197,10 @@ class AppContainer(
 
     private val applicationScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val shutdownMutex = Mutex()
-    private var shutDown = false
+    private val mutableShutdownCompleted = MutableStateFlow(false)
+
+    /** A failed shutdown does not mark this owner stopped; it still requires retry and recovery. */
+    val shutdownCompleted: StateFlow<Boolean> = mutableShutdownCompleted.asStateFlow()
 
     init {
         applicationScope.launch {
@@ -211,11 +217,11 @@ class AppContainer(
     /** The host first closes UI entry points, then calls this before closing the Room owner. */
     suspend fun shutdown() = withContext(NonCancellable) {
         shutdownMutex.withLock {
-            if (shutDown) return@withLock
+            if (mutableShutdownCompleted.value) return@withLock
             applicationScope.coroutineContext[Job]?.cancelAndJoin()
             mcpManager.shutdown()
             backend?.shutdown?.invoke()
-            shutDown = true
+            mutableShutdownCompleted.value = true
         }
     }
 
@@ -239,6 +245,7 @@ class AppContainer(
 
     suspend fun clearAllDataAndReinit() {
         localDataMutex.withLock {
+            check(!mutableShutdownCompleted.value) { "App owner is shut down" }
             if (backend == null) clearLocalData(appDirs, stores) else backend.clearLocalData()
             createDefaultAgentIfNeededLocked()
         }
