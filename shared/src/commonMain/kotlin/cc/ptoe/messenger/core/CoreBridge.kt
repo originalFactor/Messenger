@@ -208,6 +208,8 @@ interface CoreBridge {
     }
     /** Optional owner-local inspection of saved agent replay, independent of ACP workers. */
     val supportsAcpReplaySnapshots: Boolean get() = false
+    /** Backend exposes explicit review of an uncertain local steering request. */
+    val supportsAcpSteeringRecovery: Boolean get() = false
     val supportsAcpReplayDeletion: Boolean get() = false
     suspend fun listAcpReplaySnapshots(sessionId: String): List<AcpReplaySnapshot> = error("ACP replay snapshots unavailable")
     suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int): AcpReplayPage = error("ACP replay snapshots unavailable")

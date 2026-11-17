@@ -25,7 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Partial scheduler: workspace, unbounded or unsupported tool grants fail before dispatch. */
+/** Partial scheduler: unbounded or unsupported tool grants fail before dispatch. */
 internal class IsolatedRoomScheduler(
     private val db: LocalDatabase,
     private val tasks: RoomScheduledTasks,
@@ -100,7 +100,7 @@ internal class IsolatedRoomScheduler(
     }
 
     private suspend fun requireSafeScope(scope: ScheduledExecutionScope) {
-        check(scope.projectId == null) { "Scheduled workspace execution is unavailable" }
+        check(scope.projectId == null || scope.allowedTools.isEmpty()) { "Scheduled project tools are unavailable" }
         val task = tasks.list().singleOrNull { it.id == scope.taskId } ?: error("Scheduled task is unavailable")
         val agent = requireNotNull(db.rows().agent(scope.agentId)) { "Scheduled Agent is unavailable" }
         val defaultAgent = db.rows().defaultAgents().singleOrNull() ?: error("Default Agent is unavailable")

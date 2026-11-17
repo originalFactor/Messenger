@@ -175,6 +175,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                 synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
                 exclusive.withOwner {
                     check(ledger.activeRequest(id) == null) { "ACP session has an unresolved request" }
+                    check(RoomAcpSteeringLedger(db).pending(id) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
                     if (synchronized(lock) { id in retained }) {
                         withContext(NonCancellable) { manager.retireAndAwait(id); releaseLease(id) }
                     }
@@ -361,7 +362,8 @@ internal class RoomAcpBackgroundOwner private constructor(
             } finally {
                 withContext(NonCancellable) {
                     admissions.withLock {
-                        keep = keep && synchronized(lock) { pendingConfigurationWriters == 0 }
+                        keep = keep && synchronized(lock) { pendingConfigurationWriters == 0 } &&
+                            RoomAcpSteeringLedger(db).pending(task.sessionId) == null
                         try {
                             if (keep) ledger.complete(task.id, task.sessionId, object : AcpCompletionBarrier {
                                 override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T =
@@ -464,6 +466,32 @@ internal class RoomAcpBackgroundOwner private constructor(
         }
     }
 
+    /** A prior-process marker remains visible but has no local stop receipt and cannot be cleared. */
+    suspend fun steeringStatus(sessionId: String): JsonObject = admitted {
+        val pending = RoomAcpSteeringLedger(db).pending(sessionId)
+        val canAcknowledge = pending != null && manager.hasStoppedTurn(sessionId, pending.turn)
+        buildJsonObject {
+            put("type", "SteeringStatus")
+            if (pending != null) put("pending", buildJsonObject {
+                put("requestId", pending.request); put("turnId", pending.turn)
+                put("canAcknowledge", canAcknowledge)
+            })
+        }
+    }
+
+    /** User acknowledgment is local; it never asserts whether the agent acted or resends input. */
+    suspend fun acknowledgeSteering(sessionId: String, request: String, turn: String): JsonObject = admitted {
+        admissions.withLock {
+            exclusive.withOwner {
+                val pending = RoomAcpSteeringLedger(db).pending(sessionId) ?: error("ACP steering result is unavailable")
+                check(pending.request == request && pending.turn == turn) { "ACP steering result changed" }
+                check(manager.hasStoppedTurn(sessionId, turn)) { "ACP worker stop cannot be proved" }
+                RoomAcpSteeringLedger(db).acknowledgeUnknown(request, sessionId, turn, AcpManagerStopBarrier(manager))
+            }
+        }
+        steeringStatus(sessionId)
+    }
+
     /** Includes completed or evicted turns whose IDs remain in the durable admission ledger. */
     suspend fun owns(requestId: String): Boolean = admitted {
         synchronized(lock) { requestId in tasks } || ledger.contains(requestId)
@@ -509,6 +537,7 @@ internal class RoomAcpBackgroundOwner private constructor(
             synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
             exclusive.withOwner {
                 check(ledger.activeRequest(sessionId) == null) { "ACP session has an active or unresolved request" }
+                check(RoomAcpSteeringLedger(db).pending(sessionId) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
                 val (binding, configuration) = source.load(sessionId)
                 check(binding.conversationId == sessionId && !binding.delegated) { "ACP session binding changed" }
                 requireSupportedScope(configuration)

@@ -250,6 +250,8 @@ class RoomKotlinTurnStore(
             ?: return@transaction KotlinTurnAdmission.Rejected("Model not found")
         if (!model.isEnabled) return@transaction KotlinTurnAdmission.Rejected("Model is disabled")
         val provider = rows.provider(model.providerId) ?: return@transaction KotlinTurnAdmission.Rejected("Provider not found")
+        if (command.scheduledRun && scheduledClaim?.projectId != null && provider.nativeWebSearch)
+            return@transaction KotlinTurnAdmission.Rejected("Provider web search is unavailable for scheduled project runs")
         val cloudIdentity = if (provider.id == BUILTIN_PROVIDER_ID) {
             if (cloudGate == null || rows.getValue(DEFERRED_BUILTIN_PROVIDER_CLEANUP) != null || provider.apiKey.isBlank())
                 return@transaction KotlinTurnAdmission.Rejected("Cloud provider is unavailable")
@@ -323,6 +325,8 @@ class RoomKotlinTurnStore(
         require(request.model == model.modelId) { "Prepared request selected a different model" }
         val names = request.tools.orEmpty().map { it.function.name }
         if (names.distinct().size != names.size) return@transaction KotlinTurnAdmission.Rejected("Duplicate tool declaration")
+        if (command.scheduledRun && scheduledClaim?.projectId != null && names.isNotEmpty())
+            return@transaction KotlinTurnAdmission.Rejected("Scheduled project tools are unavailable")
         val coreNames = names.filter { it.startsWith("messenger_") }
         val mcpGrant = prepare.mcpToolGrant()
         val mcpNames = mcpGrant?.tools?.map { it.name }.orEmpty()
@@ -400,7 +404,10 @@ class RoomKotlinTurnStore(
     override suspend fun release(turnId: String) { transaction { rows, mark ->
         val turn = rows.read(turnId)
         if (turn.owner == owner) {
-            if (turn.phase() == KotlinTurnPhase.CANCELLING_TOOL) {
+            if (turn.scheduledRun && rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) != null) {
+                // Keep the turn and any interrupted invocation reserved for guarded recovery.
+                rows.write(turn.copy(owner = null))
+            } else if (turn.phase() == KotlinTurnPhase.CANCELLING_TOOL) {
                 val assistant = checkNotNull(rows.message(turn.assistantId))
                 rows.upsertMessages(listOf(assistant.copy(status = "sent")))
                 rows.write(turn.copy(phase = KotlinTurnPhase.CANCELLED.name, owner = null))
@@ -446,11 +453,14 @@ class RoomKotlinTurnStore(
         }
     private suspend fun LocalRowsDao.requireScheduledClaim(turn: StoredTurn) {
         if (!turn.scheduledRun) return
+        check(getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
         val claim = turn.scheduledClaim ?: throw cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable("Scheduled turn claim is unavailable")
         val conversation = checkNotNull(conversation(turn.conversationId)) { "Scheduled conversation is unavailable" }
         val prompt = checkNotNull(turn.userMessageId?.let { message(it) }) { "Scheduled prompt is unavailable" }
         check(prompt.conversationId == conversation.id && prompt.role == "user") { "Scheduled prompt changed" }
         cc.ptoe.messenger.data.local.schedule.requireScheduledTurnAdmission(this, claim, conversation, prompt.content, matchDefinition = false)
+        if (claim.projectId != null && provider(turn.providerId)?.nativeWebSearch != false)
+            throw cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable("Provider web search is unavailable for scheduled project runs")
     }
 
     override suspend fun beginSummary(turnId: String): KotlinSummaryWork? = transaction { rows, _ ->
@@ -888,7 +898,9 @@ class RoomKotlinTurnStore(
         mark(turn.conversationId)
     }
     override suspend fun fail(turnId: String, detail: String) { transaction { rows, mark ->
-        rows.failTurn(rows.read(turnId), detail, mark)
+        val turn = rows.read(turnId)
+        check(!turn.scheduledRun || rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
+        rows.failTurn(turn, detail, mark)
     } }
 
     /**
@@ -950,7 +962,9 @@ class RoomKotlinTurnStore(
         mcpInvocations[turnId]?.cancelBeforeAdmission()
         transaction { rows, mark ->
         mcpInvocations[turnId]?.cancelBeforeAdmission()
-        rows.applyCancellation(rows.read(turnId), mark)
+        val turn = rows.read(turnId)
+        check(!turn.scheduledRun || rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
+        rows.applyCancellation(turn, mark)
     } }
 
     override suspend fun cancelRemote(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) { transaction { rows, mark ->

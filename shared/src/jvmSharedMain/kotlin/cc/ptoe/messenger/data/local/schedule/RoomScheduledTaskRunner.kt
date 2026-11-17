@@ -151,7 +151,8 @@ internal class RoomScheduledTaskRunner(
         } finally {
             withContext(NonCancellable) {
                 try {
-                    val status = store.finishWithStatus(claim, failure, conversationId)
+                    val status = try { store.finishWithStatus(claim, failure, conversationId) }
+                    catch (error: Exception) { lifecycle.schedulerFailed(error.message ?: "Scheduled task cleanup requires recovery"); throw error }
                     if (status != null) lifecycle.status(claim.taskId, status)
                 } finally { if (began) lifecycle.end(claim.taskId) }
             }

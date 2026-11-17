@@ -111,7 +111,7 @@ internal class RoomScheduledTurnHost(
         try {
             withContext(NonCancellable) {
                 when (val admission = runner.submit(KotlinTurnCommand.Send(conversationId, scope.prompt, null, scheduledRun = true,
-                    scheduledClaim = KotlinScheduledTurnClaim(scope.claim.taskId, scope.claim.token, scope.claim.startedAt))) { turnId = it }) {
+                    scheduledClaim = KotlinScheduledTurnClaim(scope.claim.taskId, scope.claim.token, scope.claim.startedAt, scope.projectId))) { turnId = it }) {
                     is KotlinTurnAdmission.Accepted -> check(turnId == admission.turnId)
                     KotlinTurnAdmission.ModelRequired -> error("Scheduled Agent requires a model")
                     is KotlinTurnAdmission.Rejected -> error(admission.reason)

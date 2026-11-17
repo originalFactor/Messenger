@@ -38,15 +38,46 @@ internal class ScheduledTurnUnavailable(message: String) : kotlinx.coroutines.Ca
 internal suspend fun requireScheduledTurnAdmission(rows: LocalRowsDao,
     claim: cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim, conversation: cc.ptoe.messenger.data.local.room.ConversationRow,
     prompt: String, matchDefinition: Boolean = true) {
+    check(rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
     val active = rows.getValue(ACTIVE + claim.taskId)?.value?.let { codec.decodeFromString<ScheduledRunClaim>(it) }
         ?: throw ScheduledTurnUnavailable("Scheduled run is unavailable")
     if (active.taskId != claim.taskId || active.token != claim.token || active.startedAt != claim.startedAt || active.cancelRequested)
         throw ScheduledTurnUnavailable("Scheduled run was cancelled or replaced")
     val task = rows.getValue(TASK + claim.taskId)?.value?.let { codec.decodeFromString<KotlinScheduledTask>(it) }
         ?: throw ScheduledTurnUnavailable("Scheduled task was deleted")
+    if (conversation.projectId != claim.projectId) throw ScheduledTurnUnavailable("Scheduled project changed")
+    claim.projectId?.let { projectId ->
+        val project = rows.project(projectId) ?: throw ScheduledTurnUnavailable("Scheduled project is unavailable")
+        val device = rows.getValue("device_id")?.value
+        if (device.isNullOrBlank() || project.deviceId != device) throw ScheduledTurnUnavailable("Scheduled project is not local")
+    }
     if (task.id != claim.taskId || !task.enabled || task.lastRunAt != claim.startedAt || task.lastConversationId != conversation.id ||
         (matchDefinition && (task.agentId != conversation.agentId || task.projectId != conversation.projectId || task.prompt != prompt)))
         throw ScheduledTurnUnavailable("Scheduled task changed before admission")
+}
+
+/** Fail closed on malformed or older unbound scheduled turns; deleted tasks can still have turns. */
+private suspend fun LocalRowsDao.activeScheduledTaskIds(): Set<String> {
+    val active = valuesByPrefix("kotlin_turn_active_v1:")
+    check(active.size <= 10_000) { "Too many active turns for scheduled recovery" }
+    return buildSet {
+        for (entry in active) {
+            val turn = getValue("kotlin_turn_v1:${entry.value}")?.value?.let { codec.parseToJsonElement(it) as? JsonObject }
+                ?: error("Active scheduled turn cannot be inspected")
+            val id = (turn["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val conversation = (turn["conversationId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            check(id == entry.value && conversation != null && entry.key == "kotlin_turn_active_v1:$conversation") { "Invalid active turn identity" }
+            val scheduled = turn["scheduledRun"]?.let { (it as? JsonPrimitive)?.takeIf { value -> !value.isString }?.booleanOrNull
+                ?: error("Invalid scheduled turn identity") } ?: false
+            if (scheduled) {
+                val claim = turn["scheduledClaim"] as? JsonObject ?: error("Scheduled turn requires separate recovery")
+                val parsed = codec.decodeFromJsonElement<cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim>(claim)
+                fun validUuid(id: String) = runCatching { java.util.UUID.fromString(id).toString() == id.lowercase() }.getOrDefault(false)
+                check(validUuid(parsed.taskId) && validUuid(parsed.token) && parsed.startedAt > 0) { "Invalid scheduled turn claim" }
+                add(parsed.taskId)
+            }
+        }
+    }
 }
 
 /** Isolated persistence component. The scheduler must observe cancellation and wait for workers to stop. */
@@ -174,8 +205,12 @@ internal class RoomScheduledTasks(private val db: LocalDatabase) {
         finishWithStatus(claim, error, conversationId) != null
 
     suspend fun finishWithStatus(claim: ScheduledRunClaim, error: String?, conversationId: String?): String? = transaction { rows ->
-        val current = rows.claim(claim.taskId) ?: return@transaction null
+        val current = rows.claim(claim.taskId) ?: run {
+            check(claim.taskId !in rows.activeScheduledTaskIds()) { "Scheduled turn has no claim and requires recovery" }
+            return@transaction null
+        }
         if (current.token != claim.token || current.startedAt != claim.startedAt) return@transaction null
+        check(claim.taskId !in rows.activeScheduledTaskIds()) { "Scheduled turn remains active and requires recovery" }
         val status = if (current.cancelRequested) "cancelled" else if (error != null) "failed" else "completed"
         rows.task(claim.taskId)?.takeIf { it.lastRunAt == claim.startedAt }?.let { task ->
             rows.write(task.copy(lastError = if (current.cancelRequested) "Execution cancelled" else error,
@@ -186,6 +221,8 @@ internal class RoomScheduledTasks(private val db: LocalDatabase) {
     }
     /** Invoke only after proving all prior-process workers have stopped. Never re-executes a claim. */
     suspend fun recoverInterrupted() = transaction { rows ->
+        val turns = rows.activeScheduledTaskIds()
+        check(turns.isEmpty()) { "Scheduled turns remain active and require recovery" }
         for (entry in rows.valuesByPrefix(ACTIVE)) {
             val claim = codec.decodeFromString<ScheduledRunClaim>(entry.value)
             check(entry.key == ACTIVE + claim.taskId) { "Invalid scheduled run claim" }

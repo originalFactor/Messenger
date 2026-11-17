@@ -413,6 +413,12 @@ internal class AcpWorkerManager(
         }
     }
 
+    /** The receipt is process-local and names the exact turn whose worker was stopped. */
+    suspend fun hasStoppedTurn(id: String, turnId: String): Boolean = slot(id).mutex.withLock {
+        val current = slot(id)
+        !current.unsafe && current.active == null && current.finishedTurn == turnId && current.stoppedTurn
+    }
+
     /** A created worker may be retained only after its trusted platform proves startup is idle. */
     suspend fun retainCreatedWorker(id: String): Boolean = slot(id).mutex.withLock {
         val current = slot(id)

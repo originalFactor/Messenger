@@ -60,7 +60,7 @@ data class KotlinDelegationParent(val turnId: String, val callId: String)
 
 /** Identifies the durable scheduler claim checked atomically at turn admission. */
 @Serializable
-data class KotlinScheduledTurnClaim(val taskId: String, val token: String, val startedAt: Long)
+data class KotlinScheduledTurnClaim(val taskId: String, val token: String, val startedAt: Long, val projectId: String? = null)
 
 data class KotlinTurnSnapshot(
     val id: String,

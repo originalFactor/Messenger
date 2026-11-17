@@ -166,10 +166,35 @@ class RoomAcpBackgroundOwnerTest {
             assertFailsWith<IllegalStateException> { owner.steer(steering, binding.conversationId, content()) }
             assertEquals(1, sends)
             assertEquals(RoomAcpSteeringLedger.Pending(steering, turn), RoomAcpSteeringLedger(db).pending(binding.conversationId))
+            assertFalse(owner.steeringStatus(binding.conversationId)["pending"]!!.jsonObject["canAcknowledge"]!!.jsonPrimitive.boolean)
+            assertFailsWith<IllegalStateException> { owner.acknowledgeSteering(binding.conversationId, steering, turn) }
             assertTrue(owner.cancel(turn))
             withTimeout(5_000) { while (owner.events(turn, 0)["done"]?.jsonPrimitive?.boolean != true) delay(10) }
             assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            assertTrue(owner.steeringStatus(binding.conversationId)["pending"]!!.jsonObject["canAcknowledge"]!!.jsonPrimitive.boolean)
+            assertFailsWith<IllegalStateException> { owner.acknowledgeSteering(binding.conversationId, UUID.randomUUID().toString(), turn) }
+            owner.acknowledgeSteering(binding.conversationId, steering, turn)
+            assertEquals(null, RoomAcpSteeringLedger(db).pending(binding.conversationId))
             assertEquals(1, sends)
+        } finally { lifecycle.stopAndAwait(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun priorOwnerSteeringMarkerIsVisibleButCannotBeAcknowledgedWithoutStopProof(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-steering-old")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val turn = UUID.randomUUID().toString(); val steering = UUID.randomUUID().toString()
+        try {
+            RoomAcpSteeringLedger(db).admit(steering, binding.conversationId, turn, content())
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events) })
+            val pending = owner.steeringStatus(binding.conversationId)["pending"]!!.jsonObject
+            assertEquals(steering, pending["requestId"]!!.jsonPrimitive.content)
+            assertFalse(pending["canAcknowledge"]!!.jsonPrimitive.boolean)
+            assertFailsWith<IllegalStateException> { owner.acknowledgeSteering(binding.conversationId, steering, turn) }
+            assertEquals(RoomAcpSteeringLedger.Pending(steering, turn), RoomAcpSteeringLedger(db).pending(binding.conversationId))
+            assertFailsWith<IllegalStateException> { owner.sessionSettings(binding.conversationId) }
+            assertFailsWith<IllegalStateException> { owner.mutationGate.withInactiveSession(binding.conversationId, true) { error("must not delete") } }
+            assertEquals(RoomAcpSteeringLedger.Pending(steering, turn), RoomAcpSteeringLedger(db).pending(binding.conversationId))
         } finally { lifecycle.stopAndAwait(); db.close(); dir.toFile().deleteRecursively() }
     }
 
@@ -195,7 +220,7 @@ class RoomAcpBackgroundOwnerTest {
             assertEquals("SessionSettings", checkNotNull(response).getValue("type").jsonPrimitive.content)
             assertEquals("safe", checkNotNull(response).getValue("settings").jsonObject.getValue("configOptions").jsonArray.single().jsonObject.getValue("currentValue").jsonPrimitive.content)
             assertFalse(checkNotNull(response).getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("settingsWritable").jsonPrimitive.boolean)
-            assertFalse(checkNotNull(response).getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("steering").jsonPrimitive.boolean)
+            assertTrue(checkNotNull(response).getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("steering").jsonPrimitive.boolean)
             for (action in listOf("setSessionConfig", "steer")) {
                 assertFailsWith<IllegalStateException> {
                     bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", action); put("sessionId", binding.conversationId) }) {}

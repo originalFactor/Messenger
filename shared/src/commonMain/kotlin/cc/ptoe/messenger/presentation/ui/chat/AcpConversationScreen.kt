@@ -84,6 +84,12 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var queue by remember { mutableStateOf(emptyList<Queued>()) }
     var queuePaused by remember { mutableStateOf(false) }
     var steering by remember { mutableStateOf(false) }
+    var steeringStatus by remember(sessionId) { mutableStateOf<JsonObject?>(null) }
+    var steeringStatusChecking by remember(sessionId) { mutableStateOf(core.supportsAcpSteeringRecovery) }
+    var steeringStatusError by remember(sessionId) { mutableStateOf(false) }
+    var steeringStatusVersion by remember(sessionId) { mutableLongStateOf(0) }
+    val pendingSteering = steeringStatus?.get("pending") as? JsonObject
+    val steeringBlocked = acpSteeringBlocksInput(steering, core.supportsAcpSteeringRecovery, steeringStatusChecking, steeringStatusError, pendingSteering)
     val endedEarly = stringResource(Res.string.acp_stream_ended)
     val replayGapMessage = stringResource(Res.string.background_replay_gap)
     val copied = stringResource(Res.string.chat_copied_toast)
@@ -93,6 +99,20 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             put("status", "error"); put("timestamp", currentTimeMillis())
         }
         scope.launch { snackbar.showSnackbar(message) }
+    }
+    fun checkSteeringStatus() {
+        if (!core.supportsAcpSteeringRecovery) return
+        val version = ++steeringStatusVersion
+        steeringStatusChecking = true
+        scope.launch {
+            try {
+                val result = requestAcp(core, "steeringStatus") { put("sessionId", sessionId) }
+                check(isValidAcpSteeringStatus(result)) { "Invalid steering status" }
+                if (version == steeringStatusVersion) { steeringStatus = result; steeringStatusError = false }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: Exception) { if (version == steeringStatusVersion) steeringStatusError = true
+            } finally { if (version == steeringStatusVersion) steeringStatusChecking = false }
+        }
     }
     suspend fun loadHistory(cursor: String = "") {
         val result = requestAcp(core, "history") { put("sessionId", sessionId); if (cursor.isNotEmpty()) put("before", cursor) }
@@ -126,6 +146,19 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                 settingsError = failure.message.orEmpty()
                 report(failure.message.orEmpty())
             } finally { settingsBusy = false }
+        }
+    }
+    fun acknowledgeSteering(request: String, turn: String) {
+        val version = ++steeringStatusVersion
+        steeringStatusChecking = true
+        scope.launch {
+            try {
+                val result = requestAcp(core, "acknowledgeSteering") { put("sessionId", sessionId); put("pendingId", request); put("turnId", turn) }
+                check(isValidAcpSteeringStatus(result)) { "Invalid steering status" }
+                if (version == steeringStatusVersion) { steeringStatus = result; steeringStatusError = false; readSettings() }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { if (version == steeringStatusVersion) steeringStatusError = true; report(failure.message.orEmpty())
+            } finally { if (version == steeringStatusVersion) steeringStatusChecking = false }
         }
     }
     fun inspectPendingMode() {
@@ -234,6 +267,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         } finally { loading = false }
         readSettings()
     }
+    LaunchedEffect(sessionId, active) { checkSteeringStatus() }
     LaunchedEffect(sessionId, profilesRevision) {
         try {
             val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
@@ -259,23 +293,23 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     val supportsSteering = acpSupportsSteering(settings)
     fun steer(text: String, files: List<AcpAttachment>, onAccepted: () -> Unit) {
         if (!supportsSteering) { report("This Agent does not support steering"); return }
-        if (steering || (text.isBlank() && files.isEmpty())) return
+        if (steering || steeringBlocked || (text.isBlank() && files.isEmpty())) return
         steering = true
         scope.launch {
             try {
                 val result = requestAcp(core, "steer") { put("sessionId", sessionId); put("content", contentFor(text, files)) }
                 when ((result["result"] as? JsonObject)?.text("outcome")) {
-                    "injected" -> { onAccepted(); history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("timestamp", currentTimeMillis()) } }
+                    "injected" -> { onAccepted(); history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", contentFor(text, files)); put("timestamp", currentTimeMillis()) } }
                     "promptRequired" -> { onAccepted(); queue = queue + Queued(text, files) }
                     else -> report("Steering was not accepted")
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { report(failure.message.orEmpty()) }
-            finally { steering = false }
+            finally { checkSteeringStatus(); steering = false }
         }
     }
     val sendPrompt: (Queued, Boolean) -> Unit = { input, clearDraft ->
-                            if (!loading && !settingsBusy && !modePending && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
+                            if (!loading && !settingsBusy && !modePending && !steeringBlocked && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
                                 val text = input.text.ifBlank { input.attachments.joinToString { it.name } }
                                 val content = promptContent(input.text, input.attachments)
                                 if (clearDraft) { draft = TextFieldValue(""); attachments = emptyList() }
@@ -294,8 +328,8 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 }
                             }
     }
-    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused, modePending) {
-        if (active.isEmpty() && !loading && !settingsBusy && !modePending && !queuePaused && queue.isNotEmpty()) {
+    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused, modePending, steeringBlocked) {
+        if (active.isEmpty() && !loading && !settingsBusy && !modePending && !steeringBlocked && !queuePaused && queue.isNotEmpty()) {
             val next = queue.first(); queue = queue.drop(1)
             sendPrompt(next, false)
         }
@@ -411,10 +445,12 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                     }
                     if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     if (modePending) TextButton(onClick = { showSettings = true }) { Text(stringResource(Res.string.acp_setting_uncertain)) }
+                    if (core.supportsAcpSteeringRecovery) AcpSteeringRecovery(pendingSteering, steeringStatusChecking,
+                        steeringStatusError, active.isNotEmpty(), ::checkSteeringStatus, ::acknowledgeSteering)
                     if (queuePaused && queue.isNotEmpty()) TextButton(onClick = { queuePaused = false }) { Text(stringResource(Res.string.acp_resume_queue)) }
                     queue.forEach { queued -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(queued.text.ifBlank { queued.attachments.joinToString { it.name } }, Modifier.weight(1f), maxLines = 2)
-                        TextButton(enabled = active.isNotEmpty() && !steering && supportsSteering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
+                        TextButton(enabled = active.isNotEmpty() && !steering && !steeringBlocked && supportsSteering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
                         TextButton(onClick = { queue = queue - queued }) { Text("×") }
                     } }
                     attachments.forEach { attachment -> TextButton(onClick = { attachments = attachments - attachment }) { Text("${attachment.name} ×") } }
@@ -422,7 +458,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         TextButton(onClick = { insertCommand(command) }) { Text("/${command.text("name")} — ${command.text("description")}") }
                     }
                     files.forEach { path -> TextButton(onClick = { insertFile(path) }) { Text("@$path", maxLines = 1) } }
-                    ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = true, sendWhileGenerating = true, hasAttachments = attachments.isNotEmpty(),
+                    ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = true, sendWhileGenerating = true, hasAttachments = attachments.isNotEmpty(), sendEnabled = !steeringBlocked,
                         onAddClick = { imagePicker.launch() },
                         modifier = Modifier.onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && files.isNotEmpty()) {
@@ -452,7 +488,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 CircularProgressIndicator(progress = { if (used != null && size != null && size > 0) (used.toFloat() / size).coerceIn(0f, 1f) else 0f }, modifier = Modifier.padding(8.dp).size(24.dp).semantics { contentDescription = if (used != null && size != null) "Context: $used / $size tokens" else "Context usage unavailable" }, strokeWidth = 3.dp)
                             }
                         },
-                        onSendLongClick = if (active.isNotEmpty() && !supportsSteering) null else { {
+                        onSendLongClick = if (steeringBlocked || active.isNotEmpty() && !supportsSteering) null else { {
                             val original = draft; val files = attachments
                             if (active.isNotEmpty()) steer(original.text, files) {
                                 if (draft == original) draft = TextFieldValue("")
@@ -461,7 +497,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         } },
                         onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
                         onSendClick = {
-                            if (active.isNotEmpty()) {
+                            if (steeringBlocked) Unit else if (active.isNotEmpty()) {
                                 if (draft.text.isNotBlank() || attachments.isNotEmpty()) {
                                     queue = queue + Queued(draft.text, attachments)
                                     draft = TextFieldValue(""); attachments = emptyList()

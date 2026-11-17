@@ -14,7 +14,7 @@ import kotlinx.serialization.json.put
 internal fun roomAcpSettings(settings: JsonObject, modeWritable: Boolean = false, modePending: Boolean = false,
     modeInspected: Boolean = false, modePendingId: String? = null, modeConfigId: String? = null,
     writableConfigIds: List<String> = emptyList()): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
-    put("settingsWritable", false); put("steering", false); put("modeWritable", modeWritable); put("modePending", modePending)
+    put("settingsWritable", false); put("steering", true); put("modeWritable", modeWritable); put("modePending", modePending)
     put("writableConfigIds", JsonArray(writableConfigIds.map(::JsonPrimitive)))
     put("modeInspected", modeInspected); if (modePendingId != null) put("modePendingId", modePendingId)
     if (modeConfigId != null) put("modeConfigId", modeConfigId)
@@ -26,6 +26,7 @@ internal class KotlinAcpBackgroundBridge(
     private val owner: RoomAcpBackgroundOwner,
     private val newSession: AcpNewSessionSource,
 ) : CoreBridge by delegate {
+    override val supportsAcpSteeringRecovery: Boolean get() = true
     override suspend fun startBackgroundAcp(requestId: String, command: JsonObject) {
         require((command["action"] as? JsonPrimitive)?.contentOrNull == "prompt") { "Unsupported background ACP action" }
         val session = (command["sessionId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
@@ -74,8 +75,15 @@ internal class KotlinAcpBackgroundBridge(
             val marker = (command["pendingId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Pending mode identity is required")
             val mode = (command["modeId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Current mode is required")
             owner.confirmPendingMode(session, marker, mode) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+        } else if (action == "steeringStatus" && session?.startsWith("acp:") == true) {
+            onEvent(owner.steeringStatus(session))
+        } else if (action == "acknowledgeSteering" && session?.startsWith("acp:") == true) {
+            val pending = (command["pendingId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Pending steering identity is required")
+            val turn = (command["turnId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Pending turn identity is required")
+            onEvent(owner.acknowledgeSteering(session, pending, turn))
         } else if (action == "steer" && session?.startsWith("acp:") == true) {
-            error("This ACP operation is unavailable")
+            val content = command["content"] as? JsonArray ?: error("ACP steering content is required")
+            onEvent(buildJsonObject { put("type", "Steering"); put("result", owner.steer(requestId, session, content)) })
         } else delegate.controlCommand(requestId, command, onEvent)
     }
     override suspend fun hasActiveTasks(): Boolean = owner.hasActiveTasks() || delegate.hasActiveTasks()
