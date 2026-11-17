@@ -14,10 +14,15 @@ import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.ProjectRow
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.domain.model.Agent
+import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.model.ChatModel
 import java.nio.file.Files
 import java.util.Collections
 import java.util.UUID
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -115,10 +120,14 @@ class KotlinRoomAcpSliceTest {
                 val record = root.getValue(session).jsonObject
                 draft.copy(conversationId = session, agentSessionId = record.getValue("agent_session").jsonPrimitive.content) to workerConfig
             }
-            val config = IsolatedAcpConfig(dir.resolve("room.db"), AcpPriorOwnerBarrier { }, Fence(), source,
+            val config = IsolatedAcpConfig(dir.resolve("room.db"), AcpPriorOwnerBarrier { }, InProcessAcpConfigurationFence(), source,
                 AcpNewSessionSource { _, _ -> AcpNewSessionDraft(draft, workerConfig, "Agent") }, AcpPublishedMcpCatalog { emptyList() }, { Transport().also { transports.add(it) } })
             val backend = KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs), assetRoot,
                 dir.resolve("avatars"), dir.resolve("images"), acpConfig = config)
+            val provider = Provider("provider", "Provider", "https://provider.test", "key", createdAt = 1, updatedAt = 1)
+            val model = ChatModel("model", "provider", "model", "Model", true, createdAt = 1)
+            backend.providers.insert(provider)
+            backend.models.insert(model)
             val bridge = backend.bridge
             var catalog: JsonObject? = null
             bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "catalog") }) { catalog = it }
@@ -147,11 +156,37 @@ class KotlinRoomAcpSliceTest {
             assertTrue(bridge.hasActiveTasks())
             assertTrue(bridge.supportsAcpReplaySnapshots)
             assertTrue(bridge.supportsAcpReplayDeletion)
+            // These are the real repositories exposed by the isolated slice, not direct fence calls.
+            val cancelled = async(start = CoroutineStart.UNDISPATCHED) { backend.providers.update(provider.copy(name = "cancelled")) }
+            assertFalse(cancelled.isCompleted)
+            cancelled.cancelAndJoin()
+            assertEquals("Provider", db.rows().provider("provider")?.name)
+            val afterCancellation = assertFailsWith<IllegalStateException> {
+                checkNotNull(backend.acpOwner).start(UUID.randomUUID().toString(), id, buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "later") }) })
+            }
+            assertFalse(afterCancellation.message.orEmpty().contains("configuration is being changed"))
+            val providerWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.providers.update(provider.copy(name = "updated")) }
+            val modelWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.models.setEnabled("model", false) }
+            assertFalse(providerWrite.isCompleted)
+            assertFalse(modelWrite.isCompleted)
+            val blocked = assertFailsWith<IllegalStateException> {
+                checkNotNull(backend.acpOwner).start(UUID.randomUUID().toString(), id, buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "later") }) })
+            }
+            assertEquals("ACP configuration is being changed", blocked.message)
+            assertEquals("Provider", db.rows().provider("provider")?.name)
+            assertTrue(checkNotNull(db.rows().model("model")).isEnabled)
             val loadedReplay = bridge.listAcpReplaySnapshots(id).single()
             assertEquals(0, bridge.readAcpReplaySnapshot(id, loadedReplay.id, 0).events.size)
             assertFailsWith<IllegalStateException> { bridge.deleteAcpReplaySnapshot(id, loadedReplay.id) }
             assertEquals(requestId, bridge.backgroundAcpBySession(id)?.get("requestId")?.jsonPrimitive?.content)
             bridge.controlPermission(requestId, permission.getValue("options").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content)
+            withTimeout(5_000) { providerWrite.await(); modelWrite.await() }
+            assertEquals("updated", db.rows().provider("provider")?.name)
+            assertFalse(checkNotNull(db.rows().model("model")).isEnabled)
+            assertTrue(transports.all { it.stopped })
+            assertFailsWith<Exception> { backend.models.insert(model.copy(id = "invalid", providerId = "missing")) }
+            backend.models.setEnabled("model", true)
+            assertTrue(checkNotNull(db.rows().model("model")).isEnabled)
             val done = withTimeout(5_000) {
                 var batch = bridge.backgroundAcpEvents(requestId, 0)
                 while (!batch.getValue("done").jsonPrimitive.boolean) { delay(10); batch = bridge.backgroundAcpEvents(requestId, 0) }

@@ -196,8 +196,11 @@ internal class KotlinRoomBackendSlice private constructor(
             }
             val acp = RoomAcpConversationStore(db, acpMutationGate)
             val acpSnapshots = RoomAcpReplaySnapshots(db, acpMutationGate)
-            val providers = RoomProviderRepository(db) { _, _ -> cloud.requestLocalSync() }
-            val models = RoomModelRepository(db) { _, _ -> cloud.requestLocalSync() }
+            val configurationWrite: suspend (suspend () -> Unit) -> Unit = { write ->
+                if (acpOwner == null) write() else acpOwner.withConfigurationWrite { write() }
+            }
+            val providers = RoomProviderRepository(db, configurationWrite) { _, _ -> cloud.requestLocalSync() }
+            val models = RoomModelRepository(db, configurationWrite) { _, _ -> cloud.requestLocalSync() }
             val agents = RoomAgentRepository(db) { previous, current ->
                 cloud.requestLocalSync()
                 cloud.requestAgentAvatarChange(previous, current)

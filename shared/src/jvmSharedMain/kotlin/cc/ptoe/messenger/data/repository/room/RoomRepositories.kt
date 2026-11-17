@@ -50,16 +50,20 @@ private suspend fun LocalRowsDao.requireNoActiveTurn(conversationId: String) {
 }
 
 /** Kotlin-backed repositories remain opt-in until all Core features and migration are complete. */
-class RoomProviderRepository(private val db: LocalDatabase, private val onChanged: (String, Boolean) -> Unit = { _, _ -> }) : ProviderRepository {
+class RoomProviderRepository(
+    private val db: LocalDatabase,
+    private val configurationWrite: suspend (suspend () -> Unit) -> Unit = { it() },
+    private val onChanged: (String, Boolean) -> Unit = { _, _ -> },
+) : ProviderRepository {
     private val rows get() = db.rows()
     override fun getAll() = rows.observeProviders().map { list -> list.map { it.domain() } }
     override fun getById(id: String) = rows.observeProvider(id).map { it?.domain() }
-    override suspend fun insert(provider: Provider) { db.writeLocal { dao, mark ->
+    override suspend fun insert(provider: Provider) = configurationWrite { db.writeLocal { dao, mark ->
         check(!db.cloudSync().hasActiveTurn(ACTIVE_TURN_KEY_PREFIX)) { "Cannot change providers with an active turn" }
         dao.upsertProviders(listOf(provider.row())); mark(SyncCollection.PROVIDER, provider.id, SyncMutation.UPSERT)
     }; onChanged(provider.id, false) }
     override suspend fun update(provider: Provider) = insert(provider)
-    override suspend fun delete(id: String) { db.writeLocal { dao, mark ->
+    override suspend fun delete(id: String) = configurationWrite { db.writeLocal { dao, mark ->
         check(!db.cloudSync().hasActiveTurn(ACTIVE_TURN_KEY_PREFIX)) { "Cannot change providers with an active turn" }
         dao.deleteProvider(id); mark(SyncCollection.PROVIDER, id, SyncMutation.DELETE)
     }; onChanged(id, true) }
@@ -174,14 +178,18 @@ private fun cc.ptoe.messenger.domain.model.Agent.rowPreservingSampling(old: cc.p
     )
 }
 
-class RoomModelRepository(private val db: LocalDatabase, private val onChanged: (String, Boolean) -> Unit = { _, _ -> }) : cc.ptoe.messenger.domain.repository.ModelRepository {
+class RoomModelRepository(
+    private val db: LocalDatabase,
+    private val configurationWrite: suspend (suspend () -> Unit) -> Unit = { it() },
+    private val onChanged: (String, Boolean) -> Unit = { _, _ -> },
+) : cc.ptoe.messenger.domain.repository.ModelRepository {
     private val rows get() = db.rows()
     override fun getAll() = rows.observeModels().map { list -> list.map { it.domain() } }
     override fun getByProviderId(providerId: String) = getAll().map { list -> list.filter { it.providerId == providerId } }
     override fun getEnabledByProviderId(providerId: String) = getByProviderId(providerId).map { list -> list.filter { it.isEnabled } }
     override fun getById(id: String) = rows.observeModel(id).map { it?.domain() }
     override suspend fun insert(model: cc.ptoe.messenger.domain.model.ChatModel) = insertAll(listOf(model))
-    override suspend fun insertAll(models: List<cc.ptoe.messenger.domain.model.ChatModel>) {
+    override suspend fun insertAll(models: List<cc.ptoe.messenger.domain.model.ChatModel>) = configurationWrite {
         db.writeLocal { dao, mark ->
             val oldOwners = models.mapNotNull { dao.model(it.id)?.providerId }
             dao.upsertModelsPreservingMetadata(models.map { it.row() })
@@ -191,7 +199,7 @@ class RoomModelRepository(private val db: LocalDatabase, private val onChanged: 
     }
     override suspend fun update(model: cc.ptoe.messenger.domain.model.ChatModel) = insert(model)
     override suspend fun delete(id: String) = deleteBatch(listOf(id))
-    override suspend fun deleteBatch(ids: List<String>) { if (ids.isNotEmpty()) {
+    override suspend fun deleteBatch(ids: List<String>) { if (ids.isNotEmpty()) configurationWrite {
         val owners = db.writeLocal { dao, mark ->
             val idsToNotify = ids.mapNotNull { dao.model(it)?.providerId }.distinct()
             dao.deleteModels(ids)
@@ -202,7 +210,7 @@ class RoomModelRepository(private val db: LocalDatabase, private val onChanged: 
     } }
     override suspend fun setEnabled(id: String, isEnabled: Boolean) = setEnabledBatch(listOf(id), isEnabled)
     override suspend fun setEnabledBatch(ids: List<String>, isEnabled: Boolean) {
-        if (ids.isNotEmpty()) {
+        if (ids.isNotEmpty()) configurationWrite {
             val owners = db.writeLocal { dao, mark ->
                 val idsToNotify = ids.mapNotNull { dao.model(it)?.providerId }.distinct()
                 dao.setModelsEnabled(ids, isEnabled)
