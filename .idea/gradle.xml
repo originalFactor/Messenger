@@ -10,10 +10,8 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/androidApp" />
-            <option value="$PROJECT_DIR$/core/bindings" />
-            <option value="$PROJECT_DIR$/core/bindings-desktop" />
             <option value="$PROJECT_DIR$/desktopApp" />
-            <option value="$PROJECT_DIR$/rendering/llm-typewriter" />
+            <option value="$PROJECT_DIR$/rendering/llm-typewriter-repo/llm-typewriter" />
             <option value="$PROJECT_DIR$/runtime" />
             <option value="$PROJECT_DIR$/shared" />
             <option value="$PROJECT_DIR$/wear" />
