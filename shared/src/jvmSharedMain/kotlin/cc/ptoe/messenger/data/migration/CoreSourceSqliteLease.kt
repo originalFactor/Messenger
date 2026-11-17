@@ -30,6 +30,7 @@ internal class CoreSourceSqliteLease private constructor(
     private val source: Path,
     private val sourceKey: Any,
     private val walShmKey: Any?,
+    private val sourceSidecarKeys: Set<Any>,
     private val db: SQLiteConnection,
 ) : AutoCloseable {
     private var closed = false
@@ -142,13 +143,25 @@ internal class CoreSourceSqliteLease private constructor(
         val candidate = path.toAbsolutePath().normalize()
         val candidateExists = Files.exists(candidate, NOFOLLOW_LINKS)
         check(candidateExists || Files.notExists(candidate, NOFOLLOW_LINKS)) { "Cannot inspect migration path" }
+        if (candidateExists) check(!isHardLinked(candidate)) { "Migration path must not have hard links" }
+        if (candidateExists) {
+            val candidateKey = Files.readAttributes(candidate, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
+            check(candidateKey == null || candidateKey !in sourceSidecarKeys) { "Path aliases Core source or sidecar" }
+        }
         for (suffix in listOf("", "-wal", "-shm", "-journal")) {
             val sourcePath = source.resolveSibling(source.fileName.toString() + suffix)
             check(candidate != sourcePath) { "Path aliases Core source or sidecar" }
             val sourceExists = Files.exists(sourcePath, NOFOLLOW_LINKS)
             check(sourceExists || Files.notExists(sourcePath, NOFOLLOW_LINKS)) { "Cannot inspect Core source sidecar" }
-            if (candidateExists && sourceExists) check(!Files.isSameFile(sourcePath, candidate)) { "Path aliases Core source or sidecar" }
+            if (candidateExists && sourceExists) check(!Files.isSameFile(sourcePath, candidate) && !isHardLinked(sourcePath)) {
+                "Path aliases Core source or sidecar"
+            }
         }
+    }
+
+    private fun isHardLinked(path: Path): Boolean {
+        val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+        return attributes.isRegularFile && !attributes.isSymbolicLink && coreSourceLinkCount(path) > 1L
     }
 
     internal fun requireDistinctDatabasePaths(path: Path) {
@@ -186,6 +199,14 @@ internal class CoreSourceSqliteLease private constructor(
             require(before.isRegularFile && !before.isSymbolicLink) { "Core source must be a regular file" }
             val key = requireNotNull(before.fileKey()) { "Core source identity unavailable" }
             require(coreSourceLinkCount(path) == 1L) { "Core source must not have hard links" }
+            val sidecarKeys = linkedSetOf<Any>(key)
+            for (suffix in listOf("-wal", "-shm", "-journal")) {
+                val sidecar = path.resolveSibling(path.fileName.toString() + suffix)
+                if (Files.exists(sidecar, NOFOLLOW_LINKS)) {
+                    val attributes = Files.readAttributes(sidecar, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                    if (attributes.fileKey() != null) sidecarKeys.add(attributes.fileKey()!!)
+                }
+            }
             val db = BundledSQLiteDriver().open(path.toString(), SQLITE_OPEN_READWRITE)
             try {
                 db.prepare("PRAGMA busy_timeout=0").use { it.step() }
@@ -202,7 +223,7 @@ internal class CoreSourceSqliteLease private constructor(
                     }
                     requireNotNull(attributes.fileKey()) { "Core WAL identity unavailable" }
                 } else null
-                val lease = CoreSourceSqliteLease(path, key, shmKey, db)
+                val lease = CoreSourceSqliteLease(path, key, shmKey, sidecarKeys, db)
                 lease.verifyIdentity()
                 return lease
             } catch (failure: Throwable) {

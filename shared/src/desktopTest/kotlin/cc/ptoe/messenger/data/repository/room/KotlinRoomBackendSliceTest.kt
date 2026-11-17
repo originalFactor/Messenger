@@ -324,7 +324,7 @@ class KotlinRoomBackendSliceTest {
             assertEquals(2, requests.get())
             assertTrue(payloads.first().contains("messenger_learning"))
             assertFalse(payloads.first().contains("messenger_artifacts"))
-            assertEquals(1, proofCount.get())
+            assertEquals(2, proofCount.get())
 
             backend.agents.update(checkNotNull(backend.agents.getDefaultAgent().first()).copy(toolsEnabled = false))
             backend.bridge.scheduledTaskRequest("POST", "/scheduled-tasks",
@@ -496,13 +496,16 @@ class KotlinRoomBackendSliceTest {
             lifecycle.enter()
             val images = IsolatedImageJobsConfig(dir, PriorImageWorkersStopped { proofs.incrementAndGet() },
                 ImageGenerationAuthorization { }, recovery)
+            val schedulerRecovery = ScheduledRecoveryBarrier {
+                if (proofs.get() > 0) error("Later backend initialization failure")
+            }
             assertFailsWith<IllegalStateException> {
                 KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs), assets,
                     dir.resolve("avatars"), dir.resolve("chat-images"),
-                    schedulerRecovery = ScheduledRecoveryBarrier { error("Previous scheduled worker may be alive") }, imageJobs = images)
+                    schedulerRecovery = schedulerRecovery, imageJobs = images)
             }
             assertEquals(1, proofs.get())
-            assertFailsWith<IllegalStateException> { recovery.recoverAfterStop(PriorImageWorkersStopped { }) }
+            assertFailsWith<IllegalStateException> { recovery.recoverAfterStop(PriorImageWorkersStopped { proofs.incrementAndGet() }) }
             val stopping = async { lifecycle.stopAndAwait() }
             withTimeout(10_000) { lifecycle.state.first { it is RoomShutdownState.RecoveryRequired } }
             recovery.recoverAfterStop(PriorImageWorkersStopped { proofs.incrementAndGet() })

@@ -79,7 +79,11 @@ class AcpDelegatedTurnHostTest {
             val id = assertIs<KotlinTurnAdmission.Accepted>(parentStore.admit(KotlinTurnCommand.Send("c", "delegate", null))).turnId
             assertTrue(parentStore.claim(id, false)); parentStore.beginProvider(id); parentStore.completeProvider(id, listOf(call), null)
             parentStore.decideApproval(id, call.callId, true); parentStore.beginTool(id)
-            val result = withTimeout(5000) { tool.execute(id, call) }
+            val result = if (permission) {
+                val failure = assertFailsWith<IllegalStateException> { withTimeout(5000) { tool.execute(id, call) } }
+                assertTrue(failure.message.orEmpty().contains("requested permission"), failure.message.orEmpty())
+                ToolExecutionResult(failure.message ?: "The delegated ACP agent requested permission", isError = true)
+            } else withTimeout(5000) { tool.execute(id, call) }
             if (permission) assertTrue(result.isError && result.output.contains("requested permission"), result.output)
             else { assertFalse(result.isError, result.output); assertEquals("ACP answer", result.output) }
             assertTrue(stopped > 0, "delegated worker must be stopped before the tool returns")

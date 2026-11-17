@@ -147,8 +147,10 @@ class CoreSourceSqliteLeaseTest {
         val dir = Files.createTempDirectory("core-source-sidecar-alias")
         val source = dir.resolve("source.db")
         try {
-            fixture(source, "DELETE")
             for (suffix in listOf("-wal", "-journal")) {
+                Files.deleteIfExists(source)
+                for (existing in listOf("-wal", "-shm", "-journal")) Files.deleteIfExists(source.resolveSibling(source.fileName.toString() + existing))
+                fixture(source, "DELETE")
                 val sidecar = source.resolveSibling(source.fileName.toString() + suffix)
                 val target = dir.resolve("target.db")
                 val targetWal = dir.resolve("target.db-wal")
@@ -159,7 +161,7 @@ class CoreSourceSqliteLeaseTest {
                     CoreSourceSqliteLease.acquire(source).use { lease ->
                         assertFails { lease.requireDistinctDatabasePaths(target) }
                         assertFails { lease.importInto(target) }
-                        assertTrue(bytes.contentEquals(Files.readAllBytes(sidecar)))
+                        assertTrue(bytes.contentEquals(Files.readAllBytes(targetWal)))
                         assertTrue(Files.notExists(target))
                     }
                 } finally { Files.deleteIfExists(targetWal); Files.deleteIfExists(sidecar) }
