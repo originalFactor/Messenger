@@ -106,3 +106,35 @@
 # Compose Multiplatform resources are read from the classpath by path; the
 # generated accessors only need to keep working, not keep their names.
 -dontwarn org.jetbrains.compose.resources.**
+
+# ===========================================================================
+# LaTeX renderer (Learning workbench)
+# ===========================================================================
+# latex-parser's Kotlin 2.4 companion classes read the outer class's private
+# static fields directly (`LatexTokenizer$Companion` -> `TEXT_STOP_CHARS` /
+# `MATH_SYMBOL_CHARS`) without nest attributes, an access pattern HotSpot
+# accepts at runtime but ProGuard's consistency check refuses to resolve and
+# treats as fatal ("Please correct the above warnings first"). `-dontwarn` only
+# covers class-level references, so the task-level warning gate has to be
+# lifted with `-ignorewarnings`. The fields stay alive: `LatexTokenizer.<clinit>`
+# in the same jar assigns them, and the rest of the parser calls the companion
+# through the same jar. Re-verify with `packageRelease*` after a latex-renderer
+# upgrade in case upstream fixes the access pattern and this rule can be
+# dropped.
+-ignorewarnings
+
+# ===========================================================================
+# Room cloud-sync DAO (Kotlin 2.4 suspend state machine)
+# ===========================================================================
+# ProGuard's optimizer rewrites `CloudSyncDao.applyPull$suspendImpl` (a large
+# compiler-generated coroutine state machine) into bytecode whose stack sizes
+# its own recompute pass rejects:
+#
+#   proguard.classfile.exception.NegativeStackSizeException: Stack size becomes
+#   negative after instruction [15243] swap in [CloudSyncDao.applyPull$suspendImpl]
+#
+# This reproduces on ProGuard 7.8.0 and 7.10.0. Keeping the interface keeps its
+# methods out of the optimizer; the Room-generated implementation still gets
+# shrunk normally. Re-check after a ProGuard or Kotlin upgrade in case the
+# optimizer learns this shape and the rule can be narrowed.
+-keep class cc.ptoe.messenger.data.local.room.CloudSyncDao { *; }
