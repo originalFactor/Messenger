@@ -21,22 +21,35 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.RemoteException
 import cc.ptoe.messenger.core.AcpProcessChannel
+import cc.ptoe.messenger.data.chat.InMemoryWorkspaceTracker
+import cc.ptoe.messenger.data.chat.TrackedWorkspaceHost
+import cc.ptoe.messenger.data.chat.TrackedWorkspaceStatus
+import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.runtime.IMcpCallback
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
 import cc.ptoe.messenger.domain.tool.ShellResult
 import cc.ptoe.messenger.domain.tool.ShellRuntimeBridge
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
+import cc.ptoe.messenger.domain.tool.WorkspaceOperation
+import cc.ptoe.messenger.domain.tool.WorkspaceTool
 import cc.ptoe.messenger.runtime.IShellCallback
 import cc.ptoe.messenger.runtime.IShellService
 import cc.ptoe.messenger.runtime.ToolResult
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -49,7 +62,78 @@ import kotlinx.coroutines.withTimeoutOrNull
  * companion is absent — the terminal reports a not-installed state and the
  * agent tools are disabled.
  */
-class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
+class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, TrackedWorkspaceHost {
+
+    private val workspaceTracker = InMemoryWorkspaceTracker()
+    @Volatile private var safeGrepAvailable = false
+    override val supportedOperations: Set<String>
+        get() = if (safeGrepAvailable) setOf("glob", "grep", "read", "edit", "create")
+                else setOf("glob", "read", "edit", "create")
+
+    @Volatile
+    override var protocolAvailable: Boolean = false
+        private set
+
+    /** Synchronous workspace AIDL is tracked in this process, never by Runtime's journal. */
+    suspend fun refreshTrackedProtocol(): Boolean = withContext(Dispatchers.IO) {
+        val remote = try { service() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        val grep = try { remote?.safeWorkspaceProtocol() == 1 }
+            catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
+        synchronized(connectLock) {
+            val available = remote != null && cached === remote && remote.asBinder().isBinderAlive
+            if (available) { safeGrepAvailable = grep; protocolAvailable = true } else workspaceDisconnected()
+            available
+        }
+    }
+
+    override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult {
+        check(protocolAvailable) { "Runtime workspace connection is unavailable" }
+        return workspaceTracker.run(token) {
+            check(protocolAvailable) { "Runtime workspace connection is unavailable" }
+            val remote = service() ?: error("Runtime workspace connection is unavailable")
+            check(protocolAvailable && remote.asBinder().isBinderAlive) { "Runtime workspace connection is unavailable" }
+            require(call.name in supportedOperations) { "Unsupported workspace operation" }
+            WorkspaceTool(call.name, workspace).executeWith(call.arguments) { operation, root ->
+                withContext(Dispatchers.IO) {
+                    check(protocolAvailable && remote.asBinder().isBinderAlive) { "Runtime workspace connection is unavailable" }
+                    val result = try {
+                        when (operation) {
+                            is WorkspaceOperation.Glob -> remote.workspaceGlob(root, operation.pattern, operation.maxResults)
+                            is WorkspaceOperation.Grep -> {
+                                check(safeGrepAvailable) { "Runtime safe grep is unavailable" }
+                                remote.safeWorkspaceGrep(root, operation.pattern, operation.path, operation.fileGlob,
+                                    operation.caseSensitive, operation.fixedString, operation.maxResults)
+                            }
+                            is WorkspaceOperation.Read -> remote.workspaceRead(root, operation.path, operation.startLine, operation.maxLines)
+                            is WorkspaceOperation.Edit -> remote.workspaceEdit(root, operation.path, operation.oldText, operation.newText, operation.replaceAll)
+                            is WorkspaceOperation.Create -> remote.workspaceCreate(root, operation.path, operation.content, operation.overwrite)
+                        }
+                    } catch (error: RemoteException) {
+                        workspaceDisconnected()
+                        throw error
+                    }
+                    requireNotNull(result) { "Runtime workspace operation was rejected" }
+                    ToolExecutionResult(result.output, result.isError)
+                }
+            }
+        }
+    }
+
+    override suspend fun status(token: String): TrackedWorkspaceStatus =
+        if (protocolAvailable) workspaceTracker.status(token) else TrackedWorkspaceStatus.UNKNOWN
+
+    override suspend fun cancelAndAwaitStopped(token: String): TrackedWorkspaceStatus {
+        if (!protocolAvailable) return TrackedWorkspaceStatus.UNKNOWN
+        val status = workspaceTracker.cancelAndAwaitStopped(token)
+        return if (protocolAvailable) status else TrackedWorkspaceStatus.UNKNOWN
+    }
+
+    private fun workspaceDisconnected() {
+        protocolAvailable = false
+        safeGrepAvailable = false
+        workspaceTracker.disconnected()
+    }
 
     private val requestIds = AtomicInteger(1)
 
@@ -67,6 +151,40 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     private val connectLock = Any()
     private var cached: IShellService? = null
     private var connectLatch: CompletableDeferred<IShellService?>? = null
+    private val mcpConnections = mutableMapOf<Int, McpConnection>()
+    private val acpConnections = AcpRuntimeConnections<IBinder>()
+
+    /** One session stays bound to the Runtime process that accepted its start call. */
+    private inner class McpConnection(
+        val sessionId: Int,
+        val service: IShellService,
+        val onClosed: (Int) -> Unit,
+        val onConnectionLost: () -> Unit,
+    ) {
+        val binder: IBinder = service.asBinder()
+        private val ended = AtomicBoolean(false)
+        val death = IBinder.DeathRecipient { lost() }
+
+        private fun end(notify: () -> Unit) {
+            if (!ended.compareAndSet(false, true)) return
+            synchronized(connectLock) {
+                if (mcpConnections[sessionId] === this) mcpConnections.remove(sessionId)
+            }
+            runCatching { binder.unlinkToDeath(death, 0) }
+            notify()
+        }
+
+        fun closed(code: Int) = end { onClosed(code) }
+        fun lost() = end(onConnectionLost)
+        fun rejected() = end { }
+        fun isEnded(): Boolean = ended.get()
+    }
+
+    private fun disconnectMcp(binder: IBinder?) {
+        if (binder == null) return
+        val sessions = synchronized(connectLock) { mcpConnections.values.filter { it.binder == binder } }
+        sessions.forEach { session -> runCatching { session.lost() } }
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -78,18 +196,28 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            synchronized(connectLock) {
+            val binder = synchronized(connectLock) {
+                val previous = cached?.asBinder()
+                workspaceDisconnected()
                 cached = null
                 connectLatch = null
+                previous
             }
+            disconnectMcp(binder)
+            if (binder != null) acpConnections.disconnect(binder)
         }
 
         override fun onBindingDied(name: ComponentName?) {
             // The framework cleans up the dead binding; the next call re-binds.
-            synchronized(connectLock) {
+            val binder = synchronized(connectLock) {
+                val previous = cached?.asBinder()
+                workspaceDisconnected()
                 cached = null
                 connectLatch = null
+                previous
             }
+            disconnectMcp(binder)
+            if (binder != null) acpConnections.disconnect(binder)
         }
     }
 
@@ -162,6 +290,11 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
     // ---------------------------------------------------------------------
     // Workspace file operations
     // ---------------------------------------------------------------------
+
+    override suspend fun temporaryChatWorkspace(conversationId: String): String = withContext(Dispatchers.IO) {
+        val service = service() ?: error("Messenger Runtime is unavailable.")
+        service.temporaryChatWorkspace(conversationId) ?: error("Could not create temporary chat workspace.")
+    }
 
     override suspend fun workspaceGlob(root: String, pattern: String, maxResults: Int): ToolExecutionResult =
         workspaceCall { it.workspaceGlob(root, pattern, maxResults) }
@@ -244,43 +377,98 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
 
     suspend fun runAcpProcess(channel: AcpProcessChannel) = withContext(Dispatchers.IO) {
         val service = service() ?: error("Messenger Runtime is unavailable.")
+        val turnJob = currentCoroutineContext().job
+        val protocol = try { service.acpStopProtocol() } catch (_: Exception) { 0 }
+        check(protocol >= 2) { "Update Messenger Runtime to use ACP safely." }
+        requireAcpTurnActive(turnJob)
         val id = requestIds.getAndIncrement()
         val stdout = Channel<String>(32)
+        val binder = service.asBinder()
+        val session = synchronized(connectLock) {
+            check(cached?.asBinder() === binder) { "Messenger Runtime disconnected before ACP start." }
+            acpConnections.register(id, binder) { failure -> stdout.close(failure) }
+        }
         val callback = object : IMcpCallback.Stub() {
             override fun onOutput(reqId: Int, line: String?) {
-                if (line != null && !stdout.trySend(line).isSuccess) {
+                if (reqId == id && line != null && !stdout.trySend(line).isSuccess) {
                     stdout.close(IllegalStateException("ACP stdout buffer exceeded"))
                 }
             }
             override fun onError(reqId: Int, error: String?) = Unit
-            override fun onClosed(reqId: Int, exitCode: Int) { stdout.close() }
+            override fun onClosed(reqId: Int, exitCode: Int) { if (reqId == id) acpConnections.closed(session, exitCode) }
         }
-        val death = IBinder.DeathRecipient { stdout.close() }
-        val binder = service.asBinder()
-        binder.linkToDeath(death, 0)
+        val death = IBinder.DeathRecipient { acpConnections.lost(session) }
+        var failure: Throwable? = null
+        var accepted = false
+        var stopAttempted = false
+        var cleanupFailure: Throwable? = null
         try {
-            check(service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
-                channel.envJson, channel.cwd, callback)) {
+            binder.linkToDeath(death, 0)
+            accepted = try {
+                service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
+                    channel.envJson, channel.cwd, callback)
+            } catch (error: Exception) {
+                acpConnections.lost(session)
+                throw IllegalStateException("Messenger Runtime could not confirm whether the ACP agent started.", error)
+            }
+            requireAcpTurnActive(turnJob)
+            check(accepted) {
                 "Messenger Runtime could not start the ACP agent."
             }
-            coroutineScope {
-                val input = launch {
-                    try {
-                        channel.readInput { line -> check(service.sendAcpInput(id, line)) }
-                    } finally {
-                        stdout.close()
-                    }
-                }
+            // Keep a potentially blocked Binder write outside structured children: stop the
+            // direct child first, then join the write with a bounded, explicit uncertainty.
+            val inputScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val input = inputScope.launch {
                 try {
-                    for (line in stdout) channel.output(line)
+                    channel.readInput { line ->
+                        requireAcpTurnActive(turnJob)
+                        check(service.sendAcpInputOwned(id, line, callback)) { "ACP input could not be delivered to its session." }
+                    }
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Throwable) {
+                    stdout.close(failure)
                 } finally {
-                    input.cancel()
+                    stdout.close()
                 }
             }
+            try {
+                for (line in stdout) channel.output(line)
+            } finally {
+                stopAttempted = true
+                cleanupFailure = runCatching {
+                    finishAcpInput(input, 5_000) {
+                        acpConnections.stopAndAwaitEnd(session, accepted, 5_000) {
+                            service.stopAcpProcessOwned(id, callback)
+                        }
+                    }
+                }.exceptionOrNull()
+                inputScope.cancel()
+            }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
         } finally {
-            binder.unlinkToDeath(death, 0)
-            runCatching { service.stopAcpProcess(id) }
+            // Stop on the original Binder. A replacement service cannot prove its child exited.
+            // A rejected start can refer to an already-owned ID and must never stop that session.
+            val stopFailure = cleanupFailure ?: if (stopAttempted) null else withContext(NonCancellable) {
+                runCatching {
+                    finishAcpInput(CompletableDeferred(Unit), 5_000) {
+                        acpConnections.stopAndAwaitEnd(session, accepted, 5_000) {
+                            service.stopAcpProcessOwned(id, callback)
+                        }
+                    }
+                }.exceptionOrNull()
+            }
+            runCatching { binder.unlinkToDeath(death, 0) }
+            acpConnections.abandon(session)
             stdout.cancel()
+            val uncertain = stopFailure?.let { IllegalStateException("Messenger Runtime could not confirm ACP process stop.", it) }
+                ?: session.terminalError
+            if (uncertain != null) {
+                if (failure != null && failure !== uncertain) uncertain.addSuppressed(failure)
+                throw uncertain
+            }
         }
     }
 
@@ -290,44 +478,59 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge {
         envJson: String?,
         onOutput: (String) -> Unit,
         onError: (String) -> Unit,
-        onClosed: (Int) -> Unit
+        onClosed: (Int) -> Unit,
+        onConnectionLost: () -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         val service = service() ?: return@withContext false
+        val session = McpConnection(sessionId, service, onClosed, onConnectionLost)
+        synchronized(connectLock) {
+            if (cached?.asBinder() != session.binder) return@withContext false
+            check(mcpConnections.putIfAbsent(sessionId, session) == null) { "Duplicate MCP session" }
+        }
         val callback = object : cc.ptoe.messenger.runtime.IMcpCallback.Stub() {
             override fun onOutput(reqId: Int, line: String?) {
-                line?.let(onOutput)
+                if (reqId == sessionId && !session.isEnded()) line?.let(onOutput)
             }
 
             override fun onError(reqId: Int, error: String?) {
-                error?.let(onError)
+                if (reqId == sessionId && !session.isEnded()) error?.let(onError)
             }
 
             override fun onClosed(reqId: Int, exitCode: Int) {
-                onClosed(exitCode)
+                if (reqId == sessionId) session.closed(exitCode)
             }
         }
         try {
-            service.startMcpProcess(sessionId, command, envJson, callback)
+            session.binder.linkToDeath(session.death, 0)
+            if (session.isEnded()) return@withContext false
+            service.startMcpProcess(sessionId, command, envJson, callback).also { started ->
+                if (!started) session.rejected()
+            }
         } catch (e: Exception) {
+            // A failed Binder transaction can have started the child before the reply was lost.
+            session.lost()
             android.util.Log.e(TAG, "startMcpProcess failed", e)
             false
         }
     }
 
     override suspend fun sendMcpInput(sessionId: Int, line: String): Boolean = withContext(Dispatchers.IO) {
-        val service = service() ?: return@withContext false
+        val session = synchronized(connectLock) { mcpConnections[sessionId] } ?: return@withContext false
         try {
-            service.sendMcpInput(sessionId, line)
+            session.service.sendMcpInput(sessionId, line)
         } catch (e: Exception) {
+            session.lost()
             false
         }
     }
 
     override suspend fun stopMcpProcess(sessionId: Int): Unit = withContext(Dispatchers.IO) {
-        val service = service() ?: return@withContext
+        val session = synchronized(connectLock) { mcpConnections[sessionId] } ?: return@withContext
         try {
-            service.stopMcpProcess(sessionId)
-        } catch (_: Exception) {}
+            session.service.stopMcpProcess(sessionId)
+        } catch (error: Exception) {
+            session.lost()
+        }
     }
 
     private companion object {

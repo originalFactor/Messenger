@@ -60,6 +60,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,6 +79,11 @@ import cc.ptoe.messenger.domain.mcp.McpManager
 import cc.ptoe.messenger.domain.mcp.McpServerConfig
 import cc.ptoe.messenger.domain.mcp.McpTransportType
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.tools_approval_mode
+import cc.ptoe.messenger.generated.resources.tools_approval_manual
+import cc.ptoe.messenger.generated.resources.tools_approval_automatic
+import cc.ptoe.messenger.generated.resources.tools_approval_description
+import cc.ptoe.messenger.generated.resources.tools_approval_load_error
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_confirm
 import cc.ptoe.messenger.generated.resources.action_save
@@ -87,6 +93,8 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_args
 import cc.ptoe.messenger.generated.resources.tools_mcp_args_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_command
 import cc.ptoe.messenger.generated.resources.tools_mcp_config_error
+import cc.ptoe.messenger.generated.resources.tools_mcp_reload
+import cc.ptoe.messenger.generated.resources.tools_mcp_reload_failed
 import cc.ptoe.messenger.generated.resources.tools_mcp_command_hint
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete
 import cc.ptoe.messenger.generated.resources.tools_mcp_delete_confirm
@@ -104,11 +112,25 @@ import cc.ptoe.messenger.generated.resources.tools_mcp_url_hint
 import cc.ptoe.messenger.generated.resources.tools_settings_title
 import cc.ptoe.messenger.generated.resources.tools_agent_delegation
 import cc.ptoe.messenger.generated.resources.tools_agent_delegation_desc
+import cc.ptoe.messenger.generated.resources.tools_schedule_task
+import cc.ptoe.messenger.generated.resources.tools_schedule_task_desc
+import cc.ptoe.messenger.generated.resources.tools_schedule_task_load_error
+import cc.ptoe.messenger.generated.resources.action_retry
+import cc.ptoe.messenger.di.AppContainerHolder
+import cc.ptoe.messenger.presentation.ui.components.ExpressiveSwitchRow
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.CancellationException
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
+
+@Serializable
+private data class ScheduleToolSettings(val enabled: Boolean)
+@Serializable
+private data class ToolApprovalSettings(val mode: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,7 +151,42 @@ fun ToolsSettingsScreen(
     }
     val mcpServers by mcpManager.servers.collectAsState()
     val mcpConfigurationError by mcpManager.configurationError.collectAsState()
+    val mcpReloadFailed = stringResource(Res.string.tools_mcp_reload_failed)
+    var mcpReloadBusy by remember { mutableStateOf(false) }
     val agentDelegationEnabled by mcpManager.agentDelegationEnabled.collectAsState()
+    var scheduleEnabled by remember { mutableStateOf(false) }
+    var scheduleLoaded by remember { mutableStateOf(false) }
+    var scheduleBusy by remember { mutableStateOf(false) }
+    var scheduleError by remember { mutableStateOf<String?>(null) }
+    suspend fun loadScheduleSetting() {
+        scheduleBusy = true
+        try {
+            val response = AppContainerHolder.instance.coreBridge.scheduledTaskRequest("GET", "/scheduled-tasks/tool-settings")
+            scheduleEnabled = catalogJson.decodeFromString<ScheduleToolSettings>(response).enabled
+            scheduleLoaded = true
+            scheduleError = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { scheduleError = failure.message ?: failure.toString() }
+        finally { scheduleBusy = false }
+    }
+    var approvalMode by remember { mutableStateOf("manual") }
+    var approvalLoaded by remember { mutableStateOf(false) }
+    var approvalBusy by remember { mutableStateOf(false) }
+    var approvalError by remember { mutableStateOf<String?>(null) }
+    var showApprovalChoice by remember { mutableStateOf(false) }
+    suspend fun loadApprovalSetting() {
+        approvalBusy = true
+        try {
+            approvalMode = catalogJson.decodeFromString<ToolApprovalSettings>(
+                AppContainerHolder.instance.coreBridge.toolApprovalSettings("GET")
+            ).mode
+            approvalLoaded = true
+            approvalError = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { approvalError = failure.message ?: failure.toString() }
+        finally { approvalBusy = false }
+    }
+    LaunchedEffect(Unit) { loadScheduleSetting(); loadApprovalSetting() }
 
     var fabExpanded by remember { mutableStateOf(false) }
     var showStore by remember { mutableStateOf(false) }
@@ -174,6 +231,24 @@ fun ToolsSettingsScreen(
             ) {
                 item {
                     cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
+                        onClick = { if (approvalLoaded && !approvalBusy) showApprovalChoice = true },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(Res.string.tools_approval_mode), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(if (approvalMode == "automatic") Res.string.tools_approval_automatic else Res.string.tools_approval_manual), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(Res.string.tools_approval_description), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                approvalError?.let { message ->
+                    item {
+                        Text(stringResource(Res.string.tools_approval_load_error, message), modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { scope.launch { loadApprovalSetting() } }, enabled = !approvalBusy) { Text(stringResource(Res.string.action_retry)) }
+                    }
+                }
+                item {
+                    cc.ptoe.messenger.presentation.ui.components.ExpressiveRow(
                         onClick = { changeServer { mcpManager.setAgentDelegationEnabled(!agentDelegationEnabled) } },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                     ) {
@@ -186,6 +261,39 @@ fun ToolsSettingsScreen(
                         })
                     }
                 }
+                item {
+                    ExpressiveSwitchRow(
+                        title = stringResource(Res.string.tools_schedule_task),
+                        subtitle = stringResource(Res.string.tools_schedule_task_desc),
+                        checked = scheduleEnabled,
+                        enabled = scheduleLoaded && !scheduleBusy,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                scheduleBusy = true
+                                try {
+                                    AppContainerHolder.instance.coreBridge.scheduledTaskRequest(
+                                        "PUT", "/scheduled-tasks/tool-settings", catalogJson.encodeToString(ScheduleToolSettings(enabled))
+                                    )
+                                    scheduleEnabled = enabled
+                                    scheduleError = null
+                                    AppContainerHolder.instance.refreshCoreToolCatalog()
+                                } catch (cancelled: CancellationException) { throw cancelled }
+                                catch (failure: Exception) { snackbar.showSnackbar(failure.message ?: failure.toString()) }
+                                finally { scheduleBusy = false }
+                            }
+                        },
+                    )
+                }
+                scheduleError?.let { message ->
+                    item {
+                        Text(stringResource(Res.string.tools_schedule_task_load_error, message),
+                            modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { scope.launch { loadScheduleSetting() } }, enabled = !scheduleBusy) {
+                            Text(stringResource(Res.string.action_retry))
+                        }
+                    }
+                }
                 if (mcpConfigurationError) {
                     item {
                         Text(
@@ -194,6 +302,22 @@ fun ToolsSettingsScreen(
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )
+                        TextButton(onClick = {
+                            if (!mcpReloadBusy) {
+                                mcpReloadBusy = true
+                                scope.launch {
+                                    val failure = try {
+                                        mcpManager.loadServers()
+                                        if (mcpManager.configurationError.value) mcpReloadFailed else null
+                                    } catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (error: Exception) { error.message?.takeIf { it.isNotBlank() } ?: mcpReloadFailed }
+                                    finally { mcpReloadBusy = false }
+                                    if (failure != null) snackbar.showSnackbar(failure)
+                                }
+                            }
+                        }, enabled = !mcpReloadBusy) {
+                            Text(stringResource(Res.string.tools_mcp_reload))
+                        }
                     }
                 }
                 if (mcpServers.isEmpty()) {
@@ -260,6 +384,29 @@ fun ToolsSettingsScreen(
             }
             if (fabExpanded) Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { fabExpanded = false } })
         }
+    }
+
+    if (showApprovalChoice) {
+        val manual = stringResource(Res.string.tools_approval_manual)
+        val automatic = stringResource(Res.string.tools_approval_automatic)
+        cc.ptoe.messenger.presentation.ui.components.SingleChoiceDialog(
+            title = stringResource(Res.string.tools_approval_mode),
+            items = listOf("manual", "automatic"), initialSelectedId = approvalMode,
+            itemId = { it }, itemLabel = { if (it == "automatic") automatic else manual },
+            confirmButtonText = stringResource(Res.string.action_save), dismissButtonText = stringResource(Res.string.action_cancel),
+            onDismiss = { showApprovalChoice = false }, onConfirm = { selected ->
+                showApprovalChoice = false
+                if (selected != null && selected != approvalMode) scope.launch {
+                    approvalBusy = true
+                    try {
+                        val response = AppContainerHolder.instance.coreBridge.toolApprovalSettings("PUT", catalogJson.encodeToString(ToolApprovalSettings(selected)))
+                        approvalMode = catalogJson.decodeFromString<ToolApprovalSettings>(response).mode
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { snackbar.showSnackbar(failure.message ?: failure.toString()) }
+                    finally { approvalBusy = false }
+                }
+            },
+        )
     }
 
     if (showStore) IntegrationStoreDialog("mcp", { showStore = false }) { row ->

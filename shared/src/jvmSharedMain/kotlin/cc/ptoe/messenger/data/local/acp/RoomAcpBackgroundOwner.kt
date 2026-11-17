@@ -1,0 +1,846 @@
+/* Copyright 2026 originalFactor. Licensed under the Apache License, Version 2.0. */
+package cc.ptoe.messenger.data.local.acp
+
+import androidx.room.useReaderConnection
+import androidx.room.Transactor
+import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.migration.RoomManagedShutdown
+import cc.ptoe.messenger.data.repository.room.AcpSessionMutationGate
+import cc.ptoe.messenger.data.repository.room.RoomAcpConversationStore
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.put
+
+/**
+ * All profile, MCP, capability, project, provider, model and Cloud writers must honor the same lease.
+ * A production fence supporting multiple retained workers must admit shared reader leases.
+ * All writers must enter through the ACP owner's [RoomAcpBackgroundOwner.withConfigurationWrite].
+ */
+internal interface AcpConfigurationFence {
+    /** Cancellation before return must not leave an acquired lease behind. */
+    suspend fun acquire(binding: AcpWorkerBinding): AcpConfigurationLease
+    /** Exclusive writer access is entered only after the owner drains its retained workers. */
+    suspend fun <T> withExclusiveWriter(action: suspend () -> T): T = error("ACP configuration writes are unavailable")
+}
+
+/** Release is only permitted after stop proof; a failed release must retain writer exclusion. */
+internal fun interface AcpConfigurationLease { suspend fun release() }
+
+private fun acquireAcpForeground(): () -> Unit {
+    val begin = ForegroundTaskRegistry.begin ?: return {}
+    val end = ForegroundTaskRegistry.end ?: return {}
+    begin()
+    return end
+}
+
+/** Supplies an in-memory snapshot; the owner independently verifies it against Room. */
+internal fun interface AcpSessionConfigurationSource {
+    suspend fun load(sessionId: String): Pair<AcpWorkerBinding, AcpWorkerConfiguration>
+}
+
+/** Resolves a private snapshot; Room authority validates it again before creating the worker. */
+internal data class AcpNewSessionDraft(val binding: AcpWorkerBinding, val configuration: AcpWorkerConfiguration, val title: String)
+internal fun interface AcpNewSessionSource {
+    suspend fun load(profileId: String, projectId: String): AcpNewSessionDraft
+}
+
+private fun acpSelectValues(options: JsonArray): Set<String>? {
+    val values = mutableSetOf<String>()
+    fun visit(items: JsonArray, depth: Int): Boolean {
+        if (depth > 16 || items.isEmpty() || items.size > 1_000) return false
+        for (item in items) {
+            val option = item as? JsonObject ?: return false
+            val nested = option["options"]
+            if (nested != null) {
+                if (nested !is JsonArray || "value" in option || !visit(nested, depth + 1)) return false
+            } else {
+                val value = (option["value"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return false
+                if (value.isBlank() || value.length > 256 || values.size >= 1_000 || !values.add(value)) return false
+            }
+        }
+        return true
+    }
+    return values.takeIf { visit(options, 0) }
+}
+
+private fun acpUniqueOption(settings: JsonObject, id: String): JsonObject? {
+    if (id.isBlank() || id.length > 256) return null
+    val matches = (settings["configOptions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.filter {
+        (it["id"] as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull == id
+    }
+    return matches.singleOrNull()
+}
+
+private fun acpSelectOption(settings: JsonObject, id: String): JsonObject? =
+    acpUniqueOption(settings, id)?.takeIf {
+        (it["type"] as? JsonPrimitive)?.takeIf { type -> type.isString }?.contentOrNull == "select" &&
+        (it["currentValue"] as? JsonPrimitive)?.let { value -> value.isString && !value.contentOrNull.isNullOrBlank() && value.content.length <= 256 } == true &&
+        (it["options"] as? JsonArray)?.let(::acpSelectValues) != null }
+
+private fun acpBooleanOption(settings: JsonObject, id: String): JsonObject? =
+    acpUniqueOption(settings, id)?.takeIf {
+        (it["type"] as? JsonPrimitive)?.takeIf { type -> type.isString }?.contentOrNull == "boolean" &&
+            (it["currentValue"] as? JsonPrimitive)?.let { value -> !value.isString && value.booleanOrNull != null } == true
+    }
+
+private fun reportedAcpMode(settings: JsonObject, configId: String?, boolean: Boolean): String? {
+    val raw = if (configId == null) (settings["modes"] as? JsonObject)?.get("currentModeId")
+        else if (boolean) acpBooleanOption(settings, configId)?.get("currentValue") else acpSelectOption(settings, configId)?.get("currentValue")
+    val value = raw as? JsonPrimitive ?: return null
+    return if (boolean) value.takeUnless { it.isString }?.booleanOrNull?.toString() else value.takeIf { it.isString }?.contentOrNull
+}
+
+/**
+ * Isolated ACP background owner. The caller holds the enclosing Room owner and must ensure all
+ * ACP workers use this owner, all configuration/workspace writers use [withConfigurationWrite], and
+ * the worker factory's stop method proves that the process and its side effects cannot resume.
+ * This does not install a platform worker or supply a production stop proof.
+ */
+internal class RoomAcpBackgroundOwner private constructor(
+    private val db: LocalDatabase,
+    private val exclusive: AcpExclusiveOwner,
+    private val ledger: RoomAcpRequestLedger,
+    private val manager: AcpWorkerManager,
+    private val coordinator: AcpTurnCoordinator,
+    private val authority: AcpNewSessionAuthority,
+    private val configurationFence: AcpConfigurationFence,
+    private val source: AcpSessionConfigurationSource,
+    private val now: () -> Long,
+    private val retainReusableWorkers: Boolean,
+    private val afterQuiescentCommit: suspend () -> Unit,
+    private val foreground: () -> (() -> Unit),
+    private val afterAdmission: suspend () -> Unit,
+    private val beforeHandoff: suspend () -> Unit,
+) {
+    private class Task(val id: String, val sessionId: String) {
+        lateinit var job: Job
+        @Volatile var finished = false
+        @Volatile var warning: String? = null
+        @Volatile var cancelled = false
+        val started = AtomicBoolean(false)
+    }
+
+    private val lock = Any()
+    private val admissions = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val calls = mutableSetOf<Job>()
+    private val liveTasks = mutableSetOf<Job>()
+    private val tasks = linkedMapOf<String, Task>()
+    private val sessions = mutableSetOf<String>()
+    private val leases = mutableMapOf<String, AcpConfigurationLease>()
+    private val foregroundEnds = mutableMapOf<String, () -> Unit>()
+    private val inspectedModes = mutableMapOf<String, Pair<String, String>>()
+    private val retained = mutableSetOf<String>()
+    private var pendingConfigurationWriters = 0
+    private var closing = false
+    private val observation = AcpUiObservationBridge(coordinator, manager)
+
+    /** ACP session deletion and updates must use this gate, not a separate manager or DB. */
+    val mutationGate: AcpSessionMutationGate = object : AcpSessionMutationGate {
+        override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T = admitted {
+            admissions.withLock {
+                synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+                exclusive.withOwner {
+                    check(ledger.activeRequest(id) == null) { "ACP session has an unresolved request" }
+                    check(RoomAcpSteeringLedger(db).pending(id) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
+                    if (synchronized(lock) { id in retained }) {
+                        withContext(NonCancellable) { manager.retireAndAwait(id); releaseLease(id) }
+                    }
+                    manager.withInactiveSession(id, deleting, action)
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> admitted(block: suspend () -> T): T = coroutineScope {
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        synchronized(lock) {
+            check(!closing) { "ACP owner is shutting down" }
+            calls.add(job)
+        }
+        job.invokeOnCompletion { synchronized(lock) { calls.remove(job) } }
+        block()
+    }
+
+    private suspend fun acquireLease(binding: AcpWorkerBinding) {
+        check(synchronized(lock) { binding.conversationId !in leases }) { "ACP worker stop is unresolved" }
+        val lease = configurationFence.acquire(binding)
+        val installed = synchronized(lock) {
+            if (binding.conversationId in leases) false else { leases[binding.conversationId] = lease; true }
+        }
+        if (!installed) {
+            withContext(NonCancellable) { lease.release() }
+            error("ACP worker stop is unresolved")
+        }
+    }
+
+    /** A retained worker already holds this exact session's configuration lease. */
+    private suspend fun acquireOrReuseLease(binding: AcpWorkerBinding) {
+        if (synchronized(lock) { binding.conversationId in retained && binding.conversationId in leases }) return
+        acquireLease(binding)
+    }
+
+    /** Call only after the manager has proved this session's worker stopped. */
+    private suspend fun releaseLease(sessionId: String) {
+        val lease = synchronized(lock) { leases[sessionId] } ?: return
+        lease.release()
+        synchronized(lock) {
+            if (leases[sessionId] === lease) { leases.remove(sessionId); retained.remove(sessionId) }
+        }
+    }
+
+    private fun releaseForeground(sessionId: String) {
+        synchronized(lock) { foregroundEnds.remove(sessionId) }?.let { end -> runCatching { end() } }
+    }
+
+    /** Creates a local session only after the live project/profile and MCP snapshot are verified. */
+    suspend fun create(draft: AcpWorkerBinding, configuration: AcpWorkerConfiguration, title: String): AcpWorkerBinding = admitted {
+        admissions.withLock {
+          synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+          exclusive.withOwner {
+            check(ledger.activeRequest(draft.conversationId) == null) { "ACP session has an unresolved request" }
+            requireSupportedScope(configuration)
+            synchronized(lock) { sessions.add(draft.conversationId) }
+            acquireLease(draft)
+            var keep = false
+            try {
+                val created = AcpSessionCreator(manager, RoomAcpSessionStore(db, manager), authority, now).create(draft, configuration, title)
+                if (retainReusableWorkers && manager.retainCreatedWorker(draft.conversationId)) {
+                    synchronized(lock) { retained.add(draft.conversationId) }
+                    keep = true
+                }
+                created
+            } finally {
+                if (!keep) withContext(NonCancellable) {
+                    manager.retireAndAwait(draft.conversationId)
+                    releaseLease(draft.conversationId)
+                }
+            }
+          }
+        }
+    }
+
+    suspend fun createFrom(profileId: String, projectId: String, source: AcpNewSessionSource): AcpWorkerBinding = admitted {
+        require(profileId.isNotBlank() && projectId.isNotBlank()) { "ACP profile and project are required" }
+        val draft = source.load(profileId, projectId)
+        val id = draft.binding.conversationId.removePrefix("acp:")
+        check(draft.binding.conversationId.startsWith("acp:") && runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false) &&
+            draft.binding.profileId == profileId && draft.binding.projectId == projectId && draft.binding.agentSessionId.isEmpty() && !draft.binding.delegated) {
+            "ACP new-session identity changed"
+        }
+        create(draft.binding, draft.configuration, draft.title)
+    }
+
+    /** Admission is durable before the background job is published; detach never cancels it. */
+    @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
+    suspend fun start(requestId: String, sessionId: String, content: JsonArray) = admitted {
+        require(runCatching { UUID.fromString(requestId).toString() == requestId }.getOrDefault(false)) { "Invalid ACP request ID" }
+        require(sessionId.startsWith("acp:") && content.isNotEmpty()) { "Invalid ACP prompt" }
+        currentCoroutineContext().ensureActive()
+        val caller = checkNotNull(currentCoroutineContext()[Job])
+        val frozenContent = Json.parseToJsonElement(content.toString()).jsonArray
+        val handoffLock = Any()
+        var cancelled = false
+        val cancellation = caller.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(handoffLock) { cancelled = true }
+        }
+        try { withContext(NonCancellable) {
+            admissions.withLock {
+                synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+                exclusive.withOwner {
+                    currentCoroutineContext().ensureActive()
+                    synchronized(lock) {
+                        check(!closing) { "ACP owner is shutting down" }
+                        check(tasks.values.none { it.sessionId == sessionId && !it.finished }) { "ACP session already has an active request" }
+                        check(sessionId !in foregroundEnds) { "ACP session has an unresolved request" }
+                        while (tasks.size >= 1024) {
+                            val completed = tasks.entries.firstOrNull { it.value.finished && it.value.job.isCompleted } ?: error("Too many active ACP requests")
+                            tasks.remove(completed.key)
+                        }
+                    }
+                    check(!RoomAcpModeLedger(db).pending(sessionId)) { "Check the previous ACP mode change before starting a turn" }
+                    check(RoomAcpSteeringLedger(db).pending(sessionId) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
+                    val endForeground = foreground()
+                    var handedOff = false
+                    var admittedHere = false
+                    try {
+                        when (val admission = ledger.admit(requestId, sessionId, frozenContent)) {
+                            AcpAdmission.New -> admittedHere = true
+                            is AcpAdmission.Existing -> error(if (admission.sameRequest) "ACP request already admitted; do not resubmit" else "ACP request ID was reused")
+                            AcpAdmission.SessionBusy -> error("ACP session has an unresolved request")
+                        }
+                        afterAdmission()
+                        if (!caller.isActive) return@withOwner
+                        beforeHandoff()
+                        val task = Task(requestId, sessionId)
+                        task.job = scope.launch(start = CoroutineStart.LAZY) { runTask(task, frozenContent) }
+                        task.job.invokeOnCompletion {
+                            synchronized(lock) {
+                                liveTasks.remove(task.job)
+                                if (!task.started.get()) {
+                                    task.warning = "ACP request stopped before its worker started; recovery is required"
+                                    task.finished = true
+                                }
+                            }
+                        }
+                        synchronized(handoffLock) {
+                            if (!cancelled && caller.isActive) {
+                                synchronized(lock) {
+                                    check(sessionId !in foregroundEnds) { "ACP foreground lease is already held" }
+                                    foregroundEnds[sessionId] = endForeground
+                                    tasks[requestId] = task
+                                    sessions.add(sessionId)
+                                    liveTasks.add(task.job)
+                                }
+                                handedOff = true
+                                task.job.start()
+                            }
+                        }
+                        if (!handedOff) task.job.cancel()
+                    } finally {
+                        if (!handedOff) {
+                            try {
+                                if (admittedHere) ledger.complete(requestId, sessionId, object : AcpCompletionBarrier {
+                                    override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T = action()
+                                })
+                            } finally { runCatching { endForeground() } }
+                        }
+                    }
+                }
+            }
+        } } finally { cancellation.dispose() }
+    }
+
+    private suspend fun runTask(task: Task, content: JsonArray) {
+        task.started.set(true)
+        var failed = false
+        var completed = false
+        var keep = false
+        try {
+            val (binding, configuration) = source.load(task.sessionId)
+            check(binding.conversationId == task.sessionId && !binding.delegated) { "ACP session binding changed" }
+            requireSupportedScope(configuration)
+            acquireOrReuseLease(binding)
+            try {
+                authority.verify(binding, configuration)
+                val result = manager.prompt(binding, configuration, content, task.id)
+                keep = retainReusableWorkers && (result["type"] as? JsonPrimitive)?.contentOrNull == "Finished" &&
+                    manager.canReuseWorker(task.sessionId)
+            } finally {
+                withContext(NonCancellable) {
+                    admissions.withLock {
+                        keep = keep && synchronized(lock) { pendingConfigurationWriters == 0 } &&
+                            RoomAcpSteeringLedger(db).pending(task.sessionId) == null
+                        try {
+                            if (keep) ledger.complete(task.id, task.sessionId, object : AcpCompletionBarrier {
+                                override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T =
+                                    manager.withQuiescentTurn(sessionId, requestId, action)
+                            }) else ledger.complete(task.id, task.sessionId, AcpManagerStopBarrier(manager))
+                            completed = true
+                            if (keep) {
+                                // The hook permits testing the commit/publication boundary under the real gate.
+                                try { afterQuiescentCommit() }
+                                finally { synchronized(lock) { retained.add(task.sessionId) } }
+                            }
+                        } finally {
+                            if (!keep || !completed) {
+                                // Even if ledger settlement fails, a proven stopped worker permits release.
+                                manager.retireAndAwait(task.sessionId)
+                                releaseLease(task.sessionId)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: CancellationException) {
+            task.cancelled = true
+        } catch (_: Exception) {
+            failed = true
+        } finally {
+            withContext(NonCancellable) {
+                if (!completed) {
+                    synchronized(lock) { retained.remove(task.sessionId) }
+                    failed = true
+                    try { ledger.markUncertain(task.id, task.sessionId) } catch (_: Exception) { }
+                }
+                if (failed) {
+                    coordinator.abandonUnsettled(task.id)
+                    task.warning = "ACP request failed or its outcome is uncertain; do not resubmit automatically"
+                }
+                if (completed) releaseForeground(task.sessionId)
+                task.finished = true
+            }
+        }
+    }
+
+    suspend fun events(requestId: String, after: Long): JsonObject = admitted {
+        val task = synchronized(lock) { tasks[requestId] } ?: error("ACP request is unavailable")
+        if (!coordinator.contains(requestId)) {
+            require(after == 0L) { "Invalid ACP replay cursor" }
+            return@admitted buildJsonObject {
+                put("requestId", requestId)
+                put("events", buildJsonArray {
+                    task.warning?.let { warning -> add(buildJsonObject { put("type", "Error"); put("message", warning) }) }
+                        ?: if (task.finished && task.cancelled) add(buildJsonObject { put("type", "Cancelled") }) else Unit
+                })
+                put("nextCursor", 0); put("done", task.finished)
+            }
+        }
+        val snapshot = coordinator.snapshot(requestId, after)
+        val finished = task.finished
+        val firstTerminal = snapshot.events.firstOrNull {
+            (it.event["type"] as? JsonPrimitive)?.contentOrNull in setOf("Finished", "Cancelled", "Error")
+        }
+        // Do not expose a terminal outcome until worker retirement and ledger settlement finish.
+        val visible = if (!finished && firstTerminal != null) snapshot.copy(
+            events = snapshot.events.takeWhile { it.sequence < firstTerminal.sequence },
+            latestSequence = firstTerminal.sequence - 1,
+            completed = false,
+        ) else snapshot
+        val batch = visible.toUiBatch(requestId)
+        val warning = task.warning
+        if (!finished) JsonObject(batch + ("done" to kotlinx.serialization.json.JsonPrimitive(false)))
+        else if (warning == null) JsonObject(batch + ("done" to kotlinx.serialization.json.JsonPrimitive(true))) else {
+            val events = (batch["events"] as? JsonArray).orEmpty().filterNot {
+                ((it as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull in setOf("Finished", "Cancelled", "Error")
+            } + buildJsonObject { put("type", "Error"); put("message", warning) }
+            JsonObject(batch + mapOf("events" to JsonArray(events), "done" to kotlinx.serialization.json.JsonPrimitive(true)))
+        }
+    }
+
+    suspend fun bySession(sessionId: String): JsonObject? = admitted {
+        val task = synchronized(lock) { tasks.values.lastOrNull { it.sessionId == sessionId && !it.finished } }
+        if (task != null) return@admitted events(task.id, 0)
+        check(ledger.activeRequest(sessionId) == null) { "ACP session has an unresolved request; recovery is required" }
+        null
+    }
+
+    suspend fun decide(requestId: String, optionId: String): Boolean = admitted { observation.decide(requestId, optionId) }
+
+    /** Isolated steering; worker identity remains reserved until the outcome is recorded. */
+    suspend fun steer(requestId: String, sessionId: String, content: JsonArray): JsonObject = admitted {
+        val task = synchronized(lock) { tasks.values.lastOrNull { it.sessionId == sessionId && !it.finished } }
+            ?: return@admitted buildJsonObject { put("outcome", "promptRequired") }
+        val frozen = Json.parseToJsonElement(content.toString()).jsonArray
+        manager.withSteeringWorker(sessionId, task.id) { worker ->
+            val steering = RoomAcpSteeringLedger(db)
+            steering.admit(requestId, sessionId, task.id, frozen)
+            val result = worker.steer(task.id, frozen)
+            val outcome = (result["outcome"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                ?: error("ACP steering response is unknown")
+            withContext(NonCancellable) { steering.settle(requestId, sessionId, task.id, frozen, outcome, now()) }
+            result
+        }
+    }
+
+    /** A prior-process marker remains visible but has no local stop receipt and cannot be cleared. */
+    suspend fun steeringStatus(sessionId: String): JsonObject = admitted {
+        val pending = RoomAcpSteeringLedger(db).pending(sessionId)
+        val canAcknowledge = pending != null && manager.hasStoppedTurn(sessionId, pending.turn)
+        buildJsonObject {
+            put("type", "SteeringStatus")
+            if (pending != null) put("pending", buildJsonObject {
+                put("requestId", pending.request); put("turnId", pending.turn)
+                put("canAcknowledge", canAcknowledge)
+            })
+        }
+    }
+
+    /** User acknowledgment is local; it never asserts whether the agent acted or resends input. */
+    suspend fun acknowledgeSteering(sessionId: String, request: String, turn: String): JsonObject = admitted {
+        admissions.withLock {
+            exclusive.withOwner {
+                val pending = RoomAcpSteeringLedger(db).pending(sessionId) ?: error("ACP steering result is unavailable")
+                check(pending.request == request && pending.turn == turn) { "ACP steering result changed" }
+                check(manager.hasStoppedTurn(sessionId, turn)) { "ACP worker stop cannot be proved" }
+                RoomAcpSteeringLedger(db).acknowledgeUnknown(request, sessionId, turn, AcpManagerStopBarrier(manager))
+            }
+        }
+        steeringStatus(sessionId)
+    }
+
+    /** Includes completed or evicted turns whose IDs remain in the durable admission ledger. */
+    suspend fun owns(requestId: String): Boolean = admitted {
+        synchronized(lock) { requestId in tasks } || ledger.contains(requestId)
+    }
+
+    /** Local transcript pages preserve complete message objects, including tool events. */
+    suspend fun history(sessionId: String, before: String?): JsonObject = admitted {
+        require(sessionId.startsWith("acp:") && sessionId.length in 5..256) { "Invalid ACP session" }
+        val root = db.rows().getValue("local_acp_sessions")?.value?.let { Json.parseToJsonElement(it) as? JsonObject }
+            ?: error("ACP sessions are unavailable")
+        val record = root[sessionId] as? JsonObject ?: error("ACP session not found")
+        check((record["id"] as? JsonPrimitive)?.contentOrNull == sessionId) { "ACP session identity changed" }
+        val rows = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
+        val end = before?.let { id -> rows.indexOfFirst { (it as? JsonObject)?.get("id")?.let { field -> (field as? JsonPrimitive)?.contentOrNull } == id }.takeIf { it >= 0 } } ?: rows.size
+        val page = rows.subList((end - 20).coerceAtLeast(0), end)
+        val next = if (page.size < end) ((page.firstOrNull() as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull else null
+        buildJsonObject { put("type", "History"); put("messages", JsonArray(page)); put("before", next?.let(::JsonPrimitive) ?: JsonNull); put("writable", JsonNull) }
+    }
+
+    /** Read a live agent snapshot under the same configuration and worker ownership as a turn. */
+    suspend fun sessionSettings(sessionId: String): JsonObject = settingsOperation(sessionId, null, null, false, null, null, null)
+
+    /** Only agent-advertised choices are mutable; no request is repeated automatically. */
+    suspend fun setMode(sessionId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, mode, null, false, null, null, deliver)
+
+    suspend fun setModeOption(sessionId: String, configId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject =
+        settingsOperation(sessionId, mode, configId, false, null, null, deliver)
+
+    suspend fun setBooleanOption(sessionId: String, configId: String, value: Boolean, deliver: (JsonObject) -> Unit): JsonObject =
+        settingsOperation(sessionId, value.toString(), configId, false, null, null, deliver, boolean = true)
+
+    /** Explicitly inspect the stopped agent's current settings before permitting another change. */
+    suspend fun inspectPendingMode(sessionId: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, null, null, true, null, null, deliver)
+
+    /** Clear only the exact marker after the user confirms a freshly rechecked displayed mode. */
+    suspend fun confirmPendingMode(sessionId: String, marker: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject =
+        settingsOperation(sessionId, null, null, true, marker, mode, deliver)
+
+    @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
+    private suspend fun settingsOperation(sessionId: String, mode: String?, configId: String?, inspect: Boolean,
+        confirmMarker: String?, confirmMode: String?, deliver: ((JsonObject) -> Unit)?, boolean: Boolean = false): JsonObject = admitted {
+        admissions.withLock {
+            synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+            exclusive.withOwner {
+                check(ledger.activeRequest(sessionId) == null) { "ACP session has an active or unresolved request" }
+                check(RoomAcpSteeringLedger(db).pending(sessionId) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
+                val (binding, configuration) = source.load(sessionId)
+                check(binding.conversationId == sessionId && !binding.delegated) { "ACP session binding changed" }
+                requireSupportedScope(configuration)
+                val retainedBefore = synchronized(lock) {
+                    check(sessionId !in foregroundEnds) { "ACP session has an unresolved request" }
+                    sessionId in retained
+                }
+                val modeLedger = RoomAcpModeLedger(db)
+                val pendingRecord = modeLedger.pendingRecord(sessionId)
+                val pending = pendingRecord?.id
+                if (confirmMarker != null) {
+                    check(pending == confirmMarker && !confirmMode.isNullOrBlank()) { "The pending ACP setting change has changed" }
+                    check(synchronized(lock) { inspectedModes[sessionId] == (confirmMarker to confirmMode) }) { "Inspect the current ACP setting before confirming" }
+                }
+                if (mode != null) {
+                    require(mode.isNotBlank() && mode.length <= 256) { "Invalid ACP setting value" }
+                    require(configId == null || configId.isNotBlank() && configId.length <= 256) { "Invalid ACP setting ID" }
+                    check(pending == null) { "Check the previous ACP setting change before trying again" }
+                    check(!retainedBefore) { "This retained ACP session cannot safely change settings" }
+                }
+                if (inspect && pending != null) check(!retainedBefore) { "The ACP worker must stop before checking the setting change" }
+                val end = foreground()
+                synchronized(lock) { foregroundEnds[sessionId] = end; sessions.add(sessionId) }
+                var success = false
+                var modeMarker: String? = null
+                var settingsWorker: AcpWorkerSettings? = null
+                val settings = try {
+                    acquireOrReuseLease(binding)
+                    authority.verify(binding, configuration)
+                    val result = manager.sessionSettings(binding, configuration,
+                        afterRestore = { coordinator.preserveSettingsReplay(binding) }) { worker ->
+                        settingsWorker = worker
+                        val settings = worker.sessionSettings()
+                        if (inspect && pending != null) {
+                            val current = reportedAcpMode(settings, pendingRecord?.configId, pendingRecord?.boolean == true)
+                            check(!current.isNullOrBlank()) { "The agent did not report the current setting; the previous change remains unresolved" }
+                        }
+                        if (mode == null) settings else {
+                            if (configId == null) {
+                                val modes = (settings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray ?: error("This ACP session does not offer modes")
+                                check(modes.any { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.takeIf { id -> id.isString }?.contentOrNull == mode }) { "This ACP session does not offer that mode" }
+                            } else if (boolean) {
+                                check(acpBooleanOption(settings, configId) != null && mode in setOf("true", "false")) { "This ACP session does not offer that boolean setting" }
+                            } else {
+                                val option = acpSelectOption(settings, configId) ?: error("This ACP session does not offer that select setting")
+                                check(mode in checkNotNull(acpSelectValues(option.getValue("options") as JsonArray))) { "This ACP session does not offer that setting value" }
+                            }
+                            currentCoroutineContext().ensureActive()
+                            modeMarker = modeLedger.begin(sessionId, mode, configId, boolean)
+                            val caller = checkNotNull(currentCoroutineContext()[Job])
+                            val dispatchLock = Any()
+                            var cancelled = false
+                            var dispatched = false
+                            val cancellation = caller.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+                                if (cause != null) synchronized(dispatchLock) { cancelled = true }
+                            }
+                            val permit = {
+                                synchronized(dispatchLock) {
+                                    if (cancelled || !caller.isActive) throw CancellationException("ACP setting change cancelled before dispatch")
+                                    check(!dispatched) { "ACP setting change was already dispatched" }
+                                    dispatched = true
+                                }
+                            }
+                            try {
+                                if (configId == null) worker.setMode(mode, permit)
+                                else if (boolean) worker.setBooleanOption(configId, mode.toBooleanStrict(), permit)
+                                else worker.setModeOption(configId, mode, permit)
+                            }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) { throw IllegalStateException("ACP setting change may have completed; check the current settings before trying again", failure) }
+                            finally { cancellation.dispose() }
+                        }
+                    }
+                    success = true
+                    result
+                } finally {
+                    withContext(NonCancellable) {
+                        if (!success || !retainedBefore) {
+                            try {
+                                manager.retireAndAwait(sessionId)
+                                releaseLease(sessionId)
+                            } catch (failure: Throwable) {
+                                if (modeMarker != null || pending != null) throw IllegalStateException(
+                                    "ACP setting change may have completed and the worker has not stopped; recovery is required", failure)
+                                throw failure
+                            }
+                        }
+                        releaseForeground(sessionId)
+                    }
+                }
+                // A notification can arrive after the response but before the stopped worker's
+                // reader exits. Read its final cache only after retirement has joined that reader.
+                val finalSettings = if (mode != null || inspect && pending != null) checkNotNull(settingsWorker).sessionSettings() else settings
+                val pendingConfigId = configId ?: pendingRecord?.configId
+                val observedMode = reportedAcpMode(finalSettings, pendingConfigId, if (mode != null) boolean else pendingRecord?.boolean == true)
+                if (inspect && pending != null) check(!observedMode.isNullOrBlank()) { "The agent did not report the current setting; the previous change remains unresolved" }
+                val confirmed = confirmMarker != null && observedMode == confirmMode
+                if (confirmed) withContext(NonCancellable) { modeLedger.clear(sessionId, confirmMarker!!) }
+                val pendingAfter = if (confirmed) null else (modeMarker ?: pending)
+                synchronized(lock) {
+                    if (confirmed || pendingAfter == null) inspectedModes.remove(sessionId)
+                    else if (inspect && !observedMode.isNullOrBlank()) inspectedModes[sessionId] = pendingAfter to observedMode
+                    else inspectedModes.remove(sessionId)
+                }
+                val modes = (finalSettings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray
+                val options = (finalSettings["configOptions"] as? JsonArray).orEmpty()
+                val modeOptions = options.mapNotNull { it as? JsonObject }.filter { (it["category"] as? JsonPrimitive)?.contentOrNull == "mode" }
+                val writableIds = if (!retainedBefore && pendingAfter == null) options.mapNotNull { option ->
+                    val id = ((option as? JsonObject)?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                    id?.takeIf { acpSelectOption(finalSettings, it) != null || acpBooleanOption(finalSettings, it) != null }
+                } else emptyList()
+                val supportedMode = modeOptions.singleOrNull()?.let { option ->
+                    val id = (option["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                    id != null && acpSelectOption(finalSettings, id) != null
+                } == true
+                val modeAvailable = supportedMode || (!modes.isNullOrEmpty() && modeOptions.isEmpty())
+                val result = roomAcpSettings(finalSettings, modeWritable = modeAvailable && !retainedBefore && pendingAfter == null,
+                    modePending = pendingAfter != null, modeInspected = pendingAfter != null && inspect, modePendingId = pendingAfter,
+                    modeConfigId = pendingConfigId.takeIf { pendingAfter != null }, writableConfigIds = writableIds)
+                if (deliver != null) {
+                    currentCoroutineContext().ensureActive()
+                    // The bridge callback must not reenter this owner.
+                    deliver(result)
+                }
+                result
+            }
+        }
+    }
+
+    /** An unproven worker retains its lease even after its coroutine exits. */
+    suspend fun hasActiveTasks(): Boolean = admitted { synchronized(lock) { liveTasks.any { !it.isCompleted } || leases.isNotEmpty() || foregroundEnds.isNotEmpty() } }
+
+    /** Local catalog for the existing conversation picker; credentials never leave Room. */
+    suspend fun catalog(): JsonObject = admitted {
+        db.useReaderConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
+            val rows = db.rows()
+            val device = rows.getValue("device_id")?.value.orEmpty()
+            val agents = rows.controlAgents().map { row -> buildJsonObject {
+                put("id", row.id); put("name", row.name); put("kind", "messenger")
+            } }
+            val config = rows.getValue("device_control_config")?.value?.let {
+                require(it.encodeToByteArray().size <= 1024 * 1024) { "ACP settings are too large" }
+                Json.parseToJsonElement(it) as? JsonObject ?: error("Invalid ACP settings")
+            }
+            val profiles = (config?.get("agents") as? JsonArray).orEmpty().mapNotNull { value ->
+                val profile = value as? JsonObject ?: error("Invalid ACP profile")
+                val id = (profile["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP profile ID")
+                val enabled = profile["enabled"]?.let { (it as? JsonPrimitive)?.takeUnless { value -> value.isString }?.booleanOrNull
+                    ?: error("Invalid ACP profile setting") } ?: true
+                if (!enabled) return@mapNotNull null
+                val name = (profile["name"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP profile name")
+                buildJsonObject {
+                    put("id", "acp:$id"); put("name", name); put("kind", "acp")
+                    put("description", profile["description"] ?: JsonPrimitive("")); put("avatar", profile["avatar"] ?: JsonNull)
+                }
+            }
+            val projects = rows.controlProjects(device).map { row -> buildJsonObject { put("id", row.id); put("name", row.name) } }
+            val native = connection.usePrepared("SELECT c.id, c.title, c.projectId, c.updatedAt FROM conversations c LEFT JOIN projects p ON p.id=c.projectId WHERE c.projectId IS NULL OR (p.id IS NOT NULL AND (p.deviceId IS NULL OR p.deviceId=?)) ORDER BY c.updatedAt DESC, c.id LIMIT 100") { stmt ->
+                stmt.bindText(1, device)
+                buildList { while (stmt.step()) add(buildJsonObject {
+                    put("id", stmt.getText(0)); put("title", stmt.getText(1).take(160)); put("kind", "messenger")
+                    put("projectId", if (stmt.isNull(2)) JsonNull else JsonPrimitive(stmt.getText(2))); put("updatedAt", stmt.getLong(3))
+                }) }
+            }
+            val stored = rows.getValue("local_acp_sessions")?.value?.let {
+                require(it.encodeToByteArray().size <= 16 * 1024 * 1024) { "ACP sessions are too large" }
+                Json.parseToJsonElement(it) as? JsonObject ?: error("Invalid ACP sessions")
+            } ?: JsonObject(emptyMap())
+            val external = stored.map { (id, value) ->
+                val record = value as? JsonObject ?: error("Invalid ACP session")
+                require(id.startsWith("acp:") && (record["id"] as? JsonPrimitive)?.contentOrNull == id) { "Invalid ACP session identity" }
+                val updated = (record["updated_at"] as? JsonPrimitive)?.longOrNull ?: 0L
+                updated to buildJsonObject {
+                    put("id", id); put("title", (record["title"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(160))
+                    put("kind", "acp"); put("projectId", record["project"] ?: JsonNull); put("updatedAt", updated)
+                }
+            }.sortedByDescending { it.first }.take(100).map { it.second }
+            buildJsonObject { put("type", "Catalog"); put("agents", JsonArray((agents + profiles).take(100)))
+                put("projects", JsonArray(projects)); put("sessions", JsonArray(native + external)) }
+        } }
+    }
+
+    suspend fun cancel(requestId: String): Boolean = admitted {
+        val task = synchronized(lock) { tasks[requestId] } ?: return@admitted false
+        if (task.finished) false else { task.job.cancel(CancellationException("ACP turn cancelled")); true }
+    }
+
+    /**
+     * All configuration writers use this entry point, rather than acquiring the fence directly.
+     * Intent blocks later starts while previously admitted turns finish and their workers retire.
+     */
+    suspend fun <T> withConfigurationWrite(action: suspend () -> T): T = admitted {
+        var registered = false
+        try {
+            admissions.withLock {
+                synchronized(lock) {
+                    check(!closing) { "ACP owner is shutting down" }
+                    pendingConfigurationWriters++
+                    registered = true
+                }
+            }
+            val active = synchronized(lock) { liveTasks.toList() }
+            active.joinAll()
+            exclusive.withOwner {
+                val owned = synchronized(lock) { leases.keys.toList() }
+                for (id in owned) {
+                    check(ledger.activeRequest(id) == null) { "ACP session has an active or unresolved request" }
+                    withContext(NonCancellable) { manager.retireAndAwait(id); releaseLease(id) }
+                }
+                configurationFence.withExclusiveWriter(action)
+            }
+        } finally {
+            if (registered) withContext(NonCancellable) { synchronized(lock) { pendingConfigurationWriters-- } }
+        }
+    }
+
+    /** Independent recovery must prove the prior worker and its side effects cannot resume. */
+    suspend fun recover(requestId: String, sessionId: String, barrier: AcpRecoveryBarrier): AcpAdmissionState = admitted {
+        exclusive.withOwner {
+            check(synchronized(lock) { tasks.values.none { it.sessionId == sessionId && !it.job.isCompleted } }) { "ACP worker is still active" }
+            val result = ledger.recover(requestId, sessionId, barrier)
+            manager.reconcileStopped(sessionId)
+            manager.retireAndAwait(sessionId)
+            releaseLease(sessionId)
+            releaseForeground(sessionId)
+            result
+        }
+    }
+
+    /** Reject and join entry points and background tasks before proving every worker stopped. */
+    suspend fun shutdown() = withContext(NonCancellable) {
+        val admittedCalls = synchronized(lock) { closing = true; calls.toList() }
+        admittedCalls.forEach { it.cancel() }
+        admittedCalls.joinAll()
+        val active = synchronized(lock) { liveTasks.toList() }
+        active.forEach { it.cancel() }
+        active.joinAll()
+        exclusive.closeAndAwait {
+            val owned = synchronized(lock) { sessions.toList() }
+            for (id in owned) {
+                manager.reconcileStopped(id)
+                manager.retireAndAwait(id)
+                releaseLease(id)
+                releaseForeground(id)
+            }
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    private fun requireSupportedScope(configuration: AcpWorkerConfiguration) {
+        check(!configuration.allowDelegation && configuration.coreToolScope.isEmpty()) {
+            "ACP delegation and Core-owned tools are not yet connected to this owner"
+        }
+    }
+
+    companion object {
+        /** The enclosing Room owner must already be exclusive before the ACP lock is acquired. */
+        suspend fun attach(
+            db: LocalDatabase,
+            databasePath: Path,
+            shutdown: RoomManagedShutdown,
+            previousOwner: AcpPriorOwnerBarrier,
+            configurationFence: AcpConfigurationFence,
+            source: AcpSessionConfigurationSource,
+            catalog: AcpPublishedMcpCatalog,
+            backend: AcpGatewayBackend,
+            needsGateway: suspend () -> Boolean,
+            factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess,
+            now: () -> Long,
+            retainReusableWorkers: Boolean = false,
+            afterQuiescentCommit: suspend () -> Unit = {},
+            foreground: () -> (() -> Unit) = ::acquireAcpForeground,
+            afterAdmission: suspend () -> Unit = {},
+            beforeHandoff: suspend () -> Unit = {},
+            allowByokTakeover: Boolean = false,
+        ): RoomAcpBackgroundOwner {
+            db.useReaderConnection { connection -> connection.usePrepared("PRAGMA database_list") {
+                check(it.step() && it.getText(1) == "main" && Files.isSameFile(Paths.get(it.getText(2)), databasePath)) { "ACP owner database does not match Room" }
+            } }
+            val exclusive = AcpExclusiveOwner.acquire(databasePath, previousOwner)
+            try {
+                lateinit var manager: AcpWorkerManager
+                val guard = object : AcpActiveTurnGuard {
+                    override suspend fun <T> withActiveTurn(sessionId: String, turnId: String, action: suspend () -> T): T =
+                        manager.withActiveTurn(sessionId, turnId, action)
+                }
+                val coordinator = AcpTurnCoordinator(RoomAcpSessionJournal(db, guard), now)
+                val recorded = AcpWorkerFactory { binding ->
+                    val current = AtomicReference(binding)
+                    val raw = factory(binding, coordinator.eventsFor { current.get() })
+                    val worker = if (allowByokTakeover) RoomAcpConfiguredWorker(db, raw) else raw
+                    RecordingAcpWorker(binding, worker, coordinator) { current.set(it) }
+                }
+                manager = AcpWorkerManager(recorded, RoomAcpWorkspaceAuthority(db), backend, needsGateway,
+                    holdForSettlement = retainReusableWorkers)
+                val owner = RoomAcpBackgroundOwner(db, exclusive, RoomAcpRequestLedger(db), manager, coordinator,
+                    RoomAcpNewSessionAuthority(db, catalog, allowByokTakeover), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit, foreground, afterAdmission, beforeHandoff)
+                withContext(NonCancellable) { shutdown.registerStop { owner.shutdown() } }
+                return owner
+            } catch (failure: Throwable) {
+                try { exclusive.closeAndAwait { } } catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+                throw failure
+            }
+        }
+    }
+}

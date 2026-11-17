@@ -205,6 +205,7 @@ fun CloudSettingsScreen(
     var newPassword by remember { mutableStateOf("") }
     var deletePassword by remember { mutableStateOf("") }
     var pendingLogin by remember { mutableStateOf<CloudLoginOutcome?>(null) }
+    var checkingRestoredLogin by remember { mutableStateOf(true) }
     var isBusy by remember { mutableStateOf(false) }
     var redeemCode by remember { mutableStateOf("") }
     var redeemChecking by remember { mutableStateOf(false) }
@@ -229,6 +230,20 @@ fun CloudSettingsScreen(
     fun showMessage(message: String) {
         coroutineScope.launch {
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    // A completed authentication can outlive this screen or the process. Reopen the
+    // explicit data-source choice instead of silently restoring or uploading data.
+    LaunchedEffect(cloudSyncRepository) {
+        try {
+            pendingLogin = cloudSyncRepository.pendingLoginChoice()
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (failure: Exception) {
+            showMessage(failure.message ?: operationFailed)
+        } finally {
+            checkingRestoredLogin = false
         }
     }
 
@@ -372,7 +387,7 @@ fun CloudSettingsScreen(
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                                enabled = !isBusy &&
+                                enabled = !isBusy && !checkingRestoredLogin &&
                                     email.isNotBlank() &&
                                     password.isNotBlank() &&
                                     savedServerUrl.isNotBlank()

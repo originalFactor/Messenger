@@ -59,7 +59,7 @@ object NetworkClient {
         }
     }
 
-    private fun buildClient(apiKey: String): HttpClient = createPlatformHttpClient {
+    private fun buildClient(apiKey: String): HttpClient = createDirectProviderHttpClient {
         // Non-2xx responses throw ResponseException so callers can inspect
         // status code + error body (the old Retrofit HttpException path).
         expectSuccess = true
@@ -68,7 +68,7 @@ object NetworkClient {
         }
         install(Logging) {
             level = LogLevel.HEADERS
-            sanitizeHeader { header -> header == HttpHeaders.Authorization }
+            sanitizeHeader { header -> header.equals(HttpHeaders.Authorization, ignoreCase = true) || header.equals("x-api-key", ignoreCase = true) || header.equals("x-goog-api-key", ignoreCase = true) }
         }
         defaultRequest {
             if (apiKey.isNotBlank()) {

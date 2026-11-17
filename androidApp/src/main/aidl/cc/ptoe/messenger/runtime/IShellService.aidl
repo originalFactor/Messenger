@@ -34,4 +34,17 @@ interface IShellService {
     boolean startAcpProcess(int sessionId, String executable, in String[] arguments, String envJson, String cwd, IMcpCallback callback);
     boolean sendAcpInput(int sessionId, String line);
     void stopAcpProcess(int sessionId);
+    String temporaryChatWorkspace(String conversationId);
+    // Appended protocol: absent on older Runtime versions; callers must fail closed.
+    int trackedWorkspaceProtocol();
+    int trackedWorkspaceStatus(String token);
+    cc.ptoe.messenger.runtime.ToolResult trackedWorkspaceOperation(String token, String root, String operation, String argumentsJson);
+    // Versioned synchronous grep: runs the immutable packaged binary and joins its process.
+    int safeWorkspaceProtocol();
+    cc.ptoe.messenger.runtime.ToolResult safeWorkspaceGrep(String root, String pattern, String path, String fileGlob, boolean caseSensitive, boolean fixedString, int maxResults);
+    // Callback-bound ACP stop; support is advertised separately for older companions.
+    int acpStopProtocol();
+    boolean stopAcpProcessOwned(int sessionId, IMcpCallback callback);
+    // Protocol version 2 also binds input frames to the original callback.
+    boolean sendAcpInputOwned(int sessionId, String line, IMcpCallback callback);
 }

@@ -51,11 +51,18 @@ object ApiFormatStreamParser {
         val state = DecoderState()
         jsonFlow.collect { json ->
             if (json == "[DONE]") {
-                for (event in state.flush()) emit(event)
                 return@collect
             }
-            val payload = runCatching { Json.parseToJsonElement(json) as? JsonObject }.getOrNull()
-                ?: return@collect
+            val payload = try {
+                Json.parseToJsonElement(json) as? JsonObject
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+            if (payload == null) {
+                state.invalidPayload()
+                for (event in state.drain()) emit(event)
+                return@collect
+            }
             when (format) {
                 ApiFormat.RESPONSES -> state.feedResponses(payload)
                 ApiFormat.MESSAGES -> state.feedMessages(payload)
@@ -72,6 +79,10 @@ object ApiFormatStreamParser {
      * complete entries).
      */
     fun decodeCompletion(format: ApiFormat, payload: JsonObject): ChatCompletionResponseDto {
+        hostedSearchError(payload)?.let { throw IllegalStateException(it) }
+        if (payload.str("stop_reason") == "pause_turn") {
+            throw IllegalStateException(PAUSE_TURN_ERROR)
+        }
         val text = StringBuilder()
         val reasoning = StringBuilder()
         val toolCalls = mutableListOf<ToolCallDto>()
@@ -105,7 +116,10 @@ object ApiFormatStreamParser {
                             reasoning.append(summary.str("text") ?: "")
                         }
                         "message" -> item.array("content").forEach { part ->
-                            if (part.str("type") == "output_text") text.append(part.str("text") ?: "")
+                            if (part.str("type") == "output_text") {
+                                text.append(part.str("text") ?: "")
+                                part.array("annotations").forEach { citationLink(it)?.let(text::append) }
+                            }
                         }
                     }
                 }
@@ -128,7 +142,10 @@ object ApiFormatStreamParser {
             ApiFormat.MESSAGES -> {
                 payload.array("content").forEach { block ->
                     when (block.str("type")) {
-                        "text" -> text.append(block.str("text") ?: "")
+                        "text" -> {
+                            text.append(block.str("text") ?: "")
+                            block.array("citations").forEach { citationLink(it)?.let(text::append) }
+                        }
                         "thinking" -> reasoning.append(block.str("thinking") ?: "")
                         "tool_use" -> addCall(block.str("id"), block.str("name"), block["input"])
                     }
@@ -191,28 +208,27 @@ object ApiFormatStreamParser {
         private var reasoningEmitted = false
         private var inThinkBlock = false
         private var finished = false
+        private val citations = mutableSetOf<String>()
+
+        private fun citation(value: JsonElement?) {
+            val link = (value as? JsonObject)?.let(::citationLink) ?: return
+            if (citations.add(link)) text(link)
+        }
+
+        fun invalidPayload() {
+            if (!finished) fail("Invalid provider stream response")
+        }
+
+        private fun fail(message: String) {
+            closeThink()
+            pending.add(ChatStreamEvent.Error(message))
+            finished = true
+        }
 
         fun drain(): List<ChatStreamEvent> {
             val events = pending.toList()
             pending.clear()
             return events
-        }
-
-        fun flush(): List<ChatStreamEvent> {
-            // Chat Completions emits Done on finish_reason and again on
-            // [DONE]; the other protocols already produced theirs, so a
-            // trailing sentinel is a no-op.
-            if (finished) return emptyList()
-            closeThink()
-            pending.add(
-                ChatStreamEvent.Done(
-                    finishReason = if (toolCalls.isEmpty()) "stop" else "tool_calls",
-                    usage = usage,
-                    toolCalls = completeToolCalls()
-                )
-            )
-            finished = true
-            return drain()
         }
 
         private fun reasoning(text: String) {
@@ -257,6 +273,7 @@ object ApiFormatStreamParser {
             if (finished) return
             when (record.str("type")) {
                 "response.output_text.delta" -> text(record.str("delta") ?: "")
+                "response.output_text.annotation.added" -> citation(record["annotation"])
                 "response.reasoning_summary_text.delta", "response.reasoning_text.delta" ->
                     reasoning(record.str("delta") ?: "")
                 "response.output_item.added" -> {
@@ -284,9 +301,13 @@ object ApiFormatStreamParser {
                             totalTokens = rawUsage.int("total_tokens")
                         )
                     }
-                    response.array("output").forEach { item ->
-                        if (item.str("type") != "function_call") return@forEach
-                        val index = record.int("output_index")
+                    response.array("output").forEachIndexed { index, item ->
+                        if (item.str("type") == "message") {
+                            item.array("content").forEach { part ->
+                                part.array("annotations").forEach { citation(it) }
+                            }
+                        }
+                        if (item.str("type") != "function_call") return@forEachIndexed
                         val call = toolCalls.getOrPut(index) { Triple("", "", StringBuilder()) }
                         if (call.first.isEmpty()) {
                             toolCalls[index] = Triple(
@@ -315,9 +336,9 @@ object ApiFormatStreamParser {
                 }
                 "response.failed", "error" -> {
                     val message = ((record["error"] as? JsonObject)?.str("message"))
+                        ?: (((record["response"] as? JsonObject)?.get("error") as? JsonObject)?.str("message"))
                         ?: "Upstream stream failed."
-                    pending.add(ChatStreamEvent.Error(message))
-                    finished = true
+                    fail(message)
                 }
             }
         }
@@ -337,6 +358,8 @@ object ApiFormatStreamParser {
                 }
                 "content_block_start" -> {
                     val block = record["content_block"] as? JsonObject
+                    block?.let { hostedSearchError(it) }?.let { fail(it); return }
+                    block?.array("citations")?.forEach { citation(it) }
                     if (block?.str("type") == "tool_use") {
                         val index = record.int("index")
                         toolCalls[index] = Triple(
@@ -351,6 +374,7 @@ object ApiFormatStreamParser {
                     when (delta.str("type")) {
                         "text_delta" -> text(delta.str("text") ?: "")
                         "thinking_delta" -> reasoning(delta.str("thinking") ?: "")
+                        "citations_delta" -> citation(delta["citation"])
                         "input_json_delta" -> {
                             val index = record.int("index")
                             val call = toolCalls.getOrPut(index) { Triple("", "", StringBuilder()) }
@@ -366,6 +390,7 @@ object ApiFormatStreamParser {
                         usage = UsageDto(prompt, completion, prompt + completion)
                     }
                     val stopReason = (record["delta"] as? JsonObject)?.str("stop_reason")
+                    if (stopReason == "pause_turn") { fail(PAUSE_TURN_ERROR); return }
                     if (stopReason != null) {
                         finished = true
                         closeThink()
@@ -381,9 +406,9 @@ object ApiFormatStreamParser {
                 "message_stop" -> Unit
                 "error" -> {
                     val message = ((record["error"] as? JsonObject)?.str("message"))
+                        ?: (((record["response"] as? JsonObject)?.get("error") as? JsonObject)?.str("message"))
                         ?: "Upstream stream failed."
-                    pending.add(ChatStreamEvent.Error(message))
-                    finished = true
+                    fail(message)
                 }
             }
         }
@@ -437,9 +462,9 @@ object ApiFormatStreamParser {
                 }
                 "error" -> {
                     val message = ((record["error"] as? JsonObject)?.str("message"))
+                        ?: (((record["response"] as? JsonObject)?.get("error") as? JsonObject)?.str("message"))
                         ?: "Upstream stream failed."
-                    pending.add(ChatStreamEvent.Error(message))
-                    finished = true
+                    fail(message)
                 }
             }
         }
@@ -471,3 +496,23 @@ private fun JsonElement.array(key: String): List<JsonObject> =
 
 private fun JsonElement.jsonString(): String =
     if (this is JsonPrimitive && isString) content else toString()
+
+private const val PAUSE_TURN_ERROR = "Native web search paused by provider (pause_turn); automatic continuation is not enabled."
+
+internal fun hostedSearchError(value: JsonElement): String? = when (value) {
+    is JsonObject -> if (value.str("type") == "web_search_tool_result_error") {
+        "Native web search failed: ${value.str("error_code") ?: "unknown_error"}"
+    } else value.values.firstNotNullOfOrNull(::hostedSearchError)
+    is JsonArray -> value.firstNotNullOfOrNull(::hostedSearchError)
+    else -> null
+}
+
+private fun citationLink(citation: JsonObject): String? {
+    val rawUrl = citation.str("url") ?: return null
+    if (!rawUrl.startsWith("https://") && !rawUrl.startsWith("http://")) return null
+    val url = rawUrl.replace(" ", "%20").replace("<", "%3C").replace(">", "%3E")
+        .replace("\n", "%0A").replace("\r", "%0D")
+    val title = (citation.str("title") ?: "Source").replace("\\", "\\\\")
+        .replace("[", "\\[").replace("]", "\\]").replace("\n", " ").replace("\r", " ")
+    return " [$title](<$url>)"
+}

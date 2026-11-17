@@ -1,0 +1,247 @@
+/* Copyright 2026 originalFactor. Licensed under the Apache License, Version 2.0. */
+package cc.ptoe.messenger.data.local.acp
+
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+
+internal data class AcpCompletedReplay(val messages: JsonArray, val updates: JsonArray)
+
+/** Keeps active output bounded; completed buffers remain available to detached observers. */
+internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, private val now: () -> Long) {
+    private class Turn(val binding: AcpWorkerBinding, val broker: AcpPermissionBroker) {
+        val replay = AcpEventBuffer()
+        val text = StringBuilder()
+        val transcript = mutableListOf<JsonElement>()
+        val content = mutableListOf<JsonObject>()
+        var transcriptBytes = 0L
+        var completed = false
+    }
+    private class Restore {
+        var projector: AcpReplayProjector? = null
+        var capture: AcpReplayCapture? = null
+        var completed: AcpCompletedReplay? = null
+    }
+    private val gate = Mutex()
+    private val turns = linkedMapOf<String, Turn>()
+    private val mutableActive = MutableStateFlow<Map<String, String>>(emptyMap())
+    val activeTurns: StateFlow<Map<String, String>> = mutableActive
+    private val restores = mutableMapOf<String, Restore>()
+
+    fun eventsFor(binding: AcpWorkerBinding): AcpStdioEvents = eventsFor { binding }
+
+    /** Caller holds the manager's exclusive session reservation during this transaction. */
+    suspend fun preserveSettingsReplay(binding: AcpWorkerBinding) {
+        val replay = gate.withLock { restores[binding.conversationId]?.completed } ?: return
+        journal.preserveReplayUnderReservation(binding, replay, now())
+        gate.withLock {
+            val state = restores[binding.conversationId]
+            if (state?.completed === replay) state.completed = null
+        }
+    }
+
+    internal fun eventsFor(binding: () -> AcpWorkerBinding): AcpStdioEvents = object : AcpStdioEvents {
+        override suspend fun restoreStarted(replay: Boolean) {
+            val binding = binding()
+            gate.withLock { restores[binding.conversationId] = Restore().also {
+                if (replay) { it.projector = AcpReplayProjector(now); it.capture = AcpReplayCapture() }
+            } }
+        }
+        override suspend fun restoreFinished(success: Boolean) {
+            val binding = binding()
+            gate.withLock {
+                val state = restores[binding.conversationId] ?: return@withLock
+                state.completed = if (success && state.projector != null && state.capture != null)
+                    AcpCompletedReplay(checkNotNull(state.projector).snapshot(), checkNotNull(state.capture).snapshot()) else null
+                state.projector = null
+                state.capture = null
+            }
+        }
+        override suspend fun update(turnId: String?, update: JsonObject) {
+            val binding = binding()
+            gate.withLock {
+                if (turnId == null) {
+                    restores[binding.conversationId]?.capture?.append(update)
+                    restores[binding.conversationId]?.projector?.accept(update)
+                    return@withLock
+                }
+                val turn = turns[turnId]?.takeIf { it.binding == binding && !it.completed } ?: return@withLock
+                val kind = (update["sessionUpdate"] as? JsonPrimitive)?.contentOrNull ?: return@withLock
+                val content = update["content"] as? JsonObject
+                val contentType = (content?.get("type") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                val text = (content?.get("text") as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val media = content?.takeIf { kind == "agent_message_chunk" && contentType != null && contentType != "text" }
+                val event = when (kind) {
+                    "agent_message_chunk" -> buildJsonObject {
+                        put("type", "TextDelta"); put("text", text)
+                        if (media != null) { put("contentIndex", turn.content.size); put("contentType", contentType) }
+                    }
+                    "agent_thought_chunk" -> buildJsonObject { put("type", "ThoughtDelta"); put("text", text) }
+                    "tool_call", "tool_call_update" -> buildJsonObject { put("type", "ToolUpdate"); put("update", update) }
+                    else -> return@withLock
+                }
+                if (kind == "agent_message_chunk") {
+                    require(turn.text.length.toLong() + text.length <= 4L * 1024 * 1024) { "ACP answer exceeds limit" }
+                    turn.text.append(text)
+                }
+                if (kind in setOf("agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update")) {
+                    turn.transcriptBytes += event.toString().encodeToByteArray().size + (media?.toString()?.encodeToByteArray()?.size ?: 0)
+                    require(turn.transcriptBytes <= 8 * 1024 * 1024 && turn.transcript.size < 10_000) { "ACP transcript exceeds limit" }
+                    if (media != null) turn.content.add(media)
+                    turn.transcript.add(event)
+                }
+                turn.replay.append(event)
+            }
+        }
+        override suspend fun settings(turnId: String?, settings: JsonObject) {
+            if (turnId == null) return
+            gate.withLock {
+                val turn = turns[turnId]?.takeIf { it.binding == binding() && !it.completed } ?: return@withLock
+                turn.replay.append(buildJsonObject { put("type", "SessionSettings"); put("settings", roomAcpSettings(settings)) })
+            }
+        }
+        override suspend fun permission(turnId: String, prompt: AcpPermissionPrompt?) {
+            val binding = binding()
+            gate.withLock {
+                val turn = turns[turnId]?.takeIf { it.binding == binding && !it.completed } ?: return@withLock
+                turn.replay.permission(prompt)
+                val event = if (prompt == null) buildJsonObject { put("type", "PermissionResolved") } else prompt.toUiEvent()
+                turn.replay.append(event)
+            }
+        }
+    }
+
+    suspend fun begin(binding: AcpWorkerBinding, turnId: String, content: JsonArray, broker: AcpPermissionBroker) {
+        val turn = Turn(binding, broker)
+        val replay = gate.withLock {
+            check(turnId !in turns) { "ACP turn already recorded" }
+            while (turns.size >= 64) {
+                val oldest = turns.entries.firstOrNull { it.value.completed } ?: error("Too many active ACP turns")
+                turns.remove(oldest.key)
+            }
+            check(binding.conversationId !in mutableActive.value) { "ACP conversation already has an active recorded turn" }
+            turns[turnId] = turn
+            mutableActive.value = mutableActive.value + (binding.conversationId to turnId)
+            restores[binding.conversationId]?.completed
+        }
+        try {
+            val text = content.mapNotNull { item ->
+                val obj = item as? JsonObject ?: return@mapNotNull null
+                if ((obj["type"] as? JsonPrimitive)?.contentOrNull != "text") null else (obj["text"] as? JsonPrimitive)?.contentOrNull
+            }.joinToString("\n")
+            journal.begin(binding.conversationId, turnId, text, content, now(), replay, binding)
+            if (replay != null) gate.withLock { restores[binding.conversationId]?.completed = null }
+            turn.replay.append(buildJsonObject { put("type", "TurnStarted") })
+        } catch (failure: Throwable) {
+            withContext(NonCancellable) {
+                gate.withLock {
+                    turn.completed = true
+                    if (mutableActive.value[binding.conversationId] == turnId) mutableActive.value = mutableActive.value - binding.conversationId
+                }
+                turn.replay.append(buildJsonObject { put("type", "Error"); put("message", "ACP turn could not be recorded") })
+                turn.replay.complete()
+                gate.withLock { if (mutableActive.value[binding.conversationId] == turnId) mutableActive.value = mutableActive.value - binding.conversationId }
+            }
+            throw failure
+        }
+    }
+
+    suspend fun finish(turnId: String, result: JsonObject?, error: String?) {
+        val (turn, snapshot) = gate.withLock {
+            val current = turns[turnId]?.takeIf { !it.completed } ?: return
+            current.completed = true
+            current to Triple(current.text.toString(), JsonArray(current.transcript.toList()), JsonArray(current.content.toList()))
+        }
+        val agentError = error ?: if ((result?.get("type") as? JsonPrimitive)?.contentOrNull == "Error")
+            (result?.get("message") as? JsonPrimitive)?.contentOrNull ?: "ACP agent failed" else null
+        try {
+            journal.finish(turn.binding.conversationId, turnId, snapshot.first, snapshot.second, agentError, now(), snapshot.third)
+            turn.replay.append(result ?: buildJsonObject { put("type", if (error == null) "Cancelled" else "Error"); if (error != null) put("message", error) })
+        } catch (failure: Throwable) {
+            turn.replay.append(buildJsonObject { put("type", "Error"); put("message", "ACP transcript could not be saved") })
+            throw failure
+        } finally {
+            turn.replay.complete()
+            gate.withLock { if (mutableActive.value[turn.binding.conversationId] == turnId) mutableActive.value = mutableActive.value - turn.binding.conversationId }
+        }
+    }
+
+    suspend fun decide(turnId: String, option: String): Boolean {
+        val broker = gate.withLock { turns[turnId]?.takeUnless { it.completed }?.broker } ?: return false
+        return broker.choose(turnId, option)
+    }
+
+    /** End observation without asserting that an unproven worker or its side effects stopped. */
+    suspend fun abandonUnsettled(turnId: String) = gate.withLock {
+        val turn = turns[turnId]?.takeUnless { it.completed } ?: return@withLock
+        turn.completed = true
+        turn.replay.complete()
+        if (mutableActive.value[turn.binding.conversationId] == turnId) mutableActive.value = mutableActive.value - turn.binding.conversationId
+    }
+    suspend fun snapshot(turnId: String, after: Long): AcpEventSnapshot =
+        (gate.withLock { turns[turnId]?.replay } ?: error("ACP turn is unavailable")).snapshot(after)
+    suspend fun changes(turnId: String): StateFlow<Long> = gate.withLock { turns[turnId]?.replay?.changes ?: error("ACP turn is unavailable") }
+
+    /** Distinguishes a worker that has not started recording from an invalid replay cursor. */
+    suspend fun contains(turnId: String): Boolean = gate.withLock { turnId in turns }
+}
+
+/** Adds durable input, transcript and replay without changing the ACP wire implementation. */
+internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val worker: AcpWorkerProcess, private val events: AcpTurnCoordinator,
+    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof, AcpWorkerSettings, AcpWorkerSteering {
+    @Volatile private var binding = initialBinding
+    private val begun = mutableSetOf<String>()
+    override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
+        check(binding == this.binding) { "ACP worker binding changed" }
+        return worker.start(binding, configuration, gateway)
+    }
+    override fun bindCreatedSession(binding: AcpWorkerBinding) {
+        val old = this.binding
+        check(old.agentSessionId.isEmpty() && binding.copy(agentSessionId = "") == old && binding.agentSessionId.isNotBlank()) { "ACP created session binding changed" }
+        (worker as? AcpNewSessionBinding ?: error("ACP worker cannot adopt a new session")).bindCreatedSession(binding)
+        this.binding = binding
+        onBind(binding)
+    }
+    override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
+        withContext(NonCancellable) { events.begin(binding, turnId, content, permissions); begun.add(turnId) }
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        return worker.prompt(turnId, content, permissions)
+    }
+    override suspend fun finishTurn(turnId: String, result: JsonObject?, error: String?) {
+        if (begun.remove(turnId)) events.finish(turnId, result, error)
+    }
+    override suspend fun cancelAndConfirm() = worker.cancelAndConfirm()
+    override suspend fun stopAndAwait() = worker.stopAndAwait()
+    override suspend fun sessionSettings(): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP session settings are unavailable")).sessionSettings()
+    override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP mode changes are unavailable")).setMode(modeId, permit)
+    override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP mode changes are unavailable")).setModeOption(configId, value, permit)
+    override suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP boolean changes are unavailable")).setBooleanOption(configId, value, permit)
+    override suspend fun steer(turnId: String, content: JsonArray): JsonObject =
+        (worker as? AcpWorkerSteering ?: error("ACP steering is unavailable")).steer(turnId, content)
+    override val supportsReusableTurns: Boolean get() = (worker as? AcpReusableWorkerProof)?.supportsReusableTurns == true
+    override suspend fun requireInitialQuiescence() =
+        (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireInitialQuiescence()
+    override suspend fun requireTurnQuiescence(turnId: String) =
+        (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireTurnQuiescence(turnId)
+}
+
+/** Constructs real stdio workers while requiring the platform to supply a stop-confirming transport. */
+internal fun recordingAcpWorkerFactory(
+    coordinator: AcpTurnCoordinator,
+    transports: (AcpWorkerBinding) -> AcpLineTransport,
+    endpoints: AcpGatewayEndpointFactory,
+    discovery: suspend (AcpWorkerBinding) -> String?,
+): AcpWorkerFactory = AcpWorkerFactory { binding ->
+    val current = java.util.concurrent.atomic.AtomicReference(binding)
+    val wire = AcpStdioWorker(transports(binding), endpoints, { discovery(current.get()) }, coordinator.eventsFor { current.get() })
+    RecordingAcpWorker(binding, wire, coordinator) { current.set(it) }
+}

@@ -26,3 +26,6 @@ import io.ktor.client.HttpClientConfig
  * in their own engine (e.g. Darwin on iOS).
  */
 internal expect fun createPlatformHttpClient(block: HttpClientConfig<*>.() -> Unit): HttpClient
+
+/** Provider requests must never be retried or redirected automatically. */
+internal expect fun createDirectProviderHttpClient(block: HttpClientConfig<*>.() -> Unit): HttpClient

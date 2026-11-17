@@ -11,7 +11,6 @@
 * macOS
 * Windows
 * Linux
-* TUI
 
 核心要求：
 
@@ -45,11 +44,11 @@
                                       |
                               REST/SSE + FFI
                                       |
-          +---------------+----------+----------+---------------+
-          |               |                     |               |
-       Android          iOS                 Desktop           TUI
-          |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Python / Textual
+          +---------------+---------------------+
+          |               |                     |
+       Android          iOS                 Desktop
+          |               |                     |
+       Compose        SwiftUI/            Compose MP
        + Wear         UIKit               / Native
 ```
 
@@ -123,8 +122,7 @@ AgentEvent Stream
     │
     ├── Android
     ├── iOS
-    ├── Desktop
-    └── TUI
+    └── Desktop
 ```
 
 这样不同 UI 可以共享完全相同的 Agent 行为。
@@ -271,37 +269,6 @@ Native / Skia / wgpu renderer
 
 ---
 
-# 15. TUI
-
-
-TUI 在 Python 中使用 Textual 渲染，通过 loopback REST/SSE 连接 Rust Core。
-
-```text
-Rust Core
-    ↓
-Message/Event model
-    ↓
-Terminal Renderer
-    ↓
-ANSI / VT
-```
-
-TUI 不需要模拟 GUI。
-
-可以直接将 Message/Event model 映射成：
-
-```text
-Terminal Cell
- ├── character
- ├── foreground
- ├── background
- └── attributes
-```
-
-这也使 Rust Core 与 TUI 天然契合。
-
----
-
 # 17. UI 层统一方式
 
 不共享 UI Framework，而共享：
@@ -322,10 +289,10 @@ Capability
                  │
       ┌──────────┼──────────┐
       ▼          ▼          ▼
-   Android      iOS        TUI
+   Android      iOS      Desktop
       │          │          │
       ▼          ▼          ▼
-   Native      Native     Terminal
+   Native      Native      Compose
 ```
 
 这样平台可以拥有完全不同的交互模型。
@@ -437,8 +404,6 @@ project/
 │   └── macos/
 │
 │
-├── tui/
-│
 └── shared/
     └── protocol/
 ```
@@ -528,12 +493,6 @@ Kotlin renderer
 
 ---
 
-## Phase 6 — TUI
-
-Python 客户端通过本地 Rust Core API 实现会话历史、模型配置、流式聊天和键盘导航，并显示工具调用状态。MCP 与本地工作区工具执行属于后续范围。
-
----
-
 # 22. 最终技术决策
 
 | 部分             | 技术                                   |
@@ -549,7 +508,6 @@ Python 客户端通过本地 Rust Core API 实现会话历史、模型配置、�
 | Wear OS        | **Native View / Canvas**             |
 | iOS            | SwiftUI / UIKit                      |
 | Desktop        | Compose MP / Native，根据 benchmark     |
-| TUI            | **Python / Textual**                  |
 | 跨平台协议          | Rust-defined API / FFI               |
 | 状态同步           | Event-driven                         |
 | UI Streaming   | Batched updates                      |
@@ -647,11 +605,11 @@ Compose vs View vs Canvas vs Native
                                       |
                               REST/SSE + FFI
                                       |
-          +---------------+----------+----------+---------------+
-          |               |                     |               |
-       Android          iOS                 Desktop           TUI
-          |               |                     |               |
-       Compose        SwiftUI/            Compose MP        Python / Textual
+          +---------------+---------------------+
+          |               |                     |
+       Android          iOS                 Desktop
+          |               |                     |
+       Compose        SwiftUI/            Compose MP
        + Wear         UIKit               / Native
 ```
 text
@@ -672,12 +630,12 @@ text
                                       │
                               Platform API / FFI
                                       │
-          ┌───────────────┬───────────┼──────────────┬──────────────┐
-          │               │           │              │              │
-          ▼               ▼           ▼              ▼              ▼
-          │               │           │              │              │
-      Native View      SwiftUI/    Native/       Desktop      Python TUI
-      / Canvas         UIKit       Compose MP      Renderer      Renderer
+          ┌───────────────┬───────────┼──────────────┐
+          │               │           │              │
+          ▼               ▼           ▼              ▼
+          │               │           │              │
+      Native View      SwiftUI/    Native/       Desktop
+      / Canvas         UIKit       Compose MP      Renderer
           │
        ┌──┴───┐
        ▼      ▼

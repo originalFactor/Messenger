@@ -75,7 +75,6 @@ For terminal tools on Android, also install the matching **Messenger Runtime** A
 - **Tools** — Enable tools for an assistant when needed; choose read-only or writable access.
 - **Wear OS** — Configure providers, models, and assistants on your phone, then chat from your watch.
 - **Cloud sync** — Sign in optionally to sync supported data across devices.
-- **Terminal client** — Prefer a terminal? See the [TUI guide](tui/README.md).
 
 Conversations are stored on your device. Model requests go to your selected provider; enabling cloud sync uploads supported data to your account.
 
@@ -100,7 +99,7 @@ Conversations are stored on your device. Model requests go to your selected prov
 ## Acknowledgments
 
 - [llm-typewriter](https://github.com/originalFactor/llm-typewriter) — Streaming Markdown, code, and math.
-- [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP) — Math rendering.
+- [Compose LaTeX](https://github.com/huarangmeng/latex) — Math rendering.
 - [Jetpack Compose](https://developer.android.com/jetpack/compose), [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/), and [Material 3](https://m3.material.io/) — App interface.
 - [Axum](https://github.com/tokio-rs/axum) and [OkHttp](https://square.github.io/okhttp/) — Networking.
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — Original README template.

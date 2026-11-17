@@ -21,11 +21,9 @@ import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.domain.repository.CloudFacade
 
 /**
- * The platform's local stores: the cloud facade (always the Rust-backed
- * [cc.ptoe.messenger.data.cloud.RustCloudFacade]) plus the two preferences
- * stores. Durable entity data lives in the Rust core on every platform; only
- * the preferences DataStore is platform-specific (a file on Android/Desktop,
- * OPFS in native clients).
+ * The platform's local stores: the injected Room Cloud facade plus the two
+ * preferences stores. Production creates these from the Kotlin/Room
+ * [AppBackend]; the no-backend default factories fail closed.
  */
 open class LocalStores(
     val cloud: CloudFacade,

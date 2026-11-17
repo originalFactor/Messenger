@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -60,6 +61,7 @@ fun toolIcon(name: String): ImageVector = when (name) {
     "messenger_generate_image" -> Icons.Default.Image
     "messenger_skills" -> Icons.Default.MenuBook
     "messenger_agents" -> Icons.Default.Group
+    "messenger_schedule_task" -> Icons.Default.Schedule
     else -> Icons.Default.Extension
 }
 
@@ -71,6 +73,7 @@ fun toolDisplayName(name: String): String = when (name) {
     "messenger_generate_image" -> stringResource(Res.string.tool_name_generate_image)
     "messenger_skills" -> stringResource(Res.string.tool_name_skills)
     "messenger_agents" -> stringResource(Res.string.tool_name_agents)
+    "messenger_schedule_task" -> stringResource(Res.string.tool_name_schedule_task)
     else -> name
 }
 
@@ -83,6 +86,7 @@ fun toolDescription(tool: ChatTool): String {
         "messenger_generate_image" -> stringResource(Res.string.tool_desc_generate_image)
         "messenger_skills" -> stringResource(Res.string.tool_desc_skills)
         "messenger_agents" -> stringResource(Res.string.tool_desc_agents)
+        "messenger_schedule_task" -> stringResource(Res.string.tool_desc_schedule_task)
         else -> tool.description
     }
     return if (tool is CoreToolDescriptor && !tool.capabilityEnabled) {

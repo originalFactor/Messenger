@@ -19,6 +19,7 @@
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import com.android.build.api.attributes.BuildTypeAttr
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -27,6 +28,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 // The app version is one scheme for every client: the semantic version in the
@@ -109,6 +111,9 @@ kotlin {
         // Run commonTest on the Android (JVM) host target as well; silences the
         // "commonTest source directory exists, but android host tests are not enabled" warning.
         withHostTest { }
+        withDeviceTest {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
 
     jvm("desktop")
@@ -178,7 +183,6 @@ kotlin {
         getByName("androidMain") {
             dependsOn(jvmSharedMain)
             dependencies {
-                implementation(project(":core-bindings"))
                 implementation(libs.androidx.recyclerview)
                 implementation(libs.androidx.webkit)
                 implementation(compose.preview)
@@ -201,13 +205,22 @@ kotlin {
             }
         }
 
+        getByName("androidDeviceTest") {
+            dependencies {
+                implementation(libs.junit)
+                implementation(libs.androidx.test.runner)
+                implementation(libs.androidx.test.monitor)
+                implementation(libs.kotlinx.coroutines.core)
+            }
+        }
+
         getByName("desktopTest") { dependsOn(jvmSharedTest) }
 
         getByName("desktopMain") {
             dependsOn(jvmSharedMain)
             dependencies {
-                implementation(project(":core-bindings-desktop"))
                 implementation(compose.desktop.currentOs)
+                implementation(libs.twelve.monkeys.webp)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.ktor.client.okhttp)
                 implementation(project(":llm-typewriter")) {
@@ -220,7 +233,11 @@ kotlin {
         // Room + bundled SQLite is shared by the JVM-backed targets only.
         getByName("jvmSharedMain") {
             dependencies {
+                implementation(libs.androidx.room.runtime)
                 implementation(libs.androidx.sqlite.bundled)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.okhttp)
+                implementation(libs.snakeyaml.engine)
             }
         }
 
@@ -244,6 +261,8 @@ compose.resources {
     generateResClass = always
 }
 
+// Generate Room implementations for both JVM-backed targets.
 dependencies {
-    // No KSP processors remain: entities live in the Rust core.
+    add("kspAndroid", libs.androidx.room.compiler)
+    add("kspDesktop", libs.androidx.room.compiler)
 }

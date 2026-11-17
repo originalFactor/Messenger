@@ -1,0 +1,30 @@
+<resources>
+    <string name="legacy_review_title">检查旧数据</string>
+    <string name="legacy_review_intro">比较旧数据库、Core 数据库和迁移后的数据库，只选择需要恢复的更改。缺失的记录也可能是之前有意删除的。</string>
+    <string name="legacy_review_partial">此处仅比较项目、会话的项目关联和供应商协议，其他旧数据未在此比较。</string>
+    <string name="legacy_review_old">旧数据库</string>
+    <string name="legacy_review_core">Core 数据库</string>
+    <string name="legacy_review_room">迁移后的数据库</string>
+    <string name="legacy_review_absent">不存在</string>
+    <string name="legacy_review_unknown">未知</string>
+    <string name="legacy_review_none">无</string>
+    <string name="legacy_review_projects">项目</string>
+    <string name="legacy_review_conversations">会话的项目关联</string>
+    <string name="legacy_review_providers">供应商协议</string>
+    <string name="legacy_review_projects_detail">恢复旧项目名称和工作区。</string>
+    <string name="legacy_review_conversations_detail">恢复项目关联。</string>
+    <string name="legacy_review_providers_detail">恢复协议，保留凭据。</string>
+    <string name="legacy_review_sync_detail">所选记录可能更新修改时间，并会加入云同步队列。</string>
+    <string name="legacy_review_id">ID：%1$s</string>
+    <string name="legacy_review_project_fields">名称：%1$s\n工作区：%2$s\n设备：%3$s\n创建时间：%4$s\n更新时间：%5$s</string>
+    <string name="legacy_review_conversation_fields">标题：%1$s\n项目 ID：%2$s</string>
+    <string name="legacy_review_provider_fields">名称：%1$s\n协议：%2$s</string>
+    <string name="legacy_review_unavailable">当前数据或项目选择不允许恢复此项。</string>
+    <string name="legacy_review_restore">恢复所选更改</string>
+    <string name="legacy_review_keep_current">保留当前值</string>
+    <string name="legacy_review_confirm_keep_current">保留当前值，不恢复这些旧字段？原始数据库会保留。</string>
+    <string name="legacy_review_confirm_title">确认所选更改</string>
+    <string name="legacy_review_confirm_body">应用 %1$d 项项目、%2$d 项会话关联和 %3$d 项供应商协议更改？原始数据库会保留。</string>
+    <string name="legacy_review_new_project_device">新项目将属于此设备：%1$s</string>
+    <string name="legacy_review_selection_limit">最多选择 1,000 项更改。</string>
+</resources>

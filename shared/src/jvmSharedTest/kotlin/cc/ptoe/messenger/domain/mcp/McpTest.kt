@@ -38,7 +38,9 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
 
 class McpTest {
 
@@ -46,6 +48,105 @@ class McpTest {
         ignoreUnknownKeys = true
         encodeDefaults = true
         isLenient = true
+    }
+
+    @Test fun `tool outcomes distinguish replies from uncertain dispatch`() = runBlocking {
+        var lineCallback: ((String) -> Unit)? = null
+        var closeCallback: ((Int) -> Unit)? = null
+        var mode = "success"
+        var rawResult = "{}"
+        var envelopeFields = ""
+        var calls = 0
+        val bridge = object : McpProcessBridge {
+            override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean {
+                lineCallback = onLine; closeCallback = onClose
+                return true
+            }
+            override suspend fun sendLine(line: String): Boolean {
+                val request = json.decodeFromString<JsonRpcRequest>(line)
+                when (request.method) {
+                    "initialize" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}""")
+                    "tools/list" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"tools":[]}}""")
+                    "tools/call" -> {
+                        calls++
+                        when (mode) {
+                            "success" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"content":[{"type":"text","text":"done"}]}}""")
+                            "tool-error" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"content":[{"type":"text","text":"tool error"}],"isError":true}}""")
+                            "protocol-error" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"error":{"code":-32001,"message":"server error"}}""")
+                            "malformed" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{}}""")
+                            "raw" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":$rawResult}""")
+                            "envelope" -> lineCallback?.invoke("""{"jsonrpc":"2.0","id":${request.id},$envelopeFields}""")
+                            "missing-version" -> lineCallback?.invoke("""{"id":${request.id},"result":{"content":[]}}""")
+                            "write-failed" -> return false
+                            "write-threw" -> error("partial write is possible")
+                            "closed" -> closeCallback?.invoke(9)
+                        }
+                    }
+                }
+                return true
+            }
+            override suspend fun close() = Unit
+        }
+        val client = McpClient(McpServerConfig(id = "mock", name = "Mock", transportType = McpTransportType.STDIO, command = "mock")) { bridge }
+        try {
+            assertIs<McpToolCallOutcome.NotDispatched>(client.callToolOutcome("write", "{}"))
+            assertEquals(0, calls)
+            assertTrue(client.connect())
+            val success = assertIs<McpToolCallOutcome.Result>(client.callToolOutcome("write", "{}"))
+            assertEquals("done", success.result.output)
+            assertEquals("done", client.callTool("write", "{}").output)
+            mode = "tool-error"
+            assertTrue(assertIs<McpToolCallOutcome.Result>(client.callToolOutcome("write", "{}")).result.isError)
+            mode = "protocol-error"
+            val error = assertIs<McpToolCallOutcome.ProtocolError>(client.callToolOutcome("write", "{}"))
+            assertEquals(-32001, error.code)
+            assertEquals("MCP error (-32001): server error", client.callTool("write", "{}").output)
+            mode = "malformed"
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            mode = "raw"
+            val malformedBlocks = listOf(
+                """{"type":"text"}""", """{"type":"text","text":12}""",
+                """{"type":"image","mimeType":"image/png"}""", """{"type":"image","data":"abc"}""",
+                """{"type":"image","data":"%%%+","mimeType":"image/png"}""",
+                """{"type":"audio","data":"abc","mimeType":false}""",
+                """{"type":"resource_link","uri":"file:///a"}""",
+                """{"type":"resource","resource":{"uri":"file:///a"}}""",
+                """{"type":"resource","resource":{"uri":"file:///a","text":false,"blob":"abc"}}""",
+                """{"type":"future","value":"opaque"}""", """42"""
+            )
+            for (block in malformedBlocks) {
+                rawResult = """{"content":[$block]}"""
+                assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"), block)
+            }
+            rawResult = """{"content":[],"structuredContent":42}"""
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            rawResult = """{"content":[{"type":"text","text":"hello"},{"type":"image","data":"YWJj","mimeType":"image/png"},{"type":"audio","data":"YWJj","mimeType":"audio/wav"},{"type":"resource_link","name":"a","uri":"file:///a"},{"type":"resource","resource":{"uri":"file:///b","blob":"YWJj","mimeType":"application/octet-stream"}},{"type":"resource","resource":{"uri":"file:///c","text":"content"}}],"structuredContent":{"answer":42}}"""
+            val opaque = assertIs<McpToolCallOutcome.Result>(client.callToolOutcome("write", "{}"))
+            assertEquals(json.parseToJsonElement(rawResult), opaque.rawResult)
+            assertEquals("hello\n\n\n\n\n", client.callTool("write", "{}").output)
+            mode = "envelope"
+            for (fields in listOf(
+                """"error":null,"result":{"content":[{"type":"text","text":"legacy"}]}""",
+                """"method":"tools/call","result":{"content":[{"type":"text","text":"legacy"}]}""",
+                """"params":{},"result":{"content":[{"type":"text","text":"legacy"}]}"""
+            )) {
+                envelopeFields = fields
+                assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"), fields)
+                assertEquals("legacy", client.callTool("write", "{}").output)
+            }
+            mode = "missing-version"
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            mode = "write-failed"
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            mode = "write-threw"
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            assertFailsWith<IllegalStateException> { client.callTool("write", "{}") }
+            mode = "closed"
+            assertIs<McpToolCallOutcome.Unknown>(client.callToolOutcome("write", "{}"))
+            assertIs<McpToolCallOutcome.NotDispatched>(client.callToolOutcome("write", "{}"))
+            assertEquals(31, calls)
+        } finally { client.close() }
     }
 
     @Test

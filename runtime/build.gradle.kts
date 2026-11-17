@@ -190,6 +190,7 @@ plugins {
 }
 
 android {
+    sourceSets.getByName("main").kotlin.srcDirs("workspace-transfer-shared/src/main/kotlin")
     namespace = "cc.ptoe.messenger.runtime"
     compileSdk {
         version = release(37)
@@ -211,11 +212,14 @@ android {
         targetSdk = 28
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
 
     packaging {
         jniLibs {
+            // Tracked grep executes the immutable package-installed binary, not a writable copy.
+            useLegacyPackaging = true
             // The Termux bootstrap zip is packaged under jniLibs/<abi>/libbootstrap.zip.so
             // so AGP's per-ABI split filter includes only the target ABI's archive; skip
             // llvm-strip on it since it is a zip archive, not an ELF shared object.
@@ -337,6 +341,9 @@ androidComponents {
 
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
     // The vendored Termux terminal emulator annotates its APIs.
     implementation(libs.androidx.annotation)
 }

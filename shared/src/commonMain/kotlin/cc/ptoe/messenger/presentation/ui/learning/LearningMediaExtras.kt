@@ -18,6 +18,11 @@ import org.jetbrains.compose.resources.stringResource
 
 @Composable
 internal fun ArtifactInlinePreview(id: String, modifier: Modifier = Modifier) {
+    val managedHost = AppContainerHolder.instance.artifactUiHost
+    if (managedHost != null) {
+        ManagedArtifactInlinePreview(id, managedHost, modifier)
+        return
+    }
     val signal by AppContainerHolder.instance.learningRevision.collectAsState()
     val scope = rememberCoroutineScope()
     var artifact by remember(id) { mutableStateOf<JsonObject?>(null) }
@@ -41,8 +46,9 @@ internal fun ArtifactInlinePreview(id: String, modifier: Modifier = Modifier) {
     val current = artifact?.list("revisions")?.lastOrNull()?.obj()
     if (error != null) Text(stringResource(Res.string.media_missing) + "\n" + error, color = MaterialTheme.colorScheme.error)
     else if (files != null && current != null) {
-        key(id, current["revision"]) {
-            ArtifactWebView(files!!, current.text("entry"), (artifact!!["state"] ?: JsonNull).toString(), modifier = modifier, onMessage = { raw, reply ->
+        key(id, current["revision"], current["stateVersion"], files) {
+            val bindingIdentity = remember { Any() }
+            ArtifactWebView(files!!, current.text("entry"), (artifact!!["state"] ?: JsonNull).toString(), bindingIdentity = bindingIdentity, modifier = modifier, onMessage = { raw, reply ->
                 scope.launch {
                     var messageId: JsonElement = JsonNull
                     try {

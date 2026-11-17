@@ -35,12 +35,8 @@ import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.presentation.utils.resolvedDisplayName
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
@@ -80,9 +76,20 @@ import java.net.InetSocketAddress
  * The chat and new_conversation paths reuse [MobileWearChatHandler] so the
  * business logic stays identical to the previous transport.
  */
+internal fun mobileWearRequestError(request: JSONObject, error: Exception): JSONObject = JSONObject().apply {
+    put("type", "error")
+    put("error", error.message ?: "Unknown error")
+    request.optString("requestId").takeIf { it.isNotBlank() }?.let { put("requestId", it) }
+}
+
 class MobileHttpServer : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serverLock = Any()
+    private val requests = WearRequestLifetime {
+        synchronized(serverLock) { isRunning = false }
+        stopSelf()
+    }
+    private var registered = false
     @Volatile private var wsServer: WebSocketServer? = null
     @Volatile private var nsdManager: NsdManager? = null
     @Volatile private var registrationListener: NsdManager.RegistrationListener? = null
@@ -94,23 +101,38 @@ class MobileHttpServer : Service() {
     override fun onCreate() {
         super.onCreate()
         runCatching { startInForeground() }
+        registered = MobileWearServiceOwner.requests.register(requests)
+        if (!registered) { requests.requestStop(); return }
         acquireMulticastLock()
         startServer()
         registerNsd()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!registered || !requests.accepting) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        return START_STICKY
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        isRunning = false
-        runCatching { wsServer?.stop(1_000) }
-        wsServer = null
+        if (registered) MobileWearServiceOwner.requests.retire(requests) else requests.requestStop()
+        val server = synchronized(serverLock) {
+            isRunning = false
+            wsServer.also { wsServer = null }
+        }
+        if (server != null) MobileWearServiceOwner.requests.cleanupTransport {
+            try { server.stop() } catch (failure: Exception) {
+                Log.w(TAG, "Failed to stop WebSocket server", failure)
+                throw failure
+            }
+        }
         unregisterNsd()
         runCatching { multicastLock?.release() }
         multicastLock = null
-        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -153,12 +175,18 @@ class MobileHttpServer : Service() {
     }
 
     private fun startServer() {
-        if (isRunning) return
-        isRunning = true
+        synchronized(serverLock) {
+            if (isRunning || !requests.accepting) return
+            isRunning = true
+        }
         val expectedToken = WearBridgeToken.current(this)
-        serviceScope.launch {
+        requests.launch {
+            try { MobileWearServiceOwner.requests.awaitTransportCleanup() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { Log.e(TAG, "Previous WebSocket server did not stop", failure); return@launch }
             val server = object : WebSocketServer(InetSocketAddress(PORT)) {
                 override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
+                    if (!requests.accepting) { conn.close(1001, "service stopping"); return }
                     // The socket is reachable from the whole L2 network, so the
                     // handshake token (advertised only in the mDNS TXT record)
                     // is the access control. Reject before any request runs.
@@ -173,6 +201,7 @@ class MobileHttpServer : Service() {
                 }
 
                 override fun onMessage(conn: WebSocket, message: String) {
+                    if (!requests.accepting) { conn.close(1001, "service stopping"); return }
                     val request = try {
                         JSONObject(message)
                     } catch (e: Exception) {
@@ -191,7 +220,7 @@ class MobileHttpServer : Service() {
                     // bypasses the single-response handleRequest path and pushes
                     // frames directly onto the connection as deltas arrive.
                     if (request.optString("type") == "chat") {
-                        serviceScope.launch {
+                        requests.launch {
                             val payload = request.toString().encodeToByteArray()
                             try {
                                 MobileWearChatHandler(app).handleChatRequestStreaming(payload) { frame ->
@@ -201,21 +230,20 @@ class MobileHttpServer : Service() {
                                         Log.w(TAG, "Failed to send chat frame", e)
                                     }
                                 }
+                            } catch (e: CancellationException) { throw e
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed to handle chat message: $message", e)
                             }
                         }
                         return
                     }
-                    serviceScope.launch {
+                    requests.launch {
                         val response = try {
                             handleRequest(request)
+                        } catch (e: CancellationException) { throw e
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to handle message: $message", e)
-                            JSONObject().apply {
-                                put("type", "error")
-                                put("error", e.message ?: "Unknown error")
-                            }
+                            mobileWearRequestError(request, e)
                         }
                         try {
                             conn.send(response.toString())
@@ -238,8 +266,12 @@ class MobileHttpServer : Service() {
                 }
             }
             try {
-                server.start()
-                wsServer = server
+                synchronized(serverLock) {
+                    if (isRunning && requests.accepting) {
+                        wsServer = server
+                        server.start()
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start WebSocket server", e)
             }
@@ -323,11 +355,11 @@ class MobileHttpServer : Service() {
     }
 
     private suspend fun handleSyncRequest(): JSONObject {
-        val agents = app.agentRepository.getAll().first()
+        val agents = app.agentRepository.getAllForSync()
             // 内置标题智能体是功能型实体，手表端不可见也不可选为聊天对象。
             .filter { it.role != Agent.ROLE_TITLE }
             .sortedWith(compareByDescending<Agent> { it.isDefault }.thenBy { it.name.lowercase() })
-        val conversations = app.conversationRepository.getAll().first()
+        val conversations = app.conversationRepository.getAllForSync()
             .sortedByDescending { it.updatedAt }
             .take(MAX_CONVERSATIONS)
 
@@ -338,6 +370,7 @@ class MobileHttpServer : Service() {
                     // 内置 Agent 的种子名按系统语言下发，手表直接展示。
                     put("name", agent.resolvedDisplayName())
                     put("isDefault", agent.isDefault)
+                    put("hasDefaultModel", agent.defaultModelId != null)
                     put("isReady", isAgentReady(agent))
                     // avatarVersion lets the watch decide whether it needs to
                     // fetch the bytes via get_avatar. 0 = no avatar on the phone.
@@ -401,6 +434,8 @@ class MobileHttpServer : Service() {
             put("agents", agentsJson)
             put("conversations", conversationsJson)
             put("messages", messagesJson)
+            // Message reads above must all complete successfully before absence can be authoritative.
+            put("messagesComplete", true)
             put("userAvatarVersion", avatarVersionOf(userAvatarPath))
             put("updatedAt", System.currentTimeMillis())
         }
@@ -482,14 +517,7 @@ class MobileHttpServer : Service() {
         return diff == 0
     }
 
-    private suspend fun isAgentReady(agent: Agent): Boolean {
-        val enabledModels = app.modelRepository.getAll().first().filter { it.isEnabled }
-        if (enabledModels.isEmpty()) return false
-        val model = agent.defaultModelId?.let { modelId ->
-            enabledModels.firstOrNull { it.id == modelId }
-        } ?: enabledModels.firstOrNull() ?: return false
-        return app.providerRepository.getById(model.providerId).first() != null
-    }
+    private suspend fun isAgentReady(agent: Agent): Boolean = MobileWearChatHandler(app).isAgentReady(agent)
 
     companion object {
         private const val TAG = "MobileHttpServer"

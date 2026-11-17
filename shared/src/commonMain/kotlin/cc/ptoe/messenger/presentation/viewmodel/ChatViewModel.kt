@@ -51,6 +51,7 @@ import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +64,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.background_replay_gap
 import cc.ptoe.messenger.generated.resources.chat_picture
 import cc.ptoe.messenger.generated.resources.chat_workspace_note
 import cc.ptoe.messenger.generated.resources.context_summarize_prompt
@@ -83,7 +85,6 @@ import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
 import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
 
 import cc.ptoe.messenger.core.CoreBridge
-import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
 import kotlinx.serialization.json.contentOrNull
@@ -112,7 +113,9 @@ class ChatViewModel(
      * finished reply would never be uploaded.
      */
     private val cloud: CloudFacade? = null,
-    private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
+    private val coreBridge: CoreBridge,
+    private val platformToolsEnabled: Boolean = true,
+    private val durableTurnFailureNotices: Boolean = false,
 ) : ViewModel() {
 
     private val _conversationId = MutableStateFlow<String?>(null)
@@ -170,6 +173,87 @@ class ChatViewModel(
             initialValue = emptyList()
         )
 
+    data class ToolApproval(val callId: String, val name: String, val argumentsJson: String)
+    private val _toolApproval = MutableStateFlow<ToolApproval?>(null)
+    val toolApproval = _toolApproval.asStateFlow()
+    private val _approvalBusy = MutableStateFlow(false)
+    val approvalBusy = _approvalBusy.asStateFlow()
+
+    private val _uncertainMcpCall = MutableStateFlow<cc.ptoe.messenger.domain.chat.UncertainMcpCall?>(null)
+    val uncertainMcpCall = _uncertainMcpCall.asStateFlow()
+    private val _uncertainMcpBusy = MutableStateFlow(false)
+    val uncertainMcpBusy = _uncertainMcpBusy.asStateFlow()
+    private val _uncertainMcpChecking = MutableStateFlow(false)
+    val uncertainMcpChecking = _uncertainMcpChecking.asStateFlow()
+    private val _uncertainMcpCheckFailed = MutableStateFlow(false)
+    val uncertainMcpCheckFailed = _uncertainMcpCheckFailed.asStateFlow()
+    private val _sendPreparing = MutableStateFlow(false)
+    val sendPreparing = _sendPreparing.asStateFlow()
+    private var uncertainMcpCheckSequence = 0L
+
+    private fun refreshUncertainMcpCall(conversationId: String, generation: Long) {
+        if (!coreBridge.supportsUncertainMcpCalls) return
+        val sequence = ++uncertainMcpCheckSequence
+        _uncertainMcpChecking.value = true
+        _uncertainMcpCheckFailed.value = false
+        viewModelScope.launch {
+            try {
+                val call = coreBridge.uncertainMcpCall(conversationId)
+                if (_conversationId.value == conversationId && observationGeneration == generation && uncertainMcpCheckSequence == sequence) {
+                    _uncertainMcpCall.value = call
+                    _uncertainMcpChecking.value = false
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                if (_conversationId.value == conversationId && observationGeneration == generation && uncertainMcpCheckSequence == sequence) {
+                    _uncertainMcpCheckFailed.value = true
+                    setError(failure.message ?: failure.toString())
+                }
+            }
+        }
+    }
+
+    fun retryUncertainMcpCheck() { _conversationId.value?.let { refreshUncertainMcpCall(it, observationGeneration) } }
+
+    fun acknowledgeUncertainMcpCall() {
+        val conversationId = _conversationId.value ?: return
+        val call = _uncertainMcpCall.value ?: return
+        if (!call.canAcknowledge || _uncertainMcpChecking.value) return
+        if (_uncertainMcpBusy.value) return
+        _uncertainMcpBusy.value = true
+        val generation = observationGeneration
+        viewModelScope.launch {
+            try {
+                coreBridge.acknowledgeUncertainMcpCall(conversationId, call.turnId, call.callId)
+                if (_conversationId.value == conversationId && observationGeneration == generation && _uncertainMcpCall.value == call) {
+                    uncertainMcpCheckSequence++
+                    _uncertainMcpCall.value = null
+                    _uncertainMcpChecking.value = false
+                    _uncertainMcpCheckFailed.value = false
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                setError(failure.message ?: failure.toString())
+                if (_conversationId.value == conversationId && observationGeneration == generation) refreshUncertainMcpCall(conversationId, generation)
+            }
+            finally { _uncertainMcpBusy.value = false }
+        }
+    }
+
+    fun respondToolApproval(approved: Boolean) {
+        val pending = _toolApproval.value ?: return
+        if (_approvalBusy.value) return
+        _approvalBusy.value = true
+        viewModelScope.launch {
+            try {
+                coreBridge.respondToolApproval(pending.callId, approved)
+                if (_toolApproval.value == pending) _toolApproval.value = null
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { setError(failure.message ?: failure.toString()) }
+            finally { _approvalBusy.value = false }
+        }
+    }
+
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
@@ -212,6 +296,7 @@ class ChatViewModel(
     val streamingDiff: StateFlow<String?> = _streamingDiff.asStateFlow()
 
     private var currentGenerationJob: Job? = null
+    private var observationGeneration = 0L
 
     private val _enabledModels = MutableStateFlow<List<ChatModel>>(emptyList())
     private val enabledModels: StateFlow<List<ChatModel>> = _enabledModels.asStateFlow()
@@ -231,8 +316,7 @@ class ChatViewModel(
         )
 
     /**
-     * 本会话所属项目的 workspace；null 表示该会话不属于任何项目，因此
-     * 不声明终端与工作区工具（MCP 工具不受项目约束）。
+     * 本会话所属项目；无项目时回合执行使用临时工作区。
      */
     val project: StateFlow<Project?> = conversation
         .flatMapLatest { conv ->
@@ -337,17 +421,20 @@ class ChatViewModel(
     }
 
     fun loadConversation(conversationId: String) {
-        // Switching conversations must not leave the previous conversation's
-        // turn running: its events would keep mutating the streaming
-        // StateFlows (whose message ids belong to the old conversation) and
-        // `_isGenerating` would stay true, blocking sends in the new one.
-        if (_conversationId.value != conversationId && _isGenerating.value) {
+        // Detach from the old turn; Core keeps it running independently.
+        if (_conversationId.value != conversationId) {
+            observationGeneration++
             currentGenerationJob?.cancel()
             currentGenerationJob = null
             _isGenerating.value = false
             _streamingContent.value = null
             _streamingMessageId.value = null
             _streamingDiff.value = null
+            _toolApproval.value = null
+            _uncertainMcpCall.value = null
+            uncertainMcpCheckSequence++
+            _uncertainMcpChecking.value = false
+            _uncertainMcpCheckFailed.value = false
         }
         // Switching conversations implicitly discards any unsent
         // images: the pending preview is bound to the input bar of a
@@ -355,6 +442,19 @@ class ChatViewModel(
         _pendingImages.value = emptyList()
         _conversationId.value = conversationId
         if (paginateChatHistory) historyPager.start(conversationId)
+        val generation = observationGeneration
+        refreshUncertainMcpCall(conversationId, generation)
+        viewModelScope.launch {
+            try {
+                val active = coreBridge.backgroundTurnActive(conversationId)
+                if (_conversationId.value == conversationId && observationGeneration == generation && !_isGenerating.value && active) {
+                    _isGenerating.value = true
+                    _streamingContent.value = ""
+                    currentGenerationJob = launch { observeBackgroundTurn(conversationId, generation) }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (_conversationId.value == conversationId && observationGeneration == generation) setError(e.message ?: getString(Res.string.error_unknown)) }
+        }
     }
 
     fun loadOlderMessages() = historyPager.loadOlder()
@@ -404,12 +504,15 @@ class ChatViewModel(
      * title itself is generated by [ConversationTitleGenerator] after
      * the first assistant response completes.
      */
-    fun sendMessage(text: String) {
-        val convId = _conversationId.value ?: return
-        if (text.isBlank() && _pendingImages.value.isEmpty()) return
-        if (_isGenerating.value) return
+    fun sendMessage(text: String, onAdmitted: () -> Unit = {}): Boolean {
+        val convId = _conversationId.value ?: return false
+        val submittedImages = _pendingImages.value.toList()
+        if (text.isBlank() && submittedImages.isEmpty()) return false
+        if (_isGenerating.value || _sendPreparing.value || _uncertainMcpChecking.value || _uncertainMcpCall.value != null) return false
 
+        _sendPreparing.value = true
         viewModelScope.launch {
+            try {
             // 会话快照读数据库行：conversation 是 WhileSubscribed 流，无订阅 5 秒
             // 即重置，.value 的 writable/override 等业务决策字段不可信。
             val conv = conversationRepository.getById(convId).first() ?: return@launch
@@ -424,13 +527,17 @@ class ChatViewModel(
                 return@launch
             }
 
-            val images = _pendingImages.value
-            val parts = buildMultimodalParts(text, images)
+            val parts = buildMultimodalParts(text, submittedImages)
+            if (_uncertainMcpChecking.value || _uncertainMcpCall.value != null) return@launch
             generateResponse(
                 convId, currentAgent, operation = "send", content = text,
                 partsJson = cc.ptoe.messenger.data.local.ContentPartCodec.encode(parts),
+                onAdmitted = onAdmitted,
+                submittedImages = submittedImages,
             )
+            } finally { _sendPreparing.value = false }
         }
+        return true
     }
 
     private fun buildMultimodalParts(text: String, images: List<MessageImage>): List<ContentPart> {
@@ -453,6 +560,8 @@ class ChatViewModel(
         partsJson: String? = null,
         messageId: String? = null,
         messageGroup: List<String>? = null,
+        onAdmitted: () -> Unit = {},
+        submittedImages: List<MessageImage>? = null,
     ) {
         // 会话快照读数据库行而不是 conversation.value：模式（writable）等业务
         // 决策不能依赖 WhileSubscribed 的 StateFlow（无订阅 5 秒即重置）。
@@ -466,7 +575,18 @@ class ChatViewModel(
         val (provider, model) = result
         val bridge = coreBridge
         val titleHolder = agentRepository.getAll().first().firstOrNull { it.role == Agent.ROLE_TITLE }
-        val workspace = resolveWorkspaceFor(conv)
+        val projectWorkspace = if (platformToolsEnabled) resolveWorkspaceFor(conv) else null
+        val temporaryWorkspace = if (platformToolsEnabled && conv.projectId == null && agent.toolsEnabled && builtinChatToolsSupported()) {
+            try {
+                cc.ptoe.messenger.domain.tool.temporaryChatWorkspace(conversationId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(e.message ?: "Could not create temporary chat workspace.")
+                return
+            }
+        } else null
+        val workspace = projectWorkspace ?: temporaryWorkspace
         val availableTools = builtinTools(workspace)
         val enabledTools = if (agent.toolsEnabled && availableTools.isNotEmpty()) {
             availableTools.filter { (agent.toolsConfig[it.name]) ?: true }
@@ -477,7 +597,6 @@ class ChatViewModel(
         // 请求声明共用 per-tool 开关。写入类工具（edit/create）的声明由
         // Rust 按 writable 过滤，此处保留全量映射，模型误调未声明工具时
         // 由核心回路返回错误自纠。
-        val toolsByName = enabledTools.associateBy { it.name }
         val config = TurnConfigBridge(
             conversationId = conversationId,
             operation = operation,
@@ -501,6 +620,8 @@ class ChatViewModel(
             titleAgentId = titleHolder?.id,
             titleAgentSystemPrompt = titleHolder?.systemPrompt,
             titleAgentModelId = titleHolder?.defaultModelId,
+            workspacePath = temporaryWorkspace,
+            supportsToolApproval = true,
             hasWorkspace = workspace != null,
             workspaceNote = workspace?.let {
                 getString(Res.string.chat_workspace_note, it)
@@ -514,61 +635,98 @@ class ChatViewModel(
             },
         )
 
+        if (_uncertainMcpChecking.value || _uncertainMcpCall.value != null || _conversationId.value != conversationId) return
         _isGenerating.value = true
         _streamingContent.value = ""
         _streamingDiff.value = null
 
+        val generation = ++observationGeneration
         currentGenerationJob = viewModelScope.launch {
             try {
-                bridge.runTurn(
-                    config = config,
-                    toolExecutor = { name, argumentsJson ->
-                        val tool = toolsByName[name]
-                        if (tool != null) {
-                            // Never let an exception escape the tool host: on
-                            // Android/Desktop this lambda runs inside a JNI
-                            // upcall, where a foreign exception becomes a Rust
-                            // panic ("tool host cancelled"). Report it to the
-                            // model as an error result for self-correction.
-                            try {
-                                val r = tool.execute(argumentsJson)
-                                r.output to r.isError
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                ("tool execution failed: ${e.message ?: e::class.simpleName}") to true
+                bridge.startBackgroundTurn(config)
+                if (_conversationId.value == conversationId && observationGeneration == generation) onAdmitted()
+                observeBackgroundTurn(conversationId, generation, submittedImages = submittedImages)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (_conversationId.value == conversationId && observationGeneration == generation) {
+                    _isGenerating.value = false
+                    setError(e.message ?: getString(Res.string.error_unknown))
+                }
+            }
+        }
+    }
+
+    private suspend fun observeBackgroundTurn(conversationId: String, generation: Long, submittedImages: List<MessageImage>? = null) {
+        var terminal = false
+        var retryDelay = 500L
+        var completedRetry = false
+        val replayGapMessage = getString(Res.string.background_replay_gap)
+        try {
+            while (!terminal) {
+                var replaying = true
+                var replayGap = false
+                if (_conversationId.value == conversationId && observationGeneration == generation) {
+                    _streamingContent.value = ""
+                    _streamingMessageId.value = null
+                    _toolApproval.value = null
+                }
+                try {
+                    coreBridge.observeBackgroundTurn(conversationId) { eventJson ->
+                        val event = runCatching { NetworkClient.json.parseToJsonElement(eventJson).jsonObject }.getOrNull()
+                        val eventType = event?.get("type")?.jsonPrimitive?.contentOrNull
+                        when (eventType) {
+                            "ReplayComplete" -> { replaying = false; retryDelay = 500L }
+                            "ReplayGap" -> { replayGap = true; if (_conversationId.value == conversationId && observationGeneration == generation) setError(replayGapMessage) }
+                            "ReplaySnapshot" -> if (_conversationId.value == conversationId && observationGeneration == generation) {
+                                _streamingMessageId.value = event?.get("messageId")?.jsonPrimitive?.contentOrNull
+                                _streamingContent.value = event?.get("content")?.jsonPrimitive?.contentOrNull.orEmpty()
                             }
-                        } else {
-                            "Unknown tool: $name" to true
+                            "ToolApprovalResolved" -> if (_conversationId.value == conversationId && observationGeneration == generation && _toolApproval.value?.callId == event?.get("callId")?.jsonPrimitive?.contentOrNull) _toolApproval.value = null
+                            "Finished", "Error", "Cancelled" -> terminal = true
                         }
-                    },
-                    onEventJson = { eventJson ->
-                        handleTurnEvent(eventJson, clearImagesOnStart = operation == "send")
+                        if (_conversationId.value == conversationId && observationGeneration == generation && !(replayGap && replaying && eventType == "TextDelta")) handleTurnEvent(eventJson, submittedImages)
                     }
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(e.message ?: getString(Res.string.error_unknown))
-            } finally {
+                    if (terminal) break
+                    throw IllegalStateException("The core event stream ended before completion.")
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (failure: Exception) {
+                    if (_conversationId.value == conversationId && observationGeneration == generation) setError(failure.message ?: getString(Res.string.error_unknown))
+                    // Reconnect only the observation stream. Core owns execution; do not resubmit it.
+                    val active = try { coreBridge.backgroundTurnActive(conversationId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { true }
+                    if (!active) {
+                        // The task may have completed while disconnected; its retained
+                        // terminal event is still available on a fresh subscription.
+                        if (completedRetry) break
+                        completedRetry = true
+                    }
+                    delay(retryDelay)
+                    retryDelay = (retryDelay * 2).coerceAtMost(5_000L)
+                }
+            }
+        } finally {
+            if (_conversationId.value == conversationId && observationGeneration == generation) {
                 _streamingContent.value = null
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
-                // The core wrote the assistant/tool rows itself, so mark the
-                // conversation dirty explicitly or the reply never uploads.
-                cloud?.requestLocalChange("conversation", conversationId)
+                _toolApproval.value = null
             }
         }
     }
 
     fun stopGeneration() {
-        // Dropping this client's SSE cancels only the turn it started.
-        // Core finalizes the partial message and any interrupted tools.
-        currentGenerationJob?.cancel()
+        val conversationId = _conversationId.value ?: return
+        viewModelScope.launch {
+            try { coreBridge.cancelBackgroundTurn(conversationId) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { setError(e.message ?: getString(Res.string.error_unknown)) }
+        }
     }
 
     fun retrySend(messageId: String) {
+        if (_uncertainMcpChecking.value || _uncertainMcpCall.value != null) return
         viewModelScope.launch {
             val message = messages.value.find { it.id == messageId } ?: return@launch
             if (message.status != MessageStatus.ERROR) return@launch
@@ -584,13 +742,14 @@ class ChatViewModel(
                 return@launch
             }
 
+            if (_uncertainMcpChecking.value || _uncertainMcpCall.value != null) return@launch
             generateResponse(message.conversationId, currentAgent, operation = "retry", messageId = messageId)
         }
     }
 
     fun regenerateMessage(messageId: String) {
         val convId = _conversationId.value ?: return
-        if (_isGenerating.value) return
+        if (_isGenerating.value || _uncertainMcpChecking.value || _uncertainMcpCall.value != null) return
 
         viewModelScope.launch {
             val currentMessages = messageRepository.getByConversationId(convId).first()
@@ -621,6 +780,7 @@ class ChatViewModel(
                 listOf(messageId)
             }
 
+            if (_uncertainMcpChecking.value || _uncertainMcpCall.value != null) return@launch
             generateResponse(
                 convId, currentAgent, operation = "regenerate", messageId = messageId,
                 messageGroup = idsToDelete,
@@ -716,7 +876,7 @@ class ChatViewModel(
         conversationRepository.updateLastMessage(conversationId, lastMessage, timestamp)
     }
 
-    private fun handleTurnEvent(eventJson: String, clearImagesOnStart: Boolean) {
+    private fun handleTurnEvent(eventJson: String, submittedImages: List<MessageImage>?) {
         val root = try {
             NetworkClient.json.parseToJsonElement(eventJson).jsonObject
         } catch (_: Exception) {
@@ -724,7 +884,15 @@ class ChatViewModel(
         }
         val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return
         when (type) {
-            "TurnStarted" -> if (clearImagesOnStart) { _pendingImages.value = emptyList() }
+            "ToolApprovalRequested" -> {
+                val callId = root["callId"]?.jsonPrimitive?.contentOrNull ?: return
+                val name = root["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val arguments = root["argumentsJson"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                _toolApproval.value = ToolApproval(callId, name, arguments)
+            }
+            "TurnStarted" -> if (submittedImages != null) {
+                _pendingImages.value = _pendingImages.value.filterNot { current -> submittedImages.any { it === current } }
+            }
             "StreamingStarted" -> {
                 // The Rust loop creates the placeholder row itself; this is
                 // the ONLY id that matches the row the renderer displays.
@@ -744,8 +912,12 @@ class ChatViewModel(
                 _streamingDiff.value = null
                 _isGenerating.value = false
             }
+            "SummaryFailed", "ApprovalFailed" -> {
+                val message = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (message.isNotBlank() && !durableTurnFailureNotices) setError(message)
+            }
             "TitleFailed" -> {
-                viewModelScope.launch {
+                if (!(durableTurnFailureNotices && root["durableNotice"]?.jsonPrimitive?.contentOrNull == "true")) {
                     val code = root["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     setError(code)
                 }
@@ -753,7 +925,7 @@ class ChatViewModel(
             "Error" -> {
                 val msg = root["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (msg.isNotBlank()) {
-                    setError(msg)
+                    if (!durableTurnFailureNotices) setError(msg)
                     val convId = _conversationId.value
                     val streamingId = _streamingMessageId.value
                     if (convId != null && streamingId == null) {
@@ -784,12 +956,16 @@ class ChatViewModel(
                 _streamingMessageId.value = null
                 _streamingDiff.value = null
                 _isGenerating.value = false
+                val conversationId = _conversationId.value
+                val generation = observationGeneration
+                if (conversationId != null) refreshUncertainMcpCall(conversationId, generation)
             }
         }
     }
 
     override fun onCleared() {
         super.onCleared()
+        observationGeneration++
         currentGenerationJob?.cancel()
         currentGenerationJob = null
     }
@@ -805,7 +981,9 @@ class ChatViewModel(
             builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
             projectRepository: ProjectRepository? = null,
             cloud: CloudFacade? = null,
-            coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge)
+            coreBridge: CoreBridge,
+            platformToolsEnabled: Boolean = true,
+            durableTurnFailureNotices: Boolean = false,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -819,7 +997,9 @@ class ChatViewModel(
                     builtinTools,
                     projectRepository,
                     cloud,
-                    coreBridge
+                    coreBridge,
+                    platformToolsEnabled,
+                    durableTurnFailureNotices
                 ) as T
             }
         }

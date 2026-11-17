@@ -23,13 +23,6 @@
 -keepclassmembers class cc.ptoe.messenger.data.remote.dto.** { *; }
 
 # ===========================================================================
-# RaTeX (LaTeX rendering)
-# ===========================================================================
-# LaTeX rendering is backed by RaTeX-CMP (Rust core). Keep the renderer stack
-# intact for release builds in case RaTeX-CMP does not ship its own consumer rules.
--keep class io.ratex.** { *; }
--keep class io.ratex.**$* { *; }
--dontwarn io.ratex.**
 
 # ===========================================================================
 # MobileHttpServer / MobileWearChatHandler (Wear bridge, lives in shared)

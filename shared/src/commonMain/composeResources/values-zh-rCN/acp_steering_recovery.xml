@@ -1,0 +1,10 @@
+<resources>
+    <string name="acp_steering_unknown">引导结果未知。Agent 可能已经收到输入；系统不会自动重新发送。</string>
+    <string name="acp_steering_unknown_wait">确认此结果前，请停止当前任务并等待工作进程结束。</string>
+    <string name="acp_steering_unknown_unverified">此设备无法确认先前的工作进程已停止，结果仍处于阻止状态。</string>
+    <string name="acp_steering_ack">确认未知结果</string>
+    <string name="acp_steering_ack_title">确认未知结果？</string>
+    <string name="acp_steering_ack_detail">先前的工作进程已停止，但 Agent 是否执行了输入仍未知。确认后可以开始新任务；再次发送前请检查草稿。</string>
+    <string name="acp_steering_check">检查引导状态</string>
+    <string name="acp_steering_status_error">无法检查引导状态。检查成功前将暂停新任务。</string>
+</resources>

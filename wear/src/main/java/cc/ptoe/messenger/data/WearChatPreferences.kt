@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.map
 
 private val Context.wearChatDataStore by preferencesDataStore(name = "wear_chat")
 
-class WearChatPreferences(private val context: Context) {
+class WearChatPreferences(private val context: Context) : WearChatStore {
 
     private object Keys {
         val AGENTS = stringPreferencesKey("agents")
@@ -35,24 +35,24 @@ class WearChatPreferences(private val context: Context) {
         val USER_AVATAR_PATH = stringPreferencesKey("user_avatar_path")
     }
 
-    val agents: Flow<List<WearAgent>> = context.wearChatDataStore.data.map { preferences ->
+    override val agents: Flow<List<WearAgent>> = context.wearChatDataStore.data.map { preferences ->
         WearChatJsonCodec.decodeAgents(preferences[Keys.AGENTS])
     }
 
-    val conversations: Flow<List<WearConversation>> = context.wearChatDataStore.data.map { preferences ->
+    override val conversations: Flow<List<WearConversation>> = context.wearChatDataStore.data.map { preferences ->
         WearChatJsonCodec.decodeConversations(preferences[Keys.CONVERSATIONS])
     }
 
-    val selectedConversationId: Flow<String?> = context.wearChatDataStore.data.map { preferences ->
+    override val selectedConversationId: Flow<String?> = context.wearChatDataStore.data.map { preferences ->
         preferences[Keys.SELECTED_CONVERSATION_ID]
     }
 
-    val messageHistory: Flow<Map<String, List<WearChatMessage>>> =
+    override val messageHistory: Flow<Map<String, List<WearChatMessage>>> =
         context.wearChatDataStore.data.map { preferences ->
             WearChatJsonCodec.decodeMessages(preferences[Keys.MESSAGE_HISTORY])
         }
 
-    val userAvatarPath: Flow<String?> = context.wearChatDataStore.data.map { preferences ->
+    override val userAvatarPath: Flow<String?> = context.wearChatDataStore.data.map { preferences ->
         preferences[Keys.USER_AVATAR_PATH]
     }
 
@@ -68,7 +68,7 @@ class WearChatPreferences(private val context: Context) {
         }
     }
 
-    suspend fun setSelectedConversationId(conversationId: String?) {
+    override suspend fun setSelectedConversationId(conversationId: String?) {
         context.wearChatDataStore.edit { preferences ->
             if (conversationId.isNullOrBlank()) {
                 preferences.remove(Keys.SELECTED_CONVERSATION_ID)
@@ -94,12 +94,11 @@ class WearChatPreferences(private val context: Context) {
         }
     }
 
-    suspend fun applySnapshot(
+    override suspend fun applySnapshot(
         agents: List<WearAgent>,
         conversations: List<WearConversation>,
         messages: Map<String, List<WearChatMessage>>,
-        userAvatarPath: String?,
-        selectedConversationId: String?
+        userAvatarPath: String?
     ) {
         context.wearChatDataStore.edit { preferences ->
             preferences[Keys.AGENTS] = WearChatJsonCodec.encodeAgents(agents)
@@ -110,6 +109,8 @@ class WearChatPreferences(private val context: Context) {
             } else {
                 preferences[Keys.USER_AVATAR_PATH] = userAvatarPath
             }
+            val current = preferences[Keys.SELECTED_CONVERSATION_ID]
+            val selectedConversationId = current?.takeIf { id -> conversations.any { it.id == id } } ?: conversations.firstOrNull()?.id
             if (selectedConversationId.isNullOrBlank()) {
                 preferences.remove(Keys.SELECTED_CONVERSATION_ID)
             } else {

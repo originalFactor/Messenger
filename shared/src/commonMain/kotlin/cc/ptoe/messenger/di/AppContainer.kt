@@ -37,6 +37,7 @@ import cc.ptoe.messenger.domain.repository.CloudFacade
 import cc.ptoe.messenger.domain.repository.ConversationRepository
 import cc.ptoe.messenger.domain.repository.CurrentAgentRepository
 import cc.ptoe.messenger.domain.repository.MessageRepository
+import cc.ptoe.messenger.domain.repository.LearningRepository
 import cc.ptoe.messenger.domain.repository.ModelRepository
 import cc.ptoe.messenger.domain.repository.ProviderRepository
 import cc.ptoe.messenger.domain.repository.ProjectRepository
@@ -44,11 +45,18 @@ import cc.ptoe.messenger.domain.tool.ChatTool
 import cc.ptoe.messenger.domain.tool.createBuiltinChatTools
 import cc.ptoe.messenger.domain.mcp.McpManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import cc.ptoe.messenger.presentation.platform.defaultWorkspaceRoot
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okio.Path
@@ -67,25 +75,28 @@ class AppDirs(
  * Manual service locator shared by every platform entry point
  * (Android `MessengerApplication`, Desktop `main`, the web bundle).
  *
- * Every platform runs the Rust core: the entry point installs a
- * [CoreBridge] before constructing this container, and all durable state,
- * the agent turn loop, title generation, model discovery and cloud sync live
- * behind it. Only the preferences DataStore stays platform-local.
+ * Production currently uses the Rust-backed default. A future Kotlin host can
+ * instead supply one complete [AppBackend] backed by a single database owner.
  */
 class AppContainer(
     val appDirs: AppDirs,
     val chatImageStore: ChatImageStore,
+    private val backend: AppBackend? = null,
 ) {
 
     val localDataMutex = Mutex()
 
     /** Per-platform stores: the cloud facade plus the preferences DataStore. */
-    val stores: LocalStores = createLocalStores(appDirs)
+    val stores: LocalStores = backend?.stores ?: createLocalStores(appDirs)
 
     val appPreferences = stores.appPreferences
     val themePreferences = stores.themePreferences
 
     val cloud: CloudFacade = stores.cloud
+    /** Trusted UI uses this only when the complete backend owns its sandbox lifecycle. */
+    val artifactUiHost = backend?.artifactUiHost
+    val turnFailureNotices = backend?.turnFailureNotices
+
 
     /**
      * 平台内置工具工厂。参数是所属项目的 workspace 绝对路径（无项目时
@@ -93,9 +104,17 @@ class AppContainer(
      * Re-evaluated on access: Android's tool set depends on whether the
      * companion runtime app is installed (may change during a session).
      */
-    val builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) }
+    val platformToolsEnabled: Boolean = backend?.platformToolsEnabled != false
+    val builtinTools: (String?) -> List<ChatTool> = { if (platformToolsEnabled) createBuiltinChatTools(it) else emptyList() }
 
-    val mcpManager = McpManager(appPreferences)
+    /** The injected backend owns the bridge used by this container and its consumers. */
+    val coreBridge: CoreBridge = backend?.coreBridge ?: requireNotNull(CoreBridgeRegistry.bridge) {
+        "Install CoreBridgeRegistry.bridge before constructing AppContainer"
+    }
+
+    val mcpManager = backend?.mcpOwner?.claim(appPreferences)
+        ?: McpManager(appPreferences, enabled = platformToolsEnabled, bridgeProvider = { coreBridge })
+    val mcpExecutionEnabled: Boolean = backend?.mcpExecutionEnabled ?: true
 
     /**
      * Returns active tools: built-in tools for [workspaceRoot] + active MCP
@@ -103,28 +122,18 @@ class AppContainer(
      * （见 [Agent.effectiveToolEnabled]）。
      */
     fun availableTools(workspaceRoot: String?): List<ChatTool> =
-        builtinTools(workspaceRoot) + mcpManager.activeTools.value
+        builtinTools(workspaceRoot) + if (mcpExecutionEnabled) mcpManager.activeTools.value else emptyList()
 
     /**
      * The settings inventory (Core descriptors + built-in + active MCP), used by
      * Agent tool-config and conversation-override screens. Core descriptors
      * never enter availableTools or the platform execution catalog. These screens are about
      * WHICH tools can be toggled, not about one conversation's workspace, so
-     * workspace-bound tools are listed even though they only run inside a
-     * project.
+     * workspace-bound tools are listed independently of the current chat.
      */
     fun allTools(): List<ChatTool> =
-        (coreToolCatalog.state.value.tools + createBuiltinChatTools(defaultWorkspaceRoot()) +
-            mcpManager.activeTools.value).distinctBy { it.name }
-
-    /**
-     * The Rust core every repository delegates to. Non-null by construction:
-     * the platform entry point installs it before building the container, and
-     * a container without a core could not persist anything.
-     */
-    val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge) {
-        "Install CoreBridgeRegistry.bridge before constructing AppContainer"
-    }
+        (coreToolCatalog.state.value.tools + builtinTools(defaultWorkspaceRoot()) +
+            (if (mcpExecutionEnabled) mcpManager.activeTools.value else emptyList())).distinctBy { it.name }
 
     private fun providerChanged(id: String, deleted: Boolean) {
         // 内置云 AI 服务商不参与云同步（各设备本地自建）。
@@ -150,43 +159,48 @@ class AppContainer(
         coreBridge.learningRequest("GET", "/tools/core")
     }
 
-    val learningRepository = cc.ptoe.messenger.data.repository.RustLearningRepository(coreBridge)
+    val learningRepository: LearningRepository = backend?.learning ?: cc.ptoe.messenger.data.repository.RustLearningRepository(coreBridge)
     val learningRevision = kotlinx.coroutines.flow.MutableStateFlow(0L).also { revision ->
         coreBridge.subscribe { kind, _ -> if (kind == "Other") revision.value += 1 }
     }
 
-    val providerRepository: ProviderRepository = RustProviderRepository(coreBridge) { id, deleted ->
+    val providerRepository: ProviderRepository = backend?.providers ?: RustProviderRepository(coreBridge) { id, deleted ->
         providerChanged(id, deleted)
     }
 
-    val modelRepository: ModelRepository = RustModelRepository(coreBridge) { providerId, _ ->
+    val modelRepository: ModelRepository = backend?.models ?: RustModelRepository(coreBridge) { providerId, _ ->
         modelChanged(providerId)
     }
 
-    val agentRepository: AgentRepository = RustAgentRepository(
+    val agentRepository: AgentRepository = backend?.agents ?: RustAgentRepository(
         coreBridge = coreBridge,
         onChanged = { previous, current -> agentChanged(previous, current) },
         avatarDirectory = appDirs.filesDir.resolve("agent_avatars")
     )
 
     val conversationRepository: ConversationRepository =
-        RustConversationRepository(coreBridge) { id, deleted ->
+        backend?.conversations ?: RustConversationRepository(coreBridge) { id, deleted ->
             cloud.requestLocalChange("conversation", id, deleted)
         }
 
-    val projectRepository: ProjectRepository = RustProjectRepository(coreBridge) { id, deleted ->
+    val projectRepository: ProjectRepository = backend?.projects ?: RustProjectRepository(coreBridge) { id, deleted ->
         cloud.requestLocalChange("project", id, deleted)
     }
 
     val messageRepository: MessageRepository =
-        RustMessageRepository(coreBridge, chatImageStore) { conversationId ->
+        backend?.messages ?: RustMessageRepository(coreBridge, chatImageStore) { conversationId ->
             cloud.requestLocalChange("conversation", conversationId)
         }
 
     val currentAgentRepository: CurrentAgentRepository =
-        RustCurrentAgentRepository(coreBridge, agentRepository)
+        backend?.currentAgent ?: RustCurrentAgentRepository(coreBridge, agentRepository)
 
     private val applicationScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val shutdownMutex = Mutex()
+    private val mutableShutdownCompleted = MutableStateFlow(false)
+
+    /** A failed shutdown does not mark this owner stopped; it still requires retry and recovery. */
+    val shutdownCompleted: StateFlow<Boolean> = mutableShutdownCompleted.asStateFlow()
 
     init {
         applicationScope.launch {
@@ -198,6 +212,17 @@ class AppContainer(
 
     fun refreshCoreToolCatalog() {
         applicationScope.launch { coreToolCatalog.refresh() }
+    }
+
+    /** The host first closes UI entry points, then calls this before closing the Room owner. */
+    suspend fun shutdown() = withContext(NonCancellable) {
+        shutdownMutex.withLock {
+            if (mutableShutdownCompleted.value) return@withLock
+            applicationScope.coroutineContext[Job]?.cancelAndJoin()
+            mcpManager.shutdown()
+            backend?.shutdown?.invoke()
+            mutableShutdownCompleted.value = true
+        }
     }
 
     /** Kick off initial cloud refresh / default-Agent seeding (was MessengerApplication). */
@@ -220,7 +245,8 @@ class AppContainer(
 
     suspend fun clearAllDataAndReinit() {
         localDataMutex.withLock {
-            clearLocalData(appDirs, stores)
+            check(!mutableShutdownCompleted.value) { "App owner is shut down" }
+            if (backend == null) clearLocalData(appDirs, stores) else backend.clearLocalData()
             createDefaultAgentIfNeededLocked()
         }
     }
@@ -260,6 +286,7 @@ class AppContainer(
                 topP = 1.0f,
                 maxTokens = null,
                 isDefault = true,
+                toolsEnabled = true,
                 createdAt = now,
                 updatedAt = now
             )

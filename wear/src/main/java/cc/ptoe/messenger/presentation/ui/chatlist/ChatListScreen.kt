@@ -47,7 +47,10 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
 import cc.ptoe.messenger.data.WearConnectionState
+import cc.ptoe.messenger.data.canSendExistingChat
 import cc.ptoe.messenger.presentation.ui.components.BannerMessage
+import cc.ptoe.messenger.presentation.ui.components.StorageErrorNotice
+import cc.ptoe.messenger.presentation.ui.components.SyncErrorNotice
 import cc.ptoe.messenger.presentation.ui.components.WearAvatar
 import cc.ptoe.messenger.presentation.ui.components.verticalRotaryScroll
 import cc.ptoe.messenger.presentation.viewmodel.WearChatListItem
@@ -59,6 +62,8 @@ fun ChatListScreen(
     onChatOpen: (String) -> Unit,
     onNewChat: () -> Unit,
     onReconnect: () -> Unit,
+    onRetryStorage: () -> Unit,
+    onRetrySync: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -116,6 +121,18 @@ fun ChatListScreen(
                 }
             }
 
+            uiState.storageError?.let { error ->
+                item(key = "storage_error") {
+                    StorageErrorNotice(error, uiState.isRetryingStorage, onRetryStorage)
+                }
+            }
+
+            uiState.syncError?.let { error ->
+                item(key = "sync_error") {
+                    SyncErrorNotice(error, uiState.isRetryingSync, onRetrySync)
+                }
+            }
+
             if (uiState.chats.isEmpty()) {
                 item(key = "empty") {
                     EmptyChatList(
@@ -165,7 +182,6 @@ private fun ChatListItem(
     val conversation = chat.conversation
     val agent = chat.agent
     val preview = conversation.lastMessage?.ifBlank { null } ?: "No messages yet"
-    val isReady = agent?.isReady != false
 
     androidx.wear.compose.material3.Card(
         onClick = onClick, enabled = true, modifier = modifier.fillMaxWidth(),
@@ -177,19 +193,9 @@ private fun ChatListItem(
                 avatarPath = agent?.avatarPath,
                 size = 36.dp
             )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isReady) {
-                            MaterialTheme.colorScheme.tertiary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        }
-                    )
-            )
+            if (agent != null && !agent.canSendExistingChat()) {
+                Box(Modifier.align(Alignment.BottomEnd).size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error))
+            }
         }
         Spacer(modifier = Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {

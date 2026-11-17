@@ -189,7 +189,7 @@ private fun ImageProfileEditor(onDismiss: () -> Unit, onSaved: () -> Unit) {
 }
 
 @Composable
-private fun ArtifactEditor(existing: JsonObject? = null, onDismiss: () -> Unit, onSaved: (String) -> Unit) {
+internal fun ArtifactEditor(existing: JsonObject? = null, onDismiss: () -> Unit, onSaved: (String) -> Unit) {
     val last = existing?.list("revisions")?.lastOrNull()?.obj()
     var title by remember { mutableStateOf(existing?.text("title").orEmpty()) }
     var files by remember { mutableStateOf(last?.get("files")?.obj()?.mapValues { it.value.jsonPrimitive.content }.orEmpty().ifEmpty { mapOf("index.html" to "<!doctype html><html><body><h1>Interactive lesson</h1></body></html>") }) }
@@ -227,6 +227,11 @@ private fun ArtifactEditor(existing: JsonObject? = null, onDismiss: () -> Unit, 
 
 @Composable
 fun ArtifactDialog(id: String, onDismiss: () -> Unit) {
+    val managedHost = AppContainerHolder.instance.artifactUiHost
+    if (managedHost != null) {
+        ManagedArtifactDialog(id, managedHost, onDismiss)
+        return
+    }
     val scope = rememberCoroutineScope()
     val signal by AppContainerHolder.instance.learningRevision.collectAsState()
     var artifact by remember(id) { mutableStateOf<JsonObject?>(null) }
@@ -288,8 +293,9 @@ fun ArtifactDialog(id: String, onDismiss: () -> Unit) {
                 }
                 val files = resolvedFiles
                 if (files != null && current != null && artifact != null) {
-                    key(id, current["revision"], files) {
-                        ArtifactWebView(files = files, entry = current.text("entry"), stateJson = (if (isLatest) artifact!!["state"] else JsonNull)?.toString() ?: "null", modifier = Modifier.fillMaxWidth().weight(1f), onMessage = { raw, reply ->
+                    key(id, current["revision"], current["stateVersion"], isLatest, files) {
+                        val bindingIdentity = remember { Any() }
+                        ArtifactWebView(files = files, entry = current.text("entry"), stateJson = (if (isLatest) artifact!!["state"] else JsonNull)?.toString() ?: "null", bindingIdentity = bindingIdentity, modifier = Modifier.fillMaxWidth().weight(1f), onMessage = { raw, reply ->
                             scope.launch {
                                 var messageId: JsonElement = JsonNull
                                 try {

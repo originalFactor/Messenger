@@ -83,7 +83,6 @@ Android 如需终端工具，请同时安装配套的 **Messenger Runtime** APK�
 - **工具**：按需为助手启用工具，选择只读或可写权限。
 - **手表**：在手机配置服务商、模型和智能体，再从手表聊天。
 - **云同步**：按需登录账号，在设备间同步受支持的数据。
-- **终端客户端**：喜欢终端操作？查看 [TUI 指南](tui/README.md)。
 
 对话保存在设备上。模型请求发送至所选服务商；开启云同步后，受支持的数据会上传至你的账号。
 
@@ -116,7 +115,7 @@ Android 如需终端工具，请同时安装配套的 **Messenger Runtime** APK�
 ## 致谢
 
 - [llm-typewriter](https://github.com/originalFactor/llm-typewriter)：流式 Markdown、代码和公式显示。
-- [RaTeX](https://github.com/erweixin/RaTeX) / [RaTeX-CMP](https://github.com/darriousliu/RaTeX-CMP)：数学公式渲染。
+- [Compose LaTeX](https://github.com/huarangmeng/latex)：数学公式渲染。
 - [Jetpack Compose](https://developer.android.com/jetpack/compose)、[Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/) 和 [Material 3](https://m3.material.io/)：应用界面。
 - [Axum](https://github.com/tokio-rs/axum) 和 [OkHttp](https://square.github.io/okhttp/)：网络通信。
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template)：原始 README 模板。

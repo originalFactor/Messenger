@@ -19,6 +19,12 @@
     <string name="media_missing">此资源在当前设备不可用，请从原设备导入包含资源的学习包。</string>
     <string name="media_open">打开</string>
     <string name="media_preview">交互预览</string>
+    <string name="media_run_authorize">允许运行此版本</string>
+    <string name="media_run_authorize_title">运行此应用？</string>
+    <string name="media_run_authorize_message">此版本可以在此设备上运行自己的代码。联网权限需要单独决定。</string>
+    <string name="media_open_to_authorize">打开应用以授权运行当前版本。</string>
+    <string name="media_previous_preview_unavailable">暂时无法预览旧版本。</string>
+    <string name="media_previous_preview_readonly">此旧版本为只读模式，无法访问网络。</string>
     <string name="media_version">版本 %1$d</string>
     <string name="media_previous">上一版本</string>
     <string name="media_next">下一版本</string>

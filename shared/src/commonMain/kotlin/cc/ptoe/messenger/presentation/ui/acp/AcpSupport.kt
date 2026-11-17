@@ -4,6 +4,12 @@ import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.data.util.randomUuid
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+
+/** Signals that locally configured ACP profiles changed. */
+internal val acpProfilesRevision = MutableStateFlow(0)
+internal fun notifyAcpProfilesChanged() { acpProfilesRevision.update { it + 1 } }
 
 @Serializable
 data class AcpProfile(
@@ -16,6 +22,7 @@ data class AcpProfile(
     val cwd: String? = null,
     val enabled: Boolean = true,
     val providerTakeover: Boolean = false,
+    val avatar: String? = null,
 )
 
 internal class AcpCommandException(val code: String, message: String) : IllegalStateException(message)

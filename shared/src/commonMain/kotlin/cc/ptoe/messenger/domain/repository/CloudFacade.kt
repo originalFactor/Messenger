@@ -33,9 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The cloud SaaS surface the UI consumes — login, sync, market, avatars.
  *
- * The single implementation is `RustCloudFacade`, which delegates to the Rust
- * sync engine through [cc.ptoe.messenger.core.CoreBridge] on every platform.
- * The interface stays as the seam the screens depend on.
+ * Production uses the Room Cloud facade supplied by the Kotlin/Room AppBackend.
+ * An isolated Room implementation is being developed behind the same interface.
  */
 interface CloudFacade {
     val user: Flow<CloudUser?>
@@ -56,8 +55,17 @@ interface CloudFacade {
 
     suspend fun setServerUrl(url: String)
 
+    suspend fun remoteControlCommand(
+        requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) { error("Remote control unavailable") }
+    suspend fun registerPushDevice(registrationId: String)
+    suspend fun sendPushEvent(event: String, title: String? = null, targetKind: String? = null, conversationId: String? = null, deviceId: String? = null)
+
     suspend fun login(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
     suspend fun register(email: String, password: String, serverUrl: String? = null): CloudLoginOutcome
+    /** Recover a data-source choice interrupted after authentication, when supported. */
+    suspend fun pendingLoginChoice(): CloudLoginOutcome? = null
     suspend fun refreshUser(): CloudUser
     suspend fun logout()
 

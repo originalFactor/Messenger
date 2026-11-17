@@ -1,0 +1,11 @@
+<resources>
+    <string name="mcp_uncertain_review">Review uncertain tool call</string>
+    <string name="mcp_uncertain_title">Tool outcome unknown</string>
+    <string name="mcp_uncertain_message">The tool %1$s may still be running or may have changed something. Check its effects before continuing. Acknowledging releases this conversation, but does not stop the tool or retry it.</string>
+    <string name="mcp_uncertain_acknowledge">Acknowledge and continue</string>
+    <string name="mcp_uncertain_later">Later</string>
+    <string name="mcp_uncertain_retry_check">Check tool status again</string>
+    <string name="mcp_uncertain_previous_owner">This call belongs to a previous app session. The local worker has not been verified stopped, so this conversation remains blocked until recovery is available.</string>
+    <string name="mcp_uncertain_arguments">Tool arguments</string>
+    <string name="mcp_uncertain_truncated">Arguments are truncated.</string>
+</resources>

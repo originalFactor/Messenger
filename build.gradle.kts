@@ -20,6 +20,7 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.android.kotlin.multiplatform.library) apply false
     alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.ksp) apply false
     alias(libs.plugins.kotlin.multiplatform) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.compose.multiplatform) apply false
@@ -50,7 +51,7 @@ fun loadDotEnv() {
 loadDotEnv()
 
 /**
- * 版本方案：Android(androidApp/wear/runtime) / Desktop / TUI 使用同一套
+ * 版本方案：Android(androidApp/wear/runtime) / Desktop 使用同一套
  * 语义化版本名 + git commit 计数版本号。
  *
  * - versionName: 仓库根目录 `VERSION` 文件里的语义化版本（MAJOR.MINOR.PATCH），
@@ -193,18 +194,14 @@ ext["buildRuntimeNative"] = providers.gradleProperty("messenger.buildRuntimeNati
 /**
  * Android ABIs packaged by the phone apps (`:androidApp` and its `:runtime`
  * companion) — ONE source of truth for three places that must agree:
- * `ndk.abiFilters` per build type in both modules, the cargo-ndk target list in
- * `:core-bindings`, and the Termux bootstrap archives `:runtime` packages.
+ * `ndk.abiFilters` per build type in both modules and the Termux bootstrap
+ * archives `:runtime` packages.
  *
- * Release ships `arm64-v8a` only. Debug ships `x86_64` only: Android Studio Run
- * installs the debug variant on an AVD, the emulator has no ARM translation
- * here, and a Rust cross-compile of this workspace costs minutes — so the two
- * build types share no ABI and each compiles exactly one target. This is
- * per-build-type `ndk.abiFilters`, NOT `splits.abi`: splits are global (they
- * cannot be scoped to a build type) and AGP rejects `ndk.abiFilters` that
- * contradict them, so a split-based setup could only ever produce arm64 debug
- * APKs. `armeabi-v7a` (32-bit phones) stays selectable for either build type via
- * `-Pmessenger.abis=…` / `ANDROID_ABIS=…`.
+ * Release ships `arm64-v8a` only. Debug ships `arm64-v8a` and `x86_64`
+ * for physical devices and Android Studio AVDs. This is per-build-type
+ * `ndk.abiFilters`, NOT `splits.abi`: splits are global and cannot be scoped
+ * to a build type. Other supported ABIs can be selected with the release or
+ * debug override properties and environment variables below.
  *
  * `:wear` has its own pair of lists, see below.
  */
@@ -215,9 +212,7 @@ val abiToRustTarget = mapOf(
     "x86" to "i686-linux-android",
 )
 private val DEFAULT_RELEASE_ABIS = "arm64-v8a"
-// Debug is the emulator target only: Android Studio Run installs debug, an AVD is
-// x86_64, and a debug build must not pay for a second Rust cross-compile.
-private val DEFAULT_DEBUG_ABIS = "x86_64"
+private val DEFAULT_DEBUG_ABIS = "arm64-v8a,x86_64"
 
 /**
  * `:wear` ABIs. The watch release APK ships `armeabi-v7a` (Wear OS = 64-bit
@@ -227,7 +222,7 @@ private val DEFAULT_DEBUG_ABIS = "x86_64"
  */
 private val WEAR_ABIS = setOf("armeabi-v7a", "x86_64")
 private val DEFAULT_WEAR_RELEASE_ABIS = "armeabi-v7a"
-// Watch debug is the AVD target only, same reasoning as the phone apps.
+// Watch debug is the AVD target only.
 private val DEFAULT_WEAR_DEBUG_ABIS = "x86_64"
 
 /** Parses and validates one module's ABI list: Gradle property → env var → default. */
@@ -271,9 +266,8 @@ ext["releaseAbis"] = releaseAbis()
 ext["debugAbis"] = debugAbis()
 ext["wearReleaseAbis"] = wearReleaseAbis()
 ext["wearDebugAbis"] = wearDebugAbis()
-// cargo-ndk runs once per build type over that build type's own ABI list (see
-// :core-bindings), so these are kept separate rather than unioned — that is what
-// keeps `assembleDebug` from also cross-compiling the release ABI.
+// Debug and release native target lists are kept separate for the Runtime
+// companion and bundled SQLite packaging.
 ext["releaseRustTargets"] = (ext["releaseAbis"] as List<*>)
     .map { abiToRustTarget.getValue(it as String) }
 ext["debugRustTargets"] = (ext["debugAbis"] as List<*>)

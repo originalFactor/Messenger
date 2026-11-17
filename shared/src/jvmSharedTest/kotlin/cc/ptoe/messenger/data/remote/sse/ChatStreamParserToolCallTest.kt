@@ -21,12 +21,11 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * 流式 tool_calls 增量累积测试：id/name 随首块到达、arguments 跨块拼接、
- * finish_reason 与 [DONE] 各发一次 Done 且携带相同调用列表。
+ * finish_reason、用量块和 [DONE] 合并为一次 Done。
  */
 class ChatStreamParserToolCallTest {
 
@@ -40,19 +39,18 @@ class ChatStreamParserToolCallTest {
             {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"mmand\":\"ls -la\"}"}}]},"finish_reason":"tool_calls"}]}
         """.trimIndent()
 
-        val events = ChatStreamParser.parseToEvents(flowOf(chunk1, chunk2, "[DONE]")).toList()
+        val usage = """{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}"""
+        val events = ChatStreamParser.parseToEvents(flowOf(chunk1, chunk2, usage, "[DONE]")).toList()
         val dones = events.filterIsInstance<ChatStreamEvent.Done>()
 
-        assertEquals(2, dones.size)
+        assertEquals(1, dones.size)
         assertEquals("tool_calls", dones[0].finishReason)
         assertEquals(1, dones[0].toolCalls.size)
         val call = dones[0].toolCalls.single()
         assertEquals("call_1", call.callId)
         assertEquals("terminal", call.name)
         assertEquals("{\"command\":\"ls -la\"}", call.arguments)
-        // [DONE] 触发的第二次 Done 携带相同的累积结果
-        assertEquals(dones[0].toolCalls, dones[1].toolCalls)
-        assertNull(dones[1].finishReason)
+        assertEquals(13, dones.single().usage?.totalTokens)
     }
 
     @Test

@@ -1,0 +1,10 @@
+<resources>
+    <string name="acp_steering_unknown">The steering result is unknown. The agent may have received the input; it will not be sent again automatically.</string>
+    <string name="acp_steering_unknown_wait">Stop the current task and wait for its worker to finish before acknowledging this result.</string>
+    <string name="acp_steering_unknown_unverified">This device cannot verify that the previous worker stopped. The result remains blocked.</string>
+    <string name="acp_steering_ack">Acknowledge unknown result</string>
+    <string name="acp_steering_ack_title">Acknowledge unknown result?</string>
+    <string name="acp_steering_ack_detail">The previous worker has stopped, but whether the agent acted is unknown. Acknowledging allows new work; review your draft before sending it again.</string>
+    <string name="acp_steering_check">Check steering status</string>
+    <string name="acp_steering_status_error">Could not check the steering status. New work is paused until the check succeeds.</string>
+</resources>

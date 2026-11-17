@@ -1,0 +1,16 @@
+<resources>
+    <string name="acp_replay_title">Agent replay snapshots</string>
+    <string name="acp_replay_open">Replay</string>
+    <string name="acp_replay_explanation">These snapshots contain updates replayed by the agent when a session was loaded. They are separate from your saved conversation; their relationship to it may be incomplete or uncertain.</string>
+    <string name="acp_replay_empty">No replay snapshots for this conversation.</string>
+    <string name="acp_replay_count">%1$d updates · %2$d bytes</string>
+    <string name="acp_replay_load_more">Load more updates</string>
+    <string name="acp_replay_show_details">Show original update</string>
+    <string name="acp_replay_hide_details">Hide original update</string>
+    <string name="acp_replay_export">Export snapshot</string>
+    <string name="acp_replay_exported">Snapshot exported</string>
+    <string name="acp_replay_delete">Delete snapshot</string>
+    <string name="acp_replay_delete_confirm">Delete this replay snapshot? Your saved conversation will remain.</string>
+    <string name="acp_replay_delete_unavailable">Deletion is unavailable until the ACP session owner can confirm the session is inactive.</string>
+    <string name="acp_replay_update">Agent update</string>
+</resources>

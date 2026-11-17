@@ -20,6 +20,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.google.services)
 }
 
 // Shared ABI matrix (root build script): release ships arm64-v8a, debug adds
@@ -28,6 +29,7 @@ val releaseAbis = (rootProject.ext["releaseAbis"] as? List<*>).orEmpty().filterI
 val debugAbis = (rootProject.ext["debugAbis"] as? List<*>).orEmpty().filterIsInstance<String>()
 
 android {
+    sourceSets.getByName("main").kotlin.srcDirs(rootProject.file("runtime/workspace-transfer-shared/src/main/kotlin"))
     namespace = "cc.ptoe.messenger"
     compileSdk {
         version = release(37)
@@ -41,6 +43,8 @@ android {
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["JPUSH_APPKEY"] = "0cfeb5bf0683589beee0fc75"
+        manifestPlaceholders["JPUSH_CHANNEL"] = "default_developer"
     }
 
     signingConfigs {
@@ -74,8 +78,7 @@ android {
             ndk { abiFilters.addAll(releaseAbis) }
             // Full R8 on every release build (all Android modules): minification
             // plus resource shrinking. Rules live in proguard-rules.pro next to
-            // this file; shared/android libraries contribute consumer rules
-            // (:core-bindings).
+            // this file; shared/android libraries contribute consumer rules.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -109,8 +112,14 @@ android {
 // Per-ABI split APKs are produced via splits.abi for distribution.
 
 dependencies {
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(files("libs/jpush-android-6.3.1.aar", "libs/jcore-android-5.6.0.aar", "libs/jpush-android-plugin-fcm-v6.3.1.aar"))
+    implementation(libs.firebase.messaging)
+    implementation(libs.jetbrains.compose.material3)
     implementation(project(":shared"))
-    implementation(project(":core-bindings"))
     implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
@@ -124,4 +133,6 @@ dependencies {
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
     implementation(libs.ktor.client.core)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.sqlite.bundled)
 }

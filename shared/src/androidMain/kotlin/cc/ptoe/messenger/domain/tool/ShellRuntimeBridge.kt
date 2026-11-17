@@ -40,6 +40,8 @@ interface ShellRuntimeBridge {
     /** Whether the companion app is installed (cheap PackageManager check). */
     fun isInstalled(): Boolean
 
+    suspend fun temporaryChatWorkspace(conversationId: String): String
+
     // Workspace-confined file operations. The workspace lives in the
     // companion's own data directory (own UID), so the main app reaches it
     // only through these calls.
@@ -75,7 +77,9 @@ interface ShellRuntimeBridge {
         envJson: String?,
         onOutput: (String) -> Unit,
         onError: (String) -> Unit,
-        onClosed: (Int) -> Unit
+        onClosed: (Int) -> Unit,
+        /** The Runtime connection was lost; this does not establish that the child exited. */
+        onConnectionLost: () -> Unit
     ): Boolean
     suspend fun sendMcpInput(sessionId: Int, line: String): Boolean
     suspend fun stopMcpProcess(sessionId: Int)

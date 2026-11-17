@@ -20,8 +20,10 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +36,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Watch-side bridge to the phone. Replaces the previous DataLayer-based
@@ -46,15 +49,12 @@ import java.util.UUID
  * opens a WebSocket, and both sides speak the same line-delimited JSON
  * protocol as before.
  *
- * Public surface: [syncUpdates] / [chatFrames] / [newChatResponses] flows
- * and the [requestChat] / [requestNewConversation] methods. Chat is now
- * streaming (see [chatFrames]); the other request types are still
- * single request / single response.
+ * Chat frames use per-request channels; sync and new-chat responses use flows.
  */
 class WearBridgeClient(
     context: Context,
     private val scope: CoroutineScope
-) {
+) : WearChatTransport {
     private val appContext = context.applicationContext
     private val networkBridge = WearNetworkBridge(context, scope)
 
@@ -63,14 +63,7 @@ class WearBridgeClient(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
-    val syncUpdates: SharedFlow<WearSyncSnapshot> = _syncUpdates.asSharedFlow()
-
-    /**
-     * Streaming chat frames from the phone. The repository subscribes to this
-     * (filtered by requestId) and accumulates deltas until a terminal Done /
-     * Error frame arrives. See [WearNetworkBridge.chatFrames].
-     */
-    val chatFrames: SharedFlow<WearChatFrame> = networkBridge.chatFrames
+    override val syncUpdates: SharedFlow<WearSyncSnapshot> = _syncUpdates.asSharedFlow()
 
     private val _newChatResponses = MutableSharedFlow<WearNewChatResponse>(
         // Same reasoning as the old chatResponses: requestNewConversation emits
@@ -80,19 +73,22 @@ class WearBridgeClient(
         extraBufferCapacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
-    val newChatResponses: SharedFlow<WearNewChatResponse> = _newChatResponses.asSharedFlow()
+    override val newChatResponses: SharedFlow<WearNewChatResponse> = _newChatResponses.asSharedFlow()
 
     /**
      * Snapshot of the network transport's current state, surfaced to the UI
      * so the chat list can show a "waiting for phone" banner.
      */
-    val connectionState: StateFlow<WearConnectionState> = networkBridge.connectionState
+    override val connectionState: StateFlow<WearConnectionState> = networkBridge.connectionState
 
     /** Bumped each time the user asks for an explicit reconnect from the UI. */
     private val _reconnectRequests = MutableStateFlow(0)
     val reconnectRequests: StateFlow<Int> = _reconnectRequests.asStateFlow()
 
     private var syncJob: Job? = null
+    private val syncGate = WearSyncFailureGate()
+    override val syncError: StateFlow<String?> = syncGate.error
+    private val syncGeneration = AtomicLong(0)
     private var lastUpdatedAt: Long = 0L
 
     // 指数退避：空闲时逐步增大轮询间隔
@@ -110,7 +106,7 @@ class WearBridgeClient(
     private val avatarDir = File(appContext.filesDir, "agent_avatars").apply { mkdirs() }
     private val userAvatarFile = File(appContext.filesDir, "user_avatar.jpg")
 
-    fun start() {
+    override fun start() {
         if (syncJob != null) return
         syncJob = scope.launch {
             // Race the polling loop against user-initiated reconnect requests
@@ -158,7 +154,7 @@ class WearBridgeClient(
         runCatching { networkBridge.close() }
     }
 
-    fun loadExistingState() {
+    override fun loadExistingState() {
         // The polling loop in start() already performs the initial fetch, so
         // this is a no-op kept for API compatibility with [WearChatRepository].
         start()
@@ -169,13 +165,21 @@ class WearBridgeClient(
      * immediately on its next iteration. Use this from the UI when the user
      * taps a "Reconnect" button.
      */
-    fun requestReconnect() {
+    override fun requestReconnect() {
         _reconnectRequests.value = _reconnectRequests.value + 1
     }
 
-    private suspend fun requestSync() {
-        val response = networkBridge.requestSync() ?: return
-        if (response.optString("type") != "sync_response") return
+    override fun markSyncBarrier(): Long = syncGeneration.incrementAndGet()
+
+    override fun requestSyncNow() { scope.launch { requestSync() } }
+    override suspend fun retrySync(): Boolean = requestSync(explicitRetry = true)
+
+    private suspend fun requestSync(explicitRetry: Boolean = false): Boolean = syncGate.run(explicitRetry) {
+        val requestGeneration = syncGeneration.get()
+        val response = networkBridge.requestSync() ?: error("Phone did not respond to sync.")
+        if (response.optString("type") != "sync_response") {
+            error(response.optString("error").ifBlank { "Phone returned an invalid sync response." })
+        }
         val updatedAt = response.optLong("updatedAt", 0L)
 
         // 检查是否有数据变化
@@ -195,36 +199,36 @@ class WearBridgeClient(
             )
         }
 
-        runCatching {
-            val agentsArray = response.optJSONArray("agents") ?: JSONArray()
-            val conversationsJson = response.optJSONArray("conversations")?.toString() ?: "[]"
-            val messagesJson = response.optJSONObject("messages")?.toString() ?: "{}"
+        // Incomplete responses are not authoritative snapshots and must not erase cached history.
+        val agentsArray = response.getJSONArray("agents")
+        val conversationsArray = response.getJSONArray("conversations")
+        val messagesObject = response.getJSONObject("messages")
+        val complete = if (response.has("messagesComplete")) {
+            response.opt("messagesComplete") as? Boolean ?: error("Invalid sync completeness flag")
+        } else false
+        validateWearSyncSnapshot(agentsArray, conversationsArray, messagesObject, complete)
+        val conversationsJson = conversationsArray.toString()
+        val messagesJson = messagesObject.toString()
 
-            // Pull avatar bytes only for agents whose version actually
-            // changed since the last sync — keeps the (potentially large)
-            // image transfer off the WebSocket on every 3s poll.
-            val avatarPaths = fetchAgentAvatars(agentsArray)
-            val userAvatarPath = fetchUserAvatar(response.optLong("userAvatarVersion", 0L))
+        // Pull avatar bytes only for agents whose version actually changed.
+        val avatarPaths = fetchAgentAvatars(agentsArray)
+        val userAvatarPath = fetchUserAvatar(response.optLong("userAvatarVersion", 0L))
 
-            val agents = WearChatJsonCodec.decodeAgentsFromSync(
-                agentsArray.toString(),
-                avatarPaths
+        val agents = WearChatJsonCodec.decodeAgentsFromSync(agentsArray.toString(), avatarPaths)
+        val conversations = WearChatJsonCodec.decodeConversationsFromSync(conversationsJson)
+        val messages = WearChatJsonCodec.decodeMessagesFromSync(messagesJson)
+
+        _syncUpdates.emit(
+            WearSyncSnapshot(
+                agents = agents,
+                conversations = conversations,
+                messages = messages,
+                userAvatarPath = userAvatarPath,
+                updatedAt = updatedAt,
+                syncGeneration = requestGeneration,
+                messagesComplete = complete
             )
-            val conversations = WearChatJsonCodec.decodeConversationsFromSync(conversationsJson)
-            val messages = WearChatJsonCodec.decodeMessagesFromSync(messagesJson)
-
-            _syncUpdates.emit(
-                WearSyncSnapshot(
-                    agents = agents,
-                    conversations = conversations,
-                    messages = messages,
-                    userAvatarPath = userAvatarPath,
-                    updatedAt = updatedAt
-                )
-            )
-        }.onFailure {
-            Log.w(TAG, "Failed to parse sync response", it)
-        }
+        )
     }
 
     /**
@@ -278,7 +282,8 @@ class WearBridgeClient(
             return cachedFile.absolutePath
         }
         val requestId = "avatar-$key-${UUID.randomUUID()}"
-        val response = runCatching { request(requestId) }.getOrNull() ?: return null
+        val response = try { request(requestId) } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null } ?: return null
         if (response.optLong("version", 0L) == 0L) {
             // Phone now reports no avatar; clean up.
             cachedAvatarVersions.remove(key)
@@ -304,14 +309,17 @@ class WearBridgeClient(
 
     /**
      * Sends a chat request to the phone. The phone then streams the reply back
-     * as [chatFrames] (chat_delta* -> chat_done | chat_error), which the
-     * caller is expected to subscribe to *before* calling this so no early
-     * deltas are missed (the bridge buffers up to 128 recent frames anyway).
+     * to its registered channel. The caller registers before sending and
+     * unregisters after receiving a terminal frame or abandoning the request.
      *
      * Returns success once the request frame is queued; a failure means the
      * socket is not connected and the caller should surface a banner.
      */
-    suspend fun requestChat(
+    override fun registerChat(requestId: String): ReceiveChannel<WearChatFrame> = networkBridge.registerChat(requestId)
+
+    override fun unregisterChat(requestId: String) = networkBridge.unregisterChat(requestId)
+
+    override suspend fun requestChat(
         requestId: String,
         conversationId: String,
         text: String
@@ -324,7 +332,7 @@ class WearBridgeClient(
         }
     }
 
-    suspend fun requestNewConversation(
+    override suspend fun requestNewConversation(
         requestId: String,
         agentId: String?
     ): Result<Unit> {

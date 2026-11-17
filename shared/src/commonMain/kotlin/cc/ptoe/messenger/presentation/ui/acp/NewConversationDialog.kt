@@ -13,12 +13,14 @@ import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.generated.resources.*
 import cc.ptoe.messenger.presentation.utils.agentDisplayNames
+import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.ui.components.resolveAcpAvatar
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.put
 import org.jetbrains.compose.resources.stringResource
 
-private data class ConversationAgentChoice(val id: String, val name: String, val description: String)
+private data class ConversationAgentChoice(val id: String, val name: String, val description: String, val avatar: String?)
 
 @Composable
 fun NewConversationDialog(
@@ -37,14 +39,14 @@ fun NewConversationDialog(
     var selected by remember { mutableStateOf(initialAgentId ?: messenger.firstOrNull()?.id) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    val choices = messenger.map { ConversationAgentChoice(it.id, names[it.id] ?: it.name, it.description) } + external
+    val choices = messenger.map { ConversationAgentChoice(it.id, names[it.id] ?: it.name, it.description, it.avatar) } + external
     LaunchedEffect(core, projectId) {
         external = emptyList()
         if (projectId == null) return@LaunchedEffect
         try {
             core.controlSettings() // Seed the editable templates once before listing them.
             external = requestAcp(core, "catalog").objects("agents").filter { it.text("kind") == "acp" }
-                .map { ConversationAgentChoice(it.text("id"), it.text("name"), it.text("description")) }
+                .map { ConversationAgentChoice(it.text("id"), it.text("name"), it.text("description"), resolveAcpAvatar(it.text("id"), it.text("avatar"))) }
             if (selected == null) selected = external.firstOrNull()?.id
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { error = failure.message.orEmpty() }
@@ -58,6 +60,8 @@ fun NewConversationDialog(
                         modifier = Modifier.padding(vertical = 2.dp),
                     ) {
                         RadioButton(selected == choice.id, onClick = null, enabled = !busy)
+                        AgentAvatar(choice.avatar, size = 40.dp)
+                        Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
                             Text(choice.name, style = MaterialTheme.typography.titleSmall)
                             if (choice.id.startsWith("acp:")) Text(stringResource(Res.string.acp_agent_suffix), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

@@ -21,6 +21,9 @@ sealed class Screen(val route: String) {
     data object Chat : Screen("chat/{conversationId}") {
         fun createRoute(conversationId: String) = "chat/$conversationId"
     }
+    data object RemoteConversation : Screen("remote_chat/{deviceId}/{conversationId}") {
+        fun createRoute(deviceId: String, conversationId: String) = "remote_chat/$deviceId/$conversationId"
+    }
     data object Learning : Screen("learning")
     data object Agents : Screen("agents")
     data object AgentMarket : Screen("agent_market")
@@ -32,6 +35,7 @@ sealed class Screen(val route: String) {
     data object CloudSettings : Screen("cloud_settings")
     data object AcpSettings : Screen("acp_settings")
     data object ToolsSettings : Screen("tools_settings")
+    data object ScheduledTasks : Screen("scheduled_tasks")
     data object Skills : Screen("skills")
 
     data object ProviderEdit : Screen("provider_edit?providerId={providerId}") {

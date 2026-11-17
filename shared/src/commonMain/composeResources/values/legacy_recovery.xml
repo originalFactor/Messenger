@@ -1,0 +1,30 @@
+<resources>
+    <string name="legacy_review_title">Review older data</string>
+    <string name="legacy_review_intro">Compare the older database, the Core database, and the migrated database. Select only changes you want to restore. Missing records may have been deleted intentionally.</string>
+    <string name="legacy_review_partial">This review covers projects, conversation project links, and provider protocols. Other older data is not compared here.</string>
+    <string name="legacy_review_old">Older database</string>
+    <string name="legacy_review_core">Core database</string>
+    <string name="legacy_review_room">Migrated database</string>
+    <string name="legacy_review_absent">Not present</string>
+    <string name="legacy_review_unknown">Unknown</string>
+    <string name="legacy_review_none">None</string>
+    <string name="legacy_review_projects">Projects</string>
+    <string name="legacy_review_conversations">Conversation project links</string>
+    <string name="legacy_review_providers">Provider protocols</string>
+    <string name="legacy_review_projects_detail">Restores the older project name and workspace.</string>
+    <string name="legacy_review_conversations_detail">Restores the project link.</string>
+    <string name="legacy_review_providers_detail">Restores the protocol; credentials are kept.</string>
+    <string name="legacy_review_sync_detail">Selected records may receive a new modification time and are queued for cloud sync.</string>
+    <string name="legacy_review_id">ID: %1$s</string>
+    <string name="legacy_review_project_fields">Name: %1$s\nWorkspace: %2$s\nDevice: %3$s\nCreated: %4$s\nUpdated: %5$s</string>
+    <string name="legacy_review_conversation_fields">Title: %1$s\nProject ID: %2$s</string>
+    <string name="legacy_review_provider_fields">Name: %1$s\nProtocol: %2$s</string>
+    <string name="legacy_review_unavailable">This change cannot be selected with the current data or project selection.</string>
+    <string name="legacy_review_restore">Restore selected changes</string>
+    <string name="legacy_review_keep_current">Keep current values</string>
+    <string name="legacy_review_confirm_keep_current">Keep the current values without restoring any of these older fields? The original databases will be kept.</string>
+    <string name="legacy_review_confirm_title">Confirm selected changes</string>
+    <string name="legacy_review_confirm_body">Apply %1$d project, %2$d conversation link, and %3$d provider protocol changes? Original databases will be kept.</string>
+    <string name="legacy_review_new_project_device">New projects will be owned by this device: %1$s</string>
+    <string name="legacy_review_selection_limit">Select at most 1,000 changes.</string>
+</resources>

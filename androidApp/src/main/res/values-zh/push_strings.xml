@@ -1,0 +1,6 @@
+<resources>
+    <string name="push_consent_title">启用推送通知？</string>
+    <string name="push_consent_message">推送通知使用极光推送和 Firebase 云消息，并处理设备及网络信息以送达通知。点击阅读极光隐私政策。</string>
+    <string name="push_consent_enable">启用</string>
+    <string name="push_consent_later">暂不启用</string>
+</resources>

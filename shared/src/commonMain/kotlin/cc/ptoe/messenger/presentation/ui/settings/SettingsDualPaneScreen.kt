@@ -40,11 +40,12 @@ import cc.ptoe.messenger.presentation.ui.acp.AcpSettingsScreen
 import cc.ptoe.messenger.presentation.ui.providers.ProvidersSinglePaneScreen
 import org.jetbrains.compose.resources.stringResource
 
-private enum class SettingsDetailPane { Empty, Cloud, Tools, Acp, Skills, Providers, Licenses }
+private enum class SettingsDetailPane { Empty, Cloud, Tools, Acp, Skills, ScheduledTasks, Providers, Licenses }
 
 @Composable
 fun SettingsDualPaneScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenConversation: (String) -> Unit = {}
 ) {
     var pane by rememberSaveable { mutableStateOf(SettingsDetailPane.Empty) }
 
@@ -59,6 +60,7 @@ fun SettingsDualPaneScreen(
                 onProvidersClick = { pane = SettingsDetailPane.Providers },
                 onToolsClick = { pane = SettingsDetailPane.Tools },
                 onAcpSettingsClick = { pane = SettingsDetailPane.Acp },
+                onScheduledTasksClick = { pane = SettingsDetailPane.ScheduledTasks },
                 onSkillsClick = { pane = SettingsDetailPane.Skills },
                 onCloudSettingsClick = { pane = SettingsDetailPane.Cloud },
                 onLicensesClick = { pane = SettingsDetailPane.Licenses }
@@ -90,6 +92,11 @@ fun SettingsDualPaneScreen(
                 )
 
                 SettingsDetailPane.Acp -> AcpSettingsScreen(onBackClick = { pane = SettingsDetailPane.Empty })
+
+                SettingsDetailPane.ScheduledTasks -> cc.ptoe.messenger.presentation.ui.scheduled.ScheduledTasksScreen(
+                    onBackClick = { pane = SettingsDetailPane.Empty },
+                    onOpenConversation = onOpenConversation
+                )
 
                 SettingsDetailPane.Skills -> cc.ptoe.messenger.presentation.ui.skills.SkillsScreen(
                     onBackClick = { pane = SettingsDetailPane.Empty }

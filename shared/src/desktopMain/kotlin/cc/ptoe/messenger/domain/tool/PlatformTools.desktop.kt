@@ -20,5 +20,13 @@ actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> =
     if (workspaceRoot == null) emptyList()
     else listOf(TerminalTool(workspaceRoot = workspaceRoot)) + WorkspaceTool.allFor(workspaceRoot)
 
+actual suspend fun temporaryChatWorkspace(conversationId: String): String? {
+    val key = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(conversationId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    val dir = java.io.File(java.io.File(System.getProperty("java.io.tmpdir"), "messenger-chat-workspaces"), key)
+    check(dir.isDirectory || dir.mkdirs()) { "Could not create temporary chat workspace." }
+    return dir.absolutePath
+}
+
 /** Desktop always ships the shell + workspace tool implementations. */
 actual fun builtinChatToolsSupported(): Boolean = true

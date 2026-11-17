@@ -162,6 +162,28 @@ internal object TermuxRuntime {
         )
     }
 
+    /** Only the package-installed executable is trusted to complete without spawning children. */
+    fun supportsSafeWorkspaceGrep(context: Context): Boolean = safeRipgrep(context) != null
+
+    private fun safeRipgrep(context: Context): File? {
+        val executable = File(context.applicationInfo.nativeLibraryDir, "librg.so")
+        val directory = executable.parentFile ?: return null
+        return executable.takeIf {
+            it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) && it.canExecute() && !java.nio.file.Files.isWritable(it.toPath()) &&
+                !java.nio.file.Files.isWritable(directory.toPath())
+        }
+    }
+
+    /** Tracked grep runs only the immutable executable installed with this APK. */
+    suspend fun trackedWorkspaceGrep(
+        context: Context, root: String?, pattern: String, path: String, fileGlob: String?,
+        caseSensitive: Boolean, fixedString: Boolean, maxResults: Int, onStarted: (Long) -> Unit,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        val executable = safeRipgrep(context)
+            ?: return@withContext ToolResult("Tracked grep requires the immutable packaged ripgrep binary.", isError = true)
+        WorkspaceOps.grep(workspaceRoot(context, root), pattern, path, fileGlob, caseSensitive, fixedString, maxResults, executable, onStarted)
+    }
+
     suspend fun workspaceRead(
         context: Context,
         root: String?,
@@ -765,6 +787,7 @@ internal object TermuxRuntime {
         val process: Process,
         private val writer: java.io.BufferedWriter
     ) {
+        @Synchronized
         fun sendLine(line: String): Boolean {
             return try {
                 writer.write(line)
@@ -777,8 +800,11 @@ internal object TermuxRuntime {
         }
 
         fun close() {
+            // A full stdin pipe can keep writer.close() blocked behind sendLine().
+            // Stop and wait for the child first so the blocked writer can unwind.
+            process.destroyForcibly()
+            process.waitFor()
             runCatching { writer.close() }
-            runCatching { process.destroyForcibly() }
         }
     }
 
@@ -798,6 +824,7 @@ internal object TermuxRuntime {
             return null
         }
         return withContext(Dispatchers.IO) {
+            var launched: Process? = null
             try {
                 val workspace = if (cwd == null) runtime.workspace else {
                     File(cwd).canonicalFile.takeIf { it.isDirectory && it.isAbsolute } ?: return@withContext null
@@ -819,7 +846,7 @@ internal object TermuxRuntime {
                     }
                 }
                 builder.environment().putAll(env)
-                val process = builder.start()
+                val process = builder.start().also { launched = it }
                 val writer = process.outputStream.bufferedWriter(StandardCharsets.UTF_8)
                 val session = McpProcessSession(process, writer)
 
@@ -832,8 +859,7 @@ internal object TermuxRuntime {
                             }
                         }
                     } catch (_: Exception) {}
-                    val code = runCatching { process.waitFor() }.getOrDefault(-1)
-                    onClosed(code)
+                    notifyConfirmedChildExit({ process.waitFor() }, onClosed)
                 }.start()
 
                 // Background thread reading stderr lines
@@ -848,10 +874,23 @@ internal object TermuxRuntime {
                 }.start()
 
                 session
-            } catch (e: Exception) {
+            } catch (failure: Throwable) {
+                cleanupFailedMcpLaunch(launched, failure)
                 null
             }
         }
+    }
+
+    /** A failed post-exec launch may not discard an unjoined direct child. */
+    internal fun cleanupFailedMcpLaunch(process: Process?, failure: Throwable) {
+        if (process != null) try {
+            process.destroyForcibly()
+            process.waitFor()
+        } catch (cleanup: Throwable) {
+            if (cleanup !== failure) cleanup.addSuppressed(failure)
+            throw IllegalStateException("Direct child cleanup failed after launch", cleanup)
+        }
+        if (failure !is Exception) throw failure
     }
 
     private fun supportedAbi(): String? = android.os.Build.SUPPORTED_ABIS.firstNotNullOfOrNull {

@@ -17,6 +17,49 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalTestApi::class)
 class AcpChatMessagesTest {
     @Test
+    fun remoteOmissionIsVisibleForBothRolesAndLegacyTruncation() {
+        val rows = Json.parseToJsonElement("""[
+            {"id":"user","role":"user","text":"","detailsOmitted":true},
+            {"id":"assistant","role":"assistant","text":"Answer","detailsOmitted":true},
+            {"id":"legacy","role":"assistant","text":"Old","eventsTruncated":true},
+            {"id":"plain","role":"assistant","text":"Plain"}
+        ]""").jsonArray.map { it.jsonObject }
+        val labels = AcpContentLabels("image", "audio", "attachment", "<omitted>")
+        val messages = acpChatMessages("acp:session", rows, labels = labels)
+        assertEquals(listOf("<omitted>", "Answer\n<omitted>\n", "Old\n<omitted>\n", "Plain"), messages.map { it.content })
+    }
+
+    @Test
+    fun mediaIsVisibleAndKeepsItsPositionAroundToolEvents() {
+        val rows = Json.parseToJsonElement("""[
+            {"id":"user","role":"user","text":"Question","timestamp":1,"status":"sent","content":[
+                {"type":"image","data":"aW1hZ2U=","mimeType":"image/png"},
+                {"type":"audio","data":"YQ==","mimeType":"audio/wav"},
+                {"type":"resource","resource":{"uri":"file:///note","text":"note"}}
+            ]},
+            {"id":"agent","role":"assistant","text":"BeforeAfter","timestamp":2,"status":"sent","content":[
+                {"type":"text","text":"Before"}, {"type":"image","data":"aW1hZ2U=","mimeType":"image/png"},
+                {"type":"audio","data":"YQ==","mimeType":"audio/wav"}, {"type":"resource_link","name":"file","uri":"file:///file"}
+            ],"events":[
+                {"type":"TextDelta","text":"Before"}, {"type":"TextDelta","text":"","contentIndex":1},
+                {"type":"ToolUpdate","update":{"toolCallId":"tool","title":"Tool","status":"completed"}},
+                {"type":"TextDelta","text":"After"}, {"type":"TextDelta","text":"","contentIndex":2},
+                {"type":"TextDelta","text":"","contentIndex":3}
+            ]},
+            {"id":"old","role":"assistant","text":"Old","timestamp":3,"status":"sent",
+                "content":[{"type":"audio","data":"YQ==","mimeType":"audio/wav"}],"events":[{"type":"TextDelta","text":"Old"}]}
+        ]""").jsonArray.map { it.jsonObject }
+        val labels = AcpContentLabels("<image>", "<audio>", "<attachment>")
+        val messages = acpChatMessages("acp:session", rows, labels = labels)
+        assertEquals("Question\n<audio>\n<attachment>", messages.first().content)
+        assertEquals(1, messages.first().parts.filterIsInstance<ContentPart.Image>().size)
+        val group = buildChatItems(messages).filterIsInstance<ChatListItem.ToolGroupItem>().single()
+        assertEquals("Before\n<image>\n", group.rounds.single().content)
+        assertEquals("After\n<audio>\n<attachment>\n", group.finalMessage?.content)
+        assertEquals("Old\n<audio>\n", messages.last().content)
+    }
+
+    @Test
     fun textAndIncrementalToolOutputRetainTheirOrderAndStatus() {
         val row = Json.parseToJsonElement("""{
             "id":"reply","role":"assistant","text":"BeforeBetweenAfter","timestamp":123,"status":"sending","events":[

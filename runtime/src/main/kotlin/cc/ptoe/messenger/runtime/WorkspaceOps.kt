@@ -47,7 +47,7 @@ internal object WorkspaceOps {
         boundedList(files.map { relative(root, it) }, maxResults, "No matching files.")
     }
 
-    fun grep(root: File, pattern: String, path: String, fileGlob: String?, caseSensitive: Boolean, fixedString: Boolean, maxResults: Int, rgBinary: File?): ToolResult = guarded {
+    fun grep(root: File, pattern: String, path: String, fileGlob: String?, caseSensitive: Boolean, fixedString: Boolean, maxResults: Int, rgBinary: File?, onStarted: ((Long) -> Unit)? = null, trackedShell: String = "/system/bin/sh", timeoutMillis: Long = 30_000): ToolResult = guarded {
         require(pattern.isNotEmpty()) { "Search pattern cannot be empty." }
         val rg = rgBinary?.takeIf { it.isFile && it.canExecute() }
             ?: return@guarded ToolResult("ripgrep is not available in the runtime.", isError = true)
@@ -85,49 +85,112 @@ internal object WorkspaceOps {
             add(pattern)
             add(searchPath)
         }
-        val process = ProcessBuilder(command)
-            .directory(workspaceRoot)
-            .redirectErrorStream(false)
-            .start()
-        // When the search root is a single FILE, rg prints `line:text`
-        // without any filename — prefix the workspace-relative file so rows
-        // keep the contract ("dir/a.txt:2:...").
-        val fileRootPrefix = if (base.isFile) {
-            if (insideWorkspace) {
-                workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/')
-            } else {
-                base.absolutePath.replace('\\', '/')
-            }
-        } else {
-            null
-        }
-        val rows = mutableListOf<String>()
-        process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-            for (line in lines) {
-                rows += if (fileRootPrefix != null) {
-                    if (line.isNotEmpty()) "$fileRootPrefix:$line" else line
-                } else {
-                    // Row shape: `path\0line:text` — the NUL is the field
-                    // separator, so colons inside the matched text survive.
-                    val nul = line.indexOf('\u0000')
-                    if (nul >= 0) {
-                        normalizePath(line.substring(0, nul)) + ":" + line.substring(nul + 1)
-                    } else {
-                        normalizePath(line)
+        // The fixed script announces its PID before exec. Caller data remains argv only.
+        // No user-controlled output can precede the marker in the stdout pipe.
+        val tracked = onStarted != null
+        val argv = if (tracked) listOf(trackedShell, "-c", "printf 'MGRP1:%s\\n' \"\$\$\"; exec \"\$@\"", "tracked-rg") + command else command
+        val builder = ProcessBuilder(argv).directory(workspaceRoot).redirectErrorStream(false)
+        if (tracked) builder.environment().clear()
+        require(timeoutMillis > 0) { "Invalid grep timeout." }
+        val process = builder.start()
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        val stderr = StringBuilder()
+        val stderrFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        var stderrThread: Thread? = null
+        var watchdog: Thread? = null
+        try {
+            stderrThread = Thread({
+                try {
+                    process.errorStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val buffer = CharArray(4096)
+                        while (true) {
+                            val count = reader.read(buffer)
+                            if (count < 0) break
+                            val keep = minOf(count, (8192 - stderr.length).coerceAtLeast(0))
+                            if (keep > 0) stderr.append(buffer, 0, keep)
+                        }
                     }
-                }
-                if (rows.size > maxResults) break
+                } catch (failure: Throwable) { stderrFailure.set(failure) }
+            }, "messenger-grep-stderr").apply { isDaemon = true; start() }
+            watchdog = Thread({
+                try {
+                    if (!process.waitFor(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        timedOut.set(true)
+                        process.destroyForcibly()
+                    }
+                } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            }, "messenger-grep-timeout").apply { isDaemon = true; start() }
+            val output = process.inputStream.bufferedReader(Charsets.UTF_8)
+            if (onStarted != null) {
+                val marker = readBoundedLine(output, 64) ?: error("Tracked grep did not announce its PID")
+                require(marker.matches(Regex("MGRP1:[1-9][0-9]*"))) { "Invalid tracked grep PID marker" }
+                onStarted(marker.removePrefix("MGRP1:").toLong())
             }
+            // A single file uses rg's line:text shape; add its path for consistency.
+            val fileRootPrefix = if (base.isFile) {
+                if (insideWorkspace) workspaceRoot.toPath().relativize(base.toPath()).toString().replace('\\', '/')
+                else base.absolutePath.replace('\\', '/')
+            } else null
+            val rows = mutableListOf<String>()
+            var countChars = 0
+            var truncated = false
+            output.use { reader ->
+                while (true) {
+                    val line = readBoundedLine(reader, MAX_REPLY_CHARS) ?: break
+                    val row = if (fileRootPrefix != null) {
+                        if (line.isNotEmpty()) "$fileRootPrefix:$line" else line
+                    } else {
+                        val nul = line.indexOf('\u0000')
+                        if (nul >= 0) normalizePath(line.substring(0, nul)) + ":" + line.substring(nul + 1) else normalizePath(line)
+                    }
+                    if (rows.size >= maxResults || countChars + row.length > MAX_REPLY_CHARS) {
+                        truncated = true
+                        break
+                    }
+                    rows.add(row)
+                    countChars += row.length + 1
+                }
+            }
+            val exit = process.waitFor()
+            checkNotNull(stderrThread).join()
+            if (timedOut.get()) return@guarded ToolResult("ripgrep timed out.", isError = true)
+            stderrFailure.get()?.let { error("Could not read ripgrep errors: ${it.message}") }
+            if (exit != 0 && exit != 1 && !truncated) {
+                return@guarded ToolResult(stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "ripgrep failed.", isError = true)
+            }
+            val body = if (rows.isEmpty()) "No matches." else rows.joinToString("\n")
+            ToolResult(body + if (truncated) "\n(results truncated at $maxResults)" else "", isError = false)
+        } catch (error: Exception) {
+            // Android closes the pipe when the watchdog kills rg, which can interrupt the read
+            // before it reaches the ordinary timeout check above. Preserve the useful reason.
+            if (timedOut.get()) ToolResult("ripgrep timed out.", isError = true) else throw error
+        } finally {
+            if (process.isAlive) process.destroyForcibly()
+            // A Binder reply is never sent before the trusted executable has exited.
+            var interrupted = false
+            while (process.isAlive) {
+                try { process.waitFor() } catch (_: InterruptedException) { interrupted = true }
+            }
+            watchdog?.let { thread -> while (thread.isAlive) {
+                try { thread.join() } catch (_: InterruptedException) { interrupted = true }
+            } }
+            stderrThread?.let { thread -> while (thread.isAlive) {
+                try { thread.join() } catch (_: InterruptedException) { interrupted = true }
+            } }
+            if (interrupted) Thread.currentThread().interrupt()
         }
-        val stderr = process.errorStream.bufferedReader(Charsets.UTF_8).readText()
-        val exit = process.waitFor()
-        if (exit == 2) {
-            return@guarded ToolResult(stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "ripgrep failed.", isError = true)
+    }
+
+    /** Prevent a single maliciously long line from allocating unbounded memory. */
+    private fun readBoundedLine(reader: java.io.BufferedReader, max: Int): String? {
+        val line = StringBuilder()
+        while (true) {
+            val ch = reader.read()
+            if (ch < 0) return if (line.isEmpty()) null else line.toString()
+            if (ch == '\n'.code) return line.toString().removeSuffix("\r")
+            check(line.length < max) { "ripgrep output line exceeded limit" }
+            line.append(ch.toChar())
         }
-        val truncated = rows.size > maxResults
-        if (truncated) rows.removeAt(rows.lastIndex)
-        val body = if (rows.isEmpty()) "No matches." else rows.joinToString("\n")
-        ToolResult(body + if (truncated) "\n(results truncated at $maxResults)" else "", isError = false)
     }
 
     /** Normalizes row path separators to forward slashes. */

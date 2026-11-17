@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.presentation.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -29,12 +30,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import cc.ptoe.messenger.data.util.fileExists
+import cc.ptoe.messenger.generated.resources.Res
+import cc.ptoe.messenger.generated.resources.acp_claude
+import cc.ptoe.messenger.generated.resources.acp_codex
+import cc.ptoe.messenger.generated.resources.acp_opencode
 import coil3.compose.AsyncImage
+import org.jetbrains.compose.resources.painterResource
+
+/** Resolve bundled ACP identities for both new and previously saved profiles. */
+fun resolveAcpAvatar(profileId: String?, avatar: String?): String? =
+    avatar?.takeIf { it.isNotBlank() } ?: profileId?.removePrefix("acp:")
+        ?.takeIf { it in setOf("codex", "claude-code", "opencode") }
+        ?.let { "acp-builtin:$it" }
 
 @Composable
 fun AgentAvatar(
@@ -48,19 +62,36 @@ fun AgentAvatar(
     // registry maps FileSystem-backed values (Path / file:// URIs) onto a
     // ThrowingFileSystem, so any such model would fail to load.
     val avatarSource = remember(avatar) {
-        avatar?.takeIf { it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://") }
+        avatar?.takeIf {
+            it.isNotBlank() && !it.startsWith("acp-builtin:") &&
+                !it.startsWith("http://") && !it.startsWith("https://")
+        }
     }
     val isValid = avatarSource != null && fileExists(avatarSource)
     val remoteAvatar = avatar?.takeIf { allowRemote && (it.startsWith("http://") || it.startsWith("https://")) }
+    val builtinIcon = when (avatar) {
+        "acp-builtin:codex" -> Res.drawable.acp_codex
+        "acp-builtin:claude-code" -> Res.drawable.acp_claude
+        "acp-builtin:opencode" -> Res.drawable.acp_opencode
+        else -> null
+    }
 
     Box(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(if (avatar == "acp-builtin:claude-code") Color.White else MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
     ) {
-        if (isValid || remoteAvatar != null) {
+        if (builtinIcon != null) {
+            Image(
+                painter = painterResource(builtinIcon),
+                contentDescription = null,
+                modifier = Modifier.size(size * 0.65f),
+                colorFilter = if (avatar == "acp-builtin:claude-code") null
+                    else ColorFilter.tint(MaterialTheme.colorScheme.onPrimaryContainer),
+            )
+        } else if (isValid || remoteAvatar != null) {
             AsyncImage(
                 model = avatarSource ?: remoteAvatar,
                 contentDescription = null,

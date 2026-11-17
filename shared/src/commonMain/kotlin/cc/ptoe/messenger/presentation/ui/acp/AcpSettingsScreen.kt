@@ -26,6 +26,10 @@ import cc.ptoe.messenger.data.util.randomUuid
 import cc.ptoe.messenger.di.AppContainerHolder
 import cc.ptoe.messenger.generated.resources.*
 import cc.ptoe.messenger.presentation.ui.components.ConfirmationDialog
+import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.ui.components.resolveAcpAvatar
+import cc.ptoe.messenger.presentation.platform.copyAvatarToInternal
+import cc.ptoe.messenger.presentation.platform.rememberAvatarImagePicker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
@@ -57,6 +61,7 @@ fun AcpSettingsScreen(onBackClick: () -> Unit) {
                 val current = core.controlSettings()
                 core.saveControlSettings(JsonObject(current + ("agents" to json.encodeToJsonElement(next))))
                 reload()
+                notifyAcpProfilesChanged()
                 completed()
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) { snackbar.showSnackbar(failure.message.orEmpty())
@@ -81,6 +86,8 @@ fun AcpSettingsScreen(onBackClick: () -> Unit) {
                         onClick = { editing = profile }, enabled = !busy,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                     ) {
+                            AgentAvatar(resolveAcpAvatar(profile.id, profile.avatar), size = 40.dp)
+                            Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(profile.name, style = MaterialTheme.typography.titleMedium)
                                 if (profile.description.isNotBlank()) Text(profile.description, style = MaterialTheme.typography.bodyMedium)
@@ -122,9 +129,26 @@ internal fun AcpProfileDialog(profile: AcpProfile?, busy: Boolean, onDismiss: ()
     var env by remember { mutableStateOf(Json.encodeToString(profile?.env ?: emptyMap<String, String>())) }
     var cwd by remember { mutableStateOf(profile?.cwd.orEmpty()) }
     var providerTakeover by remember { mutableStateOf(profile?.providerTakeover ?: false) }
+    var avatar by remember { mutableStateOf(profile?.avatar) }
+    var copyingAvatar by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(stringResource(if (isNew) Res.string.acp_add else Res.string.acp_edit)) },
+    val scope = rememberCoroutineScope()
+    val avatarPicker = rememberAvatarImagePicker { path ->
+        copyingAvatar = true
+        scope.launch {
+            try {
+                val copied = copyAvatarToInternal(path, "acp_avatars")
+                if (copied != null) avatar = copied
+            } finally { copyingAvatar = false }
+        }
+    }
+    AlertDialog(onDismissRequest = { if (!busy && !copyingAvatar) onDismiss() }, title = { Text(stringResource(if (isNew) Res.string.acp_add else Res.string.acp_edit)) },
         text = { Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AgentAvatar(resolveAcpAvatar(profile?.id, avatar), size = 48.dp)
+                TextButton(enabled = !busy && !copyingAvatar, onClick = { avatarPicker.launch() }) { Text(stringResource(Res.string.agent_edit_change_avatar)) }
+                if (avatar != null) TextButton(enabled = !busy && !copyingAvatar, onClick = { avatar = null }) { Text(stringResource(Res.string.agent_edit_remove_avatar)) }
+            }
             OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.tools_mcp_name)) }, singleLine = true)
             OutlinedTextField(description, { description = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.acp_description)) })
             OutlinedTextField(command, { command = it }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(Res.string.tools_mcp_command)) }, singleLine = true)
@@ -142,10 +166,10 @@ internal fun AcpProfileDialog(profile: AcpProfile?, busy: Boolean, onDismiss: ()
                 )
             }
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-        } }, confirmButton = { TextButton(enabled = !busy && name.isNotBlank() && command.isNotBlank(), onClick = {
+        } }, confirmButton = { TextButton(enabled = !busy && !copyingAvatar && name.isNotBlank() && command.isNotBlank(), onClick = {
             try {
                 onSave(AcpProfile(profile?.id ?: randomUuid(), name.trim(), description.trim(), command.trim(),
-                    Json.decodeFromString(args), Json.decodeFromString(env), cwd.trim().ifBlank { null }, profile?.enabled ?: true, providerTakeover))
+                    Json.decodeFromString(args), Json.decodeFromString(env), cwd.trim().ifBlank { null }, profile?.enabled ?: true, providerTakeover, avatar))
             } catch (failure: Exception) { error = failure.message.orEmpty() }
-        }) { Text(stringResource(Res.string.action_save)) } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) } })
+        }) { Text(stringResource(Res.string.action_save)) } }, dismissButton = { TextButton(enabled = !busy && !copyingAvatar, onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) } })
 }

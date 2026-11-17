@@ -21,7 +21,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Common Kotlin bridge to the Rust Agent Core ([CoreHandle]).
+ * Common Kotlin bridge contract implemented by the Kotlin/Room backend.
  * Platform targets (Android, Desktop) supply their actual native handle.
  */
 interface CoreBridge {
@@ -30,6 +30,16 @@ interface CoreBridge {
     /** Authenticated local learning/media API; never exposed to generated JavaScript. */
     suspend fun learningRequest(method: String, path: String, body: String? = null): String =
         error("Learning API is unavailable in this Core bridge")
+
+    /** True while Core is executing a turn, scheduled task or image job. */
+    suspend fun hasActiveTasks(): Boolean = false
+
+    suspend fun scheduledTaskRequest(method: String, path: String, body: String? = null): String =
+        error("Scheduled tasks unavailable")
+
+    suspend fun toolApprovalSettings(method: String, body: String? = null): String = error("Tool approval unavailable")
+
+    suspend fun respondToolApproval(callId: String, approved: Boolean) { error("Tool approval unavailable") }
 
     suspend fun learningAsset(id: String): ByteArray = error("Asset API is unavailable")
 
@@ -47,6 +57,7 @@ interface CoreBridge {
     fun deleteModel(id: String)
 
     fun listAgentsJson(): String
+    fun listAgentsForSyncJson(): String = listAgentsJson()
     fun getAgentJson(id: String): String?
     fun getDefaultAgentJson(): String?
     fun getTitleAgentJson(): String?
@@ -59,6 +70,7 @@ interface CoreBridge {
     fun deleteProject(id: String)
 
     fun listConversationsJson(): String
+    fun listConversationsForSyncJson(): String = listConversationsJson()
     fun listConversationsByAgentJson(agentId: String): String
     fun listConversationsByProjectJson(projectId: String): String
     fun getConversationJson(id: String): String?
@@ -94,6 +106,9 @@ interface CoreBridge {
     fun kvDelete(key: String)
 
     // Cloud & Sync
+    suspend fun cloudPushDevice(registrationId: String) { error("Push unavailable") }
+    suspend fun cloudRemovePushDevice() { error("Push unavailable") }
+    suspend fun cloudPushEvent(event: String, title: String? = null, targetKind: String? = null, conversationId: String? = null, deviceId: String? = null) { error("Push unavailable") }
     suspend fun cloudLogin(email: String, password: String): String
     suspend fun cloudRegister(email: String, password: String): String
     suspend fun cloudLogout()
@@ -130,7 +145,7 @@ interface CoreBridge {
     suspend fun cloudCacheAvatar(scope: String, accountId: String, id: String, url: String, version: String?, destDir: String): String
 
     // Cloud account settings, avatars, market mutations and the login flows.
-    // Android/Desktop use RestCoreBridge; all native clients use RestCoreBridge
+    // Android/Desktop use the injected Kotlin/Room AppBackend bridge.
     // boundary for this migration phase.
     suspend fun cloudPushSnapshot(): Long
     suspend fun cloudSyncWith(
@@ -169,6 +184,7 @@ interface CoreBridge {
      * event loop cannot block.
      */
     suspend fun controlSettings(): kotlinx.serialization.json.JsonObject = error("Device control unavailable")
+    suspend fun remoteStatus(): kotlinx.serialization.json.JsonObject = error("Device control unavailable")
     suspend fun saveControlSettings(settings: kotlinx.serialization.json.JsonObject) {
         error("Device control unavailable")
     }
@@ -177,6 +193,40 @@ interface CoreBridge {
         command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
     ) { error("Device control unavailable") }
+    /** Local, read-only ACP history; it must not require platform tool publication. */
+    suspend fun localAcpHistory(sessionId: String, before: String?): kotlinx.serialization.json.JsonObject {
+        var result: kotlinx.serialization.json.JsonObject? = null
+        controlCommand(cc.ptoe.messenger.data.util.randomUuid(), kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("history"))
+            put("sessionId", kotlinx.serialization.json.JsonPrimitive(sessionId))
+            before?.let { put("before", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }) { event ->
+            check(result == null) { "ACP history returned multiple results" }
+            result = event
+        }
+        return checkNotNull(result) { "ACP history ended without a result" }
+    }
+    /** Optional owner-local inspection of saved agent replay, independent of ACP workers. */
+    val supportsAcpReplaySnapshots: Boolean get() = false
+    /** Backend exposes explicit review of an uncertain local steering request. */
+    val supportsAcpSteeringRecovery: Boolean get() = false
+    val supportsAcpReplayDeletion: Boolean get() = false
+    suspend fun listAcpReplaySnapshots(sessionId: String): List<AcpReplaySnapshot> = error("ACP replay snapshots unavailable")
+    suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int): AcpReplayPage = error("ACP replay snapshots unavailable")
+    suspend fun deleteAcpReplaySnapshot(sessionId: String, snapshotId: String): Unit = error("ACP replay snapshots unavailable")
+    /** Local-only, explicit acknowledgement; it does not prove a remote tool stopped. */
+    val supportsUncertainMcpCalls: Boolean get() = false
+    suspend fun uncertainMcpCall(conversationId: String): cc.ptoe.messenger.domain.chat.UncertainMcpCall? = null
+    suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String): Unit =
+        error("MCP uncertainty acknowledgement is unavailable")
+    suspend fun remoteControlCommand(
+        requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
+        onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
+    ) { error("Remote control unavailable") }
+    suspend fun remoteControlSignal(requestId: String, optionId: String? = null) { error("Remote control unavailable") }
+    suspend fun startBackgroundAcp(requestId: String, command: kotlinx.serialization.json.JsonObject) { error("Background ACP unavailable") }
+    suspend fun backgroundAcpBySession(sessionId: String): kotlinx.serialization.json.JsonObject? = error("Background ACP unavailable")
+    suspend fun backgroundAcpEvents(requestId: String, after: Long): kotlinx.serialization.json.JsonObject = error("Background ACP unavailable")
     suspend fun controlCancel(requestId: String) { error("Device control unavailable") }
     suspend fun controlPermission(requestId: String, optionId: String) { error("Device control unavailable") }
     // Device-local Agent Skills packages. YAML validation and tool policy belong to Core.
@@ -191,11 +241,23 @@ interface CoreBridge {
     suspend fun agentDelegationEnabled(): Boolean = false
     suspend fun setAgentDelegationEnabled(enabled: Boolean) { error("Agent delegation unavailable") }
 
+    suspend fun startBackgroundTurn(config: TurnConfigBridge) { error("Background turns unavailable") }
+    suspend fun backgroundTurnActive(conversationId: String): Boolean = false
+    suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) { error("Background turns unavailable") }
+    suspend fun cancelBackgroundTurn(conversationId: String) { error("Background turns unavailable") }
+
     suspend fun runTurn(
         config: TurnConfigBridge,
         toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     )
+
+    /** A stream whose lifetime is owned by the caller's coroutine. */
+    suspend fun runScopedTurn(
+        config: TurnConfigBridge,
+        toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
+        onEventJson: (String) -> Unit
+    ) = runTurn(config, toolExecutor, onEventJson)
 
 }
 
@@ -236,6 +298,8 @@ data class TurnConfigBridge(
     val messageId: String? = null,
     val messageGroup: List<String>? = null,
     val disableTools: Boolean = false,
+    val supportsToolApproval: Boolean = false,
+    val workspacePath: String? = null,
 )
 
 object CoreBridgeRegistry {

@@ -30,6 +30,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONObject
 import java.util.UUID
 
+private class WearModelRequired : IllegalStateException("This agent has no model set. Configure it on your phone first.")
+
 /**
  * Shared handler for chat and new-conversation requests coming from the
  * Wear OS companion. Used by the WebSocket server in [MobileHttpServer] —
@@ -41,11 +43,11 @@ class MobileWearChatHandler(private val app: AppContainer) {
     /**
      * Streaming wear chat handler. It:
      *
-     *  1. Inserts the user message into the store immediately.
-     *  2. Drives the Rust agent loop (`coreBridge.runTurn`), which creates and
-     *     fills the assistant placeholder row itself.
+     *  1. Validates the conversation and model before asking the backend to admit a turn.
+     *  2. The backend persists the user message and creates the assistant row.
      *  3. Pushes incremental frames to the watch via [sendFrame]:
      *
+     *       chat_accepted {"requestId","userMessageId","assistantMessageId"} (assistant ID may arrive later)
      *       chat_delta  {"requestId","delta"}      (zero or more)
      *       chat_done   {"requestId","content","userMessageId","assistantMessageId"}
      *       chat_error   {"requestId","error"}
@@ -96,9 +98,12 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 ?: throw IllegalStateException("Conversation not found on phone.")
             val agent = app.agentRepository.getById(conversation.agentId).first()
                 ?: throw IllegalStateException("Agent not found on phone.")
+            if (agent.defaultModelId == null) {
+                throw WearModelRequired()
+            }
             val resolvedAgent = resolveAgent(agent, conversation)
             if (resolvedAgent.defaultModelId == null) {
-                throw IllegalStateException("This agent has no model set. Configure it on your phone first.")
+                throw WearModelRequired()
             }
             val activeModel = resolveModelAndProvider(resolvedAgent)
                 ?: throw IllegalStateException("No enabled model is available for this agent.")
@@ -136,6 +141,19 @@ class MobileWearChatHandler(private val app: AppContainer) {
             var currentContent = ""
             // The loop creates the placeholder row; bind to ITS id.
             var assistantMessageId: String? = null
+            var acceptedSent = false
+            var acceptedAssistantId: String? = null
+
+            fun sendAcceptedIfChanged() {
+                val id = userMessageId ?: return
+                if (terminalSent || (acceptedSent && acceptedAssistantId == assistantMessageId)) return
+                frame("chat_accepted") {
+                    put("userMessageId", id)
+                    assistantMessageId?.let { put("assistantMessageId", it) }
+                }
+                acceptedSent = true
+                acceptedAssistantId = assistantMessageId
+            }
 
             fun sendDone() = sendTerminal("chat_done") {
                 put("content", currentContent)
@@ -143,20 +161,27 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 assistantMessageId?.let { put("assistantMessageId", it) }
             }
 
-            bridge.runTurn(
+            try { bridge.runScopedTurn(
                 config = config,
                 toolExecutor = { _, _ -> "Tool execution disabled on watch" to true },
                 onEventJson = { eventJson ->
                     val root = try {
                         NetworkClient.json.parseToJsonElement(eventJson).jsonObject
                     } catch (_: Exception) {
-                        return@runTurn
+                        return@runScopedTurn
                     }
-                    val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runTurn
+                    val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return@runScopedTurn
                     when (type) {
-                        "UserMessagePersisted" -> userMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull
+                        "UserMessagePersisted" -> {
+                            val id = root["messageId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            if (id != null && userMessageId == null && !terminalSent) {
+                                userMessageId = id
+                                sendAcceptedIfChanged()
+                            }
+                        }
                         "StreamingStarted" -> {
-                            assistantMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull
+                            assistantMessageId = root["messageId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            sendAcceptedIfChanged()
                         }
                         "TextDelta" -> {
                             val delta = root["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -172,16 +197,17 @@ class MobileWearChatHandler(private val app: AppContainer) {
                         }
                     }
                 }
-            )
-            // The core wrote the assistant row itself; flag the conversation
-            // so the watch-originated reply is uploaded like a phone one.
-            app.cloud.requestLocalChange("conversation", conversationId)
-            // Defensive: a loop that returned without a terminal event must
-            // still release the watch (it waits for exactly one).
-            sendDone()
+            ) } finally {
+                // The backend may have persisted a turn even if the stream failed or was cancelled.
+                app.cloud.requestLocalChange("conversation", conversationId)
+            }
+            if (!terminalSent) sendTerminal("chat_error") { put("error", "Chat stream ended before completion.") }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            sendTerminal("chat_error") { put("error", e.message ?: "Unknown error") }
+            sendTerminal("chat_error") {
+                put("error", e.message ?: "Unknown error")
+                if (e is WearModelRequired) put("code", "model_required")
+            }
         }
     }
 
@@ -221,7 +247,12 @@ class MobileWearChatHandler(private val app: AppContainer) {
         return response.toString().encodeToByteArray()
     }
 
-    private suspend fun resolveAgent(agent: Agent, conversation: Conversation): Agent {
+    internal suspend fun isAgentReady(agent: Agent): Boolean {
+        if (agent.defaultModelId == null) return false
+        return resolveModelAndProvider(resolveAgent(agent, null)) != null
+    }
+
+    private suspend fun resolveAgent(agent: Agent, conversation: Conversation?): Agent {
         val withDefault = if (agent.isDefault) {
             agent
         } else {
@@ -255,7 +286,7 @@ class MobileWearChatHandler(private val app: AppContainer) {
                 }
             )
         }
-        return withDefault.copy(
+        return if (conversation == null) withDefault else withDefault.copy(
             defaultModelId = conversation.overrideModelId ?: withDefault.defaultModelId,
             temperature = conversation.overrideTemperature ?: withDefault.temperature,
             topP = conversation.overrideTopP ?: withDefault.topP,

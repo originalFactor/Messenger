@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">Messenger</string>
+    <string name="wear_storage_error">Could not save watch data: %1$s</string>
+    <string name="wear_storage_retry">Retry saving</string>
+    <string name="wear_storage_retrying">Retrying…</string>
+    <string name="wear_sync_error">Could not sync with phone: %1$s</string>
+    <string name="wear_sync_retry">Retry sync</string>
+    <string name="wear_sync_retrying">Retrying…</string>
 </resources>

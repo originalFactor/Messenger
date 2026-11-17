@@ -44,6 +44,7 @@ import cc.ptoe.messenger.presentation.ui.agents.AgentsScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentMarketDetailScreen
 import cc.ptoe.messenger.presentation.ui.agents.AgentMarketScreen
 import cc.ptoe.messenger.presentation.ui.chat.ChatScreen
+import cc.ptoe.messenger.presentation.ui.chat.RemoteConversationScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationSettingsScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsDualPaneScreen
 import cc.ptoe.messenger.presentation.ui.conversations.ConversationsScreen
@@ -138,6 +139,17 @@ fun NavGraph(
                 }
             )
         }
+        composable(
+            route = Screen.RemoteConversation.route,
+            arguments = listOf(
+                navArgument("deviceId") { type = NavType.StringType },
+                navArgument("conversationId") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val deviceId = entry.arguments?.read { getStringOrNull("deviceId") }.orEmpty()
+            val conversationId = entry.arguments?.read { getStringOrNull("conversationId") }.orEmpty()
+            RemoteConversationScreen(deviceId, conversationId) { navController.popBackStack() }
+        }
         composable(Screen.Agents.route) { backStackEntry ->
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)
@@ -211,7 +223,7 @@ fun NavGraph(
                 val sizeClass = windowSizeClassFor(maxWidth)
                 if (sizeClass != WindowSizeClass.Compact) {
                     // Medium / Expanded (tablet portrait / desktop): List-Detail two-pane layout.
-                    SettingsDualPaneScreen()
+                    SettingsDualPaneScreen(onOpenConversation = { navController.navigate(Screen.Chat.createRoute(it)) })
                 } else {
                     // Phone: single-pane, push sub-screens on tap.
                     SettingsScreen(
@@ -220,6 +232,7 @@ fun NavGraph(
                         },
                         onToolsClick = { navController.navigate(Screen.ToolsSettings.route) },
                         onAcpSettingsClick = { navController.navigate(Screen.AcpSettings.route) },
+                        onScheduledTasksClick = { navController.navigate(Screen.ScheduledTasks.route) },
                         onSkillsClick = { navController.navigate(Screen.Skills.route) },
                         onLicensesClick = {
                             navController.navigate(Screen.Licenses.route)
@@ -261,6 +274,9 @@ fun NavGraph(
         }
         composable(Screen.Skills.route) {
             cc.ptoe.messenger.presentation.ui.skills.SkillsScreen(onBackClick = { navController.popBackStack() })
+        }
+        composable(Screen.ScheduledTasks.route) {
+            cc.ptoe.messenger.presentation.ui.scheduled.ScheduledTasksScreen(onBackClick = { navController.popBackStack() }, onOpenConversation = { navController.navigate(Screen.Chat.createRoute(it)) })
         }
         composable(Screen.AcpSettings.route) {
             AcpSettingsScreen(onBackClick = { navController.popBackStack() })

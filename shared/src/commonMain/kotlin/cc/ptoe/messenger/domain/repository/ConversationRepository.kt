@@ -18,9 +18,12 @@ package cc.ptoe.messenger.domain.repository
 
 import cc.ptoe.messenger.domain.model.Conversation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 interface ConversationRepository {
     fun getAll(): Flow<List<Conversation>>
+    /** Fresh, complete enumeration for sync; failures must propagate. */
+    suspend fun getAllForSync(): List<Conversation> = getAll().first()
     fun getByAgentId(agentId: String): Flow<List<Conversation>>
 
     /** 项目下的会话；项目页的二级列表用它。 */

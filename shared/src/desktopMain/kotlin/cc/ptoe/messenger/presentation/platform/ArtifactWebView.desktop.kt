@@ -7,11 +7,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -42,35 +42,40 @@ actual fun ArtifactWebView(
     files: Map<String, String>,
     entry: String,
     stateJson: String,
+    bindingIdentity: Any,
     onMessage: (String, (String) -> Unit) -> Unit,
+    onDisposeBinding: () -> Unit,
+    onRestartBinding: (() -> Unit)?,
     modifier: Modifier,
 ) {
-    val callback = rememberUpdatedState(onMessage)
-    val spec = remember(files, entry) { runCatching { ArtifactHelperSpec(files, entry, stateJson) } }
-    var restart by remember(files, entry) { mutableStateOf(0) }
-    var host by remember(files, entry) { mutableStateOf<ArtifactNativeProcess?>(null) }
-    var ready by remember(files, entry) { mutableStateOf(false) }
-    var closed by remember(files, entry) { mutableStateOf(false) }
-    var failure by remember(files, entry) { mutableStateOf(spec.exceptionOrNull()?.message) }
+    val identity = ArtifactBindingIdentity(bindingIdentity)
+    var restart by remember(identity, files, entry) { mutableStateOf(0) }
+    val callbacks = remember(identity, restart) { ArtifactViewCallbacks(onMessage, onDisposeBinding) }
+    DisposableEffect(callbacks) { onDispose { callbacks.close() } }
+    val spec = remember(identity, files, entry, restart) { runCatching { ArtifactHelperSpec(files, entry, stateJson) } }
+    var host by remember(identity, files, entry) { mutableStateOf<ArtifactNativeProcess?>(null) }
+    var ready by remember(identity, files, entry) { mutableStateOf(false) }
+    var closed by remember(identity, files, entry) { mutableStateOf(false) }
+    var failure by remember(identity, files, entry) { mutableStateOf(spec.exceptionOrNull()?.message) }
     val title = stringResource(Res.string.artifact_host_open)
-    LaunchedEffect(spec, restart) {
-        val configuration = spec.getOrNull() ?: return@LaunchedEffect
+    LaunchedEffect(spec, callbacks) {
+        val configuration = spec.getOrNull() ?: run { callbacks.close(); return@LaunchedEffect }
         var created: ArtifactNativeProcess? = null
         failure = null; ready = false; closed = false
         try {
             withContext(Dispatchers.IO) {
                 created = ArtifactNativeProcess(configuration, title,
-                    onMessage = { raw, reply -> callback.value(raw, reply) },
+                    onMessage = callbacks::dispatch,
                     onReady = { ready = true },
-                    onError = { failure = it },
-                    onClosed = { closed = true },
+                    onError = { callbacks.close(); failure = it },
+                    onClosed = { callbacks.close(); closed = true },
                 )
             }
             host = created
             awaitCancellation()
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (error: Exception) { failure = error.message ?: error.toString() }
-        finally { created?.close(); host = null }
+        catch (error: Exception) { callbacks.close(); failure = error.message ?: error.toString() }
+        finally { callbacks.close(); created?.close(); host = null }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val error = failure
@@ -84,7 +89,9 @@ actual fun ArtifactWebView(
             }
         }
         Button(enabled = ready || closed || error != null, onClick = {
-            if (ready && !closed && error == null) host?.focus() else restart++
+            if (ready && !closed && error == null) host?.focus()
+            else if (onRestartBinding != null) { callbacks.close(); onRestartBinding() }
+            else restart++
         }) { Text(stringResource(Res.string.artifact_host_open)) }
     }
 }
@@ -225,7 +232,7 @@ internal class ArtifactNativeProcess(
     private fun send(message: JsonObject) {
         if (disposed.get() || !process.isAlive) return
         writerExecutor.execute {
-            runCatching { writer.write(message.toString()); writer.newLine(); writer.flush() }
+            if (!disposed.get() && process.isAlive) runCatching { writer.write(message.toString()); writer.newLine(); writer.flush() }
         }
     }
     fun focus() = send(buildJsonObject { put("type", "focus") })

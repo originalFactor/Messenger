@@ -9,8 +9,12 @@ import cc.ptoe.messenger.presentation.ui.acp.objects
 import cc.ptoe.messenger.presentation.ui.acp.text
 import kotlinx.serialization.json.*
 
+internal data class AcpContentLabels(val image: String, val audio: String, val attachment: String,
+    val omitted: String = "[Some details omitted]")
+
 /** Project ACP transcripts into the same bubble/tool/think model as ordinary chats. */
-internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallbackTimestamp: Long = 0L): List<Message> = rows.flatMap { row ->
+internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallbackTimestamp: Long = 0L,
+    labels: AcpContentLabels = AcpContentLabels("[Image]", "[Audio]", "[Attachment]")): List<Message> = rows.flatMap { row ->
     val id = row.text("id")
     val timestamp = (row["timestamp"] as? JsonPrimitive)?.longOrNull ?: fallbackTimestamp
     val status = when (row.text("status")) {
@@ -18,8 +22,19 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
         "sending" -> MessageStatus.SENDING
         else -> MessageStatus.SENT
     }
+    val blocks = row.objects("content")
+    val omitted = listOf("detailsOmitted", "eventsTruncated").any { (row[it] as? JsonPrimitive)?.booleanOrNull == true }
+    fun placeholder(type: String): String? = when (type) {
+        "image" -> labels.image
+        "audio" -> labels.audio
+        "resource", "resource_link" -> labels.attachment
+        else -> null
+    }
     if (row.text("role") == "user") {
-        listOf(Message(id, sessionId, MessageRole.USER, row.text("text"), parts = row.objects("content").filter { it.text("type") == "image" }.map { image ->
+        val attachments = blocks.mapNotNull { if (it.text("type") == "image") null else placeholder(it.text("type")) }
+        val content = listOf(row.text("text")).filter { it.isNotEmpty() }.plus(attachments)
+            .plus(if (omitted) listOf(labels.omitted) else emptyList()).joinToString("\n")
+        listOf(Message(id, sessionId, MessageRole.USER, content, parts = blocks.filter { it.text("type") == "image" }.map { image ->
             val uri = "data:${image.text("mimeType")};base64,${image.text("data")}"
             ContentPart.Image(MessageImage(uri, uri))
         }, timestamp = timestamp, status = status))
@@ -30,13 +45,25 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
         val thought = StringBuilder()
         val tools = linkedMapOf<String, JsonObject>()
         val beforeTool = mutableMapOf<String, String>()
+        val renderedBlocks = mutableSetOf<Int>()
+        fun appendPlaceholder(label: String) {
+            if (pending.isNotEmpty() && pending.last() != '\n') pending.append('\n')
+            pending.append(label).append('\n')
+        }
         fun flushThought() {
             if (thought.isNotEmpty()) { pending.append("<think>").append(thought).append("</think>\n"); thought.clear() }
         }
         events.forEach { event ->
             when (event.text("type")) {
                 "ThoughtDelta" -> thought.append(event.text("text"))
-                "TextDelta" -> { flushThought(); pending.append(event.text("text")) }
+                "TextDelta" -> {
+                    flushThought()
+                    val index = (event["contentIndex"] as? JsonPrimitive)?.intOrNull
+                    val label = index?.let { blocks.getOrNull(it) }?.let { placeholder(it.text("type")) }
+                        ?: placeholder(event.text("contentType"))
+                    if (index != null && label != null && renderedBlocks.add(index)) appendPlaceholder(label)
+                    else pending.append(event.text("text"))
+                }
                 "ToolUpdate" -> {
                     val update = event["update"] as? JsonObject ?: return@forEach
                     val toolId = update.text("toolCallId")
@@ -54,6 +81,10 @@ internal fun acpChatMessages(sessionId: String, rows: List<JsonObject>, fallback
         }
         flushThought()
         if (!orderedText) pending.append(row.text("text")) // Transcripts saved before text events were recorded.
+        blocks.forEachIndexed { index, block ->
+            if (index !in renderedBlocks) placeholder(block.text("type"))?.let(::appendPlaceholder)
+        }
+        if (omitted) appendPlaceholder(labels.omitted)
         buildList {
             if (tools.isNotEmpty()) {
                 tools.entries.forEachIndexed { index, (toolId, tool) ->

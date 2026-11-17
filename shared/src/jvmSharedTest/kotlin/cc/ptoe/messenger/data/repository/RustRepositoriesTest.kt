@@ -38,11 +38,34 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RustRepositoriesTest {
+
+    @Test
+    fun batchMessagesPropagateMalformedBackendData() = runBlocking {
+        val bridge = FakeCoreBridge().apply { messageJsonOverride = "{malformed" }
+        assertFailsWith<Exception> { RustMessageRepository(bridge).getByConversationIds(listOf("c1")) }
+        Unit
+    }
+
+    @Test
+    fun syncEnumerationsPropagateMalformedAgentAndConversationData() = runBlocking {
+        val bridge = FakeCoreBridge().apply {
+            agentJsonOverride = "{malformed"
+            conversationJsonOverride = "{malformed"
+        }
+        val agents = RustAgentRepository(bridge)
+        val conversations = RustConversationRepository(bridge)
+        assertTrue(agents.getAll().first().isEmpty())
+        assertTrue(conversations.getAll().first().isEmpty())
+        assertFailsWith<Exception> { agents.getAllForSync() }
+        assertFailsWith<Exception> { conversations.getAllForSync() }
+        Unit
+    }
 
     private class FakeCoreBridge : CoreBridge {
         val providers = mutableMapOf<String, StoredProviderDto>()
@@ -50,6 +73,9 @@ class RustRepositoriesTest {
         val agents = mutableMapOf<String, StoredAgentDto>()
         val conversations = mutableMapOf<String, StoredConversationDto>()
         val messages = mutableMapOf<String, StoredMessageDto>()
+        var messageJsonOverride: String? = null
+        var agentJsonOverride: String? = null
+        var conversationJsonOverride: String? = null
         val kv = mutableMapOf<String, String>()
         val listeners = mutableListOf<(String, List<String>) -> Unit>()
 
@@ -96,7 +122,7 @@ class RustRepositoriesTest {
         }
 
         // Agent
-        override fun listAgentsJson(): String = NetworkClient.json.encodeToString(agents.values.toList())
+        override fun listAgentsJson(): String = agentJsonOverride ?: NetworkClient.json.encodeToString(agents.values.toList())
         override fun getAgentJson(id: String): String? = agents[id]?.let { NetworkClient.json.encodeToString(it) }
         override fun getDefaultAgentJson(): String? = agents.values.firstOrNull { it.isDefault }?.let { NetworkClient.json.encodeToString(it) }
         override fun getTitleAgentJson(): String? = agents.values.firstOrNull { it.role == "title" }?.let { NetworkClient.json.encodeToString(it) }
@@ -129,7 +155,7 @@ class RustRepositoriesTest {
             NetworkClient.json.encodeToString(conversations.values.filter { it.projectId == projectId })
 
         // Conversation
-        override fun listConversationsJson(): String = NetworkClient.json.encodeToString(conversations.values.toList())
+        override fun listConversationsJson(): String = conversationJsonOverride ?: NetworkClient.json.encodeToString(conversations.values.toList())
         override fun listConversationsByAgentJson(agentId: String): String =
             NetworkClient.json.encodeToString(conversations.values.filter { it.agentId == agentId })
         override fun getConversationJson(id: String): String? = conversations[id]?.let { NetworkClient.json.encodeToString(it) }
@@ -174,7 +200,7 @@ class RustRepositoriesTest {
 
         // Message
         override fun listMessagesByConversationJson(conversationId: String): String =
-            NetworkClient.json.encodeToString(messages.values.filter { it.conversationId == conversationId })
+            messageJsonOverride ?: NetworkClient.json.encodeToString(messages.values.filter { it.conversationId == conversationId })
         override fun listRecentMessagesByConversationJson(conversationId: String, limit: UInt): String =
             NetworkClient.json.encodeToString(
                 messages.values.filter { it.conversationId == conversationId }

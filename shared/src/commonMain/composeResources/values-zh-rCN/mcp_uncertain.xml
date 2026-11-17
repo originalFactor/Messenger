@@ -1,0 +1,11 @@
+<resources>
+    <string name="mcp_uncertain_review">查看结果未知的工具调用</string>
+    <string name="mcp_uncertain_title">工具调用结果未知</string>
+    <string name="mcp_uncertain_message">工具 %1$s 可能仍在运行，或已经产生更改。继续之前请检查其影响。确认后可以继续此会话，但不会停止或重试该工具。</string>
+    <string name="mcp_uncertain_acknowledge">确认并继续</string>
+    <string name="mcp_uncertain_later">稍后处理</string>
+    <string name="mcp_uncertain_retry_check">重新检查工具状态</string>
+    <string name="mcp_uncertain_previous_owner">此调用属于之前的应用会话。尚未确认本地任务已经停止，因此在恢复功能可用之前，此会话仍会被阻止。</string>
+    <string name="mcp_uncertain_arguments">工具参数</string>
+    <string name="mcp_uncertain_truncated">参数显示已截断。</string>
+</resources>

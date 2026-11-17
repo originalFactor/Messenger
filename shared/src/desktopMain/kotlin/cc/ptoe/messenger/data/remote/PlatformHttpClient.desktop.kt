@@ -33,3 +33,6 @@ internal actual fun createPlatformHttpClient(block: HttpClientConfig<*>.() -> Un
         }
         block()
     }
+
+internal actual fun createDirectProviderHttpClient(block: HttpClientConfig<*>.() -> Unit): HttpClient =
+    cc.ptoe.messenger.data.cloud.createRoomCloudHttpClient { block() }

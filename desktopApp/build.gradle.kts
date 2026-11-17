@@ -24,9 +24,9 @@ plugins {
 }
 
 dependencies {
+    testImplementation(kotlin("test"))
+    implementation(libs.kotlinx.serialization.json)
     implementation(project(":shared"))
-    // Rust core (UniFFI bindings + host cdylib); Main.kt opens the store.
-    implementation(project(":core-bindings-desktop"))
     implementation(compose.desktop.currentOs)
     implementation(libs.jetbrains.compose.material3)
     implementation(libs.kotlinx.coroutines.swing)
@@ -36,6 +36,8 @@ dependencies {
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
     implementation(libs.ktor.client.core)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.sqlite.bundled)
 }
 
 // The interactive-artifact host is an independent system-webview process. It

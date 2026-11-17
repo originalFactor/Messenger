@@ -24,6 +24,9 @@ package cc.ptoe.messenger.domain.tool
  */
 expect fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool>
 
+/** Obtain a disposable workspace for a projectless conversation on the tool host. */
+expect suspend fun temporaryChatWorkspace(conversationId: String): String?
+
 /**
  * Whether this platform can register the built-in chat tools at all.
  *

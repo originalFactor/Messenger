@@ -1,0 +1,6 @@
+<resources>
+    <string name="push_consent_title">Enable push notifications?</string>
+    <string name="push_consent_message">Push notifications use JPush and Firebase Cloud Messaging, which process device and network information to deliver notifications. Tap to read Jiguang’s privacy policy.</string>
+    <string name="push_consent_enable">Enable</string>
+    <string name="push_consent_later">Not now</string>
+</resources>

@@ -65,7 +65,7 @@ private data class OpenSourceComponent(val name: String, val license: String, va
 private val appComponents = listOf(
     OpenSourceComponent("Kotlin", "Apache-2.0", "https://github.com/JetBrains/kotlin"),
     OpenSourceComponent("Compose Multiplatform", "Apache-2.0", "https://github.com/JetBrains/compose-multiplatform"),
-    OpenSourceComponent("AndroidX / Jetpack Compose / Material 3 / DataStore / SQLite", "Apache-2.0", "https://android.googlesource.com/platform/frameworks/support/"),
+    OpenSourceComponent("AndroidX / Jetpack Compose / Material 3 / DataStore / Room / SQLite", "Apache-2.0", "https://android.googlesource.com/platform/frameworks/support/"),
     OpenSourceComponent("kotlinx.coroutines", "Apache-2.0", "https://github.com/Kotlin/kotlinx.coroutines"),
     OpenSourceComponent("kotlinx.serialization", "Apache-2.0", "https://github.com/Kotlin/kotlinx.serialization"),
     OpenSourceComponent("kotlinx-datetime", "Apache-2.0", "https://github.com/Kotlin/kotlinx-datetime"),
@@ -73,6 +73,7 @@ private val appComponents = listOf(
     OpenSourceComponent("OkHttp", "Apache-2.0", "https://github.com/square/okhttp"),
     OpenSourceComponent("Okio", "Apache-2.0", "https://github.com/square/okio"),
     OpenSourceComponent("Coil", "Apache-2.0", "https://github.com/coil-kt/coil"),
+    OpenSourceComponent("Lobe Icons", "MIT · Copyright 2023 LobeHub", "https://github.com/lobehub/lobe-icons"),
     OpenSourceComponent("Java-WebSocket", "MIT", "https://github.com/TooTallNate/Java-WebSocket"),
     OpenSourceComponent("uCrop", "Apache-2.0", "https://github.com/Yalantis/uCrop"),
     OpenSourceComponent("JNA", "Apache-2.0 OR LGPL-2.1-or-later", "https://github.com/java-native-access/jna"),
@@ -84,10 +85,12 @@ private val appComponents = listOf(
 )
 
 private val renderingComponents = listOf(
-    OpenSourceComponent("llm-typewriter", "Apache-2.0 · Copyright 2026 ECSDevs; includes work by NadeemIqbal", "https://github.com/ECSDevs/llm-typewriter/tree/3906043b2372c2f9e30e4142f51d9cad53b29658"),
+    OpenSourceComponent("llm-typewriter", "Apache-2.0 · Copyright 2026 ECSDevs; includes work by NadeemIqbal", "https://github.com/originalFactor/llm-typewriter"),
     OpenSourceComponent("Highlights", "Apache-2.0", "https://github.com/SnipMeDev/Highlights"),
-    OpenSourceComponent("RaTeX-CMP", "MIT", "https://github.com/darriousliu/RaTeX-CMP"),
-    OpenSourceComponent("RaTeX", "MIT", "https://github.com/erweixin/RaTeX"),
+    OpenSourceComponent("Compose LaTeX", "MIT", "https://github.com/huarangmeng/latex"),
+    OpenSourceComponent("TwelveMonkeys ImageIO", "BSD-3-Clause", "https://github.com/haraldk/TwelveMonkeys"),
+    OpenSourceComponent("SnakeYAML Engine", "Apache-2.0", "https://github.com/snakeyaml/snakeyaml-engine"),
+    OpenSourceComponent("KaTeX fonts", "SIL Open Font License 1.1", "https://github.com/KaTeX/KaTeX"),
     OpenSourceComponent("Cascadia Code", "SIL Open Font License 1.1 · Copyright Microsoft Corporation", "https://github.com/microsoft/cascadia-code"),
 )
 

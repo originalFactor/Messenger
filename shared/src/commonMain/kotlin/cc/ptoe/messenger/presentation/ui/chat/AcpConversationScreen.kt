@@ -36,10 +36,12 @@ import cc.ptoe.messenger.presentation.platform.copyTextToClipboard
 import cc.ptoe.messenger.presentation.platform.showPlatformToast
 import cc.ptoe.messenger.presentation.ui.acp.*
 import cc.ptoe.messenger.presentation.ui.components.AgentAvatar
+import cc.ptoe.messenger.presentation.ui.components.resolveAcpAvatar
 import cc.ptoe.messenger.presentation.utils.WindowSizeClass
 import cc.ptoe.messenger.presentation.utils.windowSizeClassFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.jetbrains.compose.resources.stringResource
@@ -53,9 +55,11 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val userAvatar by container.appPreferences.userAvatar.collectAsState(initial = null)
+    val profilesRevision by acpProfilesRevision.collectAsState()
     var title by remember { mutableStateOf("") }
     var historyTimestamp by remember { mutableStateOf(currentTimeMillis()) }
     var agentName by remember { mutableStateOf("ACP") }
+    var agentAvatar by remember(sessionId) { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf(emptyList<JsonObject>()) }
     var before by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf(TextFieldValue("")) }
@@ -70,15 +74,24 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var learningMessage by remember { mutableStateOf<Message?>(null) }
     var selectedMessage by remember { mutableStateOf<Message?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    var showReplaySnapshots by remember(sessionId) { mutableStateOf(false) }
     var settingsBusy by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(buildJsonObject {}) }
+    val modePending = ((settings["_messengerCapabilities"] as? JsonObject)?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true
     var attachments by remember { mutableStateOf(emptyList<AcpAttachment>()) }
     data class Queued(val text: String, val attachments: List<AcpAttachment>)
     var queue by remember { mutableStateOf(emptyList<Queued>()) }
     var queuePaused by remember { mutableStateOf(false) }
     var steering by remember { mutableStateOf(false) }
+    var steeringStatus by remember(sessionId) { mutableStateOf<JsonObject?>(null) }
+    var steeringStatusChecking by remember(sessionId) { mutableStateOf(core.supportsAcpSteeringRecovery) }
+    var steeringStatusError by remember(sessionId) { mutableStateOf(false) }
+    var steeringStatusVersion by remember(sessionId) { mutableLongStateOf(0) }
+    val pendingSteering = steeringStatus?.get("pending") as? JsonObject
+    val steeringBlocked = acpSteeringBlocksInput(steering, core.supportsAcpSteeringRecovery, steeringStatusChecking, steeringStatusError, pendingSteering)
     val endedEarly = stringResource(Res.string.acp_stream_ended)
+    val replayGapMessage = stringResource(Res.string.background_replay_gap)
     val copied = stringResource(Res.string.chat_copied_toast)
     fun report(message: String) {
         error = buildJsonObject {
@@ -86,6 +99,20 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             put("status", "error"); put("timestamp", currentTimeMillis())
         }
         scope.launch { snackbar.showSnackbar(message) }
+    }
+    fun checkSteeringStatus() {
+        if (!core.supportsAcpSteeringRecovery) return
+        val version = ++steeringStatusVersion
+        steeringStatusChecking = true
+        scope.launch {
+            try {
+                val result = requestAcp(core, "steeringStatus") { put("sessionId", sessionId) }
+                check(isValidAcpSteeringStatus(result)) { "Invalid steering status" }
+                if (version == steeringStatusVersion) { steeringStatus = result; steeringStatusError = false }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: Exception) { if (version == steeringStatusVersion) steeringStatusError = true
+            } finally { if (version == steeringStatusVersion) steeringStatusChecking = false }
+        }
     }
     suspend fun loadHistory(cursor: String = "") {
         val result = requestAcp(core, "history") { put("sessionId", sessionId); if (cursor.isNotEmpty()) put("before", cursor) }
@@ -109,21 +136,147 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                 settings = result["settings"] as? JsonObject ?: buildJsonObject {}
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) {
+                if (change != null && (settings["_messengerCapabilities"] as? JsonObject)?.containsKey("modeWritable") == true) {
+                    val capabilities = (settings["_messengerCapabilities"] as? JsonObject).orEmpty() - setOf("modePendingId", "modeConfigId")
+                    val pending = capabilities + mapOf("modeWritable" to JsonPrimitive(false), "modePending" to JsonPrimitive(true),
+                        "modeInspected" to JsonPrimitive(false), "writableConfigIds" to JsonArray(emptyList())) +
+                        (change["configId"]?.let { mapOf("modeConfigId" to it) } ?: emptyMap())
+                    settings = JsonObject(settings + ("_messengerCapabilities" to JsonObject(pending)))
+                }
                 settingsError = failure.message.orEmpty()
                 report(failure.message.orEmpty())
             } finally { settingsBusy = false }
         }
     }
+    fun acknowledgeSteering(request: String, turn: String) {
+        val version = ++steeringStatusVersion
+        steeringStatusChecking = true
+        scope.launch {
+            try {
+                val result = requestAcp(core, "acknowledgeSteering") { put("sessionId", sessionId); put("pendingId", request); put("turnId", turn) }
+                check(isValidAcpSteeringStatus(result)) { "Invalid steering status" }
+                if (version == steeringStatusVersion) { steeringStatus = result; steeringStatusError = false; readSettings() }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { if (version == steeringStatusVersion) steeringStatusError = true; report(failure.message.orEmpty())
+            } finally { if (version == steeringStatusVersion) steeringStatusChecking = false }
+        }
+    }
+    fun inspectPendingMode() {
+        settingsBusy = true
+        settingsError = null
+        scope.launch {
+            try {
+                val result = requestAcp(core, "inspectPendingMode") { put("sessionId", sessionId) }
+                settings = result["settings"] as? JsonObject ?: error("ACP settings unavailable")
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { settingsError = failure.message.orEmpty(); report(failure.message.orEmpty())
+            } finally { settingsBusy = false }
+        }
+    }
+    fun confirmPendingMode(pendingId: String, modeId: String) {
+        settingsBusy = true
+        settingsError = null
+        scope.launch {
+            try {
+                val result = requestAcp(core, "confirmPendingMode") { put("sessionId", sessionId); put("pendingId", pendingId); put("modeId", modeId) }
+                settings = result["settings"] as? JsonObject ?: error("ACP settings unavailable")
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { settingsError = failure.message.orEmpty(); report(failure.message.orEmpty())
+            } finally { settingsBusy = false }
+        }
+    }
+    // Poll the Core-owned task; leaving this screen cancels only this observer.
+    suspend fun watchPrompt(requestId: String, input: Queued? = null, initial: JsonObject? = null) {
+        active = requestId
+        var cursor = 0L
+        var terminal = false
+        var admitted = false
+        var shownUser = false
+        var retryDelay = 500L
+        try {
+            var snapshot = initial
+            while (true) {
+                val batch = try { snapshot ?: core.backgroundAcpEvents(requestId, cursor) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    report(failure.message.orEmpty())
+                    // Rebuild from the retained event history after reconnecting. This is
+                    // observation only; never resubmit a prompt after a network failure.
+                    cursor = 0; permission = null; partial = ""; events = emptyList(); liveId = null
+                    delay(retryDelay); retryDelay = (retryDelay * 2).coerceAtMost(5_000L)
+                    continue
+                }
+                retryDelay = 500L
+                snapshot = null
+                for (event in batch.objects("events")) {
+                    (event["settings"] as? JsonObject)?.let { settings = it }
+                    when (event.text("type")) {
+                        "TurnStarted" -> {
+                            admitted = true
+                            liveTimestamp = currentTimeMillis()
+                            liveId = randomUuid()
+                            if (input != null && !shownUser) {
+                                shownUser = true
+                                val text = input.text.ifBlank { input.attachments.joinToString { it.name } }
+                                history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", promptContent(input.text, input.attachments)); put("status", "sent"); put("timestamp", liveTimestamp) }
+                            } else if (input == null) loadHistory()
+                        }
+                        "TextDelta" -> { partial += event.text("text"); events = events + event }
+                        "ThoughtDelta" -> events = events + event
+                        "ToolUpdate" -> {
+                            events = events + event
+                            val update = event["update"] as? JsonObject
+                            if (update?.text("title") == "messenger_generate_image" && update.text("status") == "failed") {
+                                queuePaused = true
+                                val output = update["rawOutput"] as? JsonObject
+                                report(output?.text("output").orEmpty().ifBlank { update.text("status") })
+                            }
+                        }
+                        "Permission" -> permission = event
+                        "ReplayGap" -> { loadHistory(); report(replayGapMessage) }
+                        "PermissionResolved" -> permission = null
+                        "Finished" -> terminal = true
+                        "Cancelled" -> { terminal = true; queuePaused = true }
+                        "Error" -> { terminal = true; queuePaused = true; if (!admitted && input != null) queue = listOf(input) + queue; report(event.errorDetail()) }
+                    }
+                }
+                cursor = (batch["nextCursor"] as? JsonPrimitive)?.longOrNull ?: cursor
+                if ((batch["done"] as? JsonPrimitive)?.booleanOrNull == true) break
+                delay(500)
+            }
+            if (!terminal) { queuePaused = true; report(endedEarly) }
+            loadHistory()
+            liveId = null
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: Exception) {
+            queuePaused = true
+            if (!admitted && input != null) queue = listOf(input) + queue
+            report(failure.message.orEmpty())
+        } finally { active = ""; permission = null }
+    }
     LaunchedEffect(sessionId) {
         try {
             loadHistory()
-            val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
-            val profileId = row?.text("agent_id")?.removePrefix("acp:")
-            agentName = core.controlSettings().objects("agents").firstOrNull { it.text("id") == profileId }?.text("name") ?: "ACP"
+            val running = core.backgroundAcpBySession(sessionId)
+            if (running != null && (running["done"] as? JsonPrimitive)?.booleanOrNull != true) {
+                val id = running.text("requestId")
+                if (id.isNotEmpty()) { active = id; scope.launch { watchPrompt(id, initial = running) } }
+            }
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (failure: Exception) { report(failure.message.orEmpty())
         } finally { loading = false }
         readSettings()
+    }
+    LaunchedEffect(sessionId, active) { checkSteeringStatus() }
+    LaunchedEffect(sessionId, profilesRevision) {
+        try {
+            val row = withContext(ioDispatcher) { core.getConversationJson(sessionId) }?.let { Json.parseToJsonElement(it).jsonObject }
+            val profileId = row?.text("agent_id")?.removePrefix("acp:")
+            val profile = core.controlSettings().objects("agents").firstOrNull { it.text("id") == profileId }
+            agentName = profile?.text("name") ?: "ACP"
+            agentAvatar = resolveAcpAvatar(profileId, profile?.text("avatar"))
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: Exception) { report(failure.message.orEmpty()) }
     }
     fun contentFor(text: String, files: List<AcpAttachment>) = promptContent(text, files)
     fun addAttachments(files: List<AcpAttachment>) {
@@ -137,25 +290,26 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { report(failure.message.orEmpty()) }
     } }
+    val supportsSteering = acpSupportsSteering(settings)
     fun steer(text: String, files: List<AcpAttachment>, onAccepted: () -> Unit) {
-        if ((settings["steering"] as? JsonObject)?.get("supported") != JsonPrimitive(true)) { report("This Agent does not support steering"); return }
-        if (steering || (text.isBlank() && files.isEmpty())) return
+        if (!supportsSteering) { report("This Agent does not support steering"); return }
+        if (steering || steeringBlocked || (text.isBlank() && files.isEmpty())) return
         steering = true
         scope.launch {
             try {
                 val result = requestAcp(core, "steer") { put("sessionId", sessionId); put("content", contentFor(text, files)) }
                 when ((result["result"] as? JsonObject)?.text("outcome")) {
-                    "injected" -> { onAccepted(); history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("timestamp", currentTimeMillis()) } }
+                    "injected" -> { onAccepted(); history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", contentFor(text, files)); put("timestamp", currentTimeMillis()) } }
                     "promptRequired" -> { onAccepted(); queue = queue + Queued(text, files) }
                     else -> report("Steering was not accepted")
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { report(failure.message.orEmpty()) }
-            finally { steering = false }
+            finally { checkSteeringStatus(); steering = false }
         }
     }
     val sendPrompt: (Queued, Boolean) -> Unit = { input, clearDraft ->
-                            if (!loading && !settingsBusy && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
+                            if (!loading && !settingsBusy && !modePending && !steeringBlocked && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
                                 val text = input.text.ifBlank { input.attachments.joinToString { it.name } }
                                 val content = promptContent(input.text, input.attachments)
                                 if (clearDraft) { draft = TextFieldValue(""); attachments = emptyList() }
@@ -163,56 +317,73 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 active = requestId
                                 error = null; partial = ""; events = emptyList()
                                 scope.launch {
-                                    var terminal = false
-                                    var admitted = false
                                     try {
-                                        core.controlCommand(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text); put("content", content) }) { event ->
-                                            (event["settings"] as? JsonObject)?.let { settings = it }
-                                            when (event.text("type")) {
-                                                "TurnStarted" -> {
-                                                    admitted = true
-                                                    liveTimestamp = currentTimeMillis()
-                                                    liveId = randomUuid()
-                                                    history = history + buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("content", content); put("status", "sent"); put("timestamp", liveTimestamp) }
-                                                }
-                                                "TextDelta" -> { partial += event.text("text"); events = events + event }
-                                                "ThoughtDelta" -> events = events + event
-                                                "ToolUpdate" -> {
-                                                    events = events + event
-                                                    val update = event["update"] as? JsonObject
-                                                    if (update?.text("title") == "messenger_generate_image" && update.text("status") == "failed") {
-                                                        queuePaused = true
-                                                        val output = update["rawOutput"] as? JsonObject
-                                                        report(output?.text("output").orEmpty().ifBlank { update.text("status") })
-                                                    }
-                                                }
-                                                "Permission" -> permission = event
-                                                "Finished" -> terminal = true
-                                                "Cancelled" -> { terminal = true; queuePaused = true }
-                                                "Error" -> { terminal = true; queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(event.errorDetail()) }
-                                            }
-                                        }
-                                        if (!terminal) { queuePaused = true; report(endedEarly) }
-                                        loadHistory()
-                                        liveId = null
+                                        core.startBackgroundAcp(requestId, buildJsonObject { put("action", "prompt"); put("sessionId", sessionId); put("text", text); put("content", content) })
+                                        watchPrompt(requestId, input)
                                     } catch (cancelled: CancellationException) { throw cancelled
-                                    } catch (failure: Exception) { queuePaused = true; if (!admitted) queue = listOf(input) + queue; report(failure.message.orEmpty())
-                                    } finally { active = ""; permission = null }
+                                    } catch (failure: Exception) {
+                                        active = ""; queuePaused = true; queue = listOf(input) + queue
+                                        report(failure.message.orEmpty())
+                                    }
                                 }
                             }
     }
-    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused) {
-        if (active.isEmpty() && !loading && !settingsBusy && !queuePaused && queue.isNotEmpty()) {
+    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused, modePending, steeringBlocked) {
+        if (active.isEmpty() && !loading && !settingsBusy && !modePending && !steeringBlocked && !queuePaused && queue.isNotEmpty()) {
             val next = queue.first(); queue = queue.drop(1)
             sendPrompt(next, false)
         }
     }
-    val agent = remember(agentName) { Agent("acp", agentName, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
+    // Agents can advertise commands asynchronously after the initial settings snapshot.
+    val commandQuery = draft.selection.takeIf { it.collapsed }?.start?.let { cursor ->
+        draft.text.take(cursor).takeIf { it.startsWith("/") && it.none(Char::isWhitespace) }
+    }
+    LaunchedEffect(commandQuery != null, active, loading) {
+        if (commandQuery != null && active.isEmpty() && !loading) {
+            try {
+                val result = requestAcp(core, "sessionSettings") { put("sessionId", sessionId) }
+                (result["settings"] as? JsonObject)?.let { settings = it }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { report(failure.message.orEmpty()) }
+        }
+    }
+    val commands = commandQuery?.let { query ->
+        settings.objects("availableCommands").filter { it.text("name").startsWith(query.removePrefix("/"), ignoreCase = true) }.take(6)
+    }.orEmpty()
+    val fileToken = draft.selection.takeIf { it.collapsed }?.start?.let { cursor ->
+        val prefix = draft.text.take(cursor)
+        val start = prefix.indexOfLast { it.isWhitespace() } + 1
+        prefix.substring(start).takeIf { it.startsWith("@") }?.let { start to it.drop(1) }
+    }
+    var workspaceFiles by remember(sessionId) { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(sessionId, fileToken?.second) {
+        if (fileToken != null) {
+            workspaceFiles = emptyList()
+            try { workspaceFiles = acpCompletionFiles(core, sessionId, fileToken.second) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { report(failure.message.orEmpty()) }
+        }
+    }
+    val files = fileToken?.second?.let { query -> workspaceFiles.filter { it.contains(query, ignoreCase = true) }.take(6) }.orEmpty()
+    fun insertFile(path: String) {
+        val token = fileToken ?: return
+        val suffix = draft.text.drop(draft.selection.start).dropWhile { !it.isWhitespace() }
+        val value = draft.text.take(token.first) + "@" + path + if (suffix.firstOrNull()?.isWhitespace() == true) "" else " "
+        draft = TextFieldValue(value + suffix, TextRange(value.length))
+    }
+    fun insertCommand(command: JsonObject) {
+        val cursor = draft.selection.start
+        val suffix = draft.text.drop(cursor).dropWhile { !it.isWhitespace() }
+        val value = "/${command.text("name")}" + if (suffix.firstOrNull()?.isWhitespace() == true) "" else " "
+        draft = TextFieldValue(value + suffix, TextRange(value.length))
+    }
+    val agent = remember(agentName, agentAvatar) { Agent("acp", agentName, avatar = agentAvatar, systemPrompt = "", defaultModelId = null, temperature = 1f, topP = 1f, maxTokens = null, createdAt = 0, updatedAt = 0) }
     val rows = history + listOfNotNull(liveId?.let { id -> buildJsonObject {
         put("id", id); put("role", "assistant"); put("text", partial); put("status", if (active.isEmpty()) "sent" else "sending")
         put("timestamp", liveTimestamp); put("events", JsonArray(events))
     } }, error?.takeUnless { local -> history.lastOrNull()?.let { it.text("status") == "error" && it.text("text") == local.text("text") } == true })
-    val messages = remember(rows, historyTimestamp) { acpChatMessages(sessionId, rows, historyTimestamp) }
+    val mediaLabels = AcpContentLabels(stringResource(Res.string.chat_picture), stringResource(Res.string.acp_media_audio), stringResource(Res.string.acp_media_attachment))
+    val messages = remember(rows, historyTimestamp, mediaLabels) { acpChatMessages(sessionId, rows, historyTimestamp, mediaLabels) }
     val chatItems = remember(messages) { buildChatItems(messages) }
     val liveContent = messages.firstOrNull { it.id == liveId }?.content
     val originalToolbar = LocalTextToolbar.current
@@ -233,7 +404,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             topBar = {
                 TopAppBar(
                     title = { Row(verticalAlignment = Alignment.CenterVertically) {
-                        AgentAvatar(avatar = null, size = 36.dp)
+                        AgentAvatar(avatar = agentAvatar, size = 36.dp)
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(title.ifBlank { stringResource(Res.string.chat_title_default) }, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1)
@@ -242,6 +413,9 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                     } },
                     navigationIcon = { if (showBackButton) androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) } },
                     actions = {
+                        if (core.supportsAcpReplaySnapshots) TextButton(onClick = { showReplaySnapshots = true }) {
+                            Text(stringResource(Res.string.acp_replay_open))
+                        }
                         TooltipBox(positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above), tooltip = { PlainTooltip { Text(stringResource(Res.string.conversation_settings_title)) } }, state = rememberTooltipState()) {
                             IconButton(enabled = active.isEmpty() && !settingsBusy && !loading, onClick = { showSettings = true; readSettings() }) {
                                 Icon(Icons.Default.Settings, stringResource(Res.string.conversation_settings_title))
@@ -270,22 +444,28 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         } }
                     }
                     if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (modePending) TextButton(onClick = { showSettings = true }) { Text(stringResource(Res.string.acp_setting_uncertain)) }
+                    if (core.supportsAcpSteeringRecovery) AcpSteeringRecovery(pendingSteering, steeringStatusChecking,
+                        steeringStatusError, active.isNotEmpty(), ::checkSteeringStatus, ::acknowledgeSteering)
                     if (queuePaused && queue.isNotEmpty()) TextButton(onClick = { queuePaused = false }) { Text(stringResource(Res.string.acp_resume_queue)) }
                     queue.forEach { queued -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(queued.text.ifBlank { queued.attachments.joinToString { it.name } }, Modifier.weight(1f), maxLines = 2)
-                        TextButton(enabled = active.isNotEmpty() && !steering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
+                        TextButton(enabled = active.isNotEmpty() && !steering && !steeringBlocked && supportsSteering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
                         TextButton(onClick = { queue = queue - queued }) { Text("×") }
                     } }
                     attachments.forEach { attachment -> TextButton(onClick = { attachments = attachments - attachment }) { Text("${attachment.name} ×") } }
-                    if (draft.text.startsWith("/")) settings.objects("availableCommands").filter { it.text("name").startsWith(draft.text.removePrefix("/")) }.take(6).forEach { command ->
-                        TextButton(onClick = { val value = "/${command.text("name")} "; draft = TextFieldValue(value, TextRange(value.length)) }) { Text("/${command.text("name")} — ${command.text("description")}") }
+                    commands.forEach { command ->
+                        TextButton(onClick = { insertCommand(command) }) { Text("/${command.text("name")} — ${command.text("description")}") }
                     }
-                    ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = true, sendWhileGenerating = true, hasAttachments = attachments.isNotEmpty(),
+                    files.forEach { path -> TextButton(onClick = { insertFile(path) }) { Text("@$path", maxLines = 1) } }
+                    ChatInputBar(text = draft, onTextChange = { draft = it }, isGenerating = active.isNotEmpty(), showFunctionPanel = true, sendWhileGenerating = true, hasAttachments = attachments.isNotEmpty(), sendEnabled = !steeringBlocked,
                         onAddClick = { imagePicker.launch() },
                         modifier = Modifier.onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && draft.text.startsWith("/")) {
-                                val command = settings.objects("availableCommands").firstOrNull { it.text("name").startsWith(draft.text.removePrefix("/")) }
-                                if (command != null) { val text = "/${command.text("name")} "; draft = TextFieldValue(text, TextRange(text.length)) }
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && files.isNotEmpty()) {
+                                insertFile(files.first()); true
+                            } else if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && commands.isNotEmpty()) {
+                                val command = commands.firstOrNull()
+                                if (command != null) insertCommand(command)
                                 command != null
                             } else if (event.type == KeyEventType.KeyDown && event.key == Key.V && (event.isCtrlPressed || event.isMetaPressed)) {
                                 pasteAttachments {
@@ -308,16 +488,16 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 CircularProgressIndicator(progress = { if (used != null && size != null && size > 0) (used.toFloat() / size).coerceIn(0f, 1f) else 0f }, modifier = Modifier.padding(8.dp).size(24.dp).semantics { contentDescription = if (used != null && size != null) "Context: $used / $size tokens" else "Context usage unavailable" }, strokeWidth = 3.dp)
                             }
                         },
-                        onSendLongClick = {
+                        onSendLongClick = if (steeringBlocked || active.isNotEmpty() && !supportsSteering) null else { {
                             val original = draft; val files = attachments
                             if (active.isNotEmpty()) steer(original.text, files) {
                                 if (draft == original) draft = TextFieldValue("")
                                 attachments = attachments.filterNot { it in files }
                             } else sendPrompt(Queued(original.text, files), true)
-                        },
+                        } },
                         onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
                         onSendClick = {
-                            if (active.isNotEmpty()) {
+                            if (steeringBlocked) Unit else if (active.isNotEmpty()) {
                                 if (draft.text.isNotBlank() || attachments.isNotEmpty()) {
                                     queue = queue + Queued(draft.text, attachments)
                                     draft = TextFieldValue(""); attachments = emptyList()
@@ -360,7 +540,8 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             )
         }
         cc.ptoe.messenger.presentation.platform.BackHandler(enabled = showSettings, onBack = { showSettings = false }) {}
-        if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
+        if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy || active.isNotEmpty(), { showSettings = false }, ::readSettings, settingsError, ::inspectPendingMode, ::confirmPendingMode)
+        if (showReplaySnapshots) AcpReplaySnapshotsScreen(core, sessionId) { showReplaySnapshots = false }
     }
 }
 

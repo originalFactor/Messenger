@@ -26,3 +26,6 @@ actual fun createBuiltinChatTools(workspaceRoot: String?): List<ChatTool> =
 /** The companion runtime is what executes both the shell and the file tools. */
 actual fun builtinChatToolsSupported(): Boolean =
     ShellRuntimeRegistry.bridge?.isInstalled() == true
+
+actual suspend fun temporaryChatWorkspace(conversationId: String): String? =
+    ShellRuntimeRegistry.bridge?.takeIf { it.isInstalled() }?.temporaryChatWorkspace(conversationId)

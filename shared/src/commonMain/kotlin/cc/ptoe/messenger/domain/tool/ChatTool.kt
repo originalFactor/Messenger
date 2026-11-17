@@ -49,5 +49,6 @@ interface ChatTool {
 /** Result handed back to the model as the `tool` role message content. */
 data class ToolExecutionResult(
     val output: String,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val structuredContent: kotlinx.serialization.json.JsonElement? = null,
 )

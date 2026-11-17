@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Device tests use only a private loopback HTTP fixture. -->
+    <application android:usesCleartextTraffic="true">
+        <service
+            android:name="cc.ptoe.messenger.data.migration.AndroidRoomOwnerProbeService"
+            android:exported="false"
+            android:process=":roomOwnerProbe" />
+    </application>
+</manifest>
