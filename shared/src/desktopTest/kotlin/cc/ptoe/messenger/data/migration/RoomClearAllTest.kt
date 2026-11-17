@@ -54,6 +54,15 @@ class RoomClearAllTest {
     private fun openRoom(path: Path) = Room.databaseBuilder<LocalDatabase>(name = path.toString())
         .setDriver(BundledSQLiteDriver()).build()
 
+    private suspend fun markMigrated(db: LocalDatabase) {
+        db.rows().upsertValues(listOf(
+            KeyValueRow(CoreStoreMigration.MARKER_KEY, CoreStoreMigration.MARKER_VALUE),
+            KeyValueRow(CoreStoreMigration.SOURCE_FINGERPRINT_KEY, "a".repeat(64)),
+            KeyValueRow(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY, "b".repeat(64)),
+            KeyValueRow(ROOM_PUBLICATION_ID_KEY, "c".repeat(32)),
+        ))
+    }
+
     private suspend fun populate(db: LocalDatabase) {
         val rows = db.rows()
         val agent = rows.defaultAgents().single().id
@@ -191,6 +200,45 @@ class RoomClearAllTest {
                 assertEquals("cookie", db.rows().getValue("cloud_session")?.value)
                 assertTrue(Files.exists(file))
                 assertEquals(0, external.cleanupCalls)
+            }
+        } finally { dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun migratedStoreNeedsRepeatableCoreRetirementProofAndKeepsItsReceipt(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-clear-migrated")
+        val source = dir.resolve("missing-core.db")
+        val target = dir.resolve("room.db")
+        val file = Files.writeString(dir.resolve("owned-test-file"), "private")
+        val owner = Ownership()
+        val resetOwner = Ownership()
+        val external = External(file, resetOwner)
+        val checked = mutableListOf<RoomCoreSourceIdentity>()
+        val proof = RoomCoreSourceRetirement { identity -> checked += identity }
+        try {
+            if (!Files.getFileStore(dir).supportsFileAttributeView("posix")) return@runBlocking
+            RoomStoreStartup.withRoomStore(source, target, owner, RoomManagedShutdown { }, ::openRoom) { db ->
+                populate(db)
+                markMigrated(db)
+                assertFailsWith<IllegalStateException> { RoomClearAll(db, resetOwner, external).clear() }
+                assertEquals("cookie", db.rows().getValue("cloud_session")?.value)
+                assertTrue(Files.exists(file))
+                external.failCleanup = true
+                assertFailsWith<IllegalStateException> { RoomClearAll(db, resetOwner, external, sourceRetirement = proof).clear() }
+                assertNotNull(db.rows().getValue(RoomClearAll.PENDING_KEY))
+                assertNotNull(db.rows().getValue(RoomClearAll.RETIRED_SOURCE_KEY))
+                assertEquals(2, checked.size)
+            }
+            external.failCleanup = false
+            val recovery = openRoom(target)
+            try { RoomClearAll(recovery, resetOwner, external, sourceRetirement = proof).resume() } finally { recovery.close() }
+            assertFalse(Files.exists(file))
+            assertEquals(4, checked.size)
+            RoomStoreStartup.withRoomStore(source, target, owner, RoomManagedShutdown { }, ::openRoom) { db ->
+                assertNull(db.rows().getValue(RoomClearAll.PENDING_KEY))
+                assertNotNull(db.rows().getValue(RoomClearAll.RETIRED_SOURCE_KEY))
+                assertNull(db.rows().getValue(CoreStoreMigration.MARKER_KEY))
+                assertNull(db.rows().getValue("cloud_session"))
+                assertEquals(1, db.rows().defaultAgents().size)
             }
         } finally { dir.toFile().deleteRecursively() }
     }

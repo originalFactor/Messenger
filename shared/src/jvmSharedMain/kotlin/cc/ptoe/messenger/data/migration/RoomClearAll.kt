@@ -34,10 +34,27 @@ internal interface RoomClearAllExternal {
     suspend fun clearAndVerify()
 }
 
+/** Exact identity retained after a migrated Core source has been verifiably retired. */
+internal data class RoomCoreSourceIdentity(
+    val sourceFingerprint: String,
+    val publicationId: String,
+    val contentHash: String?,
+)
+
 /**
- * Isolated clear-all coordinator for fresh Room stores only. Migrated stores retain a separate
- * Core source whose durable retirement and identity transition are not implemented, so they
- * fail before any mutation. A pending marker blocks normal startup until offline recovery.
+ * Repeatable proof that the exact Core source, durable sidecars, backups, receipts and owned
+ * source assets cannot be used to recreate deleted records. It must also protect credentials.
+ * No platform implementation is supplied by this prototype; a test stub is not such a proof.
+ */
+internal fun interface RoomCoreSourceRetirement {
+    suspend fun verifyRetired(identity: RoomCoreSourceIdentity)
+}
+
+/**
+ * Isolated clear-all coordinator. Fresh stores need the external cleanup proof. A migrated or
+ * previously retired store additionally needs an exact, repeatable Core source retirement proof;
+ * its durable receipt prevents clear-all from silently turning a migrated store into a fresh one.
+ * A pending marker blocks normal startup until offline recovery.
  * The caller must destroy and recreate all in-memory services after a successful clear.
  */
 internal class RoomClearAll(
@@ -45,13 +62,18 @@ internal class RoomClearAll(
     private val ownership: RoomClearAllOwnership,
     private val external: RoomClearAllExternal,
     private val now: () -> Long = ::currentTimeMillis,
+    private val sourceRetirement: RoomCoreSourceRetirement? = null,
 ) {
+    private data class Retirement(val identity: RoomCoreSourceIdentity, val receipt: String)
+
     suspend fun clear() = ownership.withStoppedExclusiveOwner {
         external.checkReady()
+        val retirement = inspectRetirement()
+        requireRetirementProof(retirement)
         withContext(NonCancellable) {
             val id = randomUuid()
-            resetRows(id)
-            finish(id)
+            resetRows(id, retirement)
+            finish(id, retirement)
         }
     }
 
@@ -61,11 +83,74 @@ internal class RoomClearAll(
         withContext(NonCancellable) {
             val id = requireNotNull(db.rows().getValue(PENDING_KEY)?.value) { "No clear-all recovery is pending" }
             check(id.matches(UUID_PATTERN)) { "Invalid clear-all recovery marker" }
-            finish(id)
+            val retirement = readRetirementReceipt()
+            requireRetirementProof(retirement)
+            finish(id, retirement)
         }
     }
 
-    private suspend fun resetRows(id: String) = db.useWriterConnection { connection ->
+    private suspend fun inspectRetirement(): Retirement? = db.useWriterConnection { connection ->
+        connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
+            val rows = db.rows()
+            check(rows.getValue(PENDING_KEY) == null) { "Clear-all recovery is required" }
+            val fresh = rows.getValue(FRESH_KEY)?.value == "complete"
+            val migrationMarker = rows.getValue(CoreStoreMigration.MARKER_KEY)?.value
+            val existingReceipt = rows.getValue(RETIRED_SOURCE_KEY)?.value
+            if (migrationMarker == CoreStoreMigration.MARKER_VALUE) {
+                check(existingReceipt == null) { "Migrated store already has a retirement receipt" }
+                val sourceFingerprint = checkNotNull(rows.getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY)?.value) {
+                    "Migrated Core source identity is missing"
+                }
+                val publicationId = checkNotNull(rows.getValue(ROOM_PUBLICATION_ID_KEY)?.value) {
+                    "Migrated publication identity is missing"
+                }
+                val contentHash = rows.getValue(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY)?.value
+                val identity = validatedIdentity(sourceFingerprint, publicationId, contentHash)
+                Retirement(identity, receipt(identity))
+            } else {
+                check(migrationMarker == null && rows.getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY) == null &&
+                    rows.getValue(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY) == null) {
+                    "Unrecognized migration state requires recovery"
+                }
+                if (existingReceipt != null) Retirement(parseReceipt(existingReceipt), existingReceipt)
+                else {
+                    check(fresh) { "Migrated or unrecognized stores require a verified Core retirement before clear-all" }
+                    null
+                }
+            }
+        }
+    }
+
+    private suspend fun readRetirementReceipt(): Retirement? = db.useWriterConnection { connection ->
+        connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
+            db.rows().getValue(RETIRED_SOURCE_KEY)?.value?.let { raw -> Retirement(parseReceipt(raw), raw) }
+        }
+    }
+
+    private suspend fun requireRetirementProof(retirement: Retirement?) {
+        if (retirement == null) return
+        checkNotNull(sourceRetirement) { "Migrated Core source retirement proof is unavailable" }
+            .verifyRetired(retirement.identity)
+    }
+
+    private fun validatedIdentity(sourceFingerprint: String, publicationId: String, contentHash: String?): RoomCoreSourceIdentity {
+        require(sourceFingerprint.matches(SOURCE_IDENTITY_PATTERN) && publicationId.matches(PUBLICATION_PATTERN) &&
+            (contentHash == null || contentHash.matches(SOURCE_IDENTITY_PATTERN))) { "Invalid migrated Core source identity" }
+        return RoomCoreSourceIdentity(sourceFingerprint, publicationId, contentHash)
+    }
+
+    private fun receipt(identity: RoomCoreSourceIdentity) =
+        "${identity.sourceFingerprint}:${identity.publicationId}:${identity.contentHash.orEmpty()}"
+
+    private fun parseReceipt(raw: String): RoomCoreSourceIdentity {
+        val parts = raw.split(':')
+        require(parts.size == 3) { "Invalid Core retirement receipt" }
+        val identity = validatedIdentity(parts[0], parts[1], parts[2].takeIf(String::isNotEmpty))
+        check(receipt(identity) == raw) { "Invalid Core retirement receipt" }
+        return identity
+    }
+
+    private suspend fun resetRows(id: String, retirement: Retirement?) = db.useWriterConnection { connection ->
         // The marker and cleared rows must survive interruption together before file removal.
         connection.usePrepared("PRAGMA synchronous=FULL") { it.step() }
         connection.usePrepared("PRAGMA synchronous") { check(it.step() && it.getLong(0) == 2L) { "SQLite FULL sync unavailable" } }
@@ -73,8 +158,13 @@ internal class RoomClearAll(
         connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
             val rows = db.rows()
             check(rows.getValue(PENDING_KEY) == null) { "Clear-all recovery is required" }
-            check(rows.getValue(FRESH_KEY)?.value == "complete" && rows.getValue(CoreStoreMigration.MARKER_KEY) == null) {
-                "Migrated or unrecognized stores require a verified Core retirement before clear-all"
+            val fresh = rows.getValue(FRESH_KEY)?.value == "complete"
+            val migrationMarker = rows.getValue(CoreStoreMigration.MARKER_KEY)?.value
+            val existingReceipt = rows.getValue(RETIRED_SOURCE_KEY)?.value
+            check(if (retirement == null) fresh && migrationMarker == null && existingReceipt == null
+            else (migrationMarker == CoreStoreMigration.MARKER_VALUE || fresh) &&
+                (existingReceipt == null || existingReceipt == retirement.receipt)) {
+                "Store identity changed before clear-all"
             }
             val schemaVersion = connection.usePrepared("PRAGMA user_version") { check(it.step()); it.getLong(0) }
             check(schemaVersion == 1L) { "Unsupported Room schema for clear-all" }
@@ -91,15 +181,20 @@ internal class RoomClearAll(
                 description = Agent.DEFAULT_AGENT_DESCRIPTION, defaultModelId = null, temperature = 0.7f, topP = 1f,
                 maxTokens = null, isDefault = true, toolsEnabled = true, createdAt = time, updatedAt = time)
             rows.upsertAgents(listOf(seed.row(), Agent.builtinTitleAgent(time).row()))
-            rows.upsertValues(listOfNotNull(KeyValueRow(FRESH_KEY, "complete"), publication, KeyValueRow(PENDING_KEY, id)))
+            rows.upsertValues(listOfNotNull(KeyValueRow(FRESH_KEY, "complete"), publication, KeyValueRow(PENDING_KEY, id),
+                retirement?.let { KeyValueRow(RETIRED_SOURCE_KEY, it.receipt) }))
             check(rows.defaultAgents().size == 1) { "Exactly one default Agent is required" }
         }
     }
 
-    private suspend fun finish(id: String) {
+    private suspend fun finish(id: String, retirement: Retirement?) {
+        requireRetirementProof(retirement)
         db.useWriterConnection { connection ->
             check(db.rows().getValue(FRESH_KEY)?.value == "complete" &&
                 db.rows().getValue(CoreStoreMigration.MARKER_KEY) == null &&
+                db.rows().getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY) == null &&
+                db.rows().getValue(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY) == null &&
+                db.rows().getValue(RETIRED_SOURCE_KEY)?.value == retirement?.receipt &&
                 db.rows().getValue(PENDING_KEY)?.value == id && db.rows().defaultAgents().size == 1) {
                 "Clear-all recovery state is invalid"
             }
@@ -114,6 +209,7 @@ internal class RoomClearAll(
             connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
                 val rows = db.rows()
                 check(rows.getValue(PENDING_KEY)?.value == id) { "Clear-all recovery marker changed" }
+                check(rows.getValue(RETIRED_SOURCE_KEY)?.value == retirement?.receipt) { "Core retirement receipt changed" }
                 check(rows.defaultAgents().size == 1) { "Exactly one default Agent is required" }
                 rows.deleteValue(PENDING_KEY)
             }
@@ -122,8 +218,11 @@ internal class RoomClearAll(
 
     companion object {
         internal const val PENDING_KEY = "__messenger_room_clear_all_pending_v1"
+        internal const val RETIRED_SOURCE_KEY = "__messenger_room_retired_core_source_v1"
         private const val FRESH_KEY = "__messenger_room_fresh_v1"
         private val UUID_PATTERN = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        private val SOURCE_IDENTITY_PATTERN = Regex("[0-9a-f]{64}")
+        private val PUBLICATION_PATTERN = Regex("[0-9a-f]{32}")
         private val INTERNAL_TABLES = setOf("room_master_table", "android_metadata")
         // Children first, so this remains valid with foreign-key enforcement enabled.
         private val RESET_TABLES = listOf("messages", "learning_review_attempts", "learning_review_states",
