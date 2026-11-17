@@ -8,6 +8,7 @@ import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ThemePreferences
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import cc.ptoe.messenger.data.local.acp.*
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
@@ -16,6 +17,7 @@ import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.model.ChatModel
+import cc.ptoe.messenger.domain.model.Project
 import java.nio.file.Files
 import java.util.Collections
 import java.util.UUID
@@ -23,6 +25,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -108,7 +111,7 @@ class KotlinRoomAcpSliceTest {
         val transports = Collections.synchronizedList(mutableListOf<Transport>())
         val workerConfig = AcpWorkerConfiguration("fake", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
         try {
-            RoomAgentRepository(db).ensureDefaultAgent(Agent("default", "Agent", systemPrompt = "prompt", defaultModelId = null,
+            val defaultAgent = RoomAgentRepository(db).ensureDefaultAgent(Agent("default", "Agent", systemPrompt = "prompt", defaultModelId = null,
                 temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
             db.rows().upsertProjects(listOf(ProjectRow("project", "Project", workspace, "device", 1, 1)))
             db.rows().upsertValues(listOf(KeyValueRow("device_id", "device"), KeyValueRow("device_control_config",
@@ -167,26 +170,53 @@ class KotlinRoomAcpSliceTest {
             assertFalse(afterCancellation.message.orEmpty().contains("configuration is being changed"))
             val providerWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.providers.update(provider.copy(name = "updated")) }
             val modelWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.models.setEnabled("model", false) }
+            val agentWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.agents.update(defaultAgent.copy(name = "updated agent")) }
+            val projectWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.projects.update(Project("project", "updated project", workspace, 1, 2)) }
             assertFalse(providerWrite.isCompleted)
             assertFalse(modelWrite.isCompleted)
+            assertFalse(agentWrite.isCompleted)
+            assertFalse(projectWrite.isCompleted)
             val blocked = assertFailsWith<IllegalStateException> {
                 checkNotNull(backend.acpOwner).start(UUID.randomUUID().toString(), id, buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "later") }) })
             }
             assertEquals("ACP configuration is being changed", blocked.message)
             assertEquals("Provider", db.rows().provider("provider")?.name)
             assertTrue(checkNotNull(db.rows().model("model")).isEnabled)
+            assertEquals("Agent", db.rows().agent("default")?.name)
+            assertEquals("Project", db.rows().project("project")?.name)
             val loadedReplay = bridge.listAcpReplaySnapshots(id).single()
             assertEquals(0, bridge.readAcpReplaySnapshot(id, loadedReplay.id, 0).events.size)
             assertFailsWith<IllegalStateException> { bridge.deleteAcpReplaySnapshot(id, loadedReplay.id) }
             assertEquals(requestId, bridge.backgroundAcpBySession(id)?.get("requestId")?.jsonPrimitive?.content)
             bridge.controlPermission(requestId, permission.getValue("options").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content)
-            withTimeout(5_000) { providerWrite.await(); modelWrite.await() }
+            withTimeout(5_000) { providerWrite.await(); modelWrite.await(); agentWrite.await(); projectWrite.await() }
             assertEquals("updated", db.rows().provider("provider")?.name)
             assertFalse(checkNotNull(db.rows().model("model")).isEnabled)
+            assertEquals("updated agent", db.rows().agent("default")?.name)
+            assertEquals("updated project", db.rows().project("project")?.name)
             assertTrue(transports.all { it.stopped })
             assertFailsWith<Exception> { backend.models.insert(model.copy(id = "invalid", providerId = "missing")) }
             backend.models.setEnabled("model", true)
             assertTrue(checkNotNull(db.rows().model("model")).isEnabled)
+            // A workspace operation may hold its fence while two ACP-fenced writers queue.
+            // Once it drains, both writers must finish without acquiring the locks in reverse.
+            val workspaceEntered = CompletableDeferred<Unit>()
+            val releaseWorkspace = CompletableDeferred<Unit>()
+            val workspaceHolder = async(start = CoroutineStart.UNDISPATCHED) {
+                RuntimeWorkspaceFence.forDatabase(db).mutate { workspaceEntered.complete(Unit); releaseWorkspace.await() }
+            }
+            workspaceEntered.await()
+            try {
+                val waitingProject = async(start = CoroutineStart.UNDISPATCHED) {
+                    backend.projects.update(Project("project", "after workspace", workspace, 1, 3))
+                }
+                val waitingClone = async(start = CoroutineStart.UNDISPATCHED) { backend.agents.clone("default") }
+                assertFalse(waitingProject.isCompleted)
+                assertFalse(waitingClone.isCompleted)
+                releaseWorkspace.complete(Unit)
+                withTimeout(5_000) { workspaceHolder.await(); waitingProject.await(); assertTrue(waitingClone.await() != null) }
+                assertEquals("after workspace", db.rows().project("project")?.name)
+            } finally { releaseWorkspace.complete(Unit) }
             val done = withTimeout(5_000) {
                 var batch = bridge.backgroundAcpEvents(requestId, 0)
                 while (!batch.getValue("done").jsonPrimitive.boolean) { delay(10); batch = bridge.backgroundAcpEvents(requestId, 0) }

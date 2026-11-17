@@ -45,6 +45,16 @@ private suspend fun <T> LocalDatabase.writeLocal(
     return if (workspaceAuthority) RuntimeWorkspaceFence.forDatabase(this).mutate { commit() } else commit()
 }
 
+/** The supplied guard must invoke its action exactly once without reentering a guarded writer. */
+private suspend fun <T> configurationMutation(
+    guard: suspend (suspend () -> Unit) -> Unit,
+    action: suspend () -> T,
+): T {
+    var result: Result<T>? = null
+    guard { result = Result.success(action()) }
+    return checkNotNull(result) { "Configuration writer did not execute" }.getOrThrow()
+}
+
 private suspend fun LocalRowsDao.requireNoActiveTurn(conversationId: String) {
     check(getValue(ACTIVE_TURN_KEY_PREFIX + conversationId) == null) { "Cannot change messages with an active turn" }
 }
@@ -72,11 +82,15 @@ class RoomProviderRepository(
 private fun ProviderRow.domain() = Provider(id, name, baseUrl, apiKey, ApiFormat.fromWireName(apiFormat), nativeWebSearch, createdAt, updatedAt)
 private fun Provider.row() = ProviderRow(id, name, baseUrl, apiKey, apiFormat.wireName, nativeWebSearch, createdAt, updatedAt)
 
-class RoomProjectRepository(private val db: LocalDatabase, private val onChanged: (String, Boolean) -> Unit = { _, _ -> }) : ProjectRepository {
+class RoomProjectRepository(
+    private val db: LocalDatabase,
+    private val configurationWrite: suspend (suspend () -> Unit) -> Unit = { it() },
+    private val onChanged: (String, Boolean) -> Unit = { _, _ -> },
+) : ProjectRepository {
     private val rows get() = db.rows()
     override fun getAll() = rows.observeProjects().map { list -> list.map { it.domain() } }
     override fun getById(id: String) = rows.observeProject(id).map { it?.domain() }
-    override suspend fun insert(project: Project) { db.writeLocal { dao, mark ->
+    override suspend fun insert(project: Project) = configurationWrite { db.writeLocal { dao, mark ->
         val existing = dao.project(project.id)
         val owner = if (existing != null) existing.deviceId else {
             val stored = dao.getValue("device_id")?.value
@@ -89,7 +103,7 @@ class RoomProjectRepository(private val db: LocalDatabase, private val onChanged
         mark(SyncCollection.PROJECT, project.id, SyncMutation.UPSERT)
     }; onChanged(project.id, false) }
     override suspend fun update(project: Project) = insert(project)
-    override suspend fun delete(id: String) { db.writeLocal { dao, mark -> val affected = dao.conversationIdsForProject(id); dao.deleteProject(id); mark(SyncCollection.PROJECT, id, SyncMutation.DELETE); affected.forEach { mark(SyncCollection.CONVERSATION, it, SyncMutation.UPSERT) } }; onChanged(id, true) }
+    override suspend fun delete(id: String) = configurationWrite { db.writeLocal { dao, mark -> val affected = dao.conversationIdsForProject(id); dao.deleteProject(id); mark(SyncCollection.PROJECT, id, SyncMutation.DELETE); affected.forEach { mark(SyncCollection.CONVERSATION, it, SyncMutation.UPSERT) } }; onChanged(id, true) }
 }
 
 private fun ProjectRow.domain() = Project(id, name, workspace, createdAt, updatedAt)
@@ -97,16 +111,17 @@ private fun Project.row() = ProjectRow(id, name, workspace, null, createdAt, upd
 
 class RoomAgentRepository(
     private val db: LocalDatabase,
+    private val configurationWrite: suspend (suspend () -> Unit) -> Unit = { it() },
     private val onChanged: (cc.ptoe.messenger.domain.model.Agent?, cc.ptoe.messenger.domain.model.Agent?) -> Unit = { _, _ -> },
 ) : cc.ptoe.messenger.domain.repository.AgentRepository {
     private val rows get() = db.rows()
     /** Complete startup before exposing an empty or imported database to application code. */
     suspend fun ensureDefaultAgent(seed: cc.ptoe.messenger.domain.model.Agent): cc.ptoe.messenger.domain.model.Agent =
-        RuntimeWorkspaceFence.forDatabase(db).mutate { rows.ensureDefaultAgent(seed.row()).domain() }
+        configurationMutation(configurationWrite) { RuntimeWorkspaceFence.forDatabase(db).mutate { rows.ensureDefaultAgent(seed.row()).domain() } }
     override fun getAll() = rows.observeAgents().map { list -> list.map { it.domain() } }
     override fun getById(id: String) = rows.observeAgent(id).map { it?.domain() }
     override fun getDefaultAgent() = rows.observeDefaultAgent().map { it?.domain() }
-    override suspend fun insert(agent: cc.ptoe.messenger.domain.model.Agent) {
+    override suspend fun insert(agent: cc.ptoe.messenger.domain.model.Agent) = configurationWrite {
         val demoted = db.writeLocal { dao, mark ->
             val changed = dao.upsertAgentPreservingDefault(agent.rowPreservingSampling(dao.agent(agent.id)))
             mark(SyncCollection.AGENT, agent.id, SyncMutation.UPSERT)
@@ -116,7 +131,7 @@ class RoomAgentRepository(
         demoted.forEach { onChanged(it.domain(), it.copy(isDefault = false).domain()) }
         onChanged(null, rows.agent(agent.id)?.domain())
     }
-    override suspend fun update(agent: cc.ptoe.messenger.domain.model.Agent) {
+    override suspend fun update(agent: cc.ptoe.messenger.domain.model.Agent) = configurationWrite {
         val (previous, demoted) = db.writeLocal { dao, mark ->
             val old = dao.agent(agent.id)
             val changed = dao.upsertAgentPreservingDefault(agent.rowPreservingSampling(old))
@@ -127,7 +142,7 @@ class RoomAgentRepository(
         demoted.forEach { onChanged(it.domain(), it.copy(isDefault = false).domain()) }
         onChanged(previous, rows.agent(agent.id)?.domain())
     }
-    override suspend fun clone(id: String): cc.ptoe.messenger.domain.model.Agent? {
+    override suspend fun clone(id: String): cc.ptoe.messenger.domain.model.Agent? = configurationMutation(configurationWrite) {
         val result = db.writeLocal { dao, mark ->
             val original = dao.agent(id) ?: return@writeLocal null
             val now = cc.ptoe.messenger.data.util.currentTimeMillis()
@@ -138,12 +153,12 @@ class RoomAgentRepository(
             mark(SyncCollection.AGENT, copy.id, SyncMutation.UPSERT)
             demoted.forEach { mark(SyncCollection.AGENT, it.id, SyncMutation.UPSERT) }
             checkNotNull(dao.agent(copy.id)) to demoted
-        } ?: return null
+        } ?: return@configurationMutation null
         result.second.forEach { onChanged(it.domain(), it.copy(isDefault = false).domain()) }
-        return result.first.domain().also { onChanged(null, it) }
+        result.first.domain().also { onChanged(null, it) }
     }
-    override suspend fun delete(id: String) {
-        val previous = rows.agent(id)?.domain() ?: return
+    override suspend fun delete(id: String) = configurationWrite {
+        val previous = rows.agent(id)?.domain() ?: return@configurationWrite
         val seed = cc.ptoe.messenger.domain.model.Agent.builtinTitleAgent(cc.ptoe.messenger.data.util.currentTimeMillis())
         val deleted = db.writeLocal { dao, mark ->
             val affected = dao.conversationIdsForAgent(id)

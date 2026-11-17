@@ -201,12 +201,12 @@ internal class KotlinRoomBackendSlice private constructor(
             }
             val providers = RoomProviderRepository(db, configurationWrite) { _, _ -> cloud.requestLocalSync() }
             val models = RoomModelRepository(db, configurationWrite) { _, _ -> cloud.requestLocalSync() }
-            val agents = RoomAgentRepository(db) { previous, current ->
+            val agents = RoomAgentRepository(db, configurationWrite) { previous, current ->
                 cloud.requestLocalSync()
                 cloud.requestAgentAvatarChange(previous, current)
             }
             val conversations = RoomConversationRepository(db, acp) { _, _ -> cloud.requestLocalSync() }
-            val projects = RoomProjectRepository(db) { _, _ -> cloud.requestLocalSync() }
+            val projects = RoomProjectRepository(db, configurationWrite) { _, _ -> cloud.requestLocalSync() }
             val messages = RoomMessageRepository(db, { cloud.requestLocalSync() }, acp)
             val selected = RoomCurrentAgentRepository(db, agents)
 
