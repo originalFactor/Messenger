@@ -1,0 +1,64 @@
+# Rust Core 退役交接
+
+更新时间：2026-11-17。接手人：请先完整阅读根目录和相关模块的 `AGENTS.md`。本文是工作现场记录，不是发布批准或功能完成证明。
+
+## 目标与约束
+
+用户要求：Android debug 支持 `arm64-v8a`；缩短 debug/CI 编译时间并减少发布体积；移除草稿 TUI；将业务 Core 迁回 Kotlin/Room；将用户维护的 `llm-typewriter` 作为子模块并改用 Compose LaTeX；保留首个 Kotlin 版本的现有功能。用户特别确认要保留 MCP、ACP、远程控制、定时任务等功能，并愿意从旧 Room 数据恢复。
+
+最终要求是在完成 Kotlin 生产切换、基础测试和代码/构建依赖扫描后，**单独一个 commit 删除 Rust Core**。目前尚未满足条件，不要删除 `core/rust`、绑定层或 CI 的 Rust 构建，不要把隔离原型当成已发布功能。不得自动推送。
+
+## 当前状态
+
+- Android `MessengerApplication.kt` 和 Desktop `Main.kt` 仍启动 Rust；`KotlinRoomBackendSlice` 是隔离组合，`asAppBackend()` 仍拒绝 ACP owner 和远程设备 host。生产切换未完成。
+- 草稿 TUI 已移除（`eca2939`）；Android debug 默认 ABI 为 `arm64-v8a` 和 `x86_64`（`824f429`）。renderer 子模块已嵌入并使用 Compose LaTeX；子模块当前提交 `cb42531`。
+- Kotlin/Room 已有大量隔离实现和测试：聊天、Cloud、Learning、图片、生成应用、定时任务、ACP、MCP、远控及迁移。部分能力仍有限制，具体以 `shared/AGENTS.md` 和各实现文档为准。
+- 最近工作检查点：`3c563b9`（ACP 设置、工作区恢复原型）、`31efca7`/`29a980b`（ACP Agent/project/provider/model 写入保护）、`892720a`（Runtime ACP 会话协议与设备测试变体）、`f21459b`（旧库审查记录与 Cloud 派发）、`b7f9ad6`（隔离远程文字及 BYOK 接管）、`cb852df`（恢复及 ACP 接管原型）。`git log` 包含更早的阶段提交。
+- 估计曾向用户说明约 **2–6 周全职工程量**，不保证交付日期；这是粗估，平台隔离、数据迁移及跨平台测试可能改变它。
+
+## 工作树与交接时中断的工作
+
+**先运行 `git status --short --untracked-files=all`，不要重置或直接全部暂存。** 交接时已中断各协作者，以下源代码尚未形成检查点，最终版本未经完整联合测试和独立复审：
+
+1. `shared/.../KotlinControlSettingsBridge.kt`、`KotlinRoomBackendSlice.kt` 和 `KotlinRoomAcpSliceTest.kt`：ACP profile 保存先撤销远控，再等待 ACP worker 并检查原 session/epoch；即使新 profile 或名称无效也先撤销。`PartialChatBridge` 设置调用加入 shutdown 生命周期。相关 `shared/AGENTS.md` 有未提交更新。最近一次相关联合运行 `/tmp/messenger-profile-workspace-fence.log` 的 13 项测试中有 1 项失败，失败在工作区测试，不应据此称这一批全部通过。
+2. `shared/.../RoomWorkspaceExecutionFence.kt` 和对应 `RoomWorkspaceExecutionFenceTest.kt`：将持久 workspace invocation ledger 与隔离执行 fence 组合。最后的修改据作者称禁用旧的仅内存执行入口，完成结果保留 reservation 直到明确确认，解决跨入口重复执行和取消后结果丢失；**这些最后修改未重新编译、未测试、未独立复审**。仍缺 Cloud 401 同步失效、所有写入者围栏和真实 worker 停止证明，不能接入生产。原失败为 `cancelledTrackedInvocationRetainsReservationUntilExplicitProofBackedAcknowledgement`。
+3. `runtime/workspace-transfer-shared/.../WorkspaceArchive.kt`、`runtime/.../WorkspaceTransfer.kt`、`androidApp/.../AndroidWorkspaceCandidateStager.kt`、`AndroidWorkspaceCandidateDeviceTest.kt` 和两个 Gradle/AGENTS 文件：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。最后一轮修改把共用源码注册到 Kotlin source set；构建被交接中断，**尚无可信最终编译或设备测试结果**。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束或来源快照一致。检查是否有 Gradle 客户端残留后再运行。
+
+原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
+
+先检查最近未提交代码的 diff、测试日志及正在运行的进程；与作者确认后逐块完成、审查、测试、提交。不要混入 `.idea`、凭据或 server gitlink。若原型无法安全完成，保持其未连接及 fail-closed，并明确记载。
+
+## 已完成的可验证成果
+
+- Kotlin renderer 使用 `llm-typewriter` 子模块和 Compose LaTeX；Android 调试变体包含两个 ABI。`shared` Android device-test runtime 明确选择 debug `:core-bindings`，避免设备测试另外选择 release 变体；Cargo 对 debug native 仍使用优化 release profile。x86_64 模拟器的真实 UniFFI `CoreHandle.open` 验证过 native 加载；这不是 arm64 设备验证。
+- CI PR 路径筛选及 fixture 测试已提交 `c5d1461`，main push/release 仍构建所有目标；没有声称 GitHub Actions 已实际运行。
+- 旧 Room 恢复的隔离 UI 支持比较、显式选择及保留现状审查记录，记录与事务绑定，保留源数据；Android API 37 x86_64 模拟器上协调器设备测试 6/6 通过，worker 证明使用测试桩。历史 Rust 导入会遗漏 v21/v22 项目及会话关联，v22 provider `apiFormat` 也可能丢失。审查仅覆盖部分字段，不能视作全部数据一致或生产启动凭据。详见 `shared/docs/LEGACY_ROOM_RECOVERY.md`。
+- Runtime ACP 协议 2 使用 callback Binder 绑定输入/停止，旧 companion 需升级；真实跨 UID Android Binder 测试通过。同步 Binder 可能阻塞；直接子进程停止不能证明已脱离的后代停止。
+- Runtime 工作区候选传输原型（`3c563b9`）通过 5 项 Android 设备测试，包括真实硬链接拒绝、符号链接、父目录替换和深度限制；硬链接夹具仅在隔离 emulator 由 adbd root 创建后交给普通 Runtime UID，已清理。它不是完整迁移：拒绝链接/特殊文件，不保留所有元数据，不认证来源或提供跨文件一致快照。
+- 最近已提交的隔离功能包括可恢复的定时任务、ACP steering 未知结果处理、BYOK 模型接管原型、远程文字 prompt、MCP 未知结果处理和受限 Cloud raw HTTP gate；具体能力和关闭状态见 `shared/AGENTS.md`。BYOK 默认模型不可用时不静默切换计费来源；Cloud takeover 尚未启用。
+- 验证证据是分阶段的，不应加总成一次完整套件：曾有 738 Desktop 测试通过（1 skipped）、9 Runtime 和 35 Wear 单元测试通过；后续多轮定向测试分别通过 88、102、47 等项和 Android 编译；最近 ACP protocol 相关联合单元测试 84 项通过。Android 模拟器验证仅 API 37 x86_64，无 Wear OS 系统镜像，未做真实手表、Windows/macOS 设备验证。不要把旧结果套到未提交代码上。
+- debug APK 曾测得 x86_64 `libmessenger_ffi.so` 18,180,600 bytes、`libsqliteJni.so` 1,189,688 bytes（存储大小）；没有完整发布体积或 clean-build 前后对照。`shared/docs/ANDROID_SYSTEM_SQLITE.md` 解释 bundled SQLite 本身仍包含 native 库，系统 SQLite 替换尚未证明安全。
+
+## 关键未完成事项与建议顺序
+
+1. **先恢复可验证工作现场。** 复审上面 3 组未提交改动及锁顺序，修复测试，按功能分开提交。workspace ledger 的 stop barrier 只是接口；服务端不认证声称的 sender。workspace 文件候选不提供可信来源、完整元数据或全局一致快照。
+2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录了实际障碍：Rust `ServerHandle.stop()` 只等待 axum，未 join 所有后台任务；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩冒充平台证明。
+3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
+4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
+5. **Desktop 与存储。** Windows 存储的 ACL、链接/路径和持久化及旧 Core/资源独占问题未解决；参见 `shared/docs/WINDOWS_ROOM_STORAGE.md`。macOS/Linux/Windows 都需真实设备或 CI 验证。Android 系统 SQLite 的事务、游标和 WAL 语义尚待真实设备验证，不能仅为减小包而替换 driver。
+6. **切换及删除。** 先建立真实 owner 和恢复机制，在保留功能及用户数据下接入 Android/Desktop；运行基础测试及受影响设备测试；扫描源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物的 Rust Core 依赖。确认没有依赖并验证构建后，按用户要求单独提交删除 Rust Core；更新相关 `AGENTS.md`。release/R8 按仓库规则仅在确有必要时运行。
+
+## 构建与验证
+
+所有 Gradle 命令使用 `./gradlew-cli`，不要用裸 `./gradlew` 或加 `--no-daemon`。本机成功环境：
+
+```bash
+export JAVA_HOME=/opt/android-studio/jbr
+export PATH="$JAVA_HOME/bin:$PATH"
+./gradlew-cli :shared:desktopTest --tests '*RoomWorkspaceExecutionFenceTest*' --tests '*RoomWorkspaceInvocationLedgerTest*' --tests '*RoomWorkspaceRelayAuthorityTest*' --tests '*KotlinRoomAcpSliceTest*' --tests '*KotlinControlSettingsBridgeTest*' --tests '*RoomDeviceControlGrantStoreTest*' :androidApp:compileDebugKotlin -Pmessenger.debugAbis=x86_64 -Pmessenger.abis=x86_64 -Pmessenger.buildRuntimeNative=false
+./gradlew-cli :runtime:testDebugUnitTest :runtime:assembleDebug :runtime:assembleDebugAndroidTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest -Pmessenger.debugAbis=x86_64 -Pmessenger.abis=x86_64 -Pmessenger.buildRuntimeNative=false
+```
+
+根据实际变更补相应测试，特别是候选工作区的跨 UID instrumentation；不要把当前未验证文件视作上述旧测试已覆盖。设备测试仅使用临时 `emulator-5562`，明确 `adb -s emulator-5562`，结束后 `adb -s emulator-5562 emu kill`；不要操作物理设备。AVD 位于 `/tmp/messenger-avd-validation/avd`。运行状态和失败详情可先查看 `/tmp/messenger-profile-workspace-fence.log` 等 `/tmp/messenger-*.log`，但临时文件不是长期证据。Gradle 可能因 Kotlin 增量编译异常自动回退全量编译，需区分警告与失败。
+
+自动命令审查此前拒绝了清理临时 checkout `/tmp/messenger-mcp-staged-AYYoEsYN` 的 `rm -rf` 命令形式；该目录被保留。不要绕过审查或将其误认为仓库内容。
