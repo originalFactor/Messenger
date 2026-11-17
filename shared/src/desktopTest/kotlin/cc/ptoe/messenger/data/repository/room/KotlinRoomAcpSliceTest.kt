@@ -168,6 +168,24 @@ class KotlinRoomAcpSliceTest {
             assertTrue(bridge.hasActiveTasks())
             assertTrue(bridge.supportsAcpReplaySnapshots)
             assertTrue(bridge.supportsAcpReplayDeletion)
+            // Invalid unrelated edits cannot stop an explicit remote-control revocation.
+            val invalidName = bridge.controlSettings()
+            assertFailsWith<IllegalArgumentException> {
+                bridge.saveControlSettings(JsonObject(invalidName + mapOf("enabled" to JsonPrimitive(false), "name" to JsonPrimitive("x".repeat(121)))))
+            }
+            assertEquals(null, db.rows().getValue("device_control_grant"))
+            val restoreRemote = bridge.controlSettings()
+            bridge.saveControlSettings(JsonObject(restoreRemote + ("enabled" to JsonPrimitive(true))))
+            val invalidProfile = bridge.controlSettings()
+            val invalidAgents = JsonArray(invalidProfile.getValue("agents").jsonArray.mapIndexed { index, profile ->
+                if (index == 0) JsonObject(profile.jsonObject + ("command" to JsonPrimitive(""))) else profile
+            })
+            assertFailsWith<IllegalArgumentException> {
+                bridge.saveControlSettings(JsonObject(invalidProfile + mapOf("enabled" to JsonPrimitive(false), "agents" to invalidAgents)))
+            }
+            assertEquals(null, db.rows().getValue("device_control_grant"))
+            val enableAfterInvalid = bridge.controlSettings()
+            bridge.saveControlSettings(JsonObject(enableAfterInvalid + ("enabled" to JsonPrimitive(true))))
             fun changedProfile(settings: JsonObject): JsonArray = JsonArray(settings.getValue("agents").jsonArray.mapIndexed { index, profile ->
                 if (index == 0) JsonObject(profile.jsonObject + ("description" to JsonPrimitive("changed profile"))) else profile
             })

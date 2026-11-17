@@ -53,27 +53,29 @@ internal class KotlinControlSettingsBridge(
         val config = JsonObject(settings - TICKET)
         val enabled = (config["enabled"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         require(enabled != null) { "Invalid remote control setting" }
+        // A remote-control revocation takes effect even if the accompanying name or
+        // profile edit is invalid. Preserve the old configuration in this transaction.
+        val previouslyEnabled = (snapshot.config["enabled"] as? JsonPrimitive)?.booleanOrNull == true
+        val revoked = if (previouslyEnabled && !enabled) JsonObject(snapshot.config + ("enabled" to JsonPrimitive(false))) else null
+        val revokedEpoch = revoked?.let { store.saveForBridge(snapshot, it) }
         val name = (config["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: error("Invalid device name")
         require(name.codePointCount(0, name.length) <= 120 && name.none(Char::isISOControl)) { "Invalid device name" }
         validate(profiles(config))
-        if (config["agents"] == snapshot.config["agents"]) {
-            store.saveForBridge(snapshot, config)
-            return
-        }
-        // Revocation must not wait for an ACP worker. Preserve the exact old profiles in
-        // the first transaction; a later profile write must still match its new epoch.
-        val previouslyEnabled = (snapshot.config["enabled"] as? JsonPrimitive)?.booleanOrNull == true
-        val expected = if (previouslyEnabled && !enabled) {
-            val revoked = JsonObject(snapshot.config + ("enabled" to JsonPrimitive(false)))
-            val epoch = store.saveForBridge(snapshot, revoked)
+        if (revoked != null && config == revoked) return
+        // A later profile write must still match the exact session and post-revocation epoch.
+        val expected = if (revoked != null) {
             store.readForBridge().also { current ->
-                check(current.epoch == epoch && current.identity == snapshot.identity &&
+                check(current.epoch == revokedEpoch && current.identity == snapshot.identity &&
                     current.session == snapshot.session && current.config == revoked && current.templatesSeeded) {
                     "Cloud session or settings changed"
                 }
             }
         } else snapshot
-        configurationWrite { store.saveForBridge(expected, config); Unit }
+        if (config["agents"] == expected.config["agents"]) {
+            store.saveForBridge(expected, config)
+            return
+        }
+        configurationWrite { store.saveForBridge(expected, config) }
     }
 
     private fun profiles(config: JsonObject): List<AcpProfile> =
