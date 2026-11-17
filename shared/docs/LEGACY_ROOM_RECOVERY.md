@@ -135,3 +135,21 @@ file is under `getDatabasePath(...)` while the isolated Room owner requires its
 destination under `filesDir`. Other layouts, including a Desktop destination
 beside the legacy database, need a separate private destination and fail closed
 if this separation cannot be verified.
+
+The offline session records the latest explicit decision in the Room transaction
+that applies it. The decision includes exactly which project, association and
+provider-format IDs were selected, the confirmed device for new projects, a
+digest of the displayed comparison, the Room publication ID, and digests binding
+the Core source and the legacy file and durable sidecar identities and bytes.
+It does not store the original path, inode details or provider credentials.
+Choosing to keep all current values requires a separate confirmation and records
+an empty selection; dismissing review records nothing. The transaction rechecks
+all displayed Room rows, including unselected ones, before recording the choice.
+
+`readMatchingDecision` requires the same lifetime writer/path exclusion and
+rechecks the source files, Core fingerprint and Room publication before returning
+this historical record. A match does not prove current Room contents, backup age,
+complete reconciliation, platform worker termination or authority to start the
+application. This audit record is transactional; cross-platform power-loss and
+backup/restore durability still require independent validation. No production
+startup path consumes it.

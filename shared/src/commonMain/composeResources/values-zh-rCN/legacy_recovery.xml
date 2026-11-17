@@ -21,6 +21,8 @@
     <string name="legacy_review_provider_fields">名称：%1$s\n协议：%2$s</string>
     <string name="legacy_review_unavailable">当前数据或项目选择不允许恢复此项。</string>
     <string name="legacy_review_restore">恢复所选更改</string>
+    <string name="legacy_review_keep_current">保留当前值</string>
+    <string name="legacy_review_confirm_keep_current">保留当前值，不恢复这些旧字段？原始数据库会保留。</string>
     <string name="legacy_review_confirm_title">确认所选更改</string>
     <string name="legacy_review_confirm_body">应用 %1$d 项项目、%2$d 项会话关联和 %3$d 项供应商协议更改？原始数据库会保留。</string>
     <string name="legacy_review_new_project_device">新项目将属于此设备：%1$s</string>

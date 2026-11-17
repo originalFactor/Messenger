@@ -797,6 +797,20 @@ class RoomKotlinTurnStore(
         check(turn.conversationId == conversationId && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
         rows.applyApproval(turn, callId, allow, mark)
     } }
+    /** Reserved for a prompt's own permission lane; does not enable remote tools. */
+    internal suspend fun decideRemotePromptApprovalAuthenticated(scope: KotlinRemoteControlScope, cookie: String,
+        requestId: String, conversationId: String, turnId: String, callId: String, allow: Boolean) { transaction { rows, mark ->
+        check(rows.getValue("kotlin_remote_prompt_v1:$requestId")?.value == turnId) { "Remote prompt identity changed" }
+        check(rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Turn is no longer active" }
+        val turn = rows.read(turnId)
+        turn.requireOwner()
+        check(turn.conversationId == conversationId && turn.remoteScope == scope && turn.remoteCookieDigest != null) {
+            "Turn does not match the remote prompt"
+        }
+        check(rows.getValue("cloud_session")?.value == cookie) { "Cloud session changed" }
+        rows.requireRemotePrompt(turn)
+        rows.applyApproval(turn, callId, allow, mark)
+    } }
     override suspend fun beginTool(turnId: String): ToolCallData = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_TOOL)
         rows.requireRemotePrompt(turn)

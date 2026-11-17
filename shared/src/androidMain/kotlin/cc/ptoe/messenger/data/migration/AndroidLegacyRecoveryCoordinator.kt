@@ -25,6 +25,7 @@ import cc.ptoe.messenger.generated.resources.legacy_recovery_cancelled
 import cc.ptoe.messenger.generated.resources.legacy_recovery_applying
 import cc.ptoe.messenger.generated.resources.legacy_recovery_done
 import cc.ptoe.messenger.generated.resources.legacy_recovery_failed
+import cc.ptoe.messenger.generated.resources.legacy_recovery_kept
 import cc.ptoe.messenger.generated.resources.legacy_recovery_running
 import cc.ptoe.messenger.generated.resources.legacy_recovery_saved
 import cc.ptoe.messenger.generated.resources.legacy_recovery_uncertain
@@ -120,7 +121,7 @@ internal class AndroidLegacyRecoveryCoordinator(
     fun apply(review: LegacyRecoveryReview, selection: LegacyRecoverySelection): Boolean = synchronized(lock) {
         val displayed = mutableState.value as? AndroidLegacyRecoveryState.Review ?: return@synchronized false
         if (displayed.review !== review) return@synchronized false
-        val expected = LegacyRecoveryChoices(review).selection(selection.projects, selection.associations, selection.providerFormats)
+        val expected = LegacyRecoveryChoices(review).selection(selection.projects, selection.associations, selection.providerFormats, allowEmpty = true)
         if (expected == null || expected != selection) return@synchronized false
         val choice = pending ?: return@synchronized false
         if (!choice.complete(selection)) return@synchronized false
@@ -172,7 +173,9 @@ internal fun AndroidLegacyRecoveryScreen(coordinator: AndroidLegacyRecoveryCoord
                     Button(onClick = onExit) { Text(stringResource(Res.string.legacy_recovery_done)) }
                 }
                 is AndroidLegacyRecoveryState.Completed -> {
-                    Text(stringResource(Res.string.legacy_recovery_saved, current.applied.projects,
+                    if (current.applied.projects == 0 && current.applied.associations == 0 && current.applied.providerFormats == 0)
+                        Text(stringResource(Res.string.legacy_recovery_kept))
+                    else Text(stringResource(Res.string.legacy_recovery_saved, current.applied.projects,
                         current.applied.associations, current.applied.providerFormats))
                     Button(onClick = onExit) { Text(stringResource(Res.string.legacy_recovery_done)) }
                 }

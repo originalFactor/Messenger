@@ -31,7 +31,8 @@ internal fun LegacyRecoveryReviewScreen(
     var providers by remember(review) { mutableStateOf(emptySet<String>()) }
     var confirming by remember(review) { mutableStateOf(false) }
     var finished by remember(review) { mutableStateOf(false) }
-    val selection = choices.selection(projects, conversations, providers)
+    val selection = choices.selection(projects, conversations, providers, allowEmpty = true)
+    val keepCurrent = projects.isEmpty() && conversations.isEmpty() && providers.isEmpty()
 
     Scaffold(modifier = modifier.fillMaxSize(), topBar = {
         TopAppBar(title = { Text(stringResource(Res.string.legacy_review_title)) }, navigationIcon = {
@@ -41,7 +42,9 @@ internal fun LegacyRecoveryReviewScreen(
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
             TextButton(enabled = !finished, onClick = { finished = true; onCancel() }) { Text(stringResource(Res.string.action_cancel)) }
             Spacer(Modifier.width(8.dp))
-            Button(enabled = !finished && selection != null, onClick = { confirming = true }) { Text(stringResource(Res.string.legacy_review_restore)) }
+            Button(enabled = !finished && selection != null, onClick = { confirming = true }) {
+                Text(stringResource(if (keepCurrent) Res.string.legacy_review_keep_current else Res.string.legacy_review_restore))
+            }
         }
     }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("legacy-recovery-list"), contentPadding = PaddingValues(16.dp),
@@ -89,7 +92,8 @@ internal fun LegacyRecoveryReviewScreen(
         AlertDialog(onDismissRequest = { confirming = false }, title = { Text(stringResource(Res.string.legacy_review_confirm_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(Res.string.legacy_review_confirm_body, selection.projects.size,
+                    if (keepCurrent) Text(stringResource(Res.string.legacy_review_confirm_keep_current))
+                    else Text(stringResource(Res.string.legacy_review_confirm_body, selection.projects.size,
                         selection.associations.size, selection.providerFormats.size))
                     selection.newProjectDeviceId?.let { Text(stringResource(Res.string.legacy_review_new_project_device, it)) }
                 }

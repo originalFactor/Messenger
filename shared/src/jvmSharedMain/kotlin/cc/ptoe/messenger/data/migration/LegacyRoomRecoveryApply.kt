@@ -10,6 +10,7 @@ import cc.ptoe.messenger.data.cloud.SyncCollection
 import cc.ptoe.messenger.data.cloud.SyncMutation
 import cc.ptoe.messenger.data.local.room.CLOUD_REPLACEMENT_LOCK_KEY
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.ProjectRow
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -20,6 +21,8 @@ import java.nio.ByteBuffer
 import java.security.MessageDigest
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** Proves the scratch snapshot's exact original and excludes its writers and path replacement. */
 internal interface LegacyRecoveryProvenance {
@@ -64,6 +67,7 @@ internal object LegacyRoomRecoveryApply {
         provenance: LegacyRecoveryProvenance,
         openRoom: (Path) -> LocalDatabase,
         now: () -> Long,
+        legacyIdentity: String? = null,
         choose: suspend (LegacyRecoveryReview) -> LegacyRecoverySelection?,
     ): LegacyRecoveryApplied? = ownership.withExclusiveOwnership { provenance.withVerifiedSnapshot(legacySnapshot) {
         CoreSourceSqliteLease.acquire(corePath).use { lease ->
@@ -85,7 +89,8 @@ internal object LegacyRoomRecoveryApply {
                 ) } ?: return@withVerifiedSnapshot null
                 currentCoroutineContext().ensureActive()
                 val count = selected.projects.size.toLong() + selected.associations.size + selected.providerFormats.size
-                require(count in 1..MAX_SELECTIONS.toLong()) { "Select at least one bounded recovery action" }
+                require(count <= MAX_SELECTIONS && (count > 0 || legacyIdentity != null)) { "Select at least one bounded recovery action" }
+                require(legacyIdentity == null || legacyIdentity.matches(Regex("[0-9a-f]{64}"))) { "Invalid legacy source identity" }
                 check(lease.migrationFingerprint() == sourceFingerprint) { "Core source changed after preview" }
                 check(lease.legacySnapshotFingerprint(legacySnapshot) == legacyFingerprint) { "Legacy snapshot changed after preview" }
                 check(identity(target) == targetIdentity) { "Room destination changed after preview" }
@@ -93,7 +98,18 @@ internal object LegacyRoomRecoveryApply {
                 RuntimeWorkspaceFence.forDatabase(room).mutate {
                     room.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
                         currentCoroutineContext().ensureActive()
-                        apply(room, preview, selected, baseline, sourceFingerprint, timestamp)
+                        if (legacyIdentity != null) verifyReviewBaseline(room, baseline)
+                        val applied = apply(room, preview, selected, baseline, sourceFingerprint, timestamp)
+                        if (legacyIdentity != null) {
+                            val publication = checkNotNull(room.rows().getValue(ROOM_PUBLICATION_ID_KEY)).value
+                            val receipt = LegacyReviewDecisionReceipt(legacyIdentity, sourceFingerprint, publication,
+                                legacyReviewDigest(baseline.review), selected.projects.sorted(), selected.associations.sorted(),
+                                selected.providerFormats.sorted(), selected.newProjectDeviceId, timestamp)
+                            val encoded = Json.encodeToString(receipt)
+                            check(encoded.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { "Review decision exceeds limit" }
+                            room.rows().upsertValues(listOf(KeyValueRow(LEGACY_REVIEW_DECISION_KEY, encoded)))
+                        }
+                        applied
                     } }
                 }
             } finally { room.close() }
@@ -102,6 +118,15 @@ internal object LegacyRoomRecoveryApply {
 
     private data class Baseline(val projects: Map<String, String?>, val conversations: Map<String, String?>,
         val providers: Map<String, String?>, val review: LegacyRecoveryReview)
+
+    /** The receipt covers all displayed Room values, including records left unchanged. */
+    private suspend fun verifyReviewBaseline(db: LocalDatabase, baseline: Baseline) {
+        val rows = db.rows()
+        check(rows.getValue("device_id")?.value?.takeIf { it.isNotBlank() } == baseline.review.roomDeviceId) { "Device identity changed after review" }
+        for ((id, expected) in baseline.projects) check(rows.project(id)?.let(::projectHash) == expected) { "Project changed after review" }
+        for ((id, expected) in baseline.conversations) check(rows.conversation(id)?.let(::conversationHash) == expected) { "Conversation changed after review" }
+        for ((id, expected) in baseline.providers) check(rows.provider(id)?.let(::providerHash) == expected) { "Provider changed after review" }
+    }
 
     private suspend fun baseline(db: LocalDatabase, preview: LegacyRoomRecoveryPreview): Baseline =
         db.useReaderConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
@@ -173,7 +198,7 @@ internal object LegacyRoomRecoveryApply {
         return requireNotNull(attrs.fileKey()) { "Room destination identity unavailable" }
     }
 
-    private suspend fun verifyRoom(db: LocalDatabase, path: Path, expectedIdentity: Any, fingerprint: String) {
+    internal suspend fun verifyRoom(db: LocalDatabase, path: Path, expectedIdentity: Any, fingerprint: String) {
         db.useReaderConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
             connection.usePrepared("PRAGMA database_list") { row ->
                 check(row.step() && row.getText(1) == "main" && Files.isSameFile(Paths.get(row.getText(2)), path)) { "Room factory opened the wrong database" }
@@ -183,7 +208,7 @@ internal object LegacyRoomRecoveryApply {
         } }
     }
 
-    private suspend fun requirePublication(db: LocalDatabase, fingerprint: String) {
+    internal suspend fun requirePublication(db: LocalDatabase, fingerprint: String) {
         val rows = db.rows()
         check(rows.getValue(CoreStoreMigration.MARKER_KEY)?.value == CoreStoreMigration.MARKER_VALUE &&
             rows.getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY)?.value == fingerprint &&

@@ -274,6 +274,17 @@ internal interface CloudSyncDao {
     }
     @Query("SELECT * FROM agents WHERE id = :id") suspend fun agentRow(id: String): AgentRow?
     @Query("SELECT * FROM providers WHERE id = :id") suspend fun providerRow(id: String): ProviderRow?
+
+    /** A raw Cloud provider request may be admitted only for this exact session and host. */
+    @Transaction
+    suspend fun requireExternalProvider(session: SyncSession, expected: ProviderRow) {
+        check(currentSession() == session && value(DEFERRED_BUILTIN_PROVIDER_CLEANUP) == null &&
+            value(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud session requires recovery" }
+        val host = value("cloud_session_host")?.value ?: error("Cloud session host is unavailable")
+        check(expected.id == BUILTIN_PROVIDER_ID && expected.apiKey.isNotBlank() && expected.apiFormat == "chat" &&
+            !expected.nativeWebSearch && runCatching { canonicalCloudBase(host) + "/v1" }.getOrNull() == expected.baseUrl &&
+            providerRow(BUILTIN_PROVIDER_ID) == expected) { "Cloud provider changed or does not match the active session" }
+    }
     @Query("SELECT * FROM models WHERE providerId = :id") suspend fun providerModels(id: String): List<ModelRow>
     @Query("SELECT * FROM projects WHERE id = :id") suspend fun projectRow(id: String): ProjectRow?
     @Query("SELECT * FROM conversations WHERE id = :id") suspend fun conversationRow(id: String): ConversationRow?

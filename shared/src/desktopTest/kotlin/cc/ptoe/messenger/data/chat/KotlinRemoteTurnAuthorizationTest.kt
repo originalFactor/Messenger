@@ -24,6 +24,9 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.*
 
@@ -52,6 +55,56 @@ class KotlinRemoteTurnAuthorizationTest {
         override fun toolGrant() = KotlinRuntimeToolGrant("c", "project", "/workspace", "device", "host", listOf("write"))
     }
     private fun store(db: LocalDatabase) = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true })
+
+    @Test fun promptApprovalRequiresOriginalRequestCookieOwnerAndCall(): Unit = runBlocking {
+      for (expire in listOf(false, true)) {
+        val dir = Files.createTempDirectory("remote-prompt-approval")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val gate = RoomCloudProviderGate.forDao(db.cloudSync())
+        try {
+            seed(db)
+            val requestId = java.util.UUID.randomUUID().toString()
+            val textStore = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false }, gate)
+            val textTurn = assertIs<KotlinTurnAdmission.Accepted>(textStore.admit(KotlinTurnCommand.Send("c", "text", null,
+                disableTools = true, remoteScope = scope, remotePrompt = KotlinRemotePromptIdentity(requestId, "messenger_session=secret")))).turnId
+            val digest = Json.parseToJsonElement(checkNotNull(db.rows().getValue("kotlin_turn_v1:$textTurn")).value).jsonObject.getValue("remoteCookieDigest")
+            textStore.cancel(textTurn); textStore.release(textTurn)
+
+            // Remote tools are disabled. Construct the future waiting state explicitly to test
+            // the approval boundary without enabling any remote side-effect executor.
+            val owner = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+            val other = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+            val id = assertIs<KotlinTurnAdmission.Accepted>(owner.admit(KotlinTurnCommand.Send("c", "hello", null, remoteScope = scope))).turnId
+            assertTrue(owner.claim(id, false)); owner.beginProvider(id)
+            owner.completeProvider(id, listOf(ToolCallData("call", "write", "{}")), null)
+            val row = checkNotNull(db.rows().getValue("kotlin_turn_v1:$id"))
+            val injected = JsonObject(Json.parseToJsonElement(row.value).jsonObject + ("remoteCookieDigest" to digest))
+            db.rows().upsertValues(listOf(row.copy(value = injected.toString()), KeyValueRow("kotlin_remote_prompt_v1:$requestId", id)))
+
+            suspend fun decide(request: String = requestId, cookie: String = "messenger_session=secret", call: String = "call") =
+                owner.decideRemotePromptApprovalAuthenticated(scope, cookie, request, "c", id, call, false)
+            assertFailsWith<IllegalStateException> { decide(request = java.util.UUID.randomUUID().toString()) }
+            assertFailsWith<IllegalStateException> { other.decideRemotePromptApprovalAuthenticated(scope, "messenger_session=secret", requestId, "c", id, "call", false) }
+            assertFailsWith<IllegalStateException> { owner.decideRemotePromptApprovalAuthenticated(scope.copy(grantEpoch = 2), "messenger_session=secret", requestId, "c", id, "call", false) }
+            assertFailsWith<IllegalStateException> { owner.decideRemotePromptApprovalAuthenticated(scope, "messenger_session=secret", requestId, "c", "stale", "call", false) }
+            assertFailsWith<IllegalArgumentException> { decide(call = "other") }
+            assertFailsWith<IllegalStateException> { decide(cookie = "messenger_session=other") }
+            db.rows().upsertValues(listOf(KeyValueRow("cloud_session", "messenger_session=other")))
+            assertFailsWith<IllegalStateException> { decide(cookie = "messenger_session=other") }
+            db.rows().upsertValues(listOf(KeyValueRow("cloud_session", "messenger_session=secret")))
+            if (expire) {
+                gate.invalidate(SyncSession("account", "generation"))
+                assertFailsWith<IllegalStateException> { decide() }
+                assertEquals(KotlinTurnPhase.WAITING_APPROVAL, owner.snapshot(id).phase)
+            } else {
+                owner.decideRemotePromptApprovalAuthenticated(scope, "messenger_session=secret", requestId, "c", id, "call", true)
+                assertEquals(KotlinTurnPhase.READY_TOOL, owner.snapshot(id).phase)
+                assertFailsWith<IllegalStateException> { decide() }
+            }
+            owner.cancel(id); owner.release(id)
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+      }
+    }
 
     @Test fun remotePromptAdmissionBindsCookieEpochAndDurableIdentity(): Unit = runBlocking {
         val dir = Files.createTempDirectory("remote-prompt-identity")

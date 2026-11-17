@@ -150,6 +150,30 @@ class AndroidLegacyRecoveryCoordinatorDeviceTest {
         } finally { db.close() }
     }
 
+    @Test fun explicitKeepCurrentRecordsSourceBoundDecisionOnAndroid() = runBlocking {
+        fixture()
+        // These are real cooperative Android owners with test-only external worker proofs.
+        val owner = AndroidRoomDirectoryOwner.acquire(context, destination, RoomWritersStoppedProof { }, RoomWritersStoppedProof { })
+        val coordinator = coordinator(owner)
+        val work = async(Dispatchers.Default) { coordinator.run() }
+        val review = withTimeout(10_000) { coordinator.state.first { it is AndroidLegacyRecoveryState.Review } } as AndroidLegacyRecoveryState.Review
+        assertTrue(coordinator.apply(review.review, LegacyRecoverySelection()))
+        assertEquals(LegacyRecoveryApplied(0, 0, 0), withTimeout(10_000) { work.await() })
+        assertTrue(coordinator.state.value is AndroidLegacyRecoveryState.Completed)
+        val readerOwner = AndroidRoomDirectoryOwner.acquire(context, destination, RoomWritersStoppedProof { }, RoomWritersStoppedProof { })
+        val decision = LegacyRoomRecoverySession.readMatchingDecision(core, legacy, destination, readerOwner, ::openRoom)
+        assertNotNull(decision)
+        assertTrue(checkNotNull(decision).projects.isEmpty())
+        assertTrue(decision.associations.isEmpty())
+        assertTrue(decision.providerFormats.isEmpty())
+        val db = openRoom(destination)
+        try {
+            assertNull(db.rows().project("old"))
+            assertNull(db.rows().conversation("c")?.projectId)
+            assertEquals("chat", db.rows().provider("p")?.apiFormat)
+        } finally { db.close() }
+    }
+
     @Test fun cancellationDuringApplyNeverReportsACertainRollback() = runBlocking {
         fixture()
         val owner = StubOwner()

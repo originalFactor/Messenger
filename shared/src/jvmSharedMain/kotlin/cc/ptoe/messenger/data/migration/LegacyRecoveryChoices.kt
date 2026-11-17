@@ -34,9 +34,9 @@ internal class LegacyRecoveryChoices(private val review: LegacyRecoveryReview) {
             review.roomProviders.containsKey(id) && review.roomProviders[id] == pair.core
     }
 
-    fun selection(projectIds: Set<String>, conversationIds: Set<String>, providerIds: Set<String>): LegacyRecoverySelection? {
+    fun selection(projectIds: Set<String>, conversationIds: Set<String>, providerIds: Set<String>, allowEmpty: Boolean = false): LegacyRecoverySelection? {
         val count = projectIds.size.toLong() + conversationIds.size + providerIds.size
-        if (count !in 1..1_000 || projectIds.any { !canRestoreProject(it) } ||
+        if (count > 1_000 || count == 0L && !allowEmpty || projectIds.any { !canRestoreProject(it) } ||
             conversationIds.any { !canRestoreAssociation(it, projectIds) } ||
             providerIds.any { !canRestoreProviderFormat(it) }) return null
         val needsDevice = projectIds.any { review.roomProjects[it] == null }

@@ -19,7 +19,7 @@ class LegacyRecoveryReviewScreenTest {
             "this-device", mapOf("p" to null), mapOf("c" to newChat), emptyMap())
         var submitted: LegacyRecoverySelection? = null
         setContent { MaterialTheme { LegacyRecoveryReviewScreen(review, {}, { submitted = it }) } }
-        onNodeWithText("Restore selected changes").assertIsNotEnabled()
+        onNodeWithText("Keep current values").assertIsEnabled()
         onNodeWithTag("legacy-recovery-list").performScrollToNode(hasContentDescription("c"))
         onNodeWithContentDescription("c").assertIsNotEnabled()
         onNodeWithTag("legacy-recovery-list").performScrollToNode(hasContentDescription("p"))
@@ -31,5 +31,17 @@ class LegacyRecoveryReviewScreenTest {
         onNodeWithText("New projects will be owned by this device: this-device").assertExists()
         onNodeWithText("OK").performClick()
         assertEquals(LegacyRecoverySelection(setOf("p"), setOf("c"), newProjectDeviceId = "this-device"), submitted)
+    }
+
+    @Test fun keepingAllCurrentValuesRequiresASeparateConfirmation() = runComposeUiTest {
+        val review = LegacyRecoveryReview(LegacyRoomRecoveryPreview(22, emptyList(), emptyList(), emptyList()),
+            "device", emptyMap(), emptyMap(), emptyMap())
+        var submitted: LegacyRecoverySelection? = null
+        setContent { MaterialTheme { LegacyRecoveryReviewScreen(review, {}, { submitted = it }) } }
+        onNodeWithText("Keep current values").performClick()
+        onNodeWithText("Keep the current values without restoring any of these older fields? The original databases will be kept.").assertExists()
+        assertNull(submitted)
+        onNodeWithText("OK").performClick()
+        assertEquals(LegacyRecoverySelection(), submitted)
     }
 }

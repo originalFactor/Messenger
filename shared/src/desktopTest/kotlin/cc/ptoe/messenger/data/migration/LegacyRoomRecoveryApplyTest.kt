@@ -2,6 +2,7 @@
 package cc.ptoe.messenger.data.migration
 
 import androidx.room.Room
+import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.cloud.SyncCollection
@@ -11,11 +12,14 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -65,6 +69,98 @@ class LegacyRoomRecoveryApplyTest {
         return Fixture(root, core, legacy, target)
     }
     private fun selection() = LegacyRecoverySelection(setOf("old"), setOf("c"), setOf("p"), "local-device")
+
+    @Test fun explicitDecisionRecordsExactSelectionAndMatchesOnlyTheOriginalSources(): Unit = runBlocking {
+        val f = fixture(); val owner = Owner()
+        try {
+            assertNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+            assertEquals(LegacyRecoveryApplied(1, 1, 1), LegacyRoomRecoverySession.run(f.core, f.legacy, f.target,
+                f.root, owner, ::room, { 10 }) { selection() })
+            val receipt = checkNotNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+            assertEquals(listOf("old"), receipt.projects)
+            assertEquals(listOf("c"), receipt.associations)
+            assertEquals(listOf("p"), receipt.providerFormats)
+            assertEquals("local-device", receipt.newProjectDeviceId)
+            assertEquals(10L, receipt.recordedAt)
+            val db = room(f.target)
+            try {
+                val encoded = checkNotNull(db.rows().getValue(LEGACY_REVIEW_DECISION_KEY)).value
+                assertEquals(receipt, Json.decodeFromString<LegacyReviewDecisionReceipt>(encoded))
+                assertFalse(encoded.contains("SECRET"))
+                assertFalse(encoded.contains(f.root.toString()))
+            } finally { db.close() }
+            BundledSQLiteDriver().open(f.legacy.toString()).use { it.exec("UPDATE providers SET name='changed' WHERE id='p'") }
+            assertNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+            assertFalse(owner.held)
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun explicitlyKeepingCurrentValuesRecordsDecisionWithoutChangingBusinessData(): Unit = runBlocking {
+        val f = fixture(); val owner = Owner()
+        try {
+            assertEquals(LegacyRecoveryApplied(0, 0, 0), LegacyRoomRecoverySession.run(f.core, f.legacy, f.target,
+                f.root, owner, ::room, { 10 }) { LegacyRecoverySelection() })
+            val receipt = checkNotNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+            assertTrue(receipt.projects.isEmpty() && receipt.associations.isEmpty() && receipt.providerFormats.isEmpty())
+            val db = room(f.target)
+            try {
+                assertNull(db.rows().project("old"))
+                assertNull(db.rows().conversation("c")?.projectId)
+                assertEquals("chat", db.rows().provider("p")?.apiFormat)
+            } finally { db.close() }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun failedDecisionWriteRollsBackSelectedChanges(): Unit = runBlocking {
+        val f = fixture()
+        try {
+            val db = room(f.target)
+            try {
+                db.useWriterConnection { connection -> connection.usePrepared(
+                    "CREATE TRIGGER reject_legacy_decision BEFORE INSERT ON kv WHEN NEW.`key` = '$LEGACY_REVIEW_DECISION_KEY' BEGIN SELECT RAISE(ABORT, 'decision write failed'); END"
+                ) { it.step() } }
+            } finally { db.close() }
+            assertFails { LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, Owner(), ::room, { 10 }) { selection() } }
+            val verified = room(f.target)
+            try {
+                assertNull(verified.rows().project("old"))
+                assertNull(verified.rows().conversation("c")?.projectId)
+                assertEquals("chat", verified.rows().provider("p")?.apiFormat)
+                assertNull(verified.rows().getValue(LEGACY_REVIEW_DECISION_KEY))
+            } finally { verified.close() }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun decisionRejectsChangesToUnselectedReviewedValues(): Unit = runBlocking {
+        val f = fixture()
+        try {
+            assertFails { LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, Owner(), ::room, { 10 }) {
+                val concurrent = room(f.target)
+                try {
+                    val provider = checkNotNull(concurrent.rows().provider("p"))
+                    concurrent.rows().upsertProviders(listOf(provider.copy(name = "changed after review")))
+                } finally { concurrent.close() }
+                LegacyRecoverySelection()
+            } }
+            val verified = room(f.target)
+            try {
+                assertEquals("changed after review", verified.rows().provider("p")?.name)
+                assertNull(verified.rows().getValue(LEGACY_REVIEW_DECISION_KEY))
+            } finally { verified.close() }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun sameBytesAtAReplacementInodeDoNotMatchTheRecordedSource(): Unit = runBlocking {
+        val f = fixture(); val owner = Owner()
+        try {
+            LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, owner, ::room, { 10 }) { LegacyRecoverySelection() }
+            assertNotNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+            val bytes = Files.readAllBytes(f.legacy)
+            Files.move(f.legacy, f.legacy.resolveSibling("old-file-preserved.db"))
+            Files.write(f.legacy, bytes)
+            assertNull(LegacyRoomRecoverySession.readMatchingDecision(f.core, f.legacy, f.target, owner, ::room))
+        } finally { f.root.toFile().deleteRecursively() }
+    }
 
     @Test fun preparesCoreAndReviewsLegacyUnderOneOwnerAndResumesAfterDecline(): Unit = runBlocking {
         val f = fixture(prepareDestination = false, separateLegacyDirectory = true)

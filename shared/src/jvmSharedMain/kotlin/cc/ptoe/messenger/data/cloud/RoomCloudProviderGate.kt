@@ -4,6 +4,7 @@ package cc.ptoe.messenger.data.cloud
 import cc.ptoe.messenger.data.local.room.BUILTIN_PROVIDER_ID
 import cc.ptoe.messenger.data.local.room.CloudSyncDao
 import cc.ptoe.messenger.data.local.room.DEFERRED_BUILTIN_PROVIDER_CLEANUP
+import cc.ptoe.messenger.data.local.room.ProviderRow
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.data.remote.api.completionEvents
 import cc.ptoe.messenger.data.remote.NetworkClient
@@ -24,15 +25,21 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import java.lang.ref.WeakReference
+import java.net.Proxy
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
@@ -42,6 +49,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.io.readByteArray
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Authenticator
+import okhttp3.CookieJar
+import okhttp3.OkHttpClient
+import okhttp3.Request as HttpRequest
 
 /** One gate per Room DAO. All Cloud session invalidation and built-in provider streams use it.
  * The owning Room lease must exclude other database instances and all direct credential writers. */
@@ -56,6 +70,13 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     private val toolPermits = mutableSetOf<ToolPermit>()
     private val invalidated = mutableSetOf<SyncSession>()
     private var stopped = false
+    private val externalRequestContext = ThreadLocal<Boolean>()
+    private val externalHttp = lazy {
+        OkHttpClient.Builder().proxy(Proxy.NO_PROXY).cookieJar(CookieJar.NO_COOKIES)
+            .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+            .authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)
+            .connectTimeout(30, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
+    }
 
     /** A gate can authorize work only for the exact Room DAO that owns its session state. */
     internal fun requireOwner(candidate: CloudSyncDao) {
@@ -131,6 +152,96 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
         ToolPermit(session).also { toolPermits.add(it) }
     }
 
+    /** The gate creates exactly one call using its private no-retry, no-redirect client. */
+    internal inner class ExternalProviderPermit internal constructor(
+        private val session: SyncSession, private val job: Job, private val revoked: AtomicBoolean, private val expected: ProviderRow,
+    ) {
+        private var dispatched = false
+        private var activeCall: Call? = null
+        private val callbackDone = CompletableDeferred<Unit>()
+        internal fun enqueue(request: HttpRequest, callback: Callback): Call = synchronized(admissionLock) {
+            check(!dispatched && !stopped && !revoked.get() && job.isActive && session !in invalidated &&
+                requests.any { it.session == session && it.job === job }) { "Cloud session expired or request already dispatched" }
+            val target = runCatching { (expected.baseUrl.trimEnd('/') + "/chat/completions").toHttpUrl() }.getOrNull()
+                ?: error("Invalid Cloud provider URL")
+            check(expected.apiFormat == "chat" && !expected.nativeWebSearch && target.username.isEmpty() && target.password.isEmpty() &&
+                target.query == null && target.fragment == null && request.url == target && request.method == "POST" &&
+                request.body?.isOneShot() == true && request.headers.values("Authorization") == listOf("Bearer ${expected.apiKey}") &&
+                request.headers.values("Cookie").isEmpty()) {
+                "Invalid Cloud provider request"
+            }
+            dispatched = true
+            val call = externalHttp.value.newCall(request)
+            activeCall = call
+            val wrapped = object : Callback {
+                override fun onFailure(call: Call, error: java.io.IOException) = callbackScope {
+                    callback.onFailure(call, error)
+                }
+                override fun onResponse(call: Call, response: okhttp3.Response) = callbackScope {
+                    response.use { callback.onResponse(call, it) }
+                }
+                private inline fun callbackScope(action: () -> Unit) {
+                    val previous = externalRequestContext.get()
+                    externalRequestContext.set(true)
+                    try { action() } finally {
+                        if (previous == null) externalRequestContext.remove() else externalRequestContext.set(previous)
+                        callbackDone.complete(Unit)
+                    }
+                }
+            }
+            try { call.enqueue(wrapped) } catch (failure: Throwable) { callbackDone.complete(Unit); throw failure }
+            call
+        }
+        internal suspend fun closeAndAwait() = withContext(NonCancellable) {
+            val call = synchronized(admissionLock) { activeCall }
+            if (call != null) { call.cancel(); callbackDone.await() }
+        }
+    }
+
+    /**
+     * Admission for a raw, one-shot provider call such as the ACP relay. The job remains registered
+     * until [operation] actually finishes; invalidation cancels it and logout waits for its cleanup.
+     * The operation must use [ExternalProviderPermit.enqueue] for its only network dispatch. Its
+     * callback must consume the response before returning; the gate closes it and joins callbacks.
+     * A callback must not start detached work with the response or invoke/wait for gate lifecycle
+     * methods, including from another thread; account revocation runs in a separate owner scope.
+     * Provider AI-key 401 is an upstream
+     * error, not proof that the account's authenticated cookie expired.
+     * The caller must hold a real lifetime fence against all other session and provider writers;
+     * the gate coordinates invalidation but does not itself fence direct DAO mutations.
+     */
+    internal suspend fun <T> withExternalProviderRequest(session: SyncSession, expected: ProviderRow,
+        operation: suspend (ExternalProviderPermit) -> T): T = coroutineScope {
+        require(expected.id == BUILTIN_PROVIDER_ID && expected.apiKey.isNotBlank()) { "Cloud provider is unavailable" }
+        val revoked = AtomicBoolean(false)
+        val worker = async(start = CoroutineStart.LAZY) {
+            val job = checkNotNull(currentCoroutineContext()[Job])
+            val permit = ExternalProviderPermit(session, job, revoked, expected)
+            try {
+                withContext(externalRequestContext.asContextElement(true)) { operation(permit) }
+            } finally {
+                permit.closeAndAwait()
+            }
+        }
+        val request = Request(session, worker, revoked)
+        try {
+            mutex.withLock {
+                dao.requireExternalProvider(session, expected)
+                synchronized(admissionLock) {
+                    check(!stopped && session !in invalidated) { "Cloud session expired" }
+                    requests.add(request)
+                }
+            }
+            worker.start()
+            worker.await()
+        } finally {
+            withContext(NonCancellable) {
+                worker.cancelAndJoin()
+                synchronized(admissionLock) { requests.remove(request) }
+            }
+        }
+    }
+
     private fun dispatch(round: KotlinTurnSnapshot, completion: Boolean): Flow<ChatStreamEvent> = flow {
         val identity = checkNotNull(round.cloudIdentity) { "Cloud turn has no session identity" }
         val session = SyncSession(identity.accountId, identity.generation)
@@ -196,30 +307,42 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     }
 
     /** Invalidate first; durable revocation and worker drain may wait for other owners. */
-    internal suspend fun revoke(session: SyncSession): Boolean = withContext(NonCancellable) {
-        invalidate(session)
-        val cleared = mutex.withLock {
-            val cleared = deviceFence.mutate { dao.clearCredentialsIfCurrent(session) }
-            // No validated admission can pass the mutex until the old identity is gone.
-            if (cleared || dao.currentSession() != session) synchronized(admissionLock) { invalidated.remove(session) }
+    internal suspend fun revoke(session: SyncSession): Boolean {
+        check(externalRequestContext.get() != true) {
+            "A Cloud request cannot revoke and join itself"
+        }
+        return withContext(NonCancellable) {
+            invalidate(session)
+            val cleared = mutex.withLock {
+                val cleared = deviceFence.mutate { dao.clearCredentialsIfCurrent(session) }
+                // No validated admission can pass the mutex until the old identity is gone.
+                if (cleared || dao.currentSession() != session) synchronized(admissionLock) { invalidated.remove(session) }
+                cleared
+            }
+            val jobs = synchronized(admissionLock) { requests.filter { it.session == session }.map { it.job } }
+            jobs.joinAll()
             cleared
         }
-        val jobs = synchronized(admissionLock) { requests.filter { it.session == session }.map { it.job } }
-        jobs.joinAll()
-        cleared
     }
 
     /** Close admissions and drain the provider jobs before the Room owner closes the database. */
-    internal suspend fun shutdown() = withContext(NonCancellable) {
-        val jobs = synchronized(admissionLock) {
-            stopped = true
-            toolPermits.forEach { it.revoke() }
-            requests.onEach { it.revoked.set(true) }.map { it.job }
+    internal suspend fun shutdown() {
+        check(externalRequestContext.get() != true) { "A Cloud request cannot shut down and join itself" }
+        withContext(NonCancellable) {
+            val jobs = synchronized(admissionLock) {
+                stopped = true
+                toolPermits.forEach { it.revoke() }
+                requests.onEach { it.revoked.set(true) }.map { it.job }
+            }
+            jobs.forEach { it.cancel(CancellationException("Cloud provider gate closed")) }
+            jobs.joinAll()
+            mutex.withLock { /* Wait for any pending database admission check. */ }
+            closeTransport()
+            if (externalHttp.isInitialized()) {
+                externalHttp.value.dispatcher.executorService.shutdown()
+                externalHttp.value.connectionPool.evictAll()
+            }
+            forget(dao, this@RoomCloudProviderGate)
         }
-        jobs.forEach { it.cancel(CancellationException("Cloud provider gate closed")) }
-        jobs.joinAll()
-        mutex.withLock { /* Wait for any pending database admission check. */ }
-        closeTransport()
-        forget(dao, this@RoomCloudProviderGate)
     }
 }

@@ -3,6 +3,7 @@
     <string name="legacy_recovery_applying">Applying selected changes…</string>
     <string name="legacy_recovery_cancelled">Recovery was cancelled. If reopening is blocked, recovery may need to be completed first.</string>
     <string name="legacy_recovery_saved">Restored %1$d projects, %2$d conversation links, and %3$d provider protocols.</string>
+    <string name="legacy_recovery_kept">Current values were kept.</string>
     <string name="legacy_recovery_failed">Recovery could not continue: %1$s</string>
     <string name="legacy_recovery_uncertain">Recovery was interrupted while applying changes. The changes may have been saved; review your data before trying again.</string>
     <string name="legacy_recovery_done">Done</string>

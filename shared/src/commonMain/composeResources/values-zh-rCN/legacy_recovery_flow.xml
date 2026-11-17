@@ -3,6 +3,7 @@
     <string name="legacy_recovery_applying">正在应用所选更改…</string>
     <string name="legacy_recovery_cancelled">恢复已取消。如果无法重新打开，可能需要先完成恢复。</string>
     <string name="legacy_recovery_saved">已恢复 %1$d 个项目、%2$d 项会话关联和 %3$d 项供应商协议。</string>
+    <string name="legacy_recovery_kept">已保留当前值。</string>
     <string name="legacy_recovery_failed">无法继续恢复：%1$s</string>
     <string name="legacy_recovery_uncertain">应用更改时恢复被中断。更改可能已经保存，请在重试前检查数据。</string>
     <string name="legacy_recovery_done">完成</string>

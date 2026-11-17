@@ -25,11 +25,16 @@ import kotlinx.serialization.json.put
 
 /** Must use the same runner and Room owner as local chat and lifecycle management. */
 internal class RoomRemoteTurnOperations(private val store: RoomKotlinTurnStore, private val runner: KotlinChatTurnRunner) {
-    suspend fun decide(scope: KotlinRemoteControlScope, conversationId: String, turnId: String, option: String) {
+    suspend fun decide(scope: KotlinRemoteControlScope, conversationId: String, turnId: String, option: String,
+        identity: KotlinRemotePromptIdentity? = null) {
         require(!conversationId.startsWith("acp:")) { "ACP task decisions are unavailable" }
         val (verb, callId) = option.split(':', limit = 2).let { require(it.size == 2 && it[1].isNotBlank()); it[0] to it[1] }
         val approved = when (verb) { "approve" -> true; "deny" -> false; else -> error("Invalid approval option") }
-        runner.respondRemoteApproval(scope, conversationId, turnId, callId, approved)
+        if (identity == null) runner.respondRemoteApproval(scope, conversationId, turnId, callId, approved)
+        else {
+            check(runner.ownsRunningJob(turnId)) { "Active turn belongs to another owner" }
+            store.decideRemotePromptApprovalAuthenticated(scope, identity.cookie, identity.requestId, conversationId, turnId, callId, approved)
+        }
     }
 
     suspend fun cancel(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) {
@@ -58,7 +63,7 @@ internal class RoomRemoteTurnOperations(private val store: RoomKotlinTurnStore, 
                 KotlinTurnAdmission.ModelRequired -> return@coroutineScope errorEvent("A model is required")
                 is KotlinTurnAdmission.Rejected -> return@coroutineScope errorEvent(admitted.reason)
             }
-            decisions = launch { for (option in permissions) decide(scope, conversationId, turnId, option) }
+            decisions = launch { for (option in permissions) decide(scope, conversationId, turnId, option, identity) }
             var previous: KotlinTurnPresentation? = null
             var result: JsonObject? = null
             store.observePresentation(turnId, conversationId).transformWhile { state ->

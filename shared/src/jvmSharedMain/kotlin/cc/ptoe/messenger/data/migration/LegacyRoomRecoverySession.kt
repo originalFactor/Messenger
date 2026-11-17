@@ -2,6 +2,8 @@
 package cc.ptoe.messenger.data.migration
 
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import androidx.room.Transactor
+import androidx.room.useReaderConnection
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
@@ -14,6 +16,8 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 /**
  * Offline user-review entry. [ownership] must exclude all old Core, legacy, Room and detached
@@ -27,6 +31,63 @@ internal object LegacyRoomRecoverySession {
     private val allSuffixes = listOf("", "-wal", "-shm", "-journal")
     private val fileMode = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
     private val directoryMode = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
+
+    /**
+     * Historical decision lookup only. Matching evidence is not proof of current Room contents,
+     * full reconciliation, safe worker termination, backup age, or authority to start the app.
+     * The owner must exclude all source/Room writers and pathname replacement for the entire call.
+     */
+    suspend fun readMatchingDecision(core: Path, legacy: Path, destination: Path,
+        ownership: RoomStoreOwnership, openRoom: (Path) -> LocalDatabase): LegacyReviewDecisionReceipt? =
+        ownership.withExclusiveOwnership {
+            val source = legacy.toAbsolutePath().normalize()
+            val corePath = core.toAbsolutePath().normalize()
+            val target = destination.toAbsolutePath().normalize()
+            requireDisjoint(source, corePath, target)
+            val original = capture(source, null)
+            check(original["-journal"]?.size.let { it == null || it == 0L }) { "Legacy rollback journal requires offline recovery" }
+            val legacyIdentity = originalIdentity(source, original)
+            val attributes = Files.readAttributes(target, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+            check(attributes.isRegularFile && !attributes.isSymbolicLink && coreSourceLinkCount(target) == 1L) { "Invalid Room destination" }
+            val identity = requireNotNull(attributes.fileKey()) { "Room destination identity is unavailable" }
+            CoreSourceSqliteLease.acquire(corePath).use { lease ->
+                lease.requireDistinctDatabasePaths(target)
+                val fingerprint = lease.migrationFingerprint()
+                val db = openRoom(target)
+                try {
+                    LegacyRoomRecoveryApply.verifyRoom(db, target, identity, fingerprint)
+                    val receipt = db.useReaderConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
+                        LegacyRoomRecoveryApply.requirePublication(db, fingerprint)
+                        val size = connection.usePrepared("SELECT length(CAST(value AS BLOB)) FROM kv WHERE `key` = ?") { row ->
+                            row.bindText(1, LEGACY_REVIEW_DECISION_KEY)
+                            if (row.step()) row.getLong(0) else null
+                        } ?: return@withTransaction null
+                        check(size in 1..1024L * 1024) { "Review decision exceeds limit" }
+                        val encoded = checkNotNull(db.rows().getValue(LEGACY_REVIEW_DECISION_KEY)).value
+                        val decision = Json.decodeFromString<LegacyReviewDecisionReceipt>(encoded)
+                        val publication = checkNotNull(db.rows().getValue(ROOM_PUBLICATION_ID_KEY)).value
+                        val lists = listOf(decision.projects, decision.associations, decision.providerFormats)
+                        check(decision.legacyIdentity.matches(Regex("[0-9a-f]{64}")) &&
+                            decision.coreIdentity.matches(Regex("[0-9a-f]{64}")) &&
+                            decision.roomPublicationId.matches(Regex("[0-9a-f]{32}")) &&
+                            decision.reviewDigest.matches(Regex("[0-9a-f]{64}")) && decision.recordedAt >= 0 &&
+                            lists.sumOf { it.size.toLong() } <= 1_000 && lists.all { list ->
+                                list == list.sorted() && list.distinct().size == list.size && list.all(String::isNotBlank)
+                            } && (decision.newProjectDeviceId == null || decision.projects.isNotEmpty() && decision.newProjectDeviceId.isNotBlank())) {
+                            "Invalid review decision"
+                        }
+                        decision.takeIf { it.legacyIdentity == legacyIdentity && it.coreIdentity == fingerprint && it.roomPublicationId == publication }
+                    } }
+                    currentCoroutineContext().ensureActive()
+                    check(capture(source, null) == original && lease.migrationFingerprint() == fingerprint) { "Recovery source changed" }
+                    val after = Files.readAttributes(target, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                    check(after.isRegularFile && !after.isSymbolicLink && after.fileKey() == identity && coreSourceLinkCount(target) == 1L) {
+                        "Room destination changed"
+                    }
+                    receipt
+                } finally { db.close() }
+            }
+        }
 
     suspend fun run(core: Path, legacy: Path, destination: Path, scratchParent: Path,
         ownership: RoomStoreOwnership, openRoom: (Path) -> LocalDatabase, now: () -> Long,
@@ -72,6 +133,7 @@ internal object LegacyRoomRecoverySession {
             val snapshot = directory.resolve("snapshot.db")
             try {
                 val original = capture(source, snapshot)
+                val legacyIdentity = originalIdentity(source, original)
                 check(original["-journal"]?.size.let { it == null || it == 0L }) {
                     "A nonempty legacy rollback journal requires separate offline recovery"
                 }
@@ -90,7 +152,7 @@ internal object LegacyRoomRecoverySession {
                         return block()
                     }
                 }
-                LegacyRoomRecoveryApply.run(corePath, snapshot, target, borrowed, provenance, openRoom, now) { review ->
+                LegacyRoomRecoveryApply.run(corePath, snapshot, target, borrowed, provenance, openRoom, now, legacyIdentity) { review ->
                     val selection = choose(review)
                     currentCoroutineContext().ensureActive()
                     check(capture(source, null) == original) { "Legacy source changed during review" }
@@ -104,6 +166,21 @@ internal object LegacyRoomRecoverySession {
         }
 
     private data class Evidence(val identity: Any, val size: Long, val modified: java.nio.file.attribute.FileTime, val digest: String)
+
+    /** Only a digest enters Room; path, inode and file hashes are not stored individually. */
+    private fun originalIdentity(source: Path, evidence: Map<String, Evidence?>): String {
+        val digest = LegacyDecisionDigest()
+        digest.add("legacy-original-identity-v1")
+        digest.add(source.toRealPath().toString())
+        for (suffix in durableSuffixes) {
+            val item = evidence[suffix]
+            digest.add(suffix); digest.add(item != null)
+            if (item != null) {
+                digest.add(item.identity.toString()); digest.add(item.size); digest.add(item.modified.toString()); digest.add(item.digest)
+            }
+        }
+        return digest.finish()
+    }
 
     /** Copy all durable SQLite bytes, or re-read them to verify exact source identity and content. */
     private suspend fun capture(source: Path, destination: Path?): Map<String, Evidence?> {
