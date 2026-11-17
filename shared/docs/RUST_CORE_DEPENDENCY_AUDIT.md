@@ -2,9 +2,16 @@
 
 This is a retirement checklist, not permission to delete the Core. Run
 `bash .github/scripts/audit-rust-core-dependencies.sh` immediately before the
-planned one-commit removal and attach the output to the cutover review. A clean
-result requires every listed area to contain no production dependency and the
-remaining historical references to be intentional.
+planned one-commit removal and attach the output to the cutover review. Use
+`--strict` for a machine-readable pass/fail gate: it exits non-zero while
+production startup, Gradle bindings, native packaging or Rust CI references
+remain. The script prints `[summary]` with `blocking_references`,
+`rust_workspace` and `native_bindings`; `--summary FILE` writes the blocking
+count. CI runs `bash .github/scripts/test-audit-rust-core-dependencies.sh`
+alongside the client-selection fixtures, covering both the current blocked
+state and an empty switched tree. A clean result still requires every listed
+area to contain no production dependency and the remaining historical
+references to be intentional.
 
 ## Current state
 

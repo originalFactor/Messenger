@@ -85,7 +85,9 @@ jobs:
           fetch-depth: 0
       - name: Verify client selection
         shell: bash
-        run: bash .github/scripts/test-select-client-builds.sh
+        run: |
+          bash .github/scripts/test-select-client-builds.sh
+          bash .github/scripts/test-audit-rust-core-dependencies.sh
       - name: Select client builds
         id: select
         shell: bash

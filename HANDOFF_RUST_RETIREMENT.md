@@ -72,7 +72,7 @@ Rust 生命周期本轮提交：`b362dbc`（`ApiState.tasks` 跟踪并 join 本�
 3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
 4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
 5. **Desktop 与存储。** Windows 存储的 ACL、链接/路径和持久化及旧 Core/资源独占问题未解决；参见 `shared/docs/WINDOWS_ROOM_STORAGE.md`。macOS/Linux/Windows 都需真实设备或 CI 验证。Android 系统 SQLite 的事务、游标和 WAL 语义尚待真实设备验证，不能仅为减小包而替换 driver。
-6. **切换及删除。** 先建立真实 owner 和恢复机制，在保留功能及用户数据下接入 Android/Desktop；运行基础测试及受影响设备测试；运行 `bash .github/scripts/audit-rust-core-dependencies.sh` 扫描源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物的 Rust Core 依赖。确认没有依赖并验证构建后，按用户要求单独提交删除 Rust Core；更新相关 `AGENTS.md`。release/R8 按仓库规则仅在确有必要时运行。
+6. **切换及删除。** 先建立真实 owner 和恢复机制，在保留功能及用户数据下接入 Android/Desktop；运行基础测试及受影响设备测试；运行 `bash .github/scripts/audit-rust-core-dependencies.sh --strict` 扫描源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物的 Rust Core 依赖。审计脚本现在输出 `[summary]` 并可用 `--summary FILE` 写计数；`test-audit-rust-core-dependencies.sh` 在 CI selector job 中验证阻断树与 clean tree。确认 `blocking_references=0`、无 Rust workspace/bindings、无 native 产物并验证构建后，按用户要求单独提交删除 Rust Core；更新相关 `AGENTS.md`。release/R8 按仓库规则仅在确有必要时运行。
 
 ## 构建与验证
 
