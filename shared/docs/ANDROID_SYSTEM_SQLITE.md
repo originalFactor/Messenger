@@ -3,10 +3,11 @@
 The experimental Kotlin Room backend currently uses AndroidX `sqlite-bundled`
 2.7.0 for both Room and migration. It therefore still packages native SQLite;
 retiring Rust alone does not eliminate native libraries. On this checkout the
-x86_64 debug APK contains an uncompressed 1,189,688-byte `libsqliteJni.so`;
-the cached arm64 dependency contains a 1,281,456-byte library before any release
-processing. These are individual library sizes, not measured APK or download
-savings, and are not a release comparison.
+x86_64 debug APK contains an uncompressed 1,189,688-byte `libsqliteJni.so`
+and an 18,180,600-byte `libmessenger_ffi.so`. The cached arm64 SQLite
+dependency contains a 1,281,456-byte library before any release processing.
+These are individual library sizes, not measured APK or download savings, and
+are not a release comparison.
 
 Android has a system SQLite implementation and AndroidX provides
 `AndroidSQLiteDriver`, but substituting it for `BundledSQLiteDriver` needs more
