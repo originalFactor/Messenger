@@ -78,8 +78,7 @@ android {
             ndk { abiFilters.addAll(releaseAbis) }
             // Full R8 on every release build (all Android modules): minification
             // plus resource shrinking. Rules live in proguard-rules.pro next to
-            // this file; shared/android libraries contribute consumer rules
-            // (:core-bindings).
+            // this file; shared/android libraries contribute consumer rules.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -121,7 +120,6 @@ dependencies {
     implementation(libs.firebase.messaging)
     implementation(libs.jetbrains.compose.material3)
     implementation(project(":shared"))
-    implementation(project(":core-bindings"))
     implementation(libs.ucrop)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
@@ -135,4 +133,6 @@ dependencies {
     implementation(libs.coil3.network.ktor3)
     implementation(libs.okio)
     implementation(libs.ktor.client.core)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.sqlite.bundled)
 }

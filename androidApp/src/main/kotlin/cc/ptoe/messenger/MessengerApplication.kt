@@ -18,10 +18,9 @@ package cc.ptoe.messenger
 
 import android.app.Application
 import android.content.Intent
-import cc.ptoe.messenger.core.CoreBridgeRegistry
-import cc.ptoe.messenger.core.CoreHandle
-import cc.ptoe.messenger.core.HttpServerHandle
-import cc.ptoe.messenger.core.RestCoreBridge
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import cc.ptoe.messenger.di.KotlinAppBackendFactory
 import cc.ptoe.messenger.data.local.AndroidChatImageStore
 import cc.ptoe.messenger.data.wear.MobileHttpServer
 import cc.ptoe.messenger.di.AppContainer
@@ -38,12 +37,9 @@ import okio.Path.Companion.toPath
 
 class MessengerApplication : Application() {
 
-    @Suppress("unused")
-    private lateinit var coreHttpServer: HttpServerHandle
-
     override fun onCreate() {
         super.onCreate()
-        // JPush runs a separate :pushcore process; never open another Core server there.
+        // JPush runs a separate :pushcore process; never open the Room owner there.
         if (getProcessName() != packageName) return
         PushSetup.initializeIfConsented(this)
         AndroidContextHolder.appContext = applicationContext
@@ -53,35 +49,20 @@ class MessengerApplication : Application() {
         val runtime = RuntimeShellClient(applicationContext)
         ShellRuntimeRegistry.bridge = runtime
 
-        // Initialize Rust Core SQLite store and import Room database on first run
-        val storeDir = File(filesDir, "messenger_core").apply { mkdirs() }
-        val legacyDir = getDatabasePath("messenger_database").parentFile
-        val core = CoreHandle.open(
-            storePath = File(storeDir, "store.db").absolutePath,
-            legacyDbDir = legacyDir?.takeIf { it.exists() }?.absolutePath,
-            nowMs = System.currentTimeMillis()
+        val appDirs = AppDirs(
+            filesDir = filesDir.absolutePath.toPath(),
+            cacheDir = cacheDir.absolutePath.toPath()
         )
-        coreHttpServer = runBlocking { core.startHttpServer(0u) }
-        val restCore = RestCoreBridge(
-            localAddress = coreHttpServer.localAddr(),
-            token = coreHttpServer.token(),
-        )
-
-        restCore.platformAcpProcess = runtime::runAcpProcess
-        CoreBridgeRegistry.bridge = restCore
-
+        val backend = KotlinAppBackendFactory.create(appDirs) { path ->
+            Room.databaseBuilder<cc.ptoe.messenger.data.local.room.LocalDatabase>(applicationContext, path.toString())
+                .setDriver(BundledSQLiteDriver()).build()
+        }
         val container = AppContainer(
-            appDirs = AppDirs(
-                filesDir = filesDir.absolutePath.toPath(),
-                cacheDir = cacheDir.absolutePath.toPath()
-            ),
-            chatImageStore = AndroidChatImageStore(this)
+            appDirs = appDirs,
+            chatImageStore = AndroidChatImageStore(this),
+            backend = backend,
         )
-        restCore.platformTools = container::availableTools
-        restCore.publishPlatformTools(container.mcpManager)
         AppContainerHolder.initialize(container)
-        LocalTaskNotifications.install(this, restCore)
-        AndroidForegroundTasks.install(this, restCore)
         PushSetup.startRegistration(this, container.cloud)
         container.initializeLocalAndCloudData()
         setupImageLoader(container)

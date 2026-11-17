@@ -12,11 +12,11 @@ Material 3 LLM chat app (Android-first, on-wrist focused), BYOK, offline-capable
 | `desktopApp` | Desktop (JVM) application shell | `desktopApp/AGENTS.md` |
 | `wear` | Wear OS chat-only companion | `wear/AGENTS.md` |
 | `runtime` | Companion shell-runtime app (terminal UI + tool host) | `runtime/AGENTS.md` |
-| `core/rust`, `core/bindings`, `core/bindings-desktop` | Rust Agent Core (Cargo workspace), `/api/v1` REST/SSE server, minimal native lifecycle bridge | `core/rust/AGENTS.md` |
+| `core/rust`, `core/bindings`, `core/bindings-desktop` | Retired Rust Core and native bindings (removed after Kotlin cutover) | — |
 | `server` | Next.js SaaS platform (website, web console, cloud sync, card-key billing, AI relay) | `server/AGENTS.md` |
 
 - Package `cc.ptoe.messenger`; Kotlin + Jetpack Compose (Material 3).
-- Apply this root file plus the instructions for the module being changed. For `core/bindings` and `core/bindings-desktop`, also read `core/rust/AGENTS.md` for the native lifecycle/build rules.
+- Apply this root file plus the instructions for the module being changed. The retired Core modules were removed after the Kotlin/Room cutover.
 - `server/` is a git submodule — init with `git submodule update --init --recursive`.
 
 ## Commands
@@ -32,9 +32,6 @@ Every local Gradle invocation MUST go through the `gradlew-cli` wrapper (`gradle
 ./gradlew-cli :desktopApp:run                         # Desktop app
 ./gradlew-cli :desktopApp:packageReleaseMsi           # native distribution (also Dmg/Deb)
 
-cd core/rust && cargo test --workspace                 # Rust core + REST/SSE tests
-cd core/rust && cargo test -p messenger-http           # API contract tests only
-
 cd server && pnpm install && pnpm dev                  # server; checks: pnpm lint && pnpm typecheck
 ```
 
@@ -42,7 +39,7 @@ The wrapper runs Gradle with `--daemon` but under its own daemon registry (`~/.g
 
 Use the developer's regular Cargo cache for local builds. If sandboxed verification requires a temporary `CARGO_HOME`, pair it with a separate `CARGO_TARGET_DIR` and isolate any configured `CARGO_BUILD_BUILD_DIR` as well. Cargo fingerprints registry source paths, so sharing build artifacts across Cargo homes invalidates the developer's dependency cache.
 
-Prerequisites: JDK 21 for the Gradle daemon (`gradle/gradle-daemon-jvm.properties` pins toolchain 21; Android/Wear/Desktop CI bootstrap Java 21), Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download), Rust toolchain with `cargo-ndk` for the Android native core. `:llm-typewriter` uses the `rendering/llm-typewriter-repo` submodule; initialize it with `git submodule update --init rendering/llm-typewriter-repo`. It includes Android fonts and the inline-math and list layout fixes (see its `AGENTS.md`).
+Prerequisites: JDK 21 for the Gradle daemon (`gradle/gradle-daemon-jvm.properties` pins toolchain 21; Android/Wear/Desktop CI bootstrap Java 21), Android SDK, NDK `30.0.16248370` + CMake `4.1.2` + build-tools `37.0.0` on platform `android-37.0` (pinned in the root build script's `ext` block; `android.builder.sdkDownload=false` in `gradle.properties` makes any other version a hard failure instead of an auto-download). `:llm-typewriter` uses the `rendering/llm-typewriter-repo` submodule; initialize it with `git submodule update --init rendering/llm-typewriter-repo`. It includes Android fonts and the inline-math and list layout fixes (see its `AGENTS.md`).
 
 ## Hard Constraints
 
@@ -57,16 +54,16 @@ These MUST be followed at all times:
 7. **AGP 9 built-in Kotlin**: never apply `org.jetbrains.kotlin.android` in Android modules; prefer KSP over kapt. The `shared` / `androidApp` / `desktopApp` split is irreversible (AGP 9.5.0 forbids `com.android.application` + KMP in one module). R8 runs on EVERY release build (`:androidApp`, `:wear`, `:runtime`), and Compose Desktop's ProGuard step runs on `:desktopApp` release too.
 8. **Wear scope**: `wear` stays chat-only — provider/model/agent/settings management stays on the phone. `wear` is NOT a KMP module.
 9. **AGENTS.md currency**: structural changes (new module/layer/entity/repository/feature, changed constraints or conventions, build or CI changes) must update the relevant AGENTS.md in the same commit.
-10. **Local Core API**: Android/Desktop business calls currently go through Rust's `/api/v1` REST/SSE service. It binds loopback only and requires the per-start bearer token; the lifecycle bridge uses UniFFI (`CoreHandle.open`, `startHttpServer`, `HttpServerHandle.stop`). Keep `core/rust/crates/messenger-http/openapi.yaml` and `core/rust/crates/messenger-http/docs/SSE.md` current with route/event changes.
+10. **Kotlin/Room production backend**: Android/Desktop business state is owned by the Kotlin/Room `AppBackend`; Rust Core and native bindings are retired. Do not reintroduce a loopback Core server or lifecycle FFI. Historical REST/SSE contracts are no longer production dependencies.
 11. **Rendering ownership**: Android/Desktop Markdown, code highlighting and LaTeX are rendered in Kotlin with `cc.ptoe:llm-typewriter`; do not reintroduce native Document/Markdown/LaTeX rendering exits for those clients. There is no Rust Document/Markdown/LaTeX renderer; Android/Desktop use Kotlin `llm-typewriter`.
 12. **JavaScript package manager**: This repository and all Git submodules must always use and support pnpm exclusively. Use pnpm for JavaScript setup, dependency management, script execution, builds, tests, and packaging. Commit only pnpm lockfiles for JavaScript projects. Never add npm, npx, Yarn, or Bun commands, lockfiles, or compatibility paths.
-13. **Rust Core retirement direction**: Rust Core is a legacy implementation to retire, not a platform to extend. Migration work belongs in Kotlin/Room, including production ownership, stop/recovery fences, feature parity and data lifecycle. While production still depends on `/api/v1`, keep existing contracts in sync, but do not add Rust lifecycle/background-task machinery as a substitute for a Kotlin cutover. Delete Rust Core, bindings and CI wiring only in one separate final commit after production is switched, tests/device checks pass and `bash .github/scripts/audit-rust-core-dependencies.sh --strict` reports `blocking_references=0`.
+13. **Rust Core retired**: The Rust Core, bindings and Core CI wiring were removed after Android AVD install/startup validation. Unsupported Kotlin parity and cross-platform storage issues are tracked separately; do not reintroduce Rust Core to solve them.
 
 ## Conventions
 
 - **Versioning (one scheme across clients)**: version name defaults to repo-root `VERSION` (`MAJOR.MINOR.PATCH`), read by root `build.gradle.kts` and `messenger-core/build.rs`; Gradle rejects a missing/invalid VERSION unless `VERSION_NAME` overrides it. Standalone Rust currently accepts any non-empty version text and warns/falls back to `0.0.0` for an absent/empty file; this is not release validation. Gradle supports explicit `VERSION_NAME` / `VERSION_CODE` overrides (environment or root `.env`); Rust still reads `VERSION`, so do not use overrides for a cross-client release. Version code defaults to `git rev-list --count HEAD` (Gradle fallback 1, Rust fallback 0 when git is unavailable). Release tags `vX.Y.Z` MUST equal `VERSION` (`release.yml` fails otherwise). Release via `./release.ps1 -Bump patch|minor|major` (bumps, commits, tags, pushes; `-NoPush`/`-WhatIf` available). Desktop MSI packages use `MAJOR.MINOR.<commitCount>` (jpackage needs a strictly increasing numeric product version).
 - **Dependencies**: Gradle dependency versions go through `gradle/libs.versions.toml`. Never globally exclude `com.google.guava:listenablefuture` — it is the runtime `ListenableFuture` provider that `androidx.profileinstaller` needs (excluding it crashes `:wear` at launch). JitPack is kept only for `ucrop`.
-- **API error handling**: native Cloud calls are mapped by Rust to local `/api/v1` failures carrying `{code,message,detail}`; `RestCoreBridge` surfaces the HTTP status plus detail/message (or raw body). The retained direct Ktor client uses `ResponseException` (`expectSuccess = true`); the former Retrofit `HttpException` / `extractHttpErrorMessage()` path is gone. Never silently retry.
+- **API error handling**: Kotlin Cloud/provider paths surface HTTP status plus detail/message after bounded reads and credential redaction; never silently retry.
 - **Cloud session expiry**: the cloud server owns session state, so a `401` on an authenticated cloud call is terminal — the app drops the local session and the user signs in again (see `shared/AGENTS.md` → "Server-rejected sessions sign the app out"). Never treat it as a retryable error.
 - **SSE stream handling**: legacy chat streams carry a `hasFinished` flag; if the stream ends without `Finished`/`Cancelled`/`Error`, emit `stream_ended` proactively. Disconnecting a legacy stream cancels its turn and pending tool call. Core-owned background chat and ACP tasks instead survive subscriber disconnects, support reattachment and explicit cancellation, and must preserve approval and tool-execution safety.
 - **Screens**: Material 3 `Scaffold` + `TopAppBar`; never add top-level padding in screens; avoid nested Scaffold double-inset issues.
@@ -84,12 +81,12 @@ These MUST be followed at all times:
 - Generated interactive applications are separate from Markdown rendering. Kotlin owns Android WebView and the Desktop system-WebView helper lifecycle; generated code runs in an opaque sandbox with package-local resources, an identity-bound message bridge and authorized HTTPS requests through Core. Never expose the Core bearer, Provider keys, arbitrary files or unrestricted native calls to generated JavaScript. Imported applications must be authorized on the receiving device before execution; network grants are never portable.
 - Image generation uses an explicitly configured Images API profile independent of the chat model. Results become owned local assets. Never silently retry an ambiguous or failed billable request, infer executable generation support from output modalities, or delete learning images with source chat cleanup.
 - The standalone native helper under `desktopApp/webview` renders interactive applications only, uses system WebKitGTK/WebView2/WKWebView, and exchanges scoped messages with Kotlin over private stdio. It does not render chat Markdown or make business/API calls. Linux builds require GTK 3 / WebKitGTK 4.1 development packages; package/runtime details are in `desktopApp/AGENTS.md`.
-- Usage: `LEARNING.md`. Contracts and storage details: `core/rust/crates/messenger-http/docs/ASSETS.md`, `openapi.yaml`, `docs/SSE.md` and `docs/ACP.md`.
+- Usage: `LEARNING.md`. Kotlin/Room storage and capability details live under `shared/docs/`.
 
 ## Key files
 
 - `VERSION` — semantic version name shared by all clients
 - `release.ps1` — release entry point (bump, tag, push)
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle/libs.versions.toml` — version calculation, module includes, dependency catalog
-- `core/rust/crates/messenger-http/openapi.yaml` / `core/rust/crates/messenger-http/docs/SSE.md` — local API and event contracts
+- `shared/docs/KOTLIN_CORE_MIGRATION_PLAN.md` — Kotlin/Room migration and remaining follow-up work
 - `.github/workflows/` — CI/CD (see Conventions)

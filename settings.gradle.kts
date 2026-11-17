@@ -47,15 +47,6 @@ include(":androidApp")
 include(":desktopApp")
 include(":wear")
 include(":runtime")
-include(":core-bindings")
-// The bindings module lives under core/bindings to keep the Rust core and its
-// Kotlin bridge side by side; Gradle's default path would be ./core-bindings.
-project(":core-bindings").projectDir = file("core/bindings")
-// Desktop counterpart: the same lifecycle-only UniFFI surface and cdylib,
-// packaged for the JVM instead of Android.
-include(":core-bindings-desktop")
-project(":core-bindings-desktop").projectDir = file("core/bindings-desktop")
-
 include(":llm-typewriter")
 project(":llm-typewriter").projectDir = file("rendering/llm-typewriter-repo/llm-typewriter")
 project(":llm-typewriter").buildFileName = "messenger.gradle.kts"

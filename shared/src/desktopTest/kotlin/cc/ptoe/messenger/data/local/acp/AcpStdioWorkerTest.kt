@@ -23,8 +23,8 @@ class AcpStdioWorkerTest {
         private lateinit var output: BufferedReader
         fun isProcessAlive() = ::process.isInitialized && process.isAlive
         override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) {
-            val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py")) }
-            process = ProcessBuilder("python3", root.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py").toString(), mode)
+            val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("shared/desktopTest/fixtures/acp_agent.py")) }
+            process = ProcessBuilder("python3", root.resolve("shared/desktopTest/fixtures/acp_agent.py").toString(), mode)
                 .directory(cwd.toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start()
             input = process.outputStream.bufferedWriter(); output = process.inputStream.bufferedReader()
         }
@@ -276,8 +276,8 @@ class AcpStdioWorkerTest {
 
     @Test fun acknowledgedCancelStillWaitsForPersistentChildToStop(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-stdio-child")
-        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py")) }
-        val fixture = root.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py")
+        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("shared/desktopTest/fixtures/acp_agent.py")) }
+        val fixture = root.resolve("shared/desktopTest/fixtures/acp_agent.py")
         val pidFile = dir.resolve("child.pid")
         val wrapper = Files.writeString(dir.resolve("agent_with_child.py"), """
             import os, signal, subprocess, sys

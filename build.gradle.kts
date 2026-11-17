@@ -194,8 +194,8 @@ ext["buildRuntimeNative"] = providers.gradleProperty("messenger.buildRuntimeNati
 /**
  * Android ABIs packaged by the phone apps (`:androidApp` and its `:runtime`
  * companion) — ONE source of truth for three places that must agree:
- * `ndk.abiFilters` per build type in both modules, the cargo-ndk target list in
- * `:core-bindings`, and the Termux bootstrap archives `:runtime` packages.
+ * `ndk.abiFilters` per build type in both modules and the Termux bootstrap
+ * archives `:runtime` packages.
  *
  * Release ships `arm64-v8a` only. Debug ships `arm64-v8a` and `x86_64`
  * for physical devices and Android Studio AVDs. This is per-build-type
@@ -266,8 +266,8 @@ ext["releaseAbis"] = releaseAbis()
 ext["debugAbis"] = debugAbis()
 ext["wearReleaseAbis"] = wearReleaseAbis()
 ext["wearDebugAbis"] = wearDebugAbis()
-// cargo-ndk runs once per build type over that build type's own ABI list (see
-// :core-bindings), so debug and release targets are kept separate.
+// Debug and release native target lists are kept separate for the Runtime
+// companion and bundled SQLite packaging.
 ext["releaseRustTargets"] = (ext["releaseAbis"] as List<*>)
     .map { abiToRustTarget.getValue(it as String) }
 ext["debugRustTargets"] = (ext["debugAbis"] as List<*>)

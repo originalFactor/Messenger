@@ -65,28 +65,6 @@ jobs:
           # fetching anything else.
           packages: 'ndk;30.0.16248370 cmake;4.1.2 build-tools;37.0.0 platforms;android-37.0'
 
-      # :core-bindings compiles the Rust core (core/rust) via cargo-ndk for the
-      # shipped ABI; cargo-ndk picks the NDK up from ANDROID_HOME. The target
-      # list is derived from the same release/debug ABI lists the APKs filter on,
-      # so keep these in sync if the matrix ever changes.
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Install cargo-ndk
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-ndk
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core/rust
-          key: android-arm64-${{ hashFiles('core/rust/crates/**', 'VERSION') }}
-          cache-workspace-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:

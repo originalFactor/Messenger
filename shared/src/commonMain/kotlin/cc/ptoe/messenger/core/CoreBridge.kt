@@ -21,7 +21,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Common Kotlin bridge to the Rust Agent Core ([CoreHandle]).
+ * Common Kotlin bridge contract implemented by the Kotlin/Room backend.
  * Platform targets (Android, Desktop) supply their actual native handle.
  */
 interface CoreBridge {
@@ -145,7 +145,7 @@ interface CoreBridge {
     suspend fun cloudCacheAvatar(scope: String, accountId: String, id: String, url: String, version: String?, destDir: String): String
 
     // Cloud account settings, avatars, market mutations and the login flows.
-    // Android/Desktop use RestCoreBridge; all native clients use RestCoreBridge
+    // Android/Desktop use the injected Kotlin/Room AppBackend bridge.
     // boundary for this migration phase.
     suspend fun cloudPushSnapshot(): Long
     suspend fun cloudSyncWith(

@@ -4,8 +4,6 @@
 # Full R8 minification + resource shrinking is enabled for release builds
 # (androidApp, wear, runtime). The app shell itself is thin: the reflection-
 # sensitive surface comes from
-#   * the lifecycle-only Rust bridge (UniFFI-generated Kotlin + JNA), kept by
-#     :core-bindings' consumer rules,
 #   * llm-typewriter runtime classes contributed by Maven dependencies,
 #   * kotlinx.serialization (20 @Serializable DTOs decoded reified),
 #   * OkHttp/Ktor/Coil service-loader entry points,

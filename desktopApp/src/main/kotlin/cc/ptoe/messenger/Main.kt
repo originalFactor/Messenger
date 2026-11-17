@@ -22,17 +22,14 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import java.awt.Dimension
 import javax.imageio.ImageIO
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
-import cc.ptoe.messenger.core.CoreBridgeRegistry
-import cc.ptoe.messenger.core.CoreHandle
-import cc.ptoe.messenger.core.HttpServerHandle
-import cc.ptoe.messenger.core.RestCoreBridge
+import cc.ptoe.messenger.di.KotlinAppBackendFactory
 import cc.ptoe.messenger.data.local.DesktopChatImageStore
 import cc.ptoe.messenger.di.AppContainer
 import cc.ptoe.messenger.di.AppContainerHolder
@@ -45,8 +42,6 @@ import coil3.SingletonImageLoader
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import okio.Path.Companion.toPath
 
-private lateinit var coreHttpServer: HttpServerHandle
-
 fun main() {
     // Must run before any AWT/Compose class initializes its toolkit.
     val nativeWayland = configureDesktopBackend()
@@ -55,44 +50,17 @@ fun main() {
         filesDir = home.resolve(".messenger").resolve("files"),
         cacheDir = home.resolve(".messenger").resolve("cache")
     )
-    // The Rust core owns all durable state and the agent loop on every
-    // platform. Desktop stores it beside the preferences (the legacy Room file
-    // lives under filesDir/databases and is imported once, in place).
-    val coreDir = appDirs.filesDir.resolve("messenger_core").toFile().apply { mkdirs() }
-    val legacyDir = appDirs.filesDir.resolve("databases").toFile()
-    val core = CoreHandle.open(
-        storePath = coreDir.resolve("store.db").absolutePath,
-        legacyDbDir = legacyDir.takeIf { it.isDirectory }?.absolutePath,
-        nowMs = System.currentTimeMillis()
-    )
-    coreHttpServer = runBlocking { core.startHttpServer(0u) }
-    val acpDescriptor = coreDir.resolve("acp-connection.json").toPath()
-    runCatching { writeAcpDescriptor(acpDescriptor, coreHttpServer) }
-        .onFailure { System.err.println("Messenger ACP descriptor unavailable: ${it.message}") }
-    val restCore = RestCoreBridge(
-        localAddress = coreHttpServer.localAddr(),
-        token = coreHttpServer.token(),
-    )
-    CoreBridgeRegistry.bridge = restCore
-    // Stop the loopback server when the process ends (window close, Ctrl+C).
-    // The stop is graceful and waits for in-flight responses, so it never
-    // belongs on the UI thread; the timeout keeps the JVM from hanging if a
-    // response refuses to drain.
-    Runtime.getRuntime().addShutdownHook(
-        Thread {
-            runCatching {
-                runBlocking { withTimeout(5_000) { coreHttpServer.stop() } }
-                removeAcpDescriptor(acpDescriptor, coreHttpServer.token())
-            }
-        }
-    )
-
+    appDirs.filesDir.toFile().mkdirs()
+    appDirs.cacheDir.toFile().mkdirs()
+    val backend = KotlinAppBackendFactory.create(appDirs) { path ->
+        Room.databaseBuilder<cc.ptoe.messenger.data.local.room.LocalDatabase>(name = path.toString())
+            .setDriver(BundledSQLiteDriver()).build()
+    }
     val container = AppContainer(
         appDirs = appDirs,
-        chatImageStore = DesktopChatImageStore(appDirs.filesDir)
+        chatImageStore = DesktopChatImageStore(appDirs.filesDir),
+        backend = backend,
     )
-    restCore.platformTools = container::availableTools
-    restCore.publishPlatformTools(container.mcpManager)
     AppContainerHolder.initialize(container)
     container.initializeLocalAndCloudData()
     installDesktopTaskPush(container)

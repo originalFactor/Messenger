@@ -72,13 +72,11 @@ if (response.status === 200) {
 
 业务数据与调度由 Rust Core 的认证 `/api/v1` REST/SSE 管理；Kotlin 负责界面和网页宿主生命周期。原有 Markdown、代码高亮、LaTeX 继续由 Kotlin `llm-typewriter` 渲染。
 
-- [本地 API](core/rust/crates/messenger-http/openapi.yaml)
-- [SSE 与结构化工具结果](core/rust/crates/messenger-http/docs/SSE.md)
-- [资产、图片生成与完整学习包](core/rust/crates/messenger-http/docs/ASSETS.md)
-- [ACP](core/rust/crates/messenger-http/docs/ACP.md)
+- [Kotlin/Room 迁移与后续计划](shared/docs/KOTLIN_CORE_MIGRATION_PLAN.md)
+- [旧 Room 恢复](shared/docs/LEGACY_ROOM_RECOVERY.md)
 
 ```bash
-cargo test --manifest-path core/rust/Cargo.toml --workspace
+./gradlew-cli :shared:allTests
 ./gradlew-cli :shared:allTests
 ./gradlew-cli :androidApp:assembleDebug :androidApp:lintDebug
 ./gradlew-cli :desktopApp:run

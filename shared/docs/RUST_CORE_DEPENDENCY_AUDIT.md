@@ -15,12 +15,10 @@ references to be intentional.
 
 ## Current state
 
-Production Android and Desktop still call `CoreHandle.open`, start the loopback
-server, install `RestCoreBridge` and construct the default Rust-backed
-`AppContainer`. `KotlinRoomBackendSlice.asAppBackend()` remains isolated and
-refuses ACP owners and remote-device hosts. Do not remove `core/rust`, either
-binding module, native packaging or Cargo CI setup before those startup paths
-are switched to a proven complete `AppBackend`.
+Rust Core and native bindings were removed after Android AVD install/startup
+validation of the Kotlin/Room `AppBackend`. Production startup no longer uses
+`CoreHandle`, a loopback server, or the retired REST bridge. The audit below
+now guards against reintroducing those dependencies.
 
 The audit script scans these areas:
 
@@ -30,14 +28,12 @@ The audit script scans these areas:
 - CI workflows, build selection scripts and release/version tooling;
 - module and root documentation, including route/event contracts and storage
   migration notes;
-- generated native artifacts such as `libmessenger_ffi.so` and SQLite JNI
+- historical native artifacts such as `libmessenger_ffi.so` and SQLite JNI
   libraries.
 
-`core/rust/crates/messenger-http/openapi.yaml`, `docs/SSE.md`, `docs/ACP.md`,
-`docs/REMOTE.md` and `docs/ASSETS.md` remain authoritative until all callers are
-retired. The Cloud server relay contracts mirror those routes. Keeping the
-workspace relay v2 disabled and Rust-owned routes in sync is part of the
-prerequisite, not an optional cleanup.
+Legacy REST/SSE documentation was removed with the Rust workspace. The Cloud
+server relay contracts remain historical compatibility references; the
+workspace relay v2 stays disabled until its Kotlin replacement is proven.
 
 ## Cutover evidence still missing
 

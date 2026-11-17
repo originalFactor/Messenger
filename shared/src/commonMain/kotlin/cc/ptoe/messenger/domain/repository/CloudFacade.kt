@@ -33,7 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The cloud SaaS surface the UI consumes — login, sync, market, avatars.
  *
- * Production uses `RustCloudFacade`, which delegates to the Rust sync engine.
+ * Production uses the Room Cloud facade supplied by the Kotlin/Room AppBackend.
  * An isolated Room implementation is being developed behind the same interface.
  */
 interface CloudFacade {

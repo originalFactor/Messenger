@@ -31,12 +31,6 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// The KMP Android device-test configuration has no build type by default. Without an explicit
-// preference Gradle chooses release for :core-bindings and compiles a second Rust ABI set.
-configurations.matching { it.name == "androidDeviceTestRuntimeClasspath" }.configureEach {
-    attributes.attribute(BuildTypeAttr.ATTRIBUTE, objects.named<BuildTypeAttr>("debug"))
-}
-
 // The app version is one scheme for every client: the semantic version in the
 // repository-root VERSION file (rootProject.ext["versionName"]) plus the git
 // commit count (rootProject.ext["versionCode"]) — see the root build script.
@@ -189,7 +183,6 @@ kotlin {
         getByName("androidMain") {
             dependsOn(jvmSharedMain)
             dependencies {
-                implementation(project(":core-bindings"))
                 implementation(libs.androidx.recyclerview)
                 implementation(libs.androidx.webkit)
                 implementation(compose.preview)
@@ -226,7 +219,6 @@ kotlin {
         getByName("desktopMain") {
             dependsOn(jvmSharedMain)
             dependencies {
-                implementation(project(":core-bindings-desktop"))
                 implementation(compose.desktop.currentOs)
                 implementation(libs.twelve.monkeys.webp)
                 implementation(libs.kotlinx.coroutines.swing)

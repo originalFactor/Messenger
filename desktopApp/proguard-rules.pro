@@ -12,20 +12,6 @@
 # ---------------------------------------------------------------------------
 
 # ===========================================================================
-# Rust core bridge (UniFFI-generated Kotlin + JNA)
-# ===========================================================================
-# The generated bindings declare JNA `Structure`/`Callback` subclasses and an
-# interface loaded through `Native.load`; JNA reflects over their fields and
-# method names, so the whole surface must survive verbatim. The cdylib itself
-# is a classpath resource under JNA's `<os>-<arch>/` prefix — ProGuard copies
-# resources untouched, so nothing to keep for the .dll/.so itself.
--keep class cc.ptoe.messenger.core.** { *; }
--keep class com.sun.jna.** { *; }
--keep interface com.sun.jna.** { *; }
--dontwarn com.sun.jna.**
--dontwarn java.awt.**
-
-# ===========================================================================
 # App entry point
 # ===========================================================================
 # Nothing to keep: the Compose plugin's generated root config already keeps

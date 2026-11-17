@@ -25,8 +25,8 @@ class AcpTurnCoordinatorTest {
         private lateinit var input: java.io.BufferedWriter
         private lateinit var output: java.io.BufferedReader
         override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) {
-            val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py")) }
-            process = ProcessBuilder("python3", root.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py").toString(), mode)
+            val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("shared/desktopTest/fixtures/acp_agent.py")) }
+            process = ProcessBuilder("python3", root.resolve("shared/desktopTest/fixtures/acp_agent.py").toString(), mode)
                 .directory(Path.of(binding.workspace).toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start()
             input = process.outputStream.bufferedWriter(); output = process.inputStream.bufferedReader()
         }
