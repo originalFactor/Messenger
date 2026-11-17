@@ -4,12 +4,51 @@ package cc.ptoe.messenger.runtime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Collections
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.fail
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
 import org.junit.Test
 
 class McpProcessSessionTest {
+    @Test fun fatalPostExecFailureStopsChildBeforeRethrowing() {
+        assumeFalse(System.getProperty("os.name").lowercase().contains("windows"))
+        val process = ProcessBuilder("/bin/sh", "-c", "exec sleep 5").start()
+        val failure = AssertionError("reader thread could not start")
+        try {
+            try { TermuxRuntime.cleanupFailedMcpLaunch(process, failure); fail("Expected original failure") }
+            catch (actual: AssertionError) { assertSame(failure, actual) }
+            assertFalse(process.isAlive)
+        } finally { process.destroyForcibly() }
+    }
+
+    @Test fun concurrentSendsPreserveCompleteLines() {
+        assumeFalse(System.getProperty("os.name").lowercase().contains("windows"))
+        val process = ProcessBuilder("/bin/cat").start()
+        val session = TermuxRuntime.McpProcessSession(process, process.outputStream.bufferedWriter())
+        val lines = Collections.synchronizedList(mutableListOf<String>())
+        val reader = Thread { process.inputStream.bufferedReader().useLines { lines.addAll(it.toList()) } }
+        val first = "A".repeat(256)
+        val second = "B".repeat(256)
+        val senderA = Thread { repeat(100) { check(session.sendLine(first)) } }
+        val senderB = Thread { repeat(100) { check(session.sendLine(second)) } }
+        try {
+            reader.start(); senderA.start(); senderB.start()
+            senderA.join(5_000); senderB.join(5_000)
+            assertFalse(senderA.isAlive || senderB.isAlive)
+            process.outputStream.close()
+            assertTrue(process.waitFor(5, TimeUnit.SECONDS))
+            reader.join(5_000)
+            assertFalse(reader.isAlive)
+            assertEquals(100, lines.count { it == first })
+            assertEquals(100, lines.count { it == second })
+            assertEquals(200, lines.size)
+        } finally { process.destroyForcibly(); reader.join(5_000) }
+    }
+
     @Test fun stopKillsChildBeforeClosingItsBlockedWriter() {
         assumeFalse(System.getProperty("os.name").lowercase().contains("windows"))
         val process = ProcessBuilder("/bin/sh", "-c", "exec sleep 5").start()

@@ -787,6 +787,7 @@ internal object TermuxRuntime {
         val process: Process,
         private val writer: java.io.BufferedWriter
     ) {
+        @Synchronized
         fun sendLine(line: String): Boolean {
             return try {
                 writer.write(line)
@@ -823,6 +824,7 @@ internal object TermuxRuntime {
             return null
         }
         return withContext(Dispatchers.IO) {
+            var launched: Process? = null
             try {
                 val workspace = if (cwd == null) runtime.workspace else {
                     File(cwd).canonicalFile.takeIf { it.isDirectory && it.isAbsolute } ?: return@withContext null
@@ -844,7 +846,7 @@ internal object TermuxRuntime {
                     }
                 }
                 builder.environment().putAll(env)
-                val process = builder.start()
+                val process = builder.start().also { launched = it }
                 val writer = process.outputStream.bufferedWriter(StandardCharsets.UTF_8)
                 val session = McpProcessSession(process, writer)
 
@@ -873,10 +875,23 @@ internal object TermuxRuntime {
                 }.start()
 
                 session
-            } catch (e: Exception) {
+            } catch (failure: Throwable) {
+                cleanupFailedMcpLaunch(launched, failure)
                 null
             }
         }
+    }
+
+    /** A failed post-exec launch may not discard an unjoined direct child. */
+    internal fun cleanupFailedMcpLaunch(process: Process?, failure: Throwable) {
+        if (process != null) try {
+            process.destroyForcibly()
+            process.waitFor()
+        } catch (cleanup: Throwable) {
+            if (cleanup !== failure) cleanup.addSuppressed(failure)
+            throw IllegalStateException("Direct child cleanup failed after launch", cleanup)
+        }
+        if (failure !is Exception) throw failure
     }
 
     private fun supportedAbi(): String? = android.os.Build.SUPPORTED_ABIS.firstNotNullOfOrNull {

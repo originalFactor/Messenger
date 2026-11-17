@@ -42,8 +42,8 @@ class ShellService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val active = ConcurrentHashMap<Int, Job>()
-    private val acpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
-    private val mcpSessions = ConcurrentHashMap<Int, TermuxRuntime.McpProcessSession>()
+    private val acpSessions = RuntimeProcessRegistry<TermuxRuntime.McpProcessSession> { it.close() }
+    private val mcpSessions = RuntimeProcessRegistry<TermuxRuntime.McpProcessSession> { it.close() }
 
     private val binder = object : IShellService.Stub() {
         override fun temporaryChatWorkspace(conversationId: String?): String? {
@@ -180,36 +180,32 @@ class ShellService : Service() {
             callback: IMcpCallback?
         ): Boolean {
             if (!isCallerAllowed() || command.isNullOrBlank() || callback == null) return false
-            mcpSessions.remove(sessionId)?.close()
-            return runBlocking {
-                val session = TermuxRuntime.startMcpProcess(
-                    context = applicationContext,
-                    command = command,
-                    envJson = envJson,
-                    onOutput = { line -> runCatching { callback.onOutput(sessionId, line) } },
-                    onError = { err -> runCatching { callback.onError(sessionId, err) } },
-                    onClosed = { code ->
-                        mcpSessions.remove(sessionId)
-                        runCatching { callback.onClosed(sessionId, code) }
-                    }
-                )
-                if (session != null) {
-                    mcpSessions[sessionId] = session
-                    true
-                } else {
-                    false
+            val entry = sessionShutdownGate.admit { mcpSessions.reserve(sessionId) } ?: return false
+            val session = try {
+                runBlocking {
+                    TermuxRuntime.startMcpProcess(
+                        context = applicationContext, command = command, envJson = envJson,
+                        onOutput = { line -> mcpSessions.deliver(entry) { runCatching { callback.onOutput(sessionId, line) } } },
+                        onError = { err -> mcpSessions.deliver(entry) { runCatching { callback.onError(sessionId, err) } } },
+                        onClosed = { code ->
+                            mcpSessions.finished(entry) { runCatching { callback.onClosed(sessionId, code) } }
+                        },
+                    )
                 }
+            } catch (failure: Throwable) {
+                mcpSessions.failLaunch(entry, failure)
+                throw failure
             }
+            return mcpSessions.publish(entry, session)
         }
 
         override fun sendMcpInput(sessionId: Int, line: String?): Boolean {
             if (!isCallerAllowed() || line == null) return false
-            return mcpSessions[sessionId]?.sendLine(line) ?: false
+            return mcpSessions.get(sessionId)?.sendLine(line) ?: false
         }
 
         override fun stopMcpProcess(sessionId: Int) {
-            if (!isCallerAllowed()) return
-            mcpSessions.remove(sessionId)?.close()
+            if (isCallerAllowed()) mcpSessions.stop(sessionId)
         }
 
         override fun startAcpProcess(
@@ -222,39 +218,36 @@ class ShellService : Service() {
         ): Boolean {
             if (!isCallerAllowed() || executable.isNullOrBlank() || arguments == null ||
                 cwd.isNullOrBlank() || callback == null || !java.io.File(cwd).isAbsolute) return false
-            val closed = java.util.concurrent.atomic.AtomicBoolean(false)
-            acpSessions.remove(sessionId)?.close()
-            val session = runBlocking {
-                TermuxRuntime.startMcpProcess(
-                    context = applicationContext,
-                    command = executable,
-                    envJson = envJson,
-                    onOutput = { line ->
-                        if (line.length <= 192_000) callback.onOutput(sessionId, line)
-                        else acpSessions.remove(sessionId)?.close()
-                    },
-                    onError = {},
-                    onClosed = { code ->
-                        closed.set(true)
-                        acpSessions.remove(sessionId)
-                        runCatching { callback.onClosed(sessionId, code) }
-                    },
-                    arguments = arguments.toList(),
-                    cwd = cwd,
-                )
-            } ?: return false
-            acpSessions[sessionId] = session
-            if (closed.get()) acpSessions.remove(sessionId, session)
-            return true
+            val entry = sessionShutdownGate.admit { acpSessions.reserve(sessionId) } ?: return false
+            val session = try {
+                runBlocking {
+                    TermuxRuntime.startMcpProcess(
+                        context = applicationContext, command = executable, envJson = envJson,
+                        onOutput = { line ->
+                            if (line.length <= 192_000) acpSessions.deliver(entry) { callback.onOutput(sessionId, line) }
+                            else acpSessions.stop(entry)
+                        },
+                        onError = {},
+                        onClosed = { code ->
+                            acpSessions.finished(entry) { runCatching { callback.onClosed(sessionId, code) } }
+                        },
+                        arguments = arguments.toList(), cwd = cwd,
+                    )
+                }
+            } catch (failure: Throwable) {
+                acpSessions.failLaunch(entry, failure)
+                throw failure
+            }
+            return acpSessions.publish(entry, session)
         }
 
         override fun sendAcpInput(sessionId: Int, line: String?): Boolean {
             if (!isCallerAllowed() || line == null || line.length > 192_000) return false
-            return acpSessions[sessionId]?.sendLine(line) ?: false
+            return acpSessions.get(sessionId)?.sendLine(line) ?: false
         }
 
         override fun stopAcpProcess(sessionId: Int) {
-            if (isCallerAllowed()) acpSessions.remove(sessionId)?.close()
+            if (isCallerAllowed()) acpSessions.stop(sessionId)
         }
     }
 
@@ -294,17 +287,27 @@ class ShellService : Service() {
     }
 
     override fun onDestroy() {
-        for (session in mcpSessions.values) {
-            session.close()
-        }
-        mcpSessions.clear()
-        acpSessions.values.forEach { it.close() }
-        acpSessions.clear()
+        // The service lifecycle runs on the Android main thread. A launch, pipe or Binder
+        // callback may take arbitrarily long, so drain separately and fence recreated services.
+        sessionShutdownGate.begin()
+        Thread {
+            val mcp = runCatching { mcpSessions.stopAll() }
+            val acp = runCatching { acpSessions.stopAll() }
+            if (mcp.isSuccess && acp.isSuccess) {
+                runCatching { mcpSessions.awaitDrained(); acpSessions.awaitDrained() }
+                    .onSuccess { sessionShutdownGate.complete() }
+                    .onFailure { android.util.Log.e(TAG, "Runtime session drain failed", it) }
+            } else {
+                mcp.exceptionOrNull()?.let { android.util.Log.e(TAG, "MCP shutdown failed", it) }
+                acp.exceptionOrNull()?.let { android.util.Log.e(TAG, "ACP shutdown failed", it) }
+            }
+        }.start()
         scope.cancel()
         super.onDestroy()
     }
 
     private companion object {
+        val sessionShutdownGate = RuntimeSessionShutdownGate()
         const val TAG = "ShellRT"
         const val PERMISSION = "cc.ptoe.messenger.runtime.permission.SHELL"
     }
