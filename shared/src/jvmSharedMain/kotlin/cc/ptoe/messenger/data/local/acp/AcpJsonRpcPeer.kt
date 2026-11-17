@@ -29,6 +29,7 @@ internal class AcpJsonRpcPeer(
     private val pending = mutableMapOf<Long, CompletableDeferred<JsonElement>>()
     private val incoming = mutableMapOf<String, Job>()
     private var closed = false
+    private var closedMessage: String? = null
     private var reader: Job? = null
 
     suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) {
@@ -44,6 +45,7 @@ internal class AcpJsonRpcPeer(
                 }
                 fail("ACP process exited")
             } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: AcpSafeHostFailure) { fail(failure.message ?: "ACP process host failed") }
             catch (_: Exception) { fail("Invalid or interrupted ACP stream") }
         }
     }
@@ -57,7 +59,8 @@ internal class AcpJsonRpcPeer(
         var registered = false
         try {
             gate.withLock {
-                check(!closed && reader != null && pending.size < 32) { "ACP request capacity unavailable" }
+                check(!closed) { closedMessage ?: "ACP request capacity unavailable" }
+                check(reader != null && pending.size < 32) { "ACP request capacity unavailable" }
                 pending[id] = result
                 registered = true
             }
@@ -114,6 +117,7 @@ internal class AcpJsonRpcPeer(
         val waiters = gate.withLock {
             if (closed) return
             closed = true
+            closedMessage = message
             pending.values.toList().also { pending.clear() }
         }
         waiters.forEach { it.completeExceptionally(IllegalStateException(message)) }

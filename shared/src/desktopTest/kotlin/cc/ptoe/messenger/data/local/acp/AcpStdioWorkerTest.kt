@@ -21,6 +21,7 @@ class AcpStdioWorkerTest {
         private lateinit var process: Process
         private lateinit var input: BufferedWriter
         private lateinit var output: BufferedReader
+        fun isProcessAlive() = ::process.isInitialized && process.isAlive
         override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) {
             val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }.first { Files.exists(it.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py")) }
             process = ProcessBuilder("python3", root.resolve("core/rust/crates/messenger-http/tests/fixtures/acp_agent.py").toString(), mode)

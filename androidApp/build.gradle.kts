@@ -113,6 +113,8 @@ android {
 
 dependencies {
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
     implementation(libs.kotlinx.serialization.json)
     implementation(files("libs/jpush-android-6.3.1.aar", "libs/jcore-android-5.6.0.aar", "libs/jpush-android-plugin-fcm-v6.3.1.aar"))
     implementation(libs.firebase.messaging)

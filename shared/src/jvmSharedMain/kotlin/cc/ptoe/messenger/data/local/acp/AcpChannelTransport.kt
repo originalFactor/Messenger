@@ -11,6 +11,25 @@ import kotlinx.serialization.encodeToString
 internal fun interface AcpStoppedProof { suspend fun requireStopped(binding: AcpWorkerBinding) }
 internal fun interface AcpChannelHost { suspend fun run(channel: AcpProcessChannel) }
 
+/** Only fixed platform messages may cross into persisted and user-visible ACP errors. */
+internal class AcpSafeHostFailure(message: String) : IllegalStateException(message)
+
+private fun safeHostFailure(failure: Exception): AcpSafeHostFailure {
+    val message = when (failure.message) {
+        "Messenger Runtime is unavailable.",
+        "Update Messenger Runtime to use ACP safely.",
+        "Messenger Runtime disconnected before ACP start.",
+        "Messenger Runtime could not confirm whether the ACP agent started.",
+        "Messenger Runtime could not start the ACP agent.",
+        "Messenger Runtime could not confirm ACP process stop.",
+        "Messenger Runtime disconnected; ACP process stop is unverified.",
+        "ACP input could not be delivered to its session." -> failure.message!!
+        else -> "ACP process host failed"
+    }
+    // Do not retain the original exception: its cause or suppressed errors may contain secrets.
+    return AcpSafeHostFailure(message)
+}
+
 /** Adapter to the existing Runtime ACP stdio channel, with bounded in-memory buffering. */
 internal class AcpChannelTransport(private val host: AcpChannelHost, private val proof: AcpStoppedProof) : AcpLineTransport {
     private val owner = SupervisorJob()
@@ -39,7 +58,7 @@ internal class AcpChannelTransport(private val host: AcpChannelHost, private val
         hostJob = scope.launch {
             try { host.run(process); output.close() }
             catch (cancelled: CancellationException) { output.close(); throw cancelled }
-            catch (_: Exception) { output.close(IllegalStateException("ACP process host failed")) }
+            catch (failure: Exception) { output.close(safeHostFailure(failure)) }
         }
     }
     override suspend fun readLine(): String? {

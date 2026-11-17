@@ -218,7 +218,7 @@ class ShellService : Service() {
         ): Boolean {
             if (!isCallerAllowed() || executable.isNullOrBlank() || arguments == null ||
                 cwd.isNullOrBlank() || callback == null || !java.io.File(cwd).isAbsolute) return false
-            val entry = sessionShutdownGate.admit { acpSessions.reserve(sessionId) } ?: return false
+            val entry = sessionShutdownGate.admit { acpSessions.reserve(sessionId, callback.asBinder()) } ?: return false
             val session = try {
                 runBlocking {
                     TermuxRuntime.startMcpProcess(
@@ -249,6 +249,15 @@ class ShellService : Service() {
         override fun stopAcpProcess(sessionId: Int) {
             if (isCallerAllowed()) acpSessions.stop(sessionId)
         }
+
+        override fun acpStopProtocol(): Int = if (isCallerAllowed()) 2 else 0
+
+        override fun stopAcpProcessOwned(sessionId: Int, callback: IMcpCallback?): Boolean =
+            isCallerAllowed() && callback != null && acpSessions.stopOwned(sessionId, callback.asBinder())
+
+        override fun sendAcpInputOwned(sessionId: Int, line: String?, callback: IMcpCallback?): Boolean =
+            isCallerAllowed() && line != null && line.length <= 192_000 && callback != null &&
+                acpSessions.withOwned(sessionId, callback.asBinder()) { it.sendLine(line) }
     }
 
     /** Only holders of the signature permission (the main app) may call in. */

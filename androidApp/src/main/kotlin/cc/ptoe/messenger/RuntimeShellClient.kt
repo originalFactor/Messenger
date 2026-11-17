@@ -29,7 +29,11 @@ import cc.ptoe.messenger.data.chat.TrackedWorkspaceStatus
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.runtime.IMcpCallback
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import cc.ptoe.messenger.domain.tool.RUNTIME_PACKAGE
 import cc.ptoe.messenger.domain.tool.ShellResult
@@ -45,6 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -372,6 +377,10 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
 
     suspend fun runAcpProcess(channel: AcpProcessChannel) = withContext(Dispatchers.IO) {
         val service = service() ?: error("Messenger Runtime is unavailable.")
+        val turnJob = currentCoroutineContext().job
+        val protocol = try { service.acpStopProtocol() } catch (_: Exception) { 0 }
+        check(protocol >= 2) { "Update Messenger Runtime to use ACP safely." }
+        requireAcpTurnActive(turnJob)
         val id = requestIds.getAndIncrement()
         val stdout = Channel<String>(32)
         val binder = service.asBinder()
@@ -390,43 +399,75 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
         }
         val death = IBinder.DeathRecipient { acpConnections.lost(session) }
         var failure: Throwable? = null
+        var accepted = false
+        var stopAttempted = false
+        var cleanupFailure: Throwable? = null
         try {
             binder.linkToDeath(death, 0)
-            check(service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
-                channel.envJson, channel.cwd, callback)) {
+            accepted = try {
+                service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
+                    channel.envJson, channel.cwd, callback)
+            } catch (error: Exception) {
+                acpConnections.lost(session)
+                throw IllegalStateException("Messenger Runtime could not confirm whether the ACP agent started.", error)
+            }
+            requireAcpTurnActive(turnJob)
+            check(accepted) {
                 "Messenger Runtime could not start the ACP agent."
             }
-            coroutineScope {
-                val input = launch {
-                    try {
-                        channel.readInput { line -> check(service.sendAcpInput(id, line)) }
-                    } finally {
-                        stdout.close()
-                    }
-                }
+            // Keep a potentially blocked Binder write outside structured children: stop the
+            // direct child first, then join the write with a bounded, explicit uncertainty.
+            val inputScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val input = inputScope.launch {
                 try {
-                    for (line in stdout) channel.output(line)
+                    channel.readInput { line ->
+                        requireAcpTurnActive(turnJob)
+                        check(service.sendAcpInputOwned(id, line, callback)) { "ACP input could not be delivered to its session." }
+                    }
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Throwable) {
+                    stdout.close(failure)
                 } finally {
-                    input.cancel()
+                    stdout.close()
                 }
+            }
+            try {
+                for (line in stdout) channel.output(line)
+            } finally {
+                stopAttempted = true
+                cleanupFailure = runCatching {
+                    finishAcpInput(input, 5_000) {
+                        acpConnections.stopAndAwaitEnd(session, accepted, 5_000) {
+                            service.stopAcpProcessOwned(id, callback)
+                        }
+                    }
+                }.exceptionOrNull()
+                inputScope.cancel()
             }
         } catch (error: Throwable) {
             failure = error
             throw error
         } finally {
             // Stop on the original Binder. A replacement service cannot prove its child exited.
-            acpConnections.beginStop(session)
-            val stopFailure = runCatching { service.stopAcpProcess(id) }.exceptionOrNull()
+            // A rejected start can refer to an already-owned ID and must never stop that session.
+            val stopFailure = cleanupFailure ?: if (stopAttempted) null else withContext(NonCancellable) {
+                runCatching {
+                    finishAcpInput(CompletableDeferred(Unit), 5_000) {
+                        acpConnections.stopAndAwaitEnd(session, accepted, 5_000) {
+                            service.stopAcpProcessOwned(id, callback)
+                        }
+                    }
+                }.exceptionOrNull()
+            }
             runCatching { binder.unlinkToDeath(death, 0) }
             acpConnections.abandon(session)
             stdout.cancel()
             val uncertain = stopFailure?.let { IllegalStateException("Messenger Runtime could not confirm ACP process stop.", it) }
                 ?: session.terminalError
             if (uncertain != null) {
-                if (failure == null || failure is CancellationException) {
-                    failure?.let(uncertain::addSuppressed)
-                    throw uncertain
-                } else if (failure !== uncertain) failure.addSuppressed(uncertain)
+                if (failure != null && failure !== uncertain) uncertain.addSuppressed(failure)
+                throw uncertain
             }
         }
     }

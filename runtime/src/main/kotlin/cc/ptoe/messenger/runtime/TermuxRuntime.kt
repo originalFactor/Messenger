@@ -859,8 +859,7 @@ internal object TermuxRuntime {
                             }
                         }
                     } catch (_: Exception) {}
-                    val code = runCatching { process.waitFor() }.getOrDefault(-1)
-                    onClosed(code)
+                    notifyConfirmedChildExit({ process.waitFor() }, onClosed)
                 }.start()
 
                 // Background thread reading stderr lines

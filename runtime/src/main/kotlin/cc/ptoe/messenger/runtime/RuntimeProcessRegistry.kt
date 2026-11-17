@@ -3,9 +3,18 @@ package cc.ptoe.messenger.runtime
 
 import java.util.concurrent.CountDownLatch
 
+/** Only a successful wait may be delivered as confirmation of direct-child exit. */
+internal fun notifyConfirmedChildExit(wait: () -> Int, notify: (Int) -> Unit) {
+    val status = try { wait() } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return
+    } catch (_: Exception) { return }
+    notify(status)
+}
+
 /** Tracks the exact direct child for each admitted session; it cannot account for descendants. */
 internal class RuntimeProcessRegistry<T : Any>(private val close: (T) -> Unit) {
-    internal class Entry<T : Any>(val id: Int) {
+    internal class Entry<T : Any>(val id: Int, val owner: Any?) {
         val ready = CountDownLatch(1)
         var session: T? = null
         var stopping = false
@@ -22,8 +31,8 @@ internal class RuntimeProcessRegistry<T : Any>(private val close: (T) -> Unit) {
     private var closed = false
 
     /** A duplicate ID never replaces a child that may still be launching or shutting down. */
-    fun reserve(id: Int): Entry<T>? = synchronized(lock) {
-        if (closed || sessions.containsKey(id)) null else Entry<T>(id).also { sessions[id] = it }
+    fun reserve(id: Int, owner: Any? = null): Entry<T>? = synchronized(lock) {
+        if (closed || sessions.containsKey(id)) null else Entry<T>(id, owner).also { sessions[id] = it }
     }
 
     /** An exceptional launch may have left a child behind; keep its ID unavailable. */
@@ -92,21 +101,39 @@ internal class RuntimeProcessRegistry<T : Any>(private val close: (T) -> Unit) {
 
     fun get(id: Int): T? = synchronized(lock) { sessions[id]?.takeUnless { it.stopping }?.session }
 
+    /** Keep this generation reserved while a callback-owned input frame is written. */
+    fun withOwned(id: Int, owner: Any, operation: (T) -> Boolean): Boolean {
+        val (entry, session) = synchronized(lock) {
+            val entry = sessions[id] ?: return false
+            if (entry.owner != owner || entry.stopping || entry.finished) return false
+            val session = entry.session ?: return false
+            entry.callbacks++
+            entry to session
+        }
+        return try { operation(session) } finally { callbackFinished(entry) }
+    }
+
     /** Wait for a pending launch, then close its direct child before returning. */
     fun stop(id: Int) { stopEntry(null, id) }
 
     fun stop(entry: Entry<T>) { stopEntry(entry, entry.id) }
 
-    private fun stopEntry(expected: Entry<T>?, id: Int) {
+    /** The callback token selects a generation before any blocking close takes place. */
+    fun stopOwned(id: Int, owner: Any): Boolean {
+        val entry = synchronized(lock) { sessions[id]?.takeIf { it.owner == owner } } ?: return false
+        return stopEntry(entry, id)
+    }
+
+    private fun stopEntry(expected: Entry<T>?, id: Int): Boolean {
         val (entry, leader) = synchronized(lock) {
-            val entry = sessions[id] ?: return
-            if (expected != null && entry !== expected) return
+            val entry = sessions[id] ?: return false
+            if (expected != null && entry !== expected) return false
             entry to (!entry.stopping).also { entry.stopping = true }
         }
         if (!leader) {
             entry.stopped.await()
             synchronized(lock) { entry.stopFailure }?.let { throw IllegalStateException("Direct child stop failed", it) }
-            return
+            return true
         }
         try {
             entry.ready.await()
@@ -123,6 +150,7 @@ internal class RuntimeProcessRegistry<T : Any>(private val close: (T) -> Unit) {
             synchronized(lock) { entry.stopFailure = failure }
             throw failure
         } finally { entry.stopped.countDown() }
+        return true
     }
 
     /** Close admission before draining; launchers already in flight must finish publishing. */

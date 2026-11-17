@@ -19,6 +19,7 @@
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import com.android.build.api.attributes.BuildTypeAttr
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -28,6 +29,12 @@ plugins {
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+// The KMP Android device-test configuration has no build type by default. Without an explicit
+// preference Gradle chooses release for :core-bindings and compiles a second Rust ABI set.
+configurations.matching { it.name == "androidDeviceTestRuntimeClasspath" }.configureEach {
+    attributes.attribute(BuildTypeAttr.ATTRIBUTE, objects.named<BuildTypeAttr>("debug"))
 }
 
 // The app version is one scheme for every client: the semantic version in the

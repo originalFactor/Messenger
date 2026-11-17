@@ -9,6 +9,78 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RuntimeProcessRegistryTest {
+    @Test fun failedChildWaitDoesNotReportExit() {
+        val exits = mutableListOf<Int>()
+        notifyConfirmedChildExit({ throw IllegalStateException("wait failed") }) { exits.add(it) }
+        assertTrue(exits.isEmpty())
+        notifyConfirmedChildExit({ 17 }) { exits.add(it) }
+        assertEquals(listOf(17), exits)
+    }
+
+    @Test fun ownedInputPinsGenerationUntilWriteReturnsAndRejectsOldOwnerAfterReuse() {
+        val registry = RuntimeProcessRegistry<String> { }
+        val oldOwner = Any()
+        val replacementOwner = Any()
+        val old = checkNotNull(registry.reserve(7, oldOwner))
+        assertTrue(registry.publish(old, "old"))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writes = Collections.synchronizedList(mutableListOf<String>())
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val write = executor.submit<Boolean> {
+                registry.withOwned(7, oldOwner) { child ->
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    writes.add(child)
+                    true
+                }
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            registry.finished(old)
+            assertNull(registry.reserve(7, replacementOwner))
+            release.countDown()
+            assertTrue(write.get(5, TimeUnit.SECONDS))
+            val replacement = checkNotNull(registry.reserve(7, replacementOwner))
+            assertTrue(registry.publish(replacement, "new"))
+            assertFalse(registry.withOwned(7, oldOwner) { writes.add(it); true })
+            assertTrue(registry.withOwned(7, replacementOwner) { writes.add(it); true })
+            assertEquals(listOf("old", "new"), writes)
+        } finally { release.countDown(); executor.shutdownNow() }
+    }
+
+    @Test fun ownerBoundStopCannotStopReplacementAfterIdReuse() {
+        val closed = mutableListOf<String>()
+        val registry = RuntimeProcessRegistry<String> { closed.add(it) }
+        val oldOwner = Any()
+        val newOwner = Any()
+        val old = checkNotNull(registry.reserve(7, oldOwner))
+        assertTrue(registry.publish(old, "old"))
+        registry.finished(old)
+        val replacement = checkNotNull(registry.reserve(7, newOwner))
+        assertTrue(registry.publish(replacement, "new"))
+        assertFalse(registry.stopOwned(7, oldOwner))
+        assertEquals("new", registry.get(7))
+        assertTrue(closed.isEmpty())
+        assertTrue(registry.stopOwned(7, newOwner))
+        assertEquals(listOf("new"), closed)
+    }
+
+    @Test fun ownerBoundStopWaitsForItsLaunchingChild() {
+        val closed = Collections.synchronizedList(mutableListOf<String>())
+        val registry = RuntimeProcessRegistry<String> { closed.add(it) }
+        val owner = Any()
+        val entry = checkNotNull(registry.reserve(7, owner))
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            assertFalse(registry.stopOwned(7, Any()))
+            val stop = executor.submit<Boolean> { registry.stopOwned(7, owner) }
+            registry.publish(entry, "child")
+            assertTrue(stop.get(5, TimeUnit.SECONDS))
+            assertEquals(listOf("child"), closed)
+        } finally { executor.shutdownNow() }
+    }
+
     @Test fun staleCompletionCannotRemoveAReusedId() {
         val closed = mutableListOf<String>()
         val registry = RuntimeProcessRegistry<String> { closed.add(it) }

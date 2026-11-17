@@ -115,7 +115,7 @@ class RoomAcpBackgroundOwnerTest {
 
     private suspend fun owner(db: LocalDatabase, binding: AcpWorkerBinding, lifecycle: RoomManagedShutdown,
         factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess, source: AcpSessionConfigurationSource = AcpSessionConfigurationSource { binding to config },
-        fence: Fence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {},
+        fence: AcpConfigurationFence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {},
         foreground: () -> (() -> Unit) = { {} }, afterAdmission: suspend () -> Unit = {}, beforeHandoff: suspend () -> Unit = {}, allowByokTakeover: Boolean = false) =
         RoomAcpBackgroundOwner.attach(db, Path.of(db.openHelperPathForTest()), lifecycle, AcpPriorOwnerBarrier { }, fence, source,
             AcpPublishedMcpCatalog { emptyList() }, backend, { false }, factory, now = { 1000 }, retainReusableWorkers = reuse,
@@ -123,6 +123,35 @@ class RoomAcpBackgroundOwnerTest {
 
     private suspend fun LocalDatabase.openHelperPathForTest(): String = useReaderConnection { connection ->
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
+    }
+
+    @Test fun concreteFenceLetsWriterProceedOnlyAfterRealAcpProcessStops(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-concrete-fence")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val fence = InProcessAcpConfigurationFence()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        var transport: AcpStdioWorkerTest.FixtureTransport? = null
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                val wire = AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace)).also { transport = it }
+                AcpStdioWorker(wire, AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config }, fence = fence)
+            val turn = UUID.randomUUID().toString()
+            owner.start(turn, binding.conversationId, Json.parseToJsonElement("""[{"type":"text","text":"wait"}]""").jsonArray)
+            withTimeout(10_000) { while (!owner.events(turn, 0).toString().contains("partial")) delay(10) }
+            val writer = async(start = CoroutineStart.UNDISPATCHED) { owner.withConfigurationWrite {
+                assertFalse(checkNotNull(transport).isProcessAlive())
+                val project = checkNotNull(db.rows().project("project"))
+                db.rows().upsertProjects(listOf(project.copy(name = "Updated")))
+            } }
+            assertFalse(writer.isCompleted)
+            assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            assertTrue(owner.cancel(turn))
+            withTimeout(10_000) { writer.await() }
+            assertEquals("Updated", db.rows().project("project")?.name)
+        } finally { lifecycle.stopAndAwait(); db.close(); dir.toFile().deleteRecursively() }
     }
 
     @Test fun optedInByokTakeoverUsesRoomScopeThroughRealStdioAndRelay(): Unit = runBlocking {

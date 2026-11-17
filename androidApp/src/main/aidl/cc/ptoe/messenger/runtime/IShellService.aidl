@@ -42,4 +42,9 @@ interface IShellService {
     // Versioned synchronous grep: runs the immutable packaged binary and joins its process.
     int safeWorkspaceProtocol();
     cc.ptoe.messenger.runtime.ToolResult safeWorkspaceGrep(String root, String pattern, String path, String fileGlob, boolean caseSensitive, boolean fixedString, int maxResults);
+    // Callback-bound ACP stop; support is advertised separately for older companions.
+    int acpStopProtocol();
+    boolean stopAcpProcessOwned(int sessionId, IMcpCallback callback);
+    // Protocol version 2 also binds input frames to the original callback.
+    boolean sendAcpInputOwned(int sessionId, String line, IMcpCallback callback);
 }
