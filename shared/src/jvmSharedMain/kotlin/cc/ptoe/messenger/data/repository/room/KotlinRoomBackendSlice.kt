@@ -109,6 +109,7 @@ internal class KotlinRoomBackendSlice private constructor(
     val deviceHost: IsolatedRoomDeviceHost?,
     private val mcpOwner: McpManagerOwner?,
     private val mcpExecutionEnabled: Boolean,
+    private val clearAll: suspend () -> Unit,
 ) {
     /** Experimental only: never expose this backend to production until parity is established. */
     fun asAppBackend(): AppBackend {
@@ -118,7 +119,7 @@ internal class KotlinRoomBackendSlice private constructor(
         check(acpOwner == null && deviceHost == null) { "ACP and device host are unavailable in the isolated AppBackend" }
         return AppBackend(stores, bridge, providers, models, agents, conversations, projects, messages,
             currentAgent, learning, shutdown = { shutdownOwner.stopAndAwait() },
-            clearLocalData = { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") },
+            clearLocalData = clearAll,
             artifactUiHost = artifactUiHost, platformToolsEnabled = false,
             mcpOwner = mcpOwner, mcpExecutionEnabled = mcpExecutionEnabled,
             turnFailureNotices = TurnFailureNotices(turnStore.observeFailures().map { failures ->
@@ -148,6 +149,7 @@ internal class KotlinRoomBackendSlice private constructor(
             previousChatWorkersStopped: PreviousChatWorkersStopped? = null,
             turnProvider: KotlinTurnProvider? = null,
             mcpConnections: IsolatedRoomMcpConfig? = null,
+            clearAll: IsolatedRoomClearAllConfig? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             val recoveryStore = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
@@ -276,10 +278,14 @@ internal class KotlinRoomBackendSlice private constructor(
                 remoteCancel = rawBridge.remoteCancel, remoteDecision = rawBridge.remoteDecision, remotePrompt = rawBridge.remotePrompt) }
             return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
-                artifactHost, attachedDeviceHost, mcpOwner, mcpConnections?.enableExecution == true)
+                artifactHost, attachedDeviceHost, mcpOwner, mcpConnections?.enableExecution == true,
+                clearAll?.run ?: { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") })
         }
     }
 }
+
+/** Explicit isolated reset proof. The caller must prove exclusive stopped ownership and external cleanup. */
+internal class IsolatedRoomClearAllConfig(val run: suspend () -> Unit)
 
 /** Explicitly isolated test owner; platform startup must not enable execution without parity. */
 internal class IsolatedRoomMcpConfig(val bridgeFactory: () -> McpProcessBridge = ::createPlatformMcpBridge,

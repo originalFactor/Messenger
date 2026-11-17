@@ -390,8 +390,10 @@ class KotlinRoomAppBackendTest {
             val base = "http://127.0.0.1:${server.address.port}"
             val appPreferences = AppPreferences(prefs)
             appPreferences.setMcpServersJson("""[{"id":"external","name":"External","transportType":"SSE","isEnabled":true,"url":"$base/mcp"}]""")
+            var clearProofCalls = 0
             val slice = KotlinRoomBackendSlice.attach(db, lifecycle, appPreferences, ThemePreferences(prefs),
-                assets, dir.resolve("avatars"), dir.resolve("images"), base, "$base/models.json")
+                assets, dir.resolve("avatars"), dir.resolve("images"), base, "$base/models.json",
+                clearAll = IsolatedRoomClearAllConfig { clearProofCalls++ })
             val backend = slice.asAppBackend()
             CoreBridgeRegistry.bridge = backend.coreBridge
             val images = ChatImageStore::class.java.cast(Proxy.newProxyInstance(ChatImageStore::class.java.classLoader,
@@ -532,7 +534,8 @@ class KotlinRoomAppBackendTest {
             db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", pagedRecord)))
             assertEquals(2, requests.get(), "history must not start a provider or ACP worker")
             assertEquals(0, mcpRequests.get())
-            assertFailsWith<IllegalStateException> { app.clearAllDataAndReinit() }
+            app.clearAllDataAndReinit()
+            assertEquals(1, clearProofCalls)
             assertEquals(listOf("hello", "reply"), app.messageRepository.getByConversationId("c").first().map { it.content })
             assertEquals("a", app.agentRepository.getDefaultAgent().first()?.id)
             app.shutdown()
