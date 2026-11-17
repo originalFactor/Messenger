@@ -4,6 +4,7 @@ package cc.ptoe.messenger.data.cloud
 import cc.ptoe.messenger.data.local.room.CloudSyncDao
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.RoomCloudSyncStore
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -92,6 +93,7 @@ internal class RoomCloudCoordinator(
     internal suspend fun rejectSession(session: SyncSession) = withContext(NonCancellable) {
         providerGate.invalidate(session)
         RoomWorkspaceExecutionFence.forDatabase(db).invalidateSession(session.accountId, session.generation)
+        RuntimeWorkspaceFence.forDatabase(db).invalidateAdmissions()
         mutex.withLock { expire(session) }
     }
     private fun bound(): StoredCloudSession = checkNotNull(active) { "Please sign in first" }

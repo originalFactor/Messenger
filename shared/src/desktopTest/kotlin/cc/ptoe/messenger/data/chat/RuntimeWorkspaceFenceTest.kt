@@ -3,6 +3,13 @@ package cc.ptoe.messenger.data.chat
 
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import cc.ptoe.messenger.data.cloud.CloudImageRehydrator
+import cc.ptoe.messenger.data.cloud.CloudUser
+import cc.ptoe.messenger.data.cloud.RoomAvatarCache
+import cc.ptoe.messenger.data.cloud.RoomCloudCoordinator
+import cc.ptoe.messenger.data.cloud.RoomCloudHttpClient
+import cc.ptoe.messenger.data.cloud.StoredCloudSession
+import cc.ptoe.messenger.data.cloud.SyncSession
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.ConversationRow
@@ -17,6 +24,7 @@ import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Project
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import java.nio.file.Files
+import okio.Path.Companion.toPath
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -33,6 +41,40 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RuntimeWorkspaceFenceTest {
+    @Test fun authenticatedCloud401RevokesRuntimeAdmissionBeforeDurableCleanup(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("workspace-cloud-401")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
+            .setDriver(BundledSQLiteDriver()).build()
+        val http = RoomCloudHttpClient()
+        val release = CompletableDeferred<Unit>()
+        try {
+            val host = "https://cloud.example"
+            val session = SyncSession("account", "generation")
+            val user = CloudUser(id = "account", aiApiKey = "secret")
+            db.cloudSync().saveCredentials(StoredCloudSession(session, "messenger_session=secret", host, user))
+            db.cloudSync().updateCloudUser(session, user, host)
+            val coordinator = RoomCloudCoordinator(db, http, host,
+                RoomAvatarCache(dir.resolve("avatars").toString().toPath()), CloudImageRehydrator(dir.resolve("images")))
+            coordinator.restore()
+            val tracker = InMemoryWorkspaceTracker()
+            val fence = RuntimeWorkspaceFence.forDatabase(db)
+            val started = CompletableDeferred<Unit>()
+            val token = "a".repeat(64)
+            val trackedHost = object : TrackedWorkspaceHost {
+                override val protocolAvailable = true
+                override val supportedOperations = setOf("read")
+                override suspend fun execute(token: String, workspace: String, call: ToolCallData): ToolExecutionResult = error("not used")
+                override suspend fun status(token: String) = tracker.status(token)
+                override suspend fun cancelAndAwaitStopped(token: String) = tracker.cancelAndAwaitStopped(token)
+            }
+            assertTrue(fence.mutate { true })
+            withTimeout(5_000) { coordinator.rejectSession(session) }
+            assertFailsWith<IllegalStateException> { fence.execute(token, trackedHost) { Unit } }
+            assertFailsWith<IllegalStateException> { fence.mutate { Unit } }
+            assertFailsWith<IllegalStateException> { fence.authoritySnapshot() }
+        } finally { release.complete(Unit); http.close(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun invalidationCancelsWithoutWaitingAndRecoveryWaitsForRealStop(): Unit = runBlocking {
         val dir = Files.createTempDirectory("workspace-cancel")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString())
