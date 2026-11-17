@@ -1,6 +1,6 @@
 <component name="ArtifactManager">
   <artifact type="jar" name="llm-typewriter-desktop">
-    <output-path>$PROJECT_DIR$/rendering/llm-typewriter/build/libs</output-path>
+    <output-path>$PROJECT_DIR$/rendering/llm-typewriter-repo/llm-typewriter/build/libs</output-path>
     <root id="archive" name="llm-typewriter-desktop.jar" />
   </artifact>
 </component>
