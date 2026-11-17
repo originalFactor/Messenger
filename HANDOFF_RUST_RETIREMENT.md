@@ -24,6 +24,8 @@
 2. `RoomWorkspaceExecutionFence.kt`、`RoomWorkspaceInvocationLedger.kt` 和对应测试（`ac0f9c5`）：持久 workspace invocation ledger 与隔离执行 fence 组合，旧仅内存执行入口禁用，完成结果保留 reservation 直到明确确认；取消或异常保留 reservation 直到 stop barrier 支持的显式确认。5 项 fence 测试、4 项 ledger 测试及关联的 ACP/控制设置/授权测试均通过。仍缺 Cloud 401 同步失效、所有写入者围栏、可信 sender 身份和真实 worker 进程树停止证明，不能接入生产。
 3. `workspace-transfer-shared/WorkspaceArchive.kt`、`WorkspaceTransfer.kt`、`AndroidWorkspaceCandidateStager.kt`、设备测试及两个 Gradle/AGENTS 文件（`32c01a6`）：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。共用源码注册到两个 Kotlin source set；Runtime 单元测试、Runtime/Android debug APK 和 instrumentation APK 构建通过。隔离 `emulator-5562` 上跨 UID 候选设备测试 1/1 通过，Runtime 工作区设备测试 5/5 通过（含 adbd root 创建后交给普通 Runtime UID 的真实硬链接夹具，已清理）。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束、来源快照一致或全局元数据无损。
 
+续作检查点：`1f1ba9b` 修复 `:shared:allTests` 的 5 项既有失败（委派 ACP 未知结果、Core sidecar 别名、scheduler proof 计数、image recovery 顺序及 Compose 测试污染），901 项测试通过、1 skipped。`core/rust/crates/messenger-http/src/lib.rs` 已让 `ServerHandle.stop()` join 随服务器启动的 remote-control 与 scheduler 循环，并有 1 项 Rust 回归测试；`cargo test --workspace` 通过（其中 `messenger-http` 143 项通过、2 ignored）。这仍不证明所有请求级任务、ACP/Runtime 后代或旧进程停止；Android 生产切换仍不可执行。Wine 11.21 的简单 Windows 文件创建/读取/删除检查通过，仅作为有限环境证据，不证明 NTFS ACL、持久化、链接或目录 fsync。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
@@ -44,7 +46,7 @@
 ## 关键未完成事项与建议顺序
 
 1. **继续隔离原型的安全边界。** 三组交接改动已恢复检查点；workspace ledger 的 stop barrier 只是接口，服务端不认证声称的 sender，workspace 文件候选不提供可信来源、完整元数据或全局一致快照。
-2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录了实际障碍：Rust `ServerHandle.stop()` 只等待 axum，未 join 所有后台任务；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩冒充平台证明。
+2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录了实际障碍：Rust `ServerHandle.stop()` 现在 join axum、remote-control 与 scheduler 循环，但仍未 join 所有请求级后台任务；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩冒充平台证明。
 3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
 4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
 5. **Desktop 与存储。** Windows 存储的 ACL、链接/路径和持久化及旧 Core/资源独占问题未解决；参见 `shared/docs/WINDOWS_ROOM_STORAGE.md`。macOS/Linux/Windows 都需真实设备或 CI 验证。Android 系统 SQLite 的事务、游标和 WAL 语义尚待真实设备验证，不能仅为减小包而替换 driver。

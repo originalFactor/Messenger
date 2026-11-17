@@ -53,6 +53,7 @@ use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
     sync::{broadcast, mpsc, oneshot, Mutex},
+    task::JoinSet,
 };
 use tokio_stream::{
     wrappers::{BroadcastStream, UnboundedReceiverStream},
@@ -318,6 +319,7 @@ pub struct ServerHandle {
     pub token: String,
     shutdown: CancellationToken,
     task: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
+    background: JoinSet<()>,
 }
 
 impl ServerHandle {
@@ -349,7 +351,8 @@ impl ServerHandle {
             shutdown.clone(),
             wait_for_catalog,
         );
-        tokio::spawn(Arc::clone(&state.remote).run_with_control(
+        let mut background = JoinSet::new();
+        background.spawn(Arc::clone(&state.remote).run_with_control(
             Arc::new(LocalClientExecutor {
                 pending: Arc::clone(&state.pending_tools),
                 events: state.events.clone(),
@@ -357,7 +360,7 @@ impl ServerHandle {
             Some(Arc::new(control::DeviceControl(state.clone()))),
             shutdown.clone(),
         ));
-        tokio::spawn(scheduled_tasks::run(state.clone()));
+        background.spawn(scheduled_tasks::run(state.clone()));
         let router = router(state);
         let shutdown_for_task = shutdown.clone();
         let task = tokio::spawn(async move {
@@ -370,6 +373,7 @@ impl ServerHandle {
             token,
             shutdown,
             task: Some(task),
+            background,
         })
     }
 
@@ -379,11 +383,26 @@ impl ServerHandle {
 
     pub async fn stop(mut self) -> Result<(), std::io::Error> {
         self.shutdown.cancel();
-        if let Some(task) = self.task.take() {
+        let result = if let Some(task) = self.task.take() {
             task.await
                 .map_err(|e| std::io::Error::other(e.to_string()))?
         } else {
             Ok(())
+        };
+        let mut failure = result.err();
+        while let Some(result) = self.background.join_next().await {
+            if let Err(error) = result {
+                let detail = error.to_string();
+                if failure.is_none() {
+                    failure = Some(std::io::Error::other(detail));
+                } else {
+                    eprintln!("messenger-http: background task failed during stop: {detail}");
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 }
@@ -3921,6 +3940,19 @@ mod tests {
         );
         stopped
             .expect("stop must not wait for the endless /events stream")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_joins_the_remote_and_scheduler_background_tasks() {
+        let server = ServerHandle::start_local(Arc::new(Store::open_memory().unwrap()))
+            .await
+            .unwrap();
+        let background = server.background.len();
+        assert_eq!(background, 2, "remote and scheduler tasks must be tracked");
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.stop())
+            .await
+            .expect("stop must join tracked background tasks")
             .unwrap();
     }
 

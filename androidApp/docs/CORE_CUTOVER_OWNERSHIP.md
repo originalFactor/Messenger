@@ -6,13 +6,15 @@ Core/source users, Runtime and ACP workers, and new Room users for the full
 database and asset lifetime. A check that merely observes a quiet instant is
 not a fence. The current code does not provide the required platform proof.
 
-The old Core API's `ServerHandle.stop()` cancels its shutdown token and joins
-the axum server task. It does not join the separately spawned scheduler, chat,
-ACP, image, remote-control and relay tasks. `HttpServerHandle.stop()` delegates
-to this operation, and the Rust Core handle separately owns an `Arc<Store>`.
-Consequently a successful HTTP stop is not evidence that all Core tasks and
-SQLite descriptors are gone. The Android application currently keeps its
-server handle and has no complete shutdown-and-join handoff.
+The old Core API's `ServerHandle.stop()` cancels its shutdown token, joins the
+axum server task and now joins the remote-control and scheduler loops started
+with that server. It still does not join every request-spawned chat, ACP, image,
+control, delegation or relay task, nor any task outside the HTTP crate.
+`HttpServerHandle.stop()` delegates to this operation, and the Rust Core handle
+separately owns an `Arc<Store>`. Consequently a successful HTTP stop is still
+not evidence that all Core tasks and SQLite descriptors are gone. The Android
+application currently keeps its server handle and has no complete
+shutdown-and-join handoff.
 
 `CoreSourceSqliteLease` holds `BEGIN IMMEDIATE` and validates SQLite source
 and sidecar identities. It is an additional database consistency guard, not a
