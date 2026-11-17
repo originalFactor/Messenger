@@ -60,6 +60,8 @@
 
 隔离 Runtime workspace fence 的 Cloud 401 接线继续补齐：`RoomCloudCoordinator.rejectSession` 在等待 durable credential clearing 之前同步调用 `RuntimeWorkspaceFence.invalidateAdmissions()`，使精确 authenticated 401 立即拒绝后续 Runtime dispatch 和参与 mutation，并保留 ambiguous operation 的 exact-host stop recovery。新增 `authenticatedCloud401RevokesRuntimeAdmissionBeforeDurableCleanup`；定向 Runtime/Cloud/workspace 测试通过。它仍不证明 Android Runtime 独立 UID 后代停止，logout/其他 session writer 与全写入者围栏仍缺，不能接入生产。
 
+最新稳定检查点：`2079ef2`。之后尝试过进一步拆分 Cloud gate 的 bounded revocation receipt，但该状态机测试与既有语义冲突，已完整回退且未提交；接手者不要从临时日志恢复该实验。当前已提交状态下 `:shared:allTests` 全绿，CI selector/audit fixture 通过，严格审计仍为 `blocking_references=29`、`rust_workspace=present`、`native_bindings=present`。剩余的生产启动切换明确需要 Android/Desktop 平台所有权与 worker/进程树停止证明、旧 Core 源和 Runtime/ACP 后代排除、安装升级/恢复/掉电测试，以及 Windows/macOS 真机或用户提供的人工验证；按用户要求不再用 Linux/Wine/测试桩绕过这些步骤。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
