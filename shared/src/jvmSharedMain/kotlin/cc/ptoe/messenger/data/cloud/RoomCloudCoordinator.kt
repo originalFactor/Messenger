@@ -91,6 +91,7 @@ internal class RoomCloudCoordinator(
     }
     internal suspend fun rejectSession(session: SyncSession) = withContext(NonCancellable) {
         providerGate.invalidate(session)
+        RoomWorkspaceExecutionFence.forDatabase(db).invalidateSession(session.accountId, session.generation)
         mutex.withLock { expire(session) }
     }
     private fun bound(): StoredCloudSession = checkNotNull(active) { "Please sign in first" }

@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import okio.Path.Companion.toPath
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -93,6 +94,45 @@ class RoomWorkspaceExecutionFenceTest {
             }
             assertFailsWith<IllegalStateException> { gate.mutate { Unit } }
             assertNotNull(gate.pendingRecovery())
+        }
+    }
+
+    @Test fun cloudCoordinatorRejectSessionInvalidatesTheMatchingWorkspaceFence(): Unit = runBlocking {
+        fixture { db, gate ->
+            val http = RoomCloudHttpClient()
+            val host = "https://cloud.example"
+            val session = SyncSession("account", "generation")
+            val user = CloudUser(id = "account", aiApiKey = "secret")
+            db.cloudSync().saveCredentials(StoredCloudSession(session, "messenger_session=secret", host, user))
+            db.cloudSync().updateCloudUser(session, user, host)
+            val coordinator = RoomCloudCoordinator(db, http, host,
+                RoomAvatarCache(Files.createTempDirectory("cloud-401-avatars").toString().toPath()),
+                CloudImageRehydrator(Files.createTempDirectory("cloud-401-images")))
+            coordinator.restore()
+            coordinator.rejectSession(session)
+            assertFailsWith<IllegalStateException> { gate.mutate { Unit } }
+            assertFailsWith<IllegalStateException> {
+                gate.executeDurable(scope, "messenger_session=secret", call.copy(callId = "after-coordinator-401")) { _, _ ->
+                    WorkspaceExecutionOutcome.Stopped("must not dispatch", false)
+                }
+            }
+            val newerDir = Files.createTempDirectory("workspace-fence-new-session")
+            val newerDb = Room.databaseBuilder<LocalDatabase>(name = newerDir.resolve("store.db").toString())
+                .setDriver(BundledSQLiteDriver()).build()
+            try {
+                newerDb.rows().upsertValues(listOf(
+                    KeyValueRow("kotlin_sync_session", "[\"account\",\"new-generation\"]"), KeyValueRow("device_id", "device"),
+                    KeyValueRow("cloud_session", "messenger_session=secret"), KeyValueRow("cloud_session_host", host),
+                    KeyValueRow("cloud_user_json", "{\"id\":\"account\"}"),
+                ))
+                newerDb.rows().upsertProjects(listOf(ProjectRow("project", "Project", "/workspace", "device", 1, 1)))
+                val newer = RoomWorkspaceExecutionFence.forDatabase(newerDb)
+                val newerScope = scope.copy(generation = "new-generation")
+                newer.executeDurable(newerScope, "messenger_session=secret", call) { _, _ ->
+                    WorkspaceExecutionOutcome.Stopped("new session", false)
+                }
+                assertNotNull(newer.pendingRecovery())
+            } finally { newerDb.close(); newerDir.toFile().deleteRecursively(); http.close() }
         }
     }
 
