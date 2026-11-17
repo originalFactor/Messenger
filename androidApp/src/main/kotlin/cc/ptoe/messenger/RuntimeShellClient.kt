@@ -147,6 +147,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
     private var cached: IShellService? = null
     private var connectLatch: CompletableDeferred<IShellService?>? = null
     private val mcpConnections = mutableMapOf<Int, McpConnection>()
+    private val acpConnections = AcpRuntimeConnections<IBinder>()
 
     /** One session stays bound to the Runtime process that accepted its start call. */
     private inner class McpConnection(
@@ -198,6 +199,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
                 previous
             }
             disconnectMcp(binder)
+            if (binder != null) acpConnections.disconnect(binder)
         }
 
         override fun onBindingDied(name: ComponentName?) {
@@ -210,6 +212,7 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
                 previous
             }
             disconnectMcp(binder)
+            if (binder != null) acpConnections.disconnect(binder)
         }
     }
 
@@ -371,19 +374,24 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
         val service = service() ?: error("Messenger Runtime is unavailable.")
         val id = requestIds.getAndIncrement()
         val stdout = Channel<String>(32)
+        val binder = service.asBinder()
+        val session = synchronized(connectLock) {
+            check(cached?.asBinder() === binder) { "Messenger Runtime disconnected before ACP start." }
+            acpConnections.register(id, binder) { failure -> stdout.close(failure) }
+        }
         val callback = object : IMcpCallback.Stub() {
             override fun onOutput(reqId: Int, line: String?) {
-                if (line != null && !stdout.trySend(line).isSuccess) {
+                if (reqId == id && line != null && !stdout.trySend(line).isSuccess) {
                     stdout.close(IllegalStateException("ACP stdout buffer exceeded"))
                 }
             }
             override fun onError(reqId: Int, error: String?) = Unit
-            override fun onClosed(reqId: Int, exitCode: Int) { stdout.close() }
+            override fun onClosed(reqId: Int, exitCode: Int) { if (reqId == id) acpConnections.closed(session, exitCode) }
         }
-        val death = IBinder.DeathRecipient { stdout.close() }
-        val binder = service.asBinder()
-        binder.linkToDeath(death, 0)
+        val death = IBinder.DeathRecipient { acpConnections.lost(session) }
+        var failure: Throwable? = null
         try {
+            binder.linkToDeath(death, 0)
             check(service.startAcpProcess(id, channel.command, channel.arguments.toTypedArray(),
                 channel.envJson, channel.cwd, callback)) {
                 "Messenger Runtime could not start the ACP agent."
@@ -402,10 +410,24 @@ class RuntimeShellClient(private val context: Context) : ShellRuntimeBridge, Tra
                     input.cancel()
                 }
             }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
         } finally {
-            binder.unlinkToDeath(death, 0)
-            runCatching { service.stopAcpProcess(id) }
+            // Stop on the original Binder. A replacement service cannot prove its child exited.
+            acpConnections.beginStop(session)
+            val stopFailure = runCatching { service.stopAcpProcess(id) }.exceptionOrNull()
+            runCatching { binder.unlinkToDeath(death, 0) }
+            acpConnections.abandon(session)
             stdout.cancel()
+            val uncertain = stopFailure?.let { IllegalStateException("Messenger Runtime could not confirm ACP process stop.", it) }
+                ?: session.terminalError
+            if (uncertain != null) {
+                if (failure == null || failure is CancellationException) {
+                    failure?.let(uncertain::addSuppressed)
+                    throw uncertain
+                } else if (failure !== uncertain) failure.addSuppressed(uncertain)
+            }
         }
     }
 
