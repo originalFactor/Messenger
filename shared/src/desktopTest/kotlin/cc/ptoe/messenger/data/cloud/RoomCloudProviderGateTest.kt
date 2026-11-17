@@ -32,6 +32,31 @@ import okio.Path.Companion.toPath
 import kotlin.test.*
 
 class RoomCloudProviderGateTest {
+    @Test fun invalidationBoundReplacesStaleGenerationWithoutRevokingNewSession(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-cloud-invalidation-bound")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val dao = db.cloudSync()
+        val gate = RoomCloudProviderGate.forTesting(dao, KotlinTurnProvider { _, _ -> flow { awaitCancellation() } }, 2)
+        try {
+            val stale = SyncSession("account", "old")
+            val fresh = SyncSession("account", "fresh")
+            dao.activate(stale)
+            gate.invalidate(stale)
+            assertFailsWith<IllegalStateException> { gate.requireValid(stale) }
+            dao.activate(fresh)
+            gate.invalidate(stale)
+            gate.requireValid(fresh)
+            val permit = gate.registerToolPermit(fresh)
+            assertEquals("fresh", permit.authorize { "fresh" })
+            permit.release()
+            gate.invalidate(SyncSession("second", "generation"))
+            gate.invalidate(SyncSession("third", "generation"))
+            gate.invalidate(SyncSession("fourth", "generation"))
+            gate.requireValid(stale)
+            gate.requireValid(fresh)
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun toolPermitRemainsRevokedAfterDurableSignOutAndDoesNotRevokeNewSession(): Unit = runBlocking {
         val dir = Files.createTempDirectory("cloud-tool-permit")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()

@@ -61,14 +61,15 @@ import okhttp3.Request as HttpRequest
  * The owning Room lease must exclude other database instances and all direct credential writers. */
 class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     private val upstream: KotlinTurnProvider, private val closeTransport: () -> Unit,
-    private val beforeRegistration: suspend () -> Unit = {}) {
+    private val beforeRegistration: suspend () -> Unit = {}, private val invalidationLimit: Int = 64) {
     private data class Request(val session: SyncSession, val job: Job, val revoked: AtomicBoolean)
     private val mutex = Mutex()
     private val deviceFence = RoomDeviceControlFence.forDao(dao)
     private val admissionLock = Any()
     private val requests = mutableSetOf<Request>()
     private val toolPermits = mutableSetOf<ToolPermit>()
-    private val invalidated = mutableSetOf<SyncSession>()
+    private val invalidated = mutableMapOf<String, SyncSession>()
+    private val invalidationOrder = ArrayDeque<String>()
     private var stopped = false
     private val externalRequestContext = ThreadLocal<Boolean>()
     private val externalHttp = lazy {
@@ -118,9 +119,9 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
         }
         /** Tests may inject a controlled cooperative stream before any owner obtains the gate. */
         fun forTesting(dao: CloudSyncDao, upstream: KotlinTurnProvider,
-            beforeRegistration: suspend () -> Unit = {}): RoomCloudProviderGate = synchronized(gates) {
+            invalidationLimit: Int = 64, beforeRegistration: suspend () -> Unit = {}): RoomCloudProviderGate = synchronized(gates) {
             check(gates[dao]?.get() == null) { "Cloud gate already exists" }
-            RoomCloudProviderGate(dao, upstream, {}, beforeRegistration).also { gates[dao] = WeakReference(it) }
+            RoomCloudProviderGate(dao, upstream, {}, beforeRegistration, invalidationLimit).also { gates[dao] = WeakReference(it) }
         }
         private fun forget(dao: CloudSyncDao, gate: RoomCloudProviderGate) = synchronized(gates) {
             if (gates[dao]?.get() === gate) gates.remove(dao)
@@ -132,15 +133,17 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
 
     /** Linearization point for work derived from a Cloud turn, including tool claims. */
     internal fun requireValid(session: SyncSession) = synchronized(admissionLock) {
-        check(!stopped && session !in invalidated) { "Cloud session expired" }
+        check(!stopped && !isInvalidated(session)) { "Cloud session expired" }
     }
+
+    private fun isInvalidated(session: SyncSession): Boolean = invalidated[session.accountId] == session
 
     /** A permit survives removal of the session's invalidation marker after durable logout. */
     internal inner class ToolPermit internal constructor(internal val session: SyncSession) {
         private var revoked = false
         internal fun revoke() { revoked = true }
         internal fun <T> authorize(block: () -> T): T = synchronized(admissionLock) {
-            check(!stopped && !revoked && this in toolPermits && session !in invalidated) { "Cloud session expired" }
+            check(!stopped && !revoked && this in toolPermits && !isInvalidated(session)) { "Cloud session expired" }
             block()
         }
         internal fun release() = synchronized(admissionLock) { toolPermits.remove(this); Unit }
@@ -148,7 +151,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
 
     /** Register only inside the same transaction that verified this exact session. */
     internal fun registerToolPermit(session: SyncSession): ToolPermit = synchronized(admissionLock) {
-        check(!stopped && session !in invalidated) { "Cloud session expired" }
+        check(!stopped && !isInvalidated(session)) { "Cloud session expired" }
         ToolPermit(session).also { toolPermits.add(it) }
     }
 
@@ -160,7 +163,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
         private var activeCall: Call? = null
         private val callbackDone = CompletableDeferred<Unit>()
         internal fun enqueue(request: HttpRequest, callback: Callback): Call = synchronized(admissionLock) {
-            check(!dispatched && !stopped && !revoked.get() && job.isActive && session !in invalidated &&
+            check(!dispatched && !stopped && !revoked.get() && job.isActive && !isInvalidated(session) &&
                 requests.any { it.session == session && it.job === job }) { "Cloud session expired or request already dispatched" }
             val target = runCatching { (expected.baseUrl.trimEnd('/') + "/chat/completions").toHttpUrl() }.getOrNull()
                 ?: error("Invalid Cloud provider URL")
@@ -228,7 +231,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             mutex.withLock {
                 dao.requireExternalProvider(session, expected)
                 synchronized(admissionLock) {
-                    check(!stopped && session !in invalidated) { "Cloud session expired" }
+                    check(!stopped && !isInvalidated(session)) { "Cloud session expired" }
                     requests.add(request)
                 }
             }
@@ -251,7 +254,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             val worker = launch(start = CoroutineStart.LAZY) {
                 try {
                     synchronized(admissionLock) {
-                        if (stopped || session in invalidated || revoked.get()) throw CloudSessionExpired()
+                        if (stopped || isInvalidated(session) || revoked.get()) throw CloudSessionExpired()
                     }
                     (if (completion) upstream.complete(round.provider, round.request) else upstream.stream(round.provider, round.request)).collect { events.send(it) }
                     events.close()
@@ -269,7 +272,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             try {
                 synchronized(admissionLock) {
                     check(!stopped) { "Cloud provider gate is closed" }
-                    check(session !in invalidated) { "Cloud session expired" }
+                    check(!isInvalidated(session)) { "Cloud session expired" }
                 }
                 mutex.withLock {
                     check(dao.currentSession() == session && dao.value(DEFERRED_BUILTIN_PROVIDER_CLEANUP) == null) { "Cloud session expired" }
@@ -280,7 +283,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
                     beforeRegistration()
                     synchronized(admissionLock) {
                         check(!stopped) { "Cloud provider gate is closed" }
-                        check(session !in invalidated) { "Cloud session expired" }
+                        check(!isInvalidated(session)) { "Cloud session expired" }
                         requests.add(request)
                     }
                 }
@@ -299,11 +302,32 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     /** Reject an exact session immediately, without waiting for Room or an in-flight reply. */
     internal fun invalidate(session: SyncSession) {
         val jobs = synchronized(admissionLock) {
-            invalidated.add(session)
-            toolPermits.filter { it.session == session }.forEach { it.revoke() }
-            requests.filter { it.session == session }.onEach { it.revoked.set(true) }.map { it.job }
+            val current = invalidated[session.accountId]
+            if (current != null && current.generation != session.generation && isInvalidated(current)) {
+                emptyList()
+            } else {
+                putInvalidation(session)
+                revokeExact(session)
+            }
         }
         jobs.forEach { it.cancel(CancellationException("Cloud session revoked")) }
+    }
+
+    private fun putInvalidation(session: SyncSession) {
+        invalidationOrder.remove(session.accountId)
+        invalidationOrder.addLast(session.accountId)
+        invalidated[session.accountId] = session
+        if (invalidated.size > invalidationLimit) {
+            repeat(invalidated.size - invalidationLimit) {
+                val oldest = invalidationOrder.removeFirst()
+                invalidated.remove(oldest)
+            }
+        }
+    }
+
+    private fun revokeExact(session: SyncSession): List<Job> {
+        toolPermits.filter { it.session == session }.forEach { it.revoke() }
+        return requests.filter { it.session == session }.onEach { it.revoked.set(true) }.map { it.job }
     }
 
     /** Invalidate first; durable revocation and worker drain may wait for other owners. */
@@ -316,7 +340,12 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             val cleared = mutex.withLock {
                 val cleared = deviceFence.mutate { dao.clearCredentialsIfCurrent(session) }
                 // No validated admission can pass the mutex until the old identity is gone.
-                if (cleared || dao.currentSession() != session) synchronized(admissionLock) { invalidated.remove(session) }
+                if (cleared || dao.currentSession() != session) synchronized(admissionLock) {
+                    if (invalidated[session.accountId] == session) {
+                        invalidated.remove(session.accountId)
+                        invalidationOrder.remove(session.accountId)
+                    }
+                }
                 cleared
             }
             val jobs = synchronized(admissionLock) { requests.filter { it.session == session }.map { it.job } }
