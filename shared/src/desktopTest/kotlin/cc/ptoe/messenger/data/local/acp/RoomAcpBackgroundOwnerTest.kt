@@ -185,6 +185,198 @@ class RoomAcpBackgroundOwnerTest {
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }
 
+    @Test fun successfulModeChangeUsesAgentResponseAndStopsWorker(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-success")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
+                arrayOf(CoreBridge::class.java)) { _, _, _ -> error("Unexpected delegate call") })
+            val bridge = KotlinAcpBackgroundBridge(delegate, owner, AcpNewSessionSource { _, _ -> error("Unexpected creation") })
+            var response: JsonObject? = null
+            withTimeout(10_000) { bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                put("action", "setSessionConfig"); put("sessionId", binding.conversationId); put("modeId", "code")
+            }) { response = it } }
+            val changed = checkNotNull(response).getValue("settings").jsonObject
+            assertEquals("code", changed.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            val marker = changed.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertFailsWith<IllegalStateException> { owner.confirmPendingMode(binding.conversationId, marker, "code") {} }
+            // This fixture starts a fresh agent in plan mode; inspection exposes that state.
+            val different = owner.inspectPendingMode(binding.conversationId) {}
+            assertEquals("plan", different.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            owner.confirmPendingMode(binding.conversationId, marker, "plan") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertFalse(owner.hasActiveTasks())
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun interruptedModeChangeSurvivesRestartUntilUserInspectsActualState(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-unknown")
+        val (db, binding) = fixture(dir)
+        val firstLifecycle = RoomManagedShutdown { }; firstLifecycle.enter()
+        val applied = CompletableDeferred<Unit>()
+        val remoteMode = java.util.concurrent.atomic.AtomicReference("plan")
+        val reportMode = java.util.concurrent.atomic.AtomicBoolean(true)
+        val calls = AtomicInteger()
+        fun worker(): AcpWorkerProcess = object : AcpWorkerProcess, AcpWorkerSettings {
+            override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+            override suspend fun sessionSettings() = buildJsonObject { put("modes", buildJsonObject {
+                if (reportMode.get()) put("currentModeId", remoteMode.get())
+                put("availableModes", JsonArray(listOf(buildJsonObject { put("id", "plan"); put("name", "Plan") }, buildJsonObject { put("id", "code"); put("name", "Code") })))
+            }) }
+            override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject { permit(); calls.incrementAndGet(); remoteMode.set(modeId); applied.complete(Unit); awaitCancellation() }
+            override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+            override suspend fun cancelAndConfirm() = false
+            override suspend fun stopAndAwait() = Unit
+        }
+        try {
+            val first = owner(db, binding, firstLifecycle, { _, _ -> worker() })
+            val call = async { first.setMode(binding.conversationId, "code") {} }
+            withTimeout(5_000) { applied.await() }
+            call.cancel()
+            withTimeout(5_000) { call.join() }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            firstLifecycle.stopAndAwait()
+            val secondLifecycle = RoomManagedShutdown { }; secondLifecycle.enter()
+            val second = owner(db, binding, secondLifecycle, { _, _ -> worker() })
+            assertFailsWith<IllegalStateException> { second.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            assertFailsWith<IllegalStateException> { second.setMode(binding.conversationId, "code") {} }
+            val read = second.sessionSettings(binding.conversationId)
+            assertEquals("code", read.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertTrue(read.getValue("_messengerCapabilities").jsonObject.getValue("modePending").jsonPrimitive.boolean)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            reportMode.set(false)
+            assertFailsWith<IllegalStateException> { second.inspectPendingMode(binding.conversationId) {} }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            reportMode.set(true)
+            val inspected = second.inspectPendingMode(binding.conversationId) {}
+            assertEquals("code", inspected.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val marker = inspected.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            remoteMode.set("plan")
+            val changed = second.confirmPendingMode(binding.conversationId, marker, "code") {}
+            assertEquals("plan", changed.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            second.confirmPendingMode(binding.conversationId, marker, "plan") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertEquals(1, calls.get())
+            secondLifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancellationAfterModeMarkerButBeforeSendDoesNotDispatch(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-before-send")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val sent = AtomicInteger()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+                override suspend fun sessionSettings() = buildJsonObject { put("modes", buildJsonObject {
+                    put("currentModeId", "plan"); put("availableModes", JsonArray(listOf(buildJsonObject { put("id", "code") })))
+                }) }
+                override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject {
+                    entered.complete(Unit)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await(); permit(); sent.incrementAndGet() }
+                    return sessionSettings()
+                }
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() = Unit
+            } })
+            val call = async { owner.setMode(binding.conversationId, "code") {} }
+            withTimeout(5_000) { entered.await() }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            call.cancel()
+            release.complete(Unit)
+            withTimeout(5_000) { call.join() }
+            assertEquals(0, sent.get())
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val inspected = owner.inspectPendingMode(binding.conversationId) {}
+            val marker = inspected.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            owner.confirmPendingMode(binding.conversationId, marker, "plan") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun failedModeResultDeliveryRetainsThePendingMarker(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-delivery")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            assertFailsWith<IllegalStateException> { owner.setMode(binding.conversationId, "code") { error("observer disconnected") } }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            var delivered: JsonObject? = null
+            owner.inspectPendingMode(binding.conversationId) { delivered = it }
+            assertTrue(delivered != null)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val marker = checkNotNull(delivered).getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            val current = checkNotNull(delivered).getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content
+            owner.confirmPendingMode(binding.conversationId, marker, current) {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun failedModeWorkerStopBlocksInspectionUntilOwnerProvesStop(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-stop")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val stops = AtomicInteger()
+        val foreground = Foreground()
+        try {
+            val originalOwner = owner(db, binding, lifecycle, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+                override suspend fun sessionSettings() = buildJsonObject { put("modes", buildJsonObject {
+                    put("currentModeId", "plan"); put("availableModes", JsonArray(listOf(buildJsonObject { put("id", "code") })))
+                }) }
+                override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject { permit(); error("connection closed after send") }
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() { if (stops.incrementAndGet() == 1) error("stop proof unavailable") }
+            } }, foreground = foreground::acquire)
+            assertFailsWith<IllegalStateException> { originalOwner.setMode(binding.conversationId, "code") {} }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            assertEquals(0, foreground.ends.get())
+            assertFailsWith<IllegalStateException> { originalOwner.inspectPendingMode(binding.conversationId) {} }
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+            assertEquals(1, foreground.ends.get())
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val recovery = RoomManagedShutdown { }; recovery.enter()
+            val next = owner(db, binding, recovery, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+                override suspend fun sessionSettings() = buildJsonObject { put("modes", buildJsonObject { put("currentModeId", "plan") }) }
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() = Unit
+            } })
+            val inspected = next.inspectPendingMode(binding.conversationId) {}
+            val marker = inspected.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
+            next.confirmPendingMode(binding.conversationId, marker, "plan") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            recovery.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun settingsStopFailureRetainsForegroundAndOwnerUntilShutdownRecovery(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-owner-settings-stop")
         val (db, binding) = fixture(dir)

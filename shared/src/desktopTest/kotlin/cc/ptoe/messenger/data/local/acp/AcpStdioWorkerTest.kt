@@ -75,6 +75,52 @@ class AcpStdioWorkerTest {
         } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
     }
 
+    @Test fun laterModeNotificationWinsEvenWhenResponseAlsoContainsModes(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-response-order")
+        val updateSeen = CompletableDeferred<Unit>()
+        val worker = AcpStdioWorker(FixtureTransport(dir, "settings-mode-after"), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {
+            override suspend fun settings(turnId: String?, settings: JsonObject) {
+                if ((settings["modes"] as? JsonObject)?.get("currentModeId")?.jsonPrimitive?.content == "plan") updateSeen.complete(Unit)
+            }
+        }, beforeModeResultMerge = { withTimeout(5_000) { updateSeen.await() } })
+        val gateway = AcpGatewayCore(backend, false, emptySet())
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "fixture-session", false)
+        try {
+            worker.start(binding, configuration(), gateway)
+            val changed = worker.setMode("code") {}
+            assertEquals("plan", changed.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+        } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancelledModeRequestWaitingForWireDoesNotObtainDispatchPermit(): Unit = runBlocking {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val permits = java.util.concurrent.atomic.AtomicInteger()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val transport = object : AcpLineTransport {
+            override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) = Unit
+            override suspend fun readLine(): String? = awaitCancellation()
+            override suspend fun sendLine(line: String) {
+                writes.incrementAndGet(); entered.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+            }
+            override suspend fun stopAndAwait() { release.complete(Unit) }
+        }
+        val peer = AcpJsonRpcPeer(transport, scope, { _, _ -> }, { _, _ -> JsonNull })
+        val dir = Files.createTempDirectory("acp-write-permit")
+        try {
+            peer.start(AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "session", false), configuration())
+            val first = async { peer.request("hold", JsonObject(emptyMap())) }
+            withTimeout(5_000) { entered.await() }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { peer.request("session/set_mode", JsonObject(emptyMap())) { permits.incrementAndGet() } }
+            second.cancelAndJoin()
+            assertEquals(0, permits.get())
+            assertEquals(1, writes.get())
+            release.complete(Unit)
+            first.cancelAndJoin()
+        } finally { release.complete(Unit); peer.closeAndAwait(); scope.cancel(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun createsANewAgentSessionThroughTheRealFixture(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-new-session")
         val worker = AcpStdioWorker(FixtureTransport(dir), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {})

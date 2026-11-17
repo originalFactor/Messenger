@@ -23,6 +23,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -90,6 +92,79 @@ class McpManagerReconcileTest {
             callbacks[command]?.invoke("""{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
         }
         override fun close() { allowClose.complete(Unit) }
+    }
+
+    @Test fun inventoryBindsExactClientsAcrossDisconnectAndReplacement(): Unit = runBlocking {
+        val preferences = AppPreferences(MemoryPreferences())
+        val original = listOf(config("a"), config("b"))
+        preferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), original))
+        val servers = Servers().apply { blockA.set(true) }
+        val manager = McpManager(preferences) { servers.bridge() }
+        try {
+            withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+            val first = manager.inventorySnapshot()
+            assertEquals(setOf("a_tool", "b_tool"), first.tools.map { it.name }.toSet())
+            (first.tools as MutableList<McpInventoryTool>).clear()
+            assertEquals(setOf("a_tool", "b_tool"), first.tools.map { it.name }.toSet())
+            assertTrue(manager.isInventoryCurrent(first))
+            servers.disconnect("b")
+            // The client invalidates its token synchronously, before the manager's observer runs.
+            assertFalse(manager.isInventoryCurrent(first))
+            val afterDisconnect = manager.inventorySnapshot()
+            assertEquals(listOf("a_tool"), afterDisconnect.tools.map { it.name })
+            val edit = async(Dispatchers.IO) { manager.saveServers(listOf(config("a", "new-a"), config("b"))) }
+            withTimeout(5_000) { servers.closeEntered.await() }
+            assertFalse(manager.isInventoryCurrent(afterDisconnect))
+            assertFailsWith<IllegalStateException> { manager.inventorySnapshot() }
+            servers.allowClose.complete(Unit)
+            withTimeout(5_000) { edit.await(); manager.toolInventoryReady.first { it } }
+            val replaced = manager.inventorySnapshot()
+            assertEquals(listOf("a_tool"), replaced.tools.map { it.name })
+            assertFalse(manager.isInventoryCurrent(first))
+            assertFalse(manager.isInventoryCurrent(afterDisconnect))
+            assertTrue(manager.isInventoryCurrent(replaced))
+            manager.shutdown()
+            assertFalse(manager.isInventoryCurrent(replaced))
+            assertFailsWith<IllegalStateException> { manager.inventorySnapshot() }
+        } finally { servers.close(); manager.shutdown() }
+    }
+
+    @Test fun inventoryRejectsAmbiguousAndReservedNamesWithoutChangingLegacyTools(): Unit = runBlocking {
+        for (case in 0..2) {
+            val preferences = AppPreferences(MemoryPreferences())
+            val configs = when (case) {
+                0 -> listOf(config("a").copy(name = "duplicate"), config("b").copy(name = "duplicate"))
+                1 -> listOf(config("a").copy(name = "messenger"))
+                else -> listOf(config("a"), config("a").copy(isEnabled = false))
+            }
+            preferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), configs))
+            val servers = Servers()
+            val manager = McpManager(preferences) { servers.bridge() }
+            try {
+                withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+                assertEquals(if (case == 0) 2 else 1, manager.activeTools.value.size)
+                assertFailsWith<IllegalArgumentException> { manager.inventorySnapshot() }
+            } finally { servers.close(); manager.shutdown() }
+        }
+    }
+
+    @Test fun inventoryBindingDoesNotFollowMutablePublishedSchema(): Unit = runBlocking {
+        val preferences = AppPreferences(MemoryPreferences())
+        preferences.setMcpServersJson(Json.encodeToString(ListSerializer(McpServerConfig.serializer()), listOf(config("a"))))
+        val servers = Servers()
+        val manager = McpManager(preferences) { servers.bridge() }
+        try {
+            withTimeout(5_000) { manager.toolInventoryReady.first { it } }
+            val snapshot = manager.inventorySnapshot()
+            val published = manager.activeTools.value.single() as McpChatTool
+            // JsonObject delegates entries to a mutable map; mutate an entry without publishing
+            // a new inventory so the saved binding must not share its backing object.
+            val entry = published.toolDef.inputSchema.entries.single() as MutableMap.MutableEntry<String, JsonElement>
+            entry.setValue(JsonPrimitive("string"))
+            assertEquals("object", snapshot.tools.single().parameters["type"]?.toString()?.trim('"'))
+            assertFalse(manager.isInventoryCurrent(snapshot))
+            assertEquals("string", manager.inventorySnapshot().tools.single().parameters["type"]?.toString()?.trim('"'))
+        } finally { servers.close(); manager.shutdown() }
     }
 
     @Test fun unexpectedDisconnectWithdrawsOnlyThatServersTools(): Unit = runBlocking {

@@ -3,6 +3,7 @@ package cc.ptoe.messenger.data.migration
 
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
 import androidx.sqlite.driver.bundled.SQLITE_OPEN_READWRITE
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -32,6 +33,37 @@ internal class CoreSourceSqliteLease private constructor(
     fun inspect(): CoreStoreInspection {
         verifyIdentity()
         return CoreStoreInspector.inspectTransaction(db)
+    }
+
+    /** Caller provides an isolated scratch snapshot and excludes path replacement and old writers. */
+    fun previewLegacySnapshot(snapshot: Path): LegacyRoomRecoveryPreview {
+        verifyIdentity()
+        val path = snapshot.toAbsolutePath().normalize()
+        val sourcePaths = listOf("").plus(listOf("-wal", "-shm", "-journal")).map { suffix ->
+            source.resolveSibling(source.fileName.toString() + suffix)
+        }
+        for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+            val candidate = path.resolveSibling(path.fileName.toString() + suffix)
+            if (Files.exists(candidate, NOFOLLOW_LINKS)) {
+                val attributes = Files.readAttributes(candidate, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                check(attributes.isRegularFile && !attributes.isSymbolicLink && coreSourceLinkCount(candidate) == 1L) {
+                    "Legacy snapshot and sidecars must be regular files without hard links"
+                }
+                for (sourcePath in sourcePaths) {
+                    if (Files.exists(sourcePath, NOFOLLOW_LINKS)) check(!Files.isSameFile(candidate, sourcePath)) {
+                        "Legacy snapshot aliases Core source"
+                    }
+                }
+            } else {
+                check(suffix.isNotEmpty() && Files.notExists(candidate, NOFOLLOW_LINKS)) { "Legacy snapshot is unavailable" }
+            }
+        }
+        verifyIdentity()
+        return BundledSQLiteDriver().open(path.toString(), SQLITE_OPEN_READONLY).use { legacy ->
+            legacy.prepare("BEGIN").use { it.step() }
+            try { LegacyRoomRecoveryInspection.compare(legacy, db).also { verifyIdentity() } }
+            finally { legacy.prepare("ROLLBACK").use { it.step() } }
+        }
     }
 
     fun fingerprint(): String {

@@ -50,7 +50,7 @@ internal class AcpJsonRpcPeer(
 
     suspend fun notify(method: String, params: JsonObject) = write(buildJsonObject { put("jsonrpc", "2.0"); put("method", method); put("params", params) })
 
-    suspend fun request(method: String, params: JsonObject): JsonElement {
+    suspend fun request(method: String, params: JsonObject, beforeWrite: () -> Unit = {}): JsonElement {
         val id = nextId.incrementAndGet()
         check(id > 0) { "ACP request ID exhausted" }
         val result = CompletableDeferred<JsonElement>()
@@ -61,7 +61,7 @@ internal class AcpJsonRpcPeer(
                 pending[id] = result
                 registered = true
             }
-            write(buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("method", method); put("params", params) })
+            write(buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("method", method); put("params", params) }, beforeWrite)
             return result.await()
         } finally {
             if (registered) withContext(NonCancellable) { gate.withLock { pending.remove(id, result) } }
@@ -104,10 +104,10 @@ internal class AcpJsonRpcPeer(
         worker.start()
     }
 
-    private suspend fun write(packet: JsonObject) {
+    private suspend fun write(packet: JsonObject, beforeWrite: () -> Unit = {}) {
         val line = packet.toString()
         require(line.encodeToByteArray().size <= 192_000) { "ACP line exceeds limit" }
-        writes.withLock { transport.sendLine(line) }
+        writes.withLock { currentCoroutineContext().ensureActive(); beforeWrite(); transport.sendLine(line) }
     }
 
     private suspend fun fail(message: String) {

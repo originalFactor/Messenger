@@ -8,6 +8,8 @@ import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
+import cc.ptoe.messenger.data.cloud.RoomRemoteTaskCancel
+import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.repository.LearningOwnership
@@ -123,6 +125,17 @@ internal class IsolatedCoreTurnBridge(
         }
         afterCancellationCapture()
         target.first.cancel(target.second)
+    }
+
+    /** Locate the same runner that admitted the task; the store rechecks all authority. */
+    val remoteCancel = RoomRemoteTaskCancel { scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String ->
+        require(!conversationId.startsWith("acp:")) { "ACP task cancellation is unavailable" }
+        val runner = lock.withLock {
+            val runtime = runtimes[conversationId] ?: error("Active turn belongs to another owner")
+            check(runtime.runner.ownsRunningJob(turnId)) { "Active turn belongs to another owner" }
+            runtime.runner
+        }
+        runner.cancelRemoteAuthenticatedAndAwait(scope, cookie, conversationId, turnId)
     }
 
     override suspend fun respondToolApproval(callId: String, approved: Boolean) {

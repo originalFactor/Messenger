@@ -809,6 +809,17 @@ class RoomKotlinTurnStore(
         rows.applyCancellation(turn, mark)
     } }
 
+    override suspend fun cancelRemoteAuthenticated(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String) { transaction { rows, mark ->
+        rows.requireRemoteControl(scope, conversationId, requireOwnedProject = false)
+        check(rows.getValue("cloud_session")?.value == cookie) { "Cloud session changed" }
+        checkNotNull(cloudGate) { "Cloud provider dispatch gate is unavailable" }.requireValid(SyncSession(scope.accountId, scope.generation))
+        check(rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Turn is no longer active" }
+        val turn = rows.read(turnId)
+        turn.requireOwner()
+        check(turn.conversationId == conversationId && turn.phase() !in terminal && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
+        rows.applyCancellation(turn, mark)
+    } }
+
     /** Only a compatible Runtime's durable STOPPED proof may release an ambiguous tool turn.
      * This does not claim the operation was rolled back; the user must inspect its outcome. */
     suspend fun reconcileInterruptedTool(turnId: String, host: TrackedWorkspaceHost): Boolean {

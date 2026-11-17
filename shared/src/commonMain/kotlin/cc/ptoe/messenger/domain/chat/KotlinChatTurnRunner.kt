@@ -119,6 +119,10 @@ interface KotlinTurnStore {
     suspend fun fail(turnId: String, detail: String)
     suspend fun cancel(turnId: String)
     suspend fun cancelRemote(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) { error("Remote cancellation unavailable") }
+    /** The cookie is ephemeral and must be checked atomically with the exact owned turn. */
+    suspend fun cancelRemoteAuthenticated(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String) {
+        error("Authenticated remote cancellation unavailable")
+    }
 }
 
 /** No state mutation is allowed while merely constructing a command. */
@@ -223,6 +227,16 @@ class KotlinChatTurnRunner(
         currentCoroutineContext().ensureActive()
         withContext(NonCancellable) {
             store.cancelRemote(scope, conversationId, expectedTurnId)
+            lock.withLock { running[expectedTurnId]?.cancel() }
+            awaitStopped(expectedTurnId)
+        }
+    }
+
+    /** Do not release the caller until the authorized worker and its cleanup have stopped. */
+    suspend fun cancelRemoteAuthenticatedAndAwait(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, expectedTurnId: String) {
+        currentCoroutineContext().ensureActive()
+        withContext(NonCancellable) {
+            store.cancelRemoteAuthenticated(scope, cookie, conversationId, expectedTurnId)
             lock.withLock { running[expectedTurnId]?.cancel() }
             awaitStopped(expectedTurnId)
         }

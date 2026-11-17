@@ -32,6 +32,7 @@ import kotlinx.serialization.json.*
 import org.jetbrains.compose.resources.stringResource
 
 internal data class AcpSettingChoice(val value: JsonElement, val name: String, val description: String, val group: String = "")
+private data class AcpSettingRow(val option: JsonObject, val legacyMode: Boolean)
 
 /** Older backends omit this field and retain their existing supported behavior. */
 internal fun acpBackendAllows(settings: JsonObject, capability: String): Boolean =
@@ -57,20 +58,27 @@ internal fun AcpSessionSettingsScreen(
     onDismiss: () -> Unit,
     onChange: (JsonObject) -> Unit,
     errorMessage: String? = null,
+    onInspectPendingMode: () -> Unit = {},
+    onConfirmPendingMode: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val editable = acpBackendAllows(settings, "settingsWritable")
-    val options = settings.objects("configOptions").filter { it.text("type") in listOf("select", "boolean") }.toMutableList()
+    val capabilities = settings["_messengerCapabilities"] as? JsonObject
+    val modeWritable = (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true
+    val modePending = (capabilities?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true
+    val modeInspected = (capabilities?.get("modeInspected") as? JsonPrimitive)?.booleanOrNull == true
+    val modePendingId = (capabilities?.get("modePendingId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    val options = settings.objects("configOptions").filter { it.text("type") in listOf("select", "boolean") }.map { AcpSettingRow(it, false) }.toMutableList()
     val modes = settings["modes"] as? JsonObject
     val modeLabel = stringResource(Res.string.acp_session_mode)
-    if (modes != null && options.none { it.text("category") == "mode" }) options += buildJsonObject {
+    if (modes != null && options.none { it.option.text("category") == "mode" }) options += AcpSettingRow(buildJsonObject {
         put("id", "legacy-mode"); put("name", modeLabel); put("type", "select")
         put("currentValue", modes["currentModeId"] ?: JsonNull)
         put("options", buildJsonArray { modes.objects("availableModes").forEach { mode -> add(buildJsonObject {
             put("value", mode.text("id")); put("name", mode.text("name")); put("description", mode.text("description"))
         }) } })
-    }
-    var choosing by remember { mutableStateOf<String?>(null) }
+    }, true)
+    var choosing by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     LaunchedEffect(editable) { if (!editable) choosing = null }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
         ExpressiveScaffold(
@@ -92,23 +100,35 @@ internal fun AcpSessionSettingsScreen(
                 Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (busy) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
-                    if (!editable) Text(stringResource(Res.string.acp_settings_read_only), style = MaterialTheme.typography.bodyMedium)
+                    if (!editable) Text(stringResource(if (modeWritable) Res.string.acp_settings_mode_only else Res.string.acp_settings_read_only), style = MaterialTheme.typography.bodyMedium)
+                    if (modePending) {
+                        if (modeInspected) {
+                            val current = ((modes?.get("currentModeId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull).orEmpty()
+                            Text(stringResource(Res.string.acp_mode_current, current), style = MaterialTheme.typography.bodyMedium)
+                            TextButton(enabled = !busy && !modePendingId.isNullOrBlank() && current.isNotBlank(),
+                                onClick = { onConfirmPendingMode(checkNotNull(modePendingId), current) }) { Text(stringResource(Res.string.acp_confirm_mode)) }
+                        } else {
+                            Text(stringResource(Res.string.acp_mode_uncertain), style = MaterialTheme.typography.bodyMedium)
+                            TextButton(enabled = !busy, onClick = onInspectPendingMode) { Text(stringResource(Res.string.acp_check_mode)) }
+                        }
+                    }
                     if (!errorMessage.isNullOrBlank()) Surface(shape = MaterialTheme.shapes.extraLarge,
                         color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
                         Text(errorMessage, Modifier.fillMaxWidth().padding(24.dp), style = MaterialTheme.typography.bodyMedium)
                     }
                     if (!busy && options.isEmpty()) Text(stringResource(Res.string.acp_no_session_settings), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        options.forEachIndexed { index, option -> key(option.text("id")) {
+                        options.forEachIndexed { index, row -> key(row.legacyMode, row.option.text("id")) {
+                            val option = row.option
                             val boolean = option.text("type") == "boolean"
                             val checked = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true
                             val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
                             val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = false, enabled = editable && !busy && (boolean || choices.isNotEmpty()),
+                                selected = false, enabled = (editable || row.legacyMode && modeWritable) && !busy && (boolean || choices.isNotEmpty()),
                                 onClick = {
                                     if (boolean) onChange(buildJsonObject { put("configId", option.text("id")); put("value", !checked) })
-                                    else choosing = option.text("id")
+                                    else choosing = option.text("id") to row.legacyMode
                                 },
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).semantics(mergeDescendants = true) {
                                     if (boolean) { role = Role.Switch; toggleableState = if (checked) ToggleableState.On else ToggleableState.Off }
@@ -132,7 +152,8 @@ internal fun AcpSessionSettingsScreen(
                 }
             }
         }
-        options.firstOrNull { it.text("id") == choosing }?.let { option ->
+        options.firstOrNull { it.option.text("id") == choosing?.first && it.legacyMode == choosing?.second }?.let { row ->
+            val option = row.option
             val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
             AlertDialog(
                 onDismissRequest = { choosing = null },
@@ -145,11 +166,11 @@ internal fun AcpSessionSettingsScreen(
                             }
                             val selectedChoice = choice.value == option["currentValue"]
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = selectedChoice, enabled = editable && !busy,
+                                selected = selectedChoice, enabled = (editable || row.legacyMode && modeWritable) && !busy,
                                 onClick = {
                                     choosing = null
                                     onChange(buildJsonObject {
-                                        if (option.text("id") == "legacy-mode") put("modeId", choice.value)
+                                        if (row.legacyMode) put("modeId", choice.value)
                                         else { put("configId", option.text("id")); put("value", choice.value) }
                                     })
                                 },
@@ -158,7 +179,7 @@ internal fun AcpSessionSettingsScreen(
                                 containerColor = MaterialTheme.colorScheme.surfaceBright,
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 supportingContent = choice.description.takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
-                                trailingContent = { RadioButton(selectedChoice, null, enabled = editable && !busy, modifier = Modifier.clearAndSetSemantics {}) },
+                                trailingContent = { RadioButton(selectedChoice, null, enabled = (editable || row.legacyMode && modeWritable) && !busy, modifier = Modifier.clearAndSetSemantics {}) },
                                 headlineContent = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
                             )
                         }

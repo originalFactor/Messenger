@@ -7,14 +7,23 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.data.local.ThemePreferences
+import cc.ptoe.messenger.data.local.room.AgentRow
+import cc.ptoe.messenger.data.local.room.ConversationRow
+import cc.ptoe.messenger.data.local.room.ModelRow
+import cc.ptoe.messenger.data.local.room.ProviderRow
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
+import cc.ptoe.messenger.data.repository.room.KotlinRoomBackendSlice
+import cc.ptoe.messenger.core.TurnConfigBridge
+import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -25,6 +34,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -103,6 +113,9 @@ class IsolatedRoomDeviceHostTest {
         }
         fun command(cookie: String, action: String): String = UUID.randomUUID().toString().also {
             send(cookie, "controlRequest", """{"id":"$it","payload":{"action":"$action"}}""")
+        }
+        fun command(cookie: String, payload: JsonObject): String = UUID.randomUUID().toString().also {
+            send(cookie, "controlRequest", """{"id":"$it","payload":$payload}""")
         }
         fun reply(id: String) = packets.firstOrNull { it.second["id"]?.jsonPrimitive?.content == id }?.second
         override fun close() { releaseReply.countDown(); releaseStreams.countDown(); server.stop(0); executor.shutdownNow() }
@@ -196,6 +209,65 @@ class IsolatedRoomDeviceHostTest {
                 assertEquals(listOf("messenger_session=one"), relay.connections.toList())
                 withTimeout(8_000) { lifecycle.stopAndAwait() }
             } finally {
+                if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
+                db.close(); dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun remoteCancelStopsOnlyTheOwnedTurnAndWaitsForWorkerCleanup(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-remote-cancel")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val lifecycle = RoomManagedShutdown { }
+        val started = CompletableDeferred<Unit>()
+        val stopping = CompletableDeferred<Unit>()
+        val allowStop = CompletableDeferred<Unit>()
+        val provider = KotlinTurnProvider { _, _ -> flow {
+            try { started.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+            finally { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { stopping.complete(Unit); allowStop.await() } }
+        } }
+        Relay().use { relay ->
+            try {
+                db.rows().upsertValues(listOf(
+                    KeyValueRow("cloud_session", "messenger_session=one"), KeyValueRow("cloud_session_host", relay.base),
+                    KeyValueRow("cloud_user_json", """{"id":"account"}"""), KeyValueRow("device_id", "device-1"),
+                    KeyValueRow("device_control_grant", """["${relay.base}","account"]"""),
+                    KeyValueRow("device_control_config", config(true).toString()), KeyValueRow(REMOTE_CONTROL_EPOCH_KEY, "1"),
+                ))
+                db.rows().upsertProviders(listOf(ProviderRow("p", "Provider", "https://example.test", "key", "chat", false, 1, 1)))
+                db.rows().upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 1000, null, null, null, null, "text", "text", false, false, false, false, 1, null, null)))
+                db.rows().upsertAgents(listOf(AgentRow("a", "Agent", null, "prompt", "", "m", 0.7, 1.0, null, null,
+                    true, false, false, false, false, false, false, null, null, null, "chat", false, false, "", 1, 1)))
+                db.rows().upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null,
+                    null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+                lifecycle.enter()
+                val prefs = MemoryPreferences()
+                val slice = KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs),
+                    Files.createDirectory(dir.resolve("assets"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))),
+                    dir.resolve("avatars"), dir.resolve("images"),
+                    defaultServer = relay.base, catalogUrl = "${relay.base}/models.json",
+                    deviceHost = IsolatedRoomDeviceHostConfig { "Phone" }, turnProvider = provider)
+                eventually { relay.packets.any { it.second["enabled"]?.jsonPrimitive?.content == "true" } }
+                val turn = TurnConfigBridge("c", "model", "", "", "chat", "", null, null, null, null,
+                    emptyList(), false, 0, "", null, null, null, false, "", operation = "send", content = "hello", disableTools = true)
+                slice.bridge.startBackgroundTurn(turn)
+                withTimeout(8_000) { started.await() }
+                val active = checkNotNull(db.rows().getValue("kotlin_turn_active_v1:c")).value
+                fun cancel(id: String) = buildJsonObject { put("action", "notificationCancel"); put("sessionId", "c"); put("requestId", id) }
+                val stale = relay.command("messenger_session=one", cancel("stale"))
+                eventually { relay.reply(stale) != null }
+                assertEquals("Error", relay.reply(stale)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                assertFalse(stopping.isCompleted)
+                val request = relay.command("messenger_session=one", cancel(active))
+                withTimeout(8_000) { stopping.await() }
+                assertNull(relay.reply(request))
+                allowStop.complete(Unit)
+                eventually { relay.reply(request) != null }
+                assertEquals("CancelAccepted", relay.reply(request)!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                assertNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                withTimeout(8_000) { lifecycle.stopAndAwait() }
+            } finally {
+                allowStop.complete(Unit)
                 if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
                 db.close(); dir.toFile().deleteRecursively()
             }

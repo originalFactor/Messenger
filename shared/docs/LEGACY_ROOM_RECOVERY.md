@@ -36,3 +36,19 @@ reconcile the two databases. Production still starts Rust Core. The eventual
 recovery path needs device tests with old v20/v21/v22 stores, committed WAL,
 conflicting edits and deletions, interrupted recovery and source preservation,
 and independent platform proof that old writers cannot resume.
+
+`CoreSourceSqliteLease.previewLegacySnapshot` offers an isolated, bounded
+comparison of selected fields for v21/v22 snapshots. It reports both sides of
+each project (including workspace, timestamps and Core device ownership),
+conversation project association, and provider name/protocol. A missing v21
+protocol and legacy device ownership are reported as unknown. Equal selected
+fields do not establish that the datasets are reconciled. The API does not read
+provider keys, infer deletions or apply changes; v20 and malformed schemas fail
+explicitly. Before opening the snapshot, it rejects aliases to the leased Core
+database or sidecars, symlinks and hard links. The caller must hold the Core
+source lease, provide a separate WAL-aware scratch snapshot, and exclude old
+writers and path replacement throughout. Opening the original legacy database
+read-only can still use its WAL/shared-memory files, so this API does not itself
+acquire or preserve a source snapshot. A future device flow must acquire and
+validate that snapshot, present conflicts to the user and revalidate source and
+destination identities before applying explicitly selected recovery actions.

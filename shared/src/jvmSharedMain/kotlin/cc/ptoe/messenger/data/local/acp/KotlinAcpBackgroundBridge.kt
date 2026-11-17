@@ -10,8 +10,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-internal fun roomAcpSettings(settings: JsonObject): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
-    put("settingsWritable", false); put("steering", false)
+internal fun roomAcpSettings(settings: JsonObject, modeWritable: Boolean = false, modePending: Boolean = false,
+    modeInspected: Boolean = false, modePendingId: String? = null): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+    put("settingsWritable", false); put("steering", false); put("modeWritable", modeWritable); put("modePending", modePending)
+    put("modeInspected", modeInspected); if (modePendingId != null) put("modePendingId", modePendingId)
 }))
 
 /** Existing UI polling surface backed by the isolated ACP owner; other commands delegate. */
@@ -51,8 +53,19 @@ internal class KotlinAcpBackgroundBridge(
             onEvent(owner.history(session, before))
         } else if (action == "sessionSettings" && session?.startsWith("acp:") == true) {
             val settings = owner.sessionSettings(session)
-            onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", roomAcpSettings(settings)) })
-        } else if (action in setOf("setSessionConfig", "steer") && session?.startsWith("acp:") == true) {
+            onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) })
+        } else if (action == "setSessionConfig" && session?.startsWith("acp:") == true) {
+            val mode = (command["modeId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                ?: error("Only ACP mode changes are available")
+            check(command["configId"] == null && command["value"] == null) { "Only ACP mode changes are available" }
+            owner.setMode(session, mode) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+        } else if (action == "inspectPendingMode" && session?.startsWith("acp:") == true) {
+            owner.inspectPendingMode(session) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+        } else if (action == "confirmPendingMode" && session?.startsWith("acp:") == true) {
+            val marker = (command["pendingId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Pending mode identity is required")
+            val mode = (command["modeId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Current mode is required")
+            owner.confirmPendingMode(session, marker, mode) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+        } else if (action == "steer" && session?.startsWith("acp:") == true) {
             error("This ACP operation is unavailable")
         } else delegate.controlCommand(requestId, command, onEvent)
     }

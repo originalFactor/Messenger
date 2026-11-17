@@ -38,4 +38,8 @@ class AppBackend(
     val platformToolsEnabled: Boolean = true,
     /** Durable turn failures are presented by the application scaffold. */
     val turnFailureNotices: TurnFailureNotices? = null,
+    /** Optional MCP connection owner, constructed and stopped with this backend. */
+    val mcpOwner: McpManagerOwner? = null,
+    /** MCP discovery does not grant permission to execute tools in chat. */
+    val mcpExecutionEnabled: Boolean = platformToolsEnabled,
 )

@@ -78,6 +78,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var settingsBusy by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(buildJsonObject {}) }
+    val modePending = ((settings["_messengerCapabilities"] as? JsonObject)?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true
     var attachments by remember { mutableStateOf(emptyList<AcpAttachment>()) }
     data class Queued(val text: String, val attachments: List<AcpAttachment>)
     var queue by remember { mutableStateOf(emptyList<Queued>()) }
@@ -115,8 +116,37 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                 settings = result["settings"] as? JsonObject ?: buildJsonObject {}
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) {
+                if (change != null && (settings["_messengerCapabilities"] as? JsonObject)?.containsKey("modeWritable") == true) {
+                    val capabilities = (settings["_messengerCapabilities"] as? JsonObject).orEmpty()
+                    settings = JsonObject(settings + ("_messengerCapabilities" to JsonObject(capabilities + mapOf(
+                        "modeWritable" to JsonPrimitive(false), "modePending" to JsonPrimitive(true)))))
+                }
                 settingsError = failure.message.orEmpty()
                 report(failure.message.orEmpty())
+            } finally { settingsBusy = false }
+        }
+    }
+    fun inspectPendingMode() {
+        settingsBusy = true
+        settingsError = null
+        scope.launch {
+            try {
+                val result = requestAcp(core, "inspectPendingMode") { put("sessionId", sessionId) }
+                settings = result["settings"] as? JsonObject ?: error("ACP settings unavailable")
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { settingsError = failure.message.orEmpty(); report(failure.message.orEmpty())
+            } finally { settingsBusy = false }
+        }
+    }
+    fun confirmPendingMode(pendingId: String, modeId: String) {
+        settingsBusy = true
+        settingsError = null
+        scope.launch {
+            try {
+                val result = requestAcp(core, "confirmPendingMode") { put("sessionId", sessionId); put("pendingId", pendingId); put("modeId", modeId) }
+                settings = result["settings"] as? JsonObject ?: error("ACP settings unavailable")
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) { settingsError = failure.message.orEmpty(); report(failure.message.orEmpty())
             } finally { settingsBusy = false }
         }
     }
@@ -243,7 +273,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         }
     }
     val sendPrompt: (Queued, Boolean) -> Unit = { input, clearDraft ->
-                            if (!loading && !settingsBusy && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
+                            if (!loading && !settingsBusy && !modePending && active.isEmpty() && (input.text.isNotBlank() || input.attachments.isNotEmpty())) {
                                 val text = input.text.ifBlank { input.attachments.joinToString { it.name } }
                                 val content = promptContent(input.text, input.attachments)
                                 if (clearDraft) { draft = TextFieldValue(""); attachments = emptyList() }
@@ -262,8 +292,8 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 }
                             }
     }
-    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused) {
-        if (active.isEmpty() && !loading && !settingsBusy && !queuePaused && queue.isNotEmpty()) {
+    LaunchedEffect(active, queue, loading, settingsBusy, queuePaused, modePending) {
+        if (active.isEmpty() && !loading && !settingsBusy && !modePending && !queuePaused && queue.isNotEmpty()) {
             val next = queue.first(); queue = queue.drop(1)
             sendPrompt(next, false)
         }
@@ -378,6 +408,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         } }
                     }
                     if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (modePending) TextButton(onClick = { showSettings = true }) { Text(stringResource(Res.string.acp_mode_uncertain)) }
                     if (queuePaused && queue.isNotEmpty()) TextButton(onClick = { queuePaused = false }) { Text(stringResource(Res.string.acp_resume_queue)) }
                     queue.forEach { queued -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(queued.text.ifBlank { queued.attachments.joinToString { it.name } }, Modifier.weight(1f), maxLines = 2)
@@ -471,7 +502,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             )
         }
         cc.ptoe.messenger.presentation.platform.BackHandler(enabled = showSettings, onBack = { showSettings = false }) {}
-        if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
+        if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy || active.isNotEmpty(), { showSettings = false }, ::readSettings, settingsError, ::inspectPendingMode, ::confirmPendingMode)
         if (showReplaySnapshots) AcpReplaySnapshotsScreen(core, sessionId) { showReplaySnapshots = false }
     }
 }

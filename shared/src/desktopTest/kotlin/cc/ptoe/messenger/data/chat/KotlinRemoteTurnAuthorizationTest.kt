@@ -4,6 +4,8 @@ package cc.ptoe.messenger.data.chat
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.cloud.RoomDeviceControlGrantStore
+import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
+import cc.ptoe.messenger.data.cloud.SyncSession
 import cc.ptoe.messenger.data.local.room.*
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.dto.ToolSpecDto
@@ -50,6 +52,27 @@ class KotlinRemoteTurnAuthorizationTest {
         override fun toolGrant() = KotlinRuntimeToolGrant("c", "project", "/workspace", "device", "host", listOf("write"))
     }
     private fun store(db: LocalDatabase) = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true })
+
+    @Test fun authenticatedCancelRequiresExactOwnerCookieEpochAndUnexpiredSession(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("remote-cancel-authority")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val gate = RoomCloudProviderGate.forDao(db.cloudSync())
+        try {
+            seed(db)
+            val owner = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+            val other = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+            val id = assertIs<KotlinTurnAdmission.Accepted>(owner.admit(KotlinTurnCommand.Send("c", "hello", null))).turnId
+            assertTrue(owner.claim(id, false)); owner.beginProvider(id)
+            assertFailsWith<IllegalStateException> { other.cancelRemoteAuthenticated(scope, "messenger_session=secret", "c", id) }
+            assertFailsWith<IllegalStateException> { owner.cancelRemoteAuthenticated(scope, "messenger_session=other", "c", id) }
+            assertFailsWith<IllegalStateException> { owner.cancelRemoteAuthenticated(scope.copy(grantEpoch = 2), "messenger_session=secret", "c", id) }
+            assertFailsWith<IllegalStateException> { owner.cancelRemoteAuthenticated(scope, "messenger_session=secret", "c", "stale") }
+            gate.invalidate(SyncSession("account", "generation"))
+            assertFailsWith<IllegalStateException> { owner.cancelRemoteAuthenticated(scope, "messenger_session=secret", "c", id) }
+            assertEquals(KotlinTurnPhase.REQUESTING_PROVIDER, owner.snapshot(id).phase)
+            owner.cancel(id); owner.release(id)
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+    }
 
     @Test fun revokeThenReenableNeverRestoresOldTurnOrApproval() = runBlocking {
         val dir = Files.createTempDirectory("remote-turn-epoch")

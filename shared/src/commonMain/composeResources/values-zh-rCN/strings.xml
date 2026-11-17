@@ -586,6 +586,11 @@
     <string name="acp_steer">转为引导</string>
     <string name="acp_context_unavailable">上下文用量暂不可用</string>
     <string name="acp_settings_read_only">此设备上的会话设置仅供查看。</string>
+    <string name="acp_settings_mode_only">可以更改模式；此设备上的其他会话设置仅供查看。</string>
+    <string name="acp_mode_uncertain">上次模式更改可能已完成。继续之前请检查当前设置。</string>
+    <string name="acp_check_mode">检查当前设置</string>
+    <string name="acp_mode_current">当前模式：%1$s。请确认后继续。</string>
+    <string name="acp_confirm_mode">确认当前模式</string>
     <string name="settings_animated_shape_license">圆角动画：Copyright 2024 The Android Open Source Project。采用 Apache License 2.0，移植自 BakaSU manager 中保留 Apache 许可声明的 AnimatedShape.kt（548d1dda）。</string>
     <string name="settings_github">GitHub</string>
     <string name="settings_github_desc">查看源码、反馈问题与参与贡献</string>

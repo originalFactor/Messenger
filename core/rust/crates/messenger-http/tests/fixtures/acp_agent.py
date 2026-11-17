@@ -78,7 +78,7 @@ for line in sys.stdin:
     if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
         mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "mcp-load")}
+        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "settings-mode-after", "mcp-load")}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
@@ -136,6 +136,11 @@ for line in sys.stdin:
             send(id=request_id, result={"configOptions": session_settings()["configOptions"]})
     elif method == "session/set_mode":
         current_mode = packet["params"]["modeId"]
+        if mode == "settings-mode-after":
+            send(id=request_id, result={"modes": {"currentModeId": current_mode, "availableModes": session_settings()["modes"]["availableModes"]}})
+            current_mode = "plan"
+            send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "current_mode_update", "currentModeId": current_mode}})
+            continue
         send(method="session/update", params={"sessionId": session_id, "update": {
             "sessionUpdate": "current_mode_update", "currentModeId": current_mode}})
         send(id=request_id, result={})

@@ -80,6 +80,8 @@ private sealed interface McpRequestOutcome {
     data class Unknown(val closeCode: Int? = null, val legacyFailure: Exception? = null) : McpRequestOutcome
 }
 
+internal data class McpClientInventory(val revision: Long, val connected: Boolean, val tools: List<McpToolDefinition>)
+
 private fun validMcpBase64(value: String?): Boolean {
     if (value == null || value.length % 4 != 0) return false
     var padding = 0
@@ -151,6 +153,7 @@ class McpClient(
     private var isInitialized = false
     private val connectionLock = Any()
     private var connectionGeneration = 0L
+    private var inventoryRevision = 0L
     private var connectionAlive = false
     private var connectionAttempted = false
     internal var beforeToolPublication: suspend () -> Unit = {}
@@ -159,6 +162,15 @@ class McpClient(
     private val admissionLock = Any()
     private val admitted = mutableSetOf<Job>()
     private var stdioStarting = false
+
+    /** Captures connection and tool publication under the same synchronous lock. */
+    internal fun inventory(): McpClientInventory = synchronizedBlock(connectionLock) {
+        McpClientInventory(inventoryRevision, connectionAlive && isInitialized,
+            _tools.value.map {
+                val definition = (it as McpChatTool).toolDef
+                definition.copy(inputSchema = Json.parseToJsonElement(definition.inputSchema.toString()).jsonObject)
+            })
+    }
 
     /** Track actual coroutine completion so close can cancel and join blocked transports. */
     private suspend fun <T> withAdmission(unavailable: T, block: suspend () -> T): T = try {
@@ -184,6 +196,7 @@ class McpClient(
             if (connectionAttempted) return@withLock false
             connectionAttempted = true
             connectionAlive = true
+            inventoryRevision++
             ++connectionGeneration
         }
         try {
@@ -289,7 +302,7 @@ class McpClient(
 
         val initialized = synchronizedBlock(connectionLock) {
             if (connectionGeneration != generation || !connectionAlive) false
-            else { isInitialized = true; true }
+            else { isInitialized = true; inventoryRevision++; true }
         }
         if (!initialized) return false
         refreshTools()
@@ -313,7 +326,7 @@ class McpClient(
         beforeToolPublication()
         return synchronizedBlock(connectionLock) {
             if (generation != connectionGeneration || !connectionAlive) emptyList()
-            else { _tools.value = chatTools; chatTools }
+            else { _tools.value = chatTools; inventoryRevision++; chatTools }
         }
     }
 
@@ -495,6 +508,7 @@ class McpClient(
                 connectionAlive = false
                 isInitialized = false
                 _tools.value = emptyList()
+                inventoryRevision++
                 synchronizedBlock(pendingRequests) {
                     for ((_, deferred) in pendingRequests) {
                         deferred.complete(McpPendingResponse.Closed(code))

@@ -219,6 +219,8 @@ internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val 
     override suspend fun stopAndAwait() = worker.stopAndAwait()
     override suspend fun sessionSettings(): JsonObject =
         (worker as? AcpWorkerSettings ?: error("ACP session settings are unavailable")).sessionSettings()
+    override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP mode changes are unavailable")).setMode(modeId, permit)
     override val supportsReusableTurns: Boolean get() = (worker as? AcpReusableWorkerProof)?.supportsReusableTurns == true
     override suspend fun requireInitialQuiescence() =
         (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireInitialQuiescence()

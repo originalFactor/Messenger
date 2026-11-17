@@ -17,6 +17,7 @@
 package cc.ptoe.messenger.domain.mcp
 
 import cc.ptoe.messenger.data.local.AppPreferences
+import cc.ptoe.messenger.data.util.synchronizedBlock
 import cc.ptoe.messenger.domain.tool.ChatTool
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CoroutineScope
@@ -39,11 +40,33 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 import cc.ptoe.messenger.data.util.ioDispatcher
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+
+/** A descriptor only; connection handles and credentials remain private to the manager. */
+internal data class McpInventoryTool(val serverId: String, val serverName: String, val remoteName: String,
+    val name: String, val description: String, val parameters: JsonObject)
+
+internal class McpInventorySnapshot internal constructor(
+    tools: List<McpInventoryTool>,
+    private val owner: McpManager,
+    private val bindings: Map<String, Pair<McpClient, McpClientInventory>>,
+    private val epoch: Long,
+) {
+    private val frozenTools = tools.map(::copyInventoryTool)
+    val tools: List<McpInventoryTool> get() = frozenTools.map(::copyInventoryTool)
+    internal fun matches(candidate: McpManager, current: Map<String, Pair<McpClient, McpClientInventory>>, currentEpoch: Long): Boolean =
+        owner === candidate && epoch == currentEpoch && bindings == current
+}
+
+private fun copyInventoryTool(tool: McpInventoryTool): McpInventoryTool =
+    tool.copy(parameters = Json.parseToJsonElement(tool.parameters.toString()).jsonObject)
 
 class McpManager(
     private val appPreferences: AppPreferences,
     private val enabled: Boolean = true,
     private val bridgeProvider: () -> cc.ptoe.messenger.core.CoreBridge? = { cc.ptoe.messenger.core.CoreBridgeRegistry.bridge },
+    private val startImmediately: Boolean = true,
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
 ) {
     private val json = Json {
@@ -57,8 +80,11 @@ class McpManager(
     private val delegationMutex = Mutex()
     private val shutdownMutex = Mutex()
     private val editMutex = Mutex()
+    private val startLock = Any()
+    private var started = false
     private var editing = false
     private var needsReload = false
+    private var inventoryEpoch = 0L
     @Volatile private var stopped = !enabled
     private val closingClients = mutableSetOf<McpClient>()
 
@@ -79,7 +105,14 @@ class McpManager(
     val agentDelegationEnabled: StateFlow<Boolean> = _agentDelegationEnabled.asStateFlow()
 
     init {
-        if (enabled) scope.launch {
+        if (enabled && startImmediately) start()
+    }
+
+    /** Start only after the enclosing owner has registered shutdown. */
+    internal fun start() = synchronizedBlock(startLock) {
+        check(enabled && !stopped && !started) { "MCP manager cannot be started" }
+        started = true
+        scope.launch {
             loadServers()
             delegationMutex.withLock {
                 bridgeProvider()?.let {
@@ -101,7 +134,7 @@ class McpManager(
         val list = if (!rawJson.isNullOrBlank()) {
             val decoded = runCatching { json.decodeFromString(ListSerializer(McpServerConfig.serializer()), rawJson) }
             decoded.getOrElse {
-                mutex.withLock { needsReload = true; _configurationError.value = true; updateInventoryReadyLocked() }
+                mutex.withLock { inventoryEpoch++; needsReload = true; _configurationError.value = true; updateInventoryReadyLocked() }
                 return@withLock _servers.value
             }
         } else emptyList()
@@ -134,6 +167,7 @@ class McpManager(
         val retiring = mutex.withLock {
             check(!stopped) { "MCP manager is shut down" }
             editing = true
+            inventoryEpoch++
             val desired = enabledConfigs(configs)
             val removed = clients.keys.filter { id -> desired[id] != clients[id]?.config }
             for (id in removed) {
@@ -258,11 +292,48 @@ class McpManager(
         _activeTools.value
     }
 
+    /** A coherent view of the published inventory, not permission to dispatch a tool. */
+    internal suspend fun inventorySnapshot(): McpInventorySnapshot = mutex.withLock {
+        check(_toolInventoryReady.value && !stopped) { "MCP inventory is unavailable" }
+        require(_servers.value.map { it.id }.distinct().size == _servers.value.size) { "Duplicate MCP server identity" }
+        val bindings = stableInventoryLocked()
+        val tools = bindings.flatMap { (id, pair) ->
+            val (client, state) = pair
+            if (!state.connected) emptyList() else state.tools.map { tool ->
+                require(id.isNotBlank() && client.config.name.isNotBlank() && tool.name.isNotBlank()) { "Invalid MCP tool identity" }
+                McpInventoryTool(id, client.config.name, tool.name, "${client.config.name}_${tool.name}",
+                    tool.description ?: "MCP tool ${tool.name} from ${client.config.name}", tool.inputSchema)
+            }
+        }
+        require(tools.none { it.name.startsWith("messenger_") } && tools.map { it.name }.distinct().size == tools.size) {
+            "Duplicate or reserved MCP tool name"
+        }
+        require(tools.size <= 1_000 && tools.all {
+            it.name.encodeToByteArray().size <= 512 && it.description.encodeToByteArray().size <= 16_384 &&
+                it.parameters.toString().encodeToByteArray().size <= 65_536
+        } && tools.sumOf { it.parameters.toString().encodeToByteArray().size.toLong() } <= 4L * 1024 * 1024) { "MCP inventory exceeds limits" }
+        McpInventorySnapshot(tools, this, bindings, inventoryEpoch)
+    }
+
+    /** Rechecking cannot itself authorize execution; a later claim needs a joint admission fence. */
+    internal suspend fun isInventoryCurrent(snapshot: McpInventorySnapshot): Boolean = mutex.withLock {
+        if (!_toolInventoryReady.value || stopped) return@withLock false
+        snapshot.matches(this, stableInventoryLocked(), inventoryEpoch)
+    }
+
+    private fun stableInventoryLocked(): Map<String, Pair<McpClient, McpClientInventory>> {
+        repeat(8) {
+            val first = clients.mapValues { (_, client) -> client to client.inventory() }
+            if (first.all { (_, pair) -> pair.first.inventory() == pair.second }) return first
+        }
+        error("MCP inventory is changing")
+    }
+
     /** Stop admission, close every connection and wait for in-flight connection work. */
     suspend fun shutdown(): Unit = withContext(NonCancellable) {
         shutdownMutex.withLock {
             val job = scope.coroutineContext[Job]
-            job?.cancel()
+            synchronizedBlock(startLock) { stopped = true; job?.cancel() }
             val closing = mutex.withLock {
                 stopped = true
                 closingClients.addAll(clients.values)

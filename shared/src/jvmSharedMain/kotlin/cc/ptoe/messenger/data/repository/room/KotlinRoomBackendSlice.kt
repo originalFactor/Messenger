@@ -17,6 +17,10 @@ import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHost
 import cc.ptoe.messenger.data.cloud.IsolatedRoomDeviceHostConfig
 import cc.ptoe.messenger.di.AppBackend
+import cc.ptoe.messenger.di.McpManagerOwner
+import cc.ptoe.messenger.domain.mcp.McpManager
+import cc.ptoe.messenger.domain.mcp.McpProcessBridge
+import cc.ptoe.messenger.domain.mcp.createPlatformMcpBridge
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.acp.AcpGatewayBackend
 import cc.ptoe.messenger.data.local.acp.AcpGatewayTool
@@ -103,6 +107,7 @@ internal class KotlinRoomBackendSlice private constructor(
     val acpOwner: RoomAcpBackgroundOwner?,
     val artifactUiHost: ArtifactUiHost?,
     val deviceHost: IsolatedRoomDeviceHost?,
+    private val mcpOwner: McpManagerOwner?,
 ) {
     /** Experimental only: never expose this backend to production until parity is established. */
     fun asAppBackend(): AppBackend {
@@ -114,6 +119,7 @@ internal class KotlinRoomBackendSlice private constructor(
             currentAgent, learning, shutdown = { shutdownOwner.stopAndAwait() },
             clearLocalData = { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") },
             artifactUiHost = artifactUiHost, platformToolsEnabled = false,
+            mcpOwner = mcpOwner, mcpExecutionEnabled = false,
             turnFailureNotices = TurnFailureNotices(turnStore.observeFailures().map { failures ->
                 failures.map { TurnFailureNotice(it.noticeId, it.turnId, it.detail, it.conversationId, it.conversationTitle) }
             }, { notice -> turnStore.acknowledgeFailure(notice.noticeId, notice.detail) }))
@@ -140,6 +146,7 @@ internal class KotlinRoomBackendSlice private constructor(
             deviceHost: IsolatedRoomDeviceHostConfig? = null,
             previousChatWorkersStopped: PreviousChatWorkersStopped? = null,
             turnProvider: KotlinTurnProvider? = null,
+            mcpConnections: IsolatedRoomMcpConfig? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
             RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
@@ -235,18 +242,36 @@ internal class KotlinRoomBackendSlice private constructor(
                 throw failure
             }
             composition.bindChatWorkers(processJob)
+            val mcpOwner = mcpConnections?.let { config ->
+                val manager = McpManager(appPreferences, bridgeProvider = { bridge }, startImmediately = false, bridgeFactory = config.bridgeFactory)
+                val owner = McpManagerOwner(manager, appPreferences) { shutdown.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running }
+                try {
+                    withContext(NonCancellable) {
+                        shutdown.registerStop { owner.stopAndAwait() }
+                        owner.start()
+                    }
+                } catch (failure: Throwable) {
+                    try { withContext(NonCancellable) { owner.stopAndAwait() } }
+                    catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
+                    throw failure
+                }
+                owner
+            }
             val scheduler = schedulerRecovery?.let {
                 IsolatedRoomScheduler(db, checkNotNull(scheduledTasks), learningOwnership, artifacts, cloud.providerGate, processScope, it, now, admissions,
                     taskStatus = composition::scheduledTaskStatus)
                     .also { scheduler -> scheduler.start() }
             }
-            val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it) }
+            val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it, remoteCancel = rawBridge.remoteCancel) }
             return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
-                artifactHost, attachedDeviceHost)
+                artifactHost, attachedDeviceHost, mcpOwner)
         }
     }
 }
+
+/** Explicit opt-in to connection management only; Kotlin MCP dispatch remains unavailable. */
+internal class IsolatedRoomMcpConfig(val bridgeFactory: () -> McpProcessBridge = ::createPlatformMcpBridge)
 
 /** Tracks bridge calls separately from workers so shutdown cannot race turn admission. */
 private class PartialChatBridge(

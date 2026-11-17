@@ -116,6 +116,7 @@ internal class RoomAcpBackgroundOwner private constructor(
     private val sessions = mutableSetOf<String>()
     private val leases = mutableMapOf<String, AcpConfigurationLease>()
     private val foregroundEnds = mutableMapOf<String, () -> Unit>()
+    private val inspectedModes = mutableMapOf<String, Pair<String, String>>()
     private val retained = mutableSetOf<String>()
     private var pendingConfigurationWriters = 0
     private var closing = false
@@ -243,6 +244,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                             tasks.remove(completed.key)
                         }
                     }
+                    check(!RoomAcpModeLedger(db).pending(sessionId)) { "Check the previous ACP mode change before starting a turn" }
                     val endForeground = foreground()
                     var handedOff = false
                     var admittedHere = false
@@ -419,7 +421,21 @@ internal class RoomAcpBackgroundOwner private constructor(
     }
 
     /** Read a live agent snapshot under the same configuration and worker ownership as a turn. */
-    suspend fun sessionSettings(sessionId: String): JsonObject = admitted {
+    suspend fun sessionSettings(sessionId: String): JsonObject = settingsOperation(sessionId, null, false, null, null, null)
+
+    /** Only agent-advertised legacy modes are mutable; no request is repeated automatically. */
+    suspend fun setMode(sessionId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, mode, false, null, null, deliver)
+
+    /** Explicitly inspect the stopped agent's current settings before permitting another change. */
+    suspend fun inspectPendingMode(sessionId: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, null, true, null, null, deliver)
+
+    /** Clear only the exact marker after the user confirms a freshly rechecked displayed mode. */
+    suspend fun confirmPendingMode(sessionId: String, marker: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject =
+        settingsOperation(sessionId, null, true, marker, mode, deliver)
+
+    @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
+    private suspend fun settingsOperation(sessionId: String, mode: String?, inspect: Boolean,
+        confirmMarker: String?, confirmMode: String?, deliver: ((JsonObject) -> Unit)?): JsonObject = admitted {
         admissions.withLock {
             synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
             exclusive.withOwner {
@@ -431,22 +447,101 @@ internal class RoomAcpBackgroundOwner private constructor(
                     check(sessionId !in foregroundEnds) { "ACP session has an unresolved request" }
                     sessionId in retained
                 }
+                val modeLedger = RoomAcpModeLedger(db)
+                val pending = modeLedger.pendingId(sessionId)
+                if (confirmMarker != null) {
+                    check(pending == confirmMarker && !confirmMode.isNullOrBlank()) { "The pending ACP mode change has changed" }
+                    check(synchronized(lock) { inspectedModes[sessionId] == (confirmMarker to confirmMode) }) { "Inspect the current ACP mode before confirming" }
+                }
+                if (mode != null) {
+                    require(mode.isNotBlank() && mode.length <= 256) { "Invalid ACP mode" }
+                    check(pending == null) { "Check the previous ACP mode change before trying again" }
+                    check(!retainedBefore) { "This retained ACP session cannot safely change mode" }
+                }
+                if (inspect && pending != null) check(!retainedBefore) { "The ACP worker must stop before checking the mode change" }
                 val end = foreground()
                 synchronized(lock) { foregroundEnds[sessionId] = end; sessions.add(sessionId) }
                 var success = false
-                try {
+                var modeMarker: String? = null
+                var settingsWorker: AcpWorkerSettings? = null
+                val settings = try {
                     acquireOrReuseLease(binding)
                     authority.verify(binding, configuration)
-                    manager.sessionSettings(binding, configuration) { coordinator.preserveSettingsReplay(binding) }.also { success = true }
+                    val result = manager.sessionSettings(binding, configuration,
+                        afterRestore = { coordinator.preserveSettingsReplay(binding) }) { worker ->
+                        settingsWorker = worker
+                        val settings = worker.sessionSettings()
+                        if (inspect && pending != null) {
+                            val current = ((settings["modes"] as? JsonObject)?.get("currentModeId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                            check(!current.isNullOrBlank()) { "The agent did not report its current mode; the previous change remains unresolved" }
+                        }
+                        if (mode == null) settings else {
+                            val modes = (settings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray ?: error("This ACP session does not offer modes")
+                            check(modes.any { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.takeIf { id -> id.isString }?.contentOrNull == mode }) { "This ACP session does not offer that mode" }
+                            currentCoroutineContext().ensureActive()
+                            modeMarker = modeLedger.begin(sessionId, mode)
+                            val caller = checkNotNull(currentCoroutineContext()[Job])
+                            val dispatchLock = Any()
+                            var cancelled = false
+                            var dispatched = false
+                            val cancellation = caller.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+                                if (cause != null) synchronized(dispatchLock) { cancelled = true }
+                            }
+                            try { worker.setMode(mode) {
+                                synchronized(dispatchLock) {
+                                    if (cancelled || !caller.isActive) throw CancellationException("ACP mode change cancelled before dispatch")
+                                    check(!dispatched) { "ACP mode change was already dispatched" }
+                                    dispatched = true
+                                }
+                            } }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) { throw IllegalStateException("ACP mode change may have completed; check the current settings before trying again", failure) }
+                            finally { cancellation.dispose() }
+                        }
+                    }
+                    success = true
+                    result
                 } finally {
                     withContext(NonCancellable) {
                         if (!success || !retainedBefore) {
-                            manager.retireAndAwait(sessionId)
-                            releaseLease(sessionId)
+                            try {
+                                manager.retireAndAwait(sessionId)
+                                releaseLease(sessionId)
+                            } catch (failure: Throwable) {
+                                if (modeMarker != null || pending != null) throw IllegalStateException(
+                                    "ACP mode change may have completed and the worker has not stopped; recovery is required", failure)
+                                throw failure
+                            }
                         }
                         releaseForeground(sessionId)
                     }
                 }
+                // A notification can arrive after the response but before the stopped worker's
+                // reader exits. Read its final cache only after retirement has joined that reader.
+                val finalSettings = if (mode != null || inspect && pending != null) checkNotNull(settingsWorker).sessionSettings() else settings
+                val observedMode = ((finalSettings["modes"] as? JsonObject)?.get("currentModeId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                if (inspect && pending != null) check(!observedMode.isNullOrBlank()) { "The agent did not report its current mode; the previous change remains unresolved" }
+                val confirmed = confirmMarker != null && observedMode == confirmMode
+                if (confirmed) withContext(NonCancellable) { modeLedger.clear(sessionId, confirmMarker!!) }
+                val pendingAfter = if (confirmed) null else (modeMarker ?: pending)
+                synchronized(lock) {
+                    if (confirmed || pendingAfter == null) inspectedModes.remove(sessionId)
+                    else if (inspect && !observedMode.isNullOrBlank()) inspectedModes[sessionId] = pendingAfter to observedMode
+                    else inspectedModes.remove(sessionId)
+                }
+                val modes = (finalSettings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray
+                val options = (finalSettings["configOptions"] as? JsonArray).orEmpty()
+                val legacyModeAvailable = !modes.isNullOrEmpty() && options.none {
+                    ((it as? JsonObject)?.get("category") as? JsonPrimitive)?.contentOrNull == "mode"
+                }
+                val result = roomAcpSettings(finalSettings, modeWritable = legacyModeAvailable && !retainedBefore && pendingAfter == null,
+                    modePending = pendingAfter != null, modeInspected = pendingAfter != null && inspect, modePendingId = pendingAfter)
+                if (deliver != null) {
+                    currentCoroutineContext().ensureActive()
+                    // The bridge callback must not reenter this owner.
+                    deliver(result)
+                }
+                result
             }
         }
     }

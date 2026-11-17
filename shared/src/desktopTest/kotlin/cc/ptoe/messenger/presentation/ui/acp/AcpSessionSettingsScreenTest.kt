@@ -56,6 +56,76 @@ class AcpSessionSettingsScreenTest {
     }
 
     @Test
+    fun modeOnlyBackendAllowsModeAndKeepsOtherOptionsReadOnly() = runComposeUiTest {
+        val modeSettings = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modeWritable", true); put("modePending", false)
+        }) + ("modes" to Json.parseToJsonElement("""{"currentModeId":"plan","availableModes":[{"id":"plan","name":"Plan"},{"id":"code","name":"Code"}]}""")))
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(modeSettings, false, {}, { submitted = it }) } }
+        onNodeWithText("Read only").assertIsNotEnabled()
+        onNodeWithText("Plan").performClick()
+        onNodeWithText("Code").performClick()
+        assertEquals("code", submitted?.text("modeId"))
+    }
+
+    @Test
+    fun uncertainModeRequiresExplicitInspection() = runComposeUiTest {
+        val pending = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modeWritable", false); put("modePending", true)
+        }))
+        var inspections = 0
+        setContent { MaterialTheme { AcpSessionSettingsScreen(pending, false, {}, {}, onInspectPendingMode = { inspections++ }) } }
+        onNodeWithText("The previous mode change may have completed. Check the current settings before continuing.").assertExists()
+        onNodeWithText("Check current settings").performClick()
+        assertEquals(1, inspections)
+    }
+
+    @Test
+    fun inspectedModeRequiresExplicitConfirmation() = runComposeUiTest {
+        val inspected = Json.parseToJsonElement("""{
+            "_messengerCapabilities":{"settingsWritable":false,"modeWritable":false,"modePending":true,"modeInspected":true,"modePendingId":"marker"},
+            "modes":{"currentModeId":"code","availableModes":[{"id":"code","name":"Code"}]}
+        }""").jsonObject
+        var confirmed: Pair<String, String>? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(inspected, false, {}, {}, onConfirmPendingMode = { id, mode -> confirmed = id to mode }) } }
+        onNodeWithText("Current mode: code. Confirm it before continuing.").assertExists()
+        onNodeWithText("Confirm current mode").performClick()
+        assertEquals("marker" to "code", confirmed)
+    }
+
+    @Test
+    fun agentOptionNamedLegacyModeRemainsDistinctFromSyntheticMode() = runComposeUiTest {
+        val collision = Json.parseToJsonElement("""{
+            "configOptions":[{"id":"legacy-mode","name":"Agent option","type":"select","currentValue":"a","options":[{"value":"a","name":"Option A"},{"value":"b","name":"Option B"}]}],
+            "modes":{"currentModeId":"plan","availableModes":[{"id":"plan","name":"Plan"},{"id":"code","name":"Code"}]}
+        }""").jsonObject
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(collision, false, {}, { submitted = it }) } }
+        onNodeWithText("Option A").performClick()
+        onNodeWithText("Option B").performClick()
+        assertEquals("legacy-mode", submitted?.text("configId"))
+        assertEquals("b", submitted?.text("value"))
+        onNodeWithText("Plan").performClick()
+        onNodeWithText("Code").performClick()
+        assertEquals("code", submitted?.text("modeId"))
+    }
+
+    @Test
+    fun modeOnlyCapabilityDoesNotEnableAgentOptionWithSameId() = runComposeUiTest {
+        val collision = Json.parseToJsonElement("""{
+            "_messengerCapabilities":{"settingsWritable":false,"modeWritable":true},
+            "configOptions":[{"id":"legacy-mode","name":"Agent option","type":"select","currentValue":"a","options":[{"value":"a","name":"Option A"}]}],
+            "modes":{"currentModeId":"plan","availableModes":[{"id":"plan","name":"Plan"},{"id":"code","name":"Code"}]}
+        }""").jsonObject
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(collision, false, {}, { submitted = it }) } }
+        onNodeWithText("Option A").assertIsNotEnabled()
+        onNodeWithText("Plan").performClick()
+        onNodeWithText("Code").performClick()
+        assertEquals("code", submitted?.text("modeId"))
+    }
+
+    @Test
     fun modelAndEffortControlsFollowTheAgentsReplacementSnapshot() = runComposeUiTest {
         val initial = Json.parseToJsonElement("""{"configOptions":[
             {"id":"model","name":"Model","category":"model","type":"select","currentValue":"first",

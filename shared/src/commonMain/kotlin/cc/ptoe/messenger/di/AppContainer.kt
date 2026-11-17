@@ -109,7 +109,9 @@ class AppContainer(
         "Install CoreBridgeRegistry.bridge before constructing AppContainer"
     }
 
-    val mcpManager = McpManager(appPreferences, enabled = platformToolsEnabled, bridgeProvider = { coreBridge })
+    val mcpManager = backend?.mcpOwner?.claim(appPreferences)
+        ?: McpManager(appPreferences, enabled = platformToolsEnabled, bridgeProvider = { coreBridge })
+    val mcpExecutionEnabled: Boolean = backend?.mcpExecutionEnabled ?: true
 
     /**
      * Returns active tools: built-in tools for [workspaceRoot] + active MCP
@@ -117,7 +119,7 @@ class AppContainer(
      * （见 [Agent.effectiveToolEnabled]）。
      */
     fun availableTools(workspaceRoot: String?): List<ChatTool> =
-        builtinTools(workspaceRoot) + mcpManager.activeTools.value
+        builtinTools(workspaceRoot) + if (mcpExecutionEnabled) mcpManager.activeTools.value else emptyList()
 
     /**
      * The settings inventory (Core descriptors + built-in + active MCP), used by
@@ -128,7 +130,7 @@ class AppContainer(
      */
     fun allTools(): List<ChatTool> =
         (coreToolCatalog.state.value.tools + builtinTools(defaultWorkspaceRoot()) +
-            mcpManager.activeTools.value).distinctBy { it.name }
+            (if (mcpExecutionEnabled) mcpManager.activeTools.value else emptyList())).distinctBy { it.name }
 
     private fun providerChanged(id: String, deleted: Boolean) {
         // 内置云 AI 服务商不参与云同步（各设备本地自建）。

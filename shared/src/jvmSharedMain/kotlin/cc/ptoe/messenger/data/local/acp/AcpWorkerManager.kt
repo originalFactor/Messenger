@@ -48,7 +48,11 @@ internal interface AcpWorkerProcess {
 }
 
 /** Agent-reported settings only; this interface does not mutate a session. */
-internal interface AcpWorkerSettings { suspend fun sessionSettings(): JsonObject }
+internal interface AcpWorkerSettings {
+    suspend fun sessionSettings(): JsonObject
+    /** Invoke permit immediately before the first write; a passed permit means outcome may be unknown. */
+    suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject = error("ACP mode changes are unavailable")
+}
 
 /**
  * Optional platform-provided proof for an ACP process which can remain alive between turns.
@@ -124,7 +128,7 @@ internal class AcpWorkerManager(
 
     /** Read only agent-reported settings while excluding turns and session mutation. */
     suspend fun sessionSettings(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration,
-        afterRestore: suspend () -> Unit): JsonObject = slot(binding.conversationId).mutex.withLock {
+        afterRestore: suspend () -> Unit, action: suspend (AcpWorkerSettings) -> JsonObject = { it.sessionSettings() }): JsonObject = slot(binding.conversationId).mutex.withLock {
         val current = slot(binding.conversationId)
         check(!current.unsafe && current.active == null && !current.settlementPending) { "ACP session is active or its worker has not stopped" }
         workspace.requireLocalUnchanged(binding)
@@ -142,7 +146,7 @@ internal class AcpWorkerManager(
         workspace.requireLocalUnchanged(binding)
         check(worker.ready!!.skillsGatewayAvailable || !needsGateway()) { "This ACP agent needs MCP SSE or HTTP support; restart with a compatible agent" }
         afterRestore()
-        (worker.process as? AcpWorkerSettings ?: error("ACP session settings are unavailable")).sessionSettings()
+        action(worker.process as? AcpWorkerSettings ?: error("ACP session settings are unavailable"))
     }
 
     override suspend fun <T> withActiveTurn(sessionId: String, turnId: String, action: suspend () -> T): T = slot(sessionId).mutex.withLock {

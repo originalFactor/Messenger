@@ -30,6 +30,11 @@ internal fun interface RoomRemoteTaskSnapshots {
 }
 internal data class RoomRemoteTaskSnapshot(val active: Boolean, val requestId: String? = null, val events: List<JsonObject> = emptyList())
 
+/** Uses the same owner as the active local worker; cookie never enters durable turn state. */
+internal fun interface RoomRemoteTaskCancel {
+    suspend fun cancel(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String)
+}
+
 /**
  * Remote read-only commands over the same Room owner as chat and Cloud. Each database
  * snapshot checks the account-scoped explicit control grant. Notification access is
@@ -45,6 +50,7 @@ internal class RoomDeviceControlDispatcher(
     private val operations: RoomRemoteTurnOperations? = null,
     private val modeGate: RoomCloudProviderGate? = null,
     private val onModeChanged: () -> Unit = {},
+    private val remoteCancel: RoomRemoteTaskCancel? = null,
 ) : RoomDeviceCommandDispatcher {
     private class Failure(val code: String, override val message: String) : IllegalStateException(message)
     private data class SessionPage(val title: String, val writable: Boolean?, val messages: List<JsonObject>, val before: String?)
@@ -99,7 +105,8 @@ internal class RoomDeviceControlDispatcher(
                     val id = command.requiredText("sessionId").validatedId()
                     val turnId = command.requiredText("requestId").validatedId()
                     transaction(scope) { rows -> requireSession(rows, id, requireOwnedProject = false) }
-                    (operations ?: throw Failure("unavailable", "Remote task cancellation is unavailable")).cancel(scope, id, turnId)
+                    if (remoteCancel != null) remoteCancel.cancel(scope, stored.cookie, id, turnId)
+                    else (operations ?: throw Failure("unavailable", "Remote task cancellation is unavailable")).cancel(scope, id, turnId)
                     buildJsonObject { put("type", "CancelAccepted") }
                 }
                 "prompt" -> {

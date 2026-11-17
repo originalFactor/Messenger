@@ -30,12 +30,15 @@ import cc.ptoe.messenger.domain.model.Message
 import cc.ptoe.messenger.domain.model.MessageRole
 import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.mcp.McpProcessBridge
+import cc.ptoe.messenger.domain.mcp.JsonRpcRequest
 import com.sun.net.httpserver.HttpServer
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -54,6 +57,7 @@ import okio.Path.Companion.toPath
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -63,6 +67,78 @@ class KotlinRoomAppBackendTest {
         override val data: Flow<Preferences> = state
         override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
             transform(state.value).also { state.value = it }
+    }
+
+    @Test fun optionalMcpManagerHasOneRoomOwnerAndCannotDispatchKotlinTools(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-mcp-owner")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val prefs = MemoryPreferences()
+        val preferences = AppPreferences(prefs)
+        val closes = AtomicInteger()
+        val failClose = AtomicBoolean(true)
+        val starts = AtomicInteger()
+        val toolCalls = AtomicInteger()
+        var callback: ((String) -> Unit)? = null
+        val factory = { object : McpProcessBridge {
+            override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean {
+                starts.incrementAndGet(); callback = onLine; return true
+            }
+            override suspend fun sendLine(line: String): Boolean {
+                val request = Json.decodeFromString<JsonRpcRequest>(line)
+                when (request.method) {
+                    "initialize" -> callback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
+                    "tools/list" -> callback?.invoke("""{"jsonrpc":"2.0","id":${request.id},"result":{"tools":[{"name":"work","inputSchema":{"type":"object"}}]}}""")
+                    "tools/call" -> toolCalls.incrementAndGet()
+                }
+                return true
+            }
+            override suspend fun close() { closes.incrementAndGet(); check(!failClose.get()) { "MCP stop is unverified" } }
+        } }
+        var container: AppContainer? = null
+        try {
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("a", "Agent", systemPrompt = "prompt", defaultModelId = null,
+                temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
+            preferences.setMcpServersJson("""[{"id":"server","name":"Server","transportType":"STDIO","command":"fake","env":{"TOKEN":"secret"}}]""")
+            val assets = Files.createDirectory(dir.resolve("assets"))
+            val slice = KotlinRoomBackendSlice.attach(db, lifecycle, preferences, ThemePreferences(prefs), assets,
+                dir.resolve("avatars"), dir.resolve("images"), mcpConnections = IsolatedRoomMcpConfig(factory))
+            val backend = slice.asAppBackend()
+            val images = ChatImageStore::class.java.cast(Proxy.newProxyInstance(ChatImageStore::class.java.classLoader,
+                arrayOf(ChatImageStore::class.java)) { _, _, _ -> null })
+            val dirs = AppDirs(dir.toString().toPath(), dir.resolve("cache").toString().toPath())
+            val app = AppContainer(dirs, images, backend)
+            container = app
+            withTimeout(5_000) { app.mcpManager.toolInventoryReady.first { it } }
+            val snapshot = app.mcpManager.inventorySnapshot()
+            assertEquals(listOf("Server_work"), snapshot.tools.map { it.name })
+            assertFalse(snapshot.tools.toString().contains("secret"))
+            assertEquals(1, starts.get())
+            assertFalse(app.platformToolsEnabled)
+            assertFalse(app.mcpExecutionEnabled)
+            assertTrue(app.availableTools(null).isEmpty())
+            assertTrue(app.allTools().none { it.name == "Server_work" })
+            assertFailsWith<IllegalStateException> { AppContainer(dirs, images, backend) }
+            val attempted = TurnConfigBridge("missing", "model", "", "", "chat", "", null, null, null, null,
+                listOf("Server_work"), false, 0, "", null, null, null, false, "", operation = "send", content = "hi")
+            assertFailsWith<IllegalArgumentException> { app.coreBridge.startBackgroundTurn(attempted) }
+            assertEquals(0, toolCalls.get())
+            assertFailsWith<IllegalStateException> { app.shutdown() }
+            assertEquals(RoomShutdownState.Running, lifecycle.state.value)
+            assertTrue(db.rows().defaultAgents().isNotEmpty())
+            failClose.set(false)
+            app.shutdown()
+            assertEquals(RoomShutdownState.Stopped, lifecycle.state.value)
+            assertEquals(2, closes.get())
+            assertFalse(app.mcpManager.isInventoryCurrent(snapshot))
+            assertFailsWith<IllegalStateException> { AppContainer(dirs, images, backend) }
+        } finally {
+            failClose.set(false)
+            container?.shutdown()
+            lifecycle.stopAndAwait()
+            db.close(); dir.toFile().deleteRecursively()
+        }
     }
 
     @Test fun appContainerUsesOneRoomOwnerAndRefusesUnsupportedOperations(): Unit = runBlocking {
