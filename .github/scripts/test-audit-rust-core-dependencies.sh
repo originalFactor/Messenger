@@ -8,12 +8,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 output=$(cd "$repo" && bash "$script_dir/audit-rust-core-dependencies.sh")
-printf '%s\n' "$output" | rg -q '^\[application sources\]$'
-printf '%s\n' "$output" | rg -q '^\[summary\]$'
-printf '%s\n' "$output" | rg -q '^rust_workspace=absent$'
+printf '%s\n' "$output" | grep -Eq '^\[application sources\]$'
+printf '%s\n' "$output" | grep -Eq '^\[summary\]$'
+printf '%s\n' "$output" | grep -Eq '^rust_workspace=absent$'
 
 (cd "$repo" && bash "$script_dir/audit-rust-core-dependencies.sh" --strict) >"$tmp/strict.log" 2>&1
-printf '%s\n' "$(cat "$tmp/strict.log")" | rg -q '^blocking_references=0$'
+printf '%s\n' "$(cat "$tmp/strict.log")" | grep -Eq '^blocking_references=0$'
 
 clean=$tmp/clean
 mkdir -p "$clean"/{.github/scripts,.github/workflows,androidApp/src/main,androidApp/src/main/aidl,androidApp/docs,desktopApp/src/main,shared/src,shared/docs,wear/src,runtime/src,runtime/src/main/aidl}
@@ -46,10 +46,10 @@ if (cd "$clean" && bash .github/scripts/audit-rust-core-dependencies.sh --strict
   printf 'Expected --strict to fail when a Rust Core startup reference is reintroduced.\n' >&2
   exit 1
 fi
-rg -q 'retirement is blocked' "$tmp/reintroduced.log"
+grep -Eq 'retirement is blocked' "$tmp/reintroduced.log"
 rm "$clean/androidApp/src/main/Startup.kt"
 (cd "$clean" && bash .github/scripts/audit-rust-core-dependencies.sh --strict --summary "$summary") > "$tmp/clean.log"
 test "$(cat "$summary")" = 0
-printf '%s\n' "$(cat "$tmp/clean.log")" | rg -q '^rust_workspace=absent$'
+printf '%s\n' "$(cat "$tmp/clean.log")" | grep -Eq '^rust_workspace=absent$'
 
 echo 'Rust Core dependency audit checks passed'

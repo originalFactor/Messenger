@@ -23,14 +23,14 @@ patterns=(
   'cargo-ndk|cargoBuildHost|uniffi|UniFFI|libmessenger_ffi'
 )
 exclude=(
-  --glob '!**/build/**'
-  --glob '!**/.gradle/**'
-  --glob '!**/.idea/**'
-  --glob '!server/**'
-  --glob '!rendering/**'
-  --glob '!core/rust/**'
-  --glob '!HANDOFF_RUST_RETIREMENT.md'
-  --glob '!shared/docs/RUST_CORE_DEPENDENCY_AUDIT.md'
+  --exclude-dir=build
+  --exclude-dir=.gradle
+  --exclude-dir=.idea
+  --exclude-dir=server
+  --exclude-dir=rendering
+  --exclude-dir=rust
+  --exclude=HANDOFF_RUST_RETIREMENT.md
+  --exclude=RUST_CORE_DEPENDENCY_AUDIT.md
 )
 
 commit=$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')
@@ -43,7 +43,7 @@ scan() {
     if [[ -e "$path" ]]; then existing+=("$path"); fi
   done
   if [[ ${#existing[@]} -eq 0 ]]; then return 0; fi
-  rg -n --no-heading "${exclude[@]}" -e "$(IFS='|'; echo "${patterns[*]}")" "${existing[@]}" || true
+  grep -rEn "${exclude[@]}" -e "$(IFS='|'; echo "${patterns[*]}")" "${existing[@]}" || true
 }
 
 blockers() {
@@ -54,7 +54,7 @@ blockers() {
     if [[ -e "$path" ]]; then paths+=("$path"); fi
   done
   if [[ ${#paths[@]} -eq 0 ]]; then return 0; fi
-  rg -n --no-heading "${exclude[@]}" \
+  grep -rEn "${exclude[@]}" \
     -e 'CoreHandle\.open|startHttpServer\(|RestCoreBridge\(|implementation\(project\(":core-bindings' \
     -e 'include\(":core-bindings|Setup Rust toolchain|Install cargo-ndk|cargoBuildHost|libmessenger_ffi\.so' \
     "${paths[@]}" || true
@@ -87,7 +87,7 @@ if [[ ${#artifact_paths[@]} -gt 0 ]]; then
     \( -name 'libmessenger_ffi.so' -o -name 'libsqliteJni.so' -o -name '*uniffi*' \) -print 2>/dev/null || true
 fi
 
-blocking_count=$(blockers | rg -c . || true)
+blocking_count=$(blockers | grep -c . || true)
 blocking_count=${blocking_count:-0}
 printf '\n[summary]\n'
 printf 'blocking_references=%s\n' "$blocking_count"
