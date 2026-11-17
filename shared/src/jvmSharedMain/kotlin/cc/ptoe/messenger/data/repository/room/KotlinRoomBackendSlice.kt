@@ -211,7 +211,7 @@ internal class KotlinRoomBackendSlice private constructor(
             val selected = RoomCurrentAgentRepository(db, agents)
 
             val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = remoteSkills)
-            val controls = KotlinControlSettingsBridge(skills, db)
+            val controls = KotlinControlSettingsBridge(skills, db, configurationWrite)
             val workerBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession)
                 else controls
             val acpBridge = RoomAcpHistoryBridge(workerBridge, acp, acpSnapshots, deletionAvailable = acpOwner != null)
@@ -331,6 +331,8 @@ private class PartialChatBridge(
     override suspend fun deleteSkill(name: String) = admitted { delegate.deleteSkill(name) }
     override suspend fun discoverRemoteSkills(requestJson: String) = admitted { delegate.discoverRemoteSkills(requestJson) }
     override suspend fun previewRemoteSkill(requestJson: String) = admitted { delegate.previewRemoteSkill(requestJson) }
+    override suspend fun controlSettings() = admitted { delegate.controlSettings() }
+    override suspend fun saveControlSettings(settings: JsonObject) = admitted { delegate.saveControlSettings(settings) }
     override suspend fun scheduledTaskRequest(method: String, path: String, body: String?) =
         admitted { delegate.scheduledTaskRequest(method, path, body) }
     override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) =

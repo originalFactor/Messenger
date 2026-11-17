@@ -211,6 +211,7 @@ android {
         targetSdk = 28
         versionCode = rootProject.ext["versionCode"] as Int
         versionName = rootProject.ext["versionName"] as String
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
 
@@ -340,6 +341,8 @@ androidComponents {
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
     // The vendored Termux terminal emulator annotates its APIs.
     implementation(libs.androidx.annotation)
 }

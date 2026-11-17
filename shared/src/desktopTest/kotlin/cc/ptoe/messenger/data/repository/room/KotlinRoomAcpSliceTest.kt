@@ -132,6 +132,15 @@ class KotlinRoomAcpSliceTest {
             backend.providers.insert(provider)
             backend.models.insert(model)
             val bridge = backend.bridge
+            db.rows().upsertValues(listOf(
+                KeyValueRow("kotlin_sync_session", "[\"account\",\"one\"]"),
+                KeyValueRow("cloud_session", "messenger_session=first"),
+                KeyValueRow("cloud_session_host", "https://cloud.example"),
+                KeyValueRow("cloud_user_json", "{\"id\":\"account\"}"),
+            ))
+            val enableRemote = bridge.controlSettings()
+            bridge.saveControlSettings(JsonObject(enableRemote + ("enabled" to JsonPrimitive(true))))
+            assertTrue(db.rows().getValue("device_control_grant") != null)
             var catalog: JsonObject? = null
             bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "catalog") }) { catalog = it }
             assertTrue(checkNotNull(catalog).getValue("agents").jsonArray.any { it.jsonObject["id"]?.jsonPrimitive?.content == "acp:agent" })
@@ -159,7 +168,9 @@ class KotlinRoomAcpSliceTest {
             assertTrue(bridge.hasActiveTasks())
             assertTrue(bridge.supportsAcpReplaySnapshots)
             assertTrue(bridge.supportsAcpReplayDeletion)
-            // These are the real repositories exposed by the isolated slice, not direct fence calls.
+            fun changedProfile(settings: JsonObject): JsonArray = JsonArray(settings.getValue("agents").jsonArray.mapIndexed { index, profile ->
+                if (index == 0) JsonObject(profile.jsonObject + ("description" to JsonPrimitive("changed profile"))) else profile
+            })
             val cancelled = async(start = CoroutineStart.UNDISPATCHED) { backend.providers.update(provider.copy(name = "cancelled")) }
             assertFalse(cancelled.isCompleted)
             cancelled.cancelAndJoin()
@@ -168,6 +179,32 @@ class KotlinRoomAcpSliceTest {
                 checkNotNull(backend.acpOwner).start(UUID.randomUUID().toString(), id, buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "later") }) })
             }
             assertFalse(afterCancellation.message.orEmpty().contains("configuration is being changed"))
+            val disabling = bridge.controlSettings()
+            val originalProfiles = disabling.getValue("agents")
+            val pendingDisable = async {
+                runCatching { bridge.saveControlSettings(JsonObject(disabling + mapOf(
+                    "enabled" to JsonPrimitive(false), "agents" to changedProfile(disabling)))) }
+            }
+            withTimeout(5_000) { while (db.rows().getValue("device_control_grant") != null) delay(10) }
+            assertFalse(pendingDisable.isCompleted)
+            assertEquals(originalProfiles, bridge.controlSettings().getValue("agents"))
+            val reenable = bridge.controlSettings()
+            bridge.saveControlSettings(JsonObject(reenable + ("enabled" to JsonPrimitive(true))))
+            val enabling = bridge.controlSettings()
+            val pendingEnable = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { bridge.saveControlSettings(JsonObject(enabling + ("agents" to changedProfile(enabling)))) }
+            }
+            assertFalse(pendingEnable.isCompleted)
+            val disableAgain = bridge.controlSettings()
+            bridge.saveControlSettings(JsonObject(disableAgain + ("enabled" to JsonPrimitive(false))))
+            assertEquals(null, db.rows().getValue("device_control_grant"))
+            val cancelledSettings = bridge.controlSettings()
+            val cancelledProfile = async(start = CoroutineStart.UNDISPATCHED) {
+                bridge.saveControlSettings(JsonObject(cancelledSettings + ("agents" to changedProfile(cancelledSettings))))
+            }
+            assertFalse(cancelledProfile.isCompleted)
+            cancelledProfile.cancelAndJoin()
+            // These are the real repositories exposed by the isolated slice, not direct fence calls.
             val providerWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.providers.update(provider.copy(name = "updated")) }
             val modelWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.models.setEnabled("model", false) }
             val agentWrite = async(start = CoroutineStart.UNDISPATCHED) { backend.agents.update(defaultAgent.copy(name = "updated agent")) }
@@ -190,6 +227,11 @@ class KotlinRoomAcpSliceTest {
             assertEquals(requestId, bridge.backgroundAcpBySession(id)?.get("requestId")?.jsonPrimitive?.content)
             bridge.controlPermission(requestId, permission.getValue("options").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content)
             withTimeout(5_000) { providerWrite.await(); modelWrite.await(); agentWrite.await(); projectWrite.await() }
+            assertTrue(withTimeout(5_000) { pendingDisable.await() }.isFailure)
+            assertTrue(withTimeout(5_000) { pendingEnable.await() }.isFailure)
+            val finalControl = bridge.controlSettings()
+            assertFalse(finalControl.getValue("enabled").jsonPrimitive.boolean)
+            assertEquals(originalProfiles, finalControl.getValue("agents"))
             assertEquals("updated", db.rows().provider("provider")?.name)
             assertFalse(checkNotNull(db.rows().model("model")).isEnabled)
             assertEquals("updated agent", db.rows().agent("default")?.name)
@@ -241,7 +283,25 @@ class KotlinRoomAcpSliceTest {
             assertTrue(transports.all { it.stopped })
             bridge.deleteAcpReplaySnapshot(id, loadedReplay.id)
             assertTrue(bridge.listAcpReplaySnapshots(id).isEmpty())
-            lifecycle.stopAndAwait()
+            // Shutdown cancels and joins a settings save waiting for a live ACP worker.
+            val shutdownTurn = UUID.randomUUID().toString()
+            bridge.startBackgroundAcp(shutdownTurn, buildJsonObject { put("action", "prompt"); put("sessionId", id)
+                put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "wait") }) }) })
+            withTimeout(5_000) {
+                while (bridge.backgroundAcpEvents(shutdownTurn, 0).getValue("events").jsonArray.none {
+                    it.jsonObject["type"]?.jsonPrimitive?.content == "Permission"
+                }) delay(10)
+            }
+            val beforeShutdown = bridge.controlSettings()
+            val blockedSave = async(start = CoroutineStart.UNDISPATCHED) {
+                bridge.saveControlSettings(JsonObject(beforeShutdown + ("agents" to changedProfile(beforeShutdown))))
+            }
+            assertFalse(blockedSave.isCompleted)
+            withTimeout(5_000) { lifecycle.stopAndAwait() }
+            assertTrue(blockedSave.isCancelled)
+            assertEquals(originalProfiles, Json.parseToJsonElement(checkNotNull(db.rows().getValue("device_control_config")).value).jsonObject["agents"])
+            assertFailsWith<IllegalStateException> { bridge.controlSettings() }
+            assertFailsWith<IllegalStateException> { bridge.saveControlSettings(beforeShutdown) }
             assertFailsWith<IllegalStateException> { bridge.listAcpReplaySnapshots(id) }
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }

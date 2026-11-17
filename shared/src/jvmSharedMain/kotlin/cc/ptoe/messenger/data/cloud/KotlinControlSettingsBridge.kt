@@ -18,6 +18,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 internal class KotlinControlSettingsBridge(
     private val delegate: CoreBridge,
     private val db: LocalDatabase,
+    private val configurationWrite: suspend (suspend () -> Unit) -> Unit = { it() },
 ) : CoreBridge by delegate {
     private val store = RoomDeviceControlGrantStore(db)
     private val identity = RoomDeviceHostAccessSource(db) { "Messenger · $it" }
@@ -55,7 +56,24 @@ internal class KotlinControlSettingsBridge(
         val name = (config["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: error("Invalid device name")
         require(name.codePointCount(0, name.length) <= 120 && name.none(Char::isISOControl)) { "Invalid device name" }
         validate(profiles(config))
-        store.saveForBridge(snapshot, config)
+        if (config["agents"] == snapshot.config["agents"]) {
+            store.saveForBridge(snapshot, config)
+            return
+        }
+        // Revocation must not wait for an ACP worker. Preserve the exact old profiles in
+        // the first transaction; a later profile write must still match its new epoch.
+        val previouslyEnabled = (snapshot.config["enabled"] as? JsonPrimitive)?.booleanOrNull == true
+        val expected = if (previouslyEnabled && !enabled) {
+            val revoked = JsonObject(snapshot.config + ("enabled" to JsonPrimitive(false)))
+            val epoch = store.saveForBridge(snapshot, revoked)
+            store.readForBridge().also { current ->
+                check(current.epoch == epoch && current.identity == snapshot.identity &&
+                    current.session == snapshot.session && current.config == revoked && current.templatesSeeded) {
+                    "Cloud session or settings changed"
+                }
+            }
+        } else snapshot
+        configurationWrite { store.saveForBridge(expected, config); Unit }
     }
 
     private fun profiles(config: JsonObject): List<AcpProfile> =

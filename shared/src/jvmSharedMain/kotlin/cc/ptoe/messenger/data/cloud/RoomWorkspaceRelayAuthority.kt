@@ -4,6 +4,7 @@ package cc.ptoe.messenger.data.cloud
 import androidx.room.Transactor
 import androidx.room.useReaderConnection
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.local.room.LocalRowsDao
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 
 /** The server scopes the relay to an account but does not authenticate the claimed fromDeviceId. */
@@ -28,25 +29,33 @@ internal data class RoomInboundWorkspaceGrant(val scope: KotlinRemoteControlScop
  */
 internal class RoomWorkspaceRelayAuthority(private val db: LocalDatabase) {
     suspend fun prepare(scope: KotlinRemoteControlScope, call: RoomInboundWorkspaceCall): RoomInboundWorkspaceGrant {
-        require(call.callId.isNotBlank() && call.callId.length <= 128 && call.callId.none(Char::isISOControl)) { "Invalid tool call identity" }
-        val device = Regex("[A-Za-z0-9_-]{1,64}")
-        val entity = Regex("[A-Za-z0-9_-]{1,200}")
-        require(call.fromDeviceId.matches(device) && call.targetDeviceId == scope.deviceId && call.projectId.matches(entity) &&
-            call.conversationId.matches(entity) && call.argumentsJson.length <= 1_000_000) { "Invalid workspace relay call" }
-        require(call.name in setOf("terminal", "glob", "grep", "read", "edit", "create")) { "Unknown workspace tool" }
+        validateWorkspaceCall(scope, call)
         return db.useReaderConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
-            val rows = db.rows()
-            rows.requireCloudSession(scope)
-            val project = rows.project(call.projectId) ?: error("Project not found on this device")
-            check(project.deviceId == scope.deviceId) { "Project is not owned by this device" }
-            check(project.workspace.isNotBlank() && project.workspace.length <= 2_000) { "Project workspace is unavailable" }
-            // Terminal can write even in a nominally read-only mode; require writable
-            // for it as well as for explicit editing tools.
-            if (call.name in setOf("terminal", "edit", "create")) {
-                val conversation = rows.conversation(call.conversationId) ?: error("Conversation not found on this device")
-                check(conversation.projectId == project.id && conversation.writable) { "Workspace write requires a writable conversation of this project" }
-            }
-            RoomInboundWorkspaceGrant(scope, call, project.workspace)
+            db.rows().workspaceGrant(scope, call)
         } }
     }
+}
+
+/** Call before opening a transaction; repeat workspaceGrant inside the admission transaction. */
+internal fun validateWorkspaceCall(scope: KotlinRemoteControlScope, call: RoomInboundWorkspaceCall) {
+    require(call.callId.isNotBlank() && call.callId.length <= 128 && call.callId.none(Char::isISOControl)) { "Invalid tool call identity" }
+    val device = Regex("[A-Za-z0-9_-]{1,64}")
+    val entity = Regex("[A-Za-z0-9_-]{1,200}")
+    require(call.fromDeviceId.matches(device) && call.targetDeviceId == scope.deviceId && call.projectId.matches(entity) &&
+        call.conversationId.matches(entity) && call.argumentsJson.length <= 1_000_000) { "Invalid workspace relay call" }
+    require(call.name in setOf("terminal", "glob", "grep", "read", "edit", "create")) { "Unknown workspace tool" }
+}
+
+/** Caller holds a Room transaction and independently fences concurrent authority writers. */
+internal suspend fun LocalRowsDao.workspaceGrant(scope: KotlinRemoteControlScope, call: RoomInboundWorkspaceCall): RoomInboundWorkspaceGrant {
+    requireCloudSession(scope)
+    val project = project(call.projectId) ?: error("Project not found on this device")
+    check(project.deviceId == scope.deviceId) { "Project is not owned by this device" }
+    check(project.workspace.isNotBlank() && project.workspace.length <= 2_000) { "Project workspace is unavailable" }
+    // Terminal may write, even when its prompt says otherwise.
+    if (call.name in setOf("terminal", "edit", "create")) {
+        val conversation = conversation(call.conversationId) ?: error("Conversation not found on this device")
+        check(conversation.projectId == project.id && conversation.writable) { "Workspace write requires a writable conversation of this project" }
+    }
+    return RoomInboundWorkspaceGrant(scope, call, project.workspace)
 }
