@@ -244,9 +244,29 @@ async fn publish_core_tool(output: &Mutex<Output>, owner: Uuid, update: Value) {
 pub(crate) struct ExternalSessions {
     records: std::sync::Mutex<()>,
     workers: Mutex<HashMap<String, Worker>>,
+    handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl ExternalSessions {
+    /** Cancel and join local ACP worker tasks. OS descendants still require a platform stop proof. */
+    pub(crate) async fn stop_and_join(&self) {
+        let workers = {
+            let mut current = self.workers.lock().await;
+            current.drain().map(|(_, worker)| worker).collect::<Vec<_>>()
+        };
+        for worker in &workers {
+            worker.lifetime.cancel();
+        }
+        let handles = {
+            let mut current = self.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            current.retain(|handle| !handle.is_finished());
+            current.drain(..).collect::<Vec<_>>()
+        };
+        for handle in handles {
+            let _ = handle.await;
+        }
+    }
+
     pub fn sessions(&self, store: &Store) -> Result<HashMap<String, Record>, ApiError> {
         store
             .kv_get(SESSIONS)
@@ -736,7 +756,7 @@ async fn start_worker_impl(
     let gateway_output = output.clone();
     let gateway_state = state.clone();
     let gateway_lifetime = lifetime.clone();
-    tokio::spawn(async move {
+    let worker_task = tokio::spawn(async move {
         let Process {
             stdin,
             stdout,
@@ -870,6 +890,7 @@ async fn start_worker_impl(
         lifetime.cancel();
         let _ = failure.send(error.unwrap_or_else(|| "The ACP agent exited.".into()));
     });
+    state.external.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(worker_task);
     tokio::select! {
         biased;
         result = initialized => {
@@ -1171,6 +1192,18 @@ async fn spawn_process(
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn stop_joins_local_acp_worker_tasks() {
+        let (state, session) = setup("skills-load").await;
+        assert!(state.external.workers.lock().await.contains_key(&session));
+        tokio::time::timeout(Duration::from_secs(5), state.external.stop_and_join())
+            .await
+            .expect("local ACP worker stop must join");
+        assert!(state.external.workers.lock().await.is_empty());
+        assert!(state.external.handles.lock().unwrap().iter().all(|handle| handle.is_finished()));
+        state.shutdown.cancel();
+    }
 
     #[tokio::test]
     async fn image_gateway_failure_requires_a_new_user_turn_before_another_request() {

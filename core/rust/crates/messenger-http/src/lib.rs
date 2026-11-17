@@ -486,6 +486,7 @@ impl ServerHandle {
     pub async fn stop(mut self) -> Result<(), std::io::Error> {
         self.shutdown.cancel();
         self.state.images.stop_and_join().await;
+        self.state.external.stop_and_join().await;
         let mut relay = {
             let mut current = self.agent_relay.lock().await;
             current.take()
