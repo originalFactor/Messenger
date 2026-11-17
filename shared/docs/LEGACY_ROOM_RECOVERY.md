@@ -97,3 +97,22 @@ project cannot be selected. The apply transaction still validates all choices;
 the screen is not an ownership proof. No production host or navigation entry
 currently opens it, and its selected-field comparison is not a complete account
 of differences in older data.
+
+`AndroidLegacyRecoveryCoordinator` and `AndroidLegacyRecoveryScreen` connect
+that review to the offline session on Android. The caller must launch `run` in
+a dedicated, supervised coroutine that survives activity recreation and remains
+alive through cleanup. The caller must supply an actual lifetime owner; neither
+the coordinator nor the screen supplies a process or worker-stop proof. The
+coordinator accepts choices only for the displayed review, declines stale or
+invalid selections, and keeps ownership throughout review and commit. Cancelling
+before a choice returns no selection. If cancellation or failure occurs after a
+selection is submitted, it reports an uncertain outcome: the transaction might
+already have committed, so the user must inspect the data before retrying.
+If the injected owner retains a marker after an exceptional exit, separately
+verified owner recovery is required before another attempt. The Android app has
+no production entry point or valid lifetime proof for this flow yet.
+
+Android validates the scratch parent with the existing platform directory
+gate (`lstat`/`fstat`, app UID, private mode and fsync). Desktop retains its
+POSIX attribute check. Android's `Files.getFileStore` can be denied even for an
+app-private directory and is not used for this verification.

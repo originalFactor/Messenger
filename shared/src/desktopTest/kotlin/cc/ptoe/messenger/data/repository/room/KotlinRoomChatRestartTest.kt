@@ -134,6 +134,17 @@ class KotlinRoomChatRestartTest {
                     val schedulerProofs = AtomicInteger()
                     shutdown.enter()
                     val prefs = MemoryPreferences()
+                    if (!delegated && configureScheduler) {
+                        KotlinRoomBackendSlice.attach(db, shutdown, AppPreferences(prefs), ThemePreferences(prefs),
+                            assets, dir.resolve("avatars"), dir.resolve("images"),
+                            schedulerRecovery = ScheduledRecoveryBarrier { schedulerProofs.incrementAndGet() },
+                            previousChatWorkersStopped = PreviousChatWorkersStopped { })
+                        assertEquals(2, schedulerProofs.get()) // reconciliation and scheduler loop start
+                        assertNull(db.rows().getValue("kotlin_turn_active_v1:a-normal"))
+                        assertNull(db.rows().getValue("kotlin_turn_active_v1:z-owned"))
+                        assertEquals(KotlinTurnPhase.FAILED, RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(),
+                            KotlinTurnToolPolicy { _, _, _ -> false }).snapshot(ids.second).phase)
+                    } else {
                     val failure = assertFailsWith<IllegalStateException> {
                         KotlinRoomBackendSlice.attach(db, shutdown, AppPreferences(prefs), ThemePreferences(prefs),
                             assets, dir.resolve("avatars"), dir.resolve("images"),
@@ -141,21 +152,27 @@ class KotlinRoomChatRestartTest {
                             previousChatWorkersStopped = PreviousChatWorkersStopped { })
                     }
                     assertTrue(failure.message.orEmpty().contains("owning service"))
-                    assertEquals(0, schedulerProofs.get(), "a supplied scheduler callback is not completed reconciliation")
+                    assertEquals(if (configureScheduler) 1 else 0, schedulerProofs.get())
                     assertEquals(beforeNormal, db.rows().getValue("kotlin_turn_v1:${ids.first}"))
                     assertEquals(beforeOwned, db.rows().getValue("kotlin_turn_v1:${ids.second}"))
                     assertEquals(beforeMessages, db.rows().messagesFor(listOf("a-normal", "z-owned")))
                     assertEquals(ids.first, db.rows().getValue("kotlin_turn_active_v1:a-normal")?.value)
                     assertEquals(ids.second, db.rows().getValue("kotlin_turn_active_v1:z-owned")?.value)
                     assertTrue(db.rows().observeTurnErrorKeys().first().isEmpty())
+                    }
                 } finally {
                     if (shutdown.state.value == RoomShutdownState.Running) shutdown.stopAndAwait()
                     db.close()
                 }
                 val reopened = open(path)
                 try {
-                    assertEquals(ids.first, reopened.rows().getValue("kotlin_turn_active_v1:a-normal")?.value)
-                    assertEquals(ids.second, reopened.rows().getValue("kotlin_turn_active_v1:z-owned")?.value)
+                    if (!delegated && configureScheduler) {
+                        assertNull(reopened.rows().getValue("kotlin_turn_active_v1:a-normal"))
+                        assertNull(reopened.rows().getValue("kotlin_turn_active_v1:z-owned"))
+                    } else {
+                        assertEquals(ids.first, reopened.rows().getValue("kotlin_turn_active_v1:a-normal")?.value)
+                        assertEquals(ids.second, reopened.rows().getValue("kotlin_turn_active_v1:z-owned")?.value)
+                    }
                 } finally { reopened.close() }
             } finally { dir.toFile().deleteRecursively() }
         }

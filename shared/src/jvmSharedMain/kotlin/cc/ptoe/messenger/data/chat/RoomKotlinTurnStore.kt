@@ -12,6 +12,9 @@ import cc.ptoe.messenger.data.cloud.canonicalCloudBase
 import cc.ptoe.messenger.data.cloud.requireRemoteControl
 import cc.ptoe.messenger.data.local.ContentPartCodec
 import cc.ptoe.messenger.data.local.room.*
+import cc.ptoe.messenger.data.local.schedule.ScheduledRecoveryBarrier
+import cc.ptoe.messenger.data.local.schedule.scheduledClaimForRecovery
+import cc.ptoe.messenger.data.local.schedule.finishRecoveredScheduledClaim
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.dto.ChatMessageDto
 import cc.ptoe.messenger.data.remote.dto.ToolCallDto
@@ -907,6 +910,58 @@ class RoomKotlinTurnStore(
      * Run only before exposing this Room owner. No provider or tool operation is resumed.
      * An interrupted tool keeps its reservation until separate stop evidence permits recovery.
      */
+    internal suspend fun reconcilePreviousScheduledTurns(proof: ScheduledRecoveryBarrier) {
+        // The platform must exclude other owners for this entire call and prove prior workers
+        // and their side effects have stopped. A one-time process listing is not such a proof.
+        proof.awaitPreviousWorkersStopped()
+        transaction { rows, mark ->
+            check(rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
+            val active = rows.activeTurnKeys()
+            check(active.size <= 10_000) { "Too many interrupted chat turns" }
+            val seen = mutableSetOf<String>()
+            for (entry in active) {
+                val turn = rows.read(entry.value)
+                check(entry.key == ACTIVE + turn.conversationId && entry.value == turn.id) { "Invalid active turn identity" }
+                if (!turn.scheduledRun) continue
+                check(!turn.delegatedRun && turn.remoteScope == null) { "Invalid scheduled turn identity" }
+                val source = checkNotNull(turn.scheduledClaim) { "Scheduled turn has no claim identity" }
+                check(seen.add(source.taskId)) { "Multiple active turns claim one scheduled task" }
+                val claim = rows.scheduledClaimForRecovery(source, turn.conversationId)
+                when (turn.phase()) {
+                    KotlinTurnPhase.FINISHED, KotlinTurnPhase.FAILED, KotlinTurnPhase.CANCELLED -> error("Terminal scheduled turn is still active")
+                    KotlinTurnPhase.INTERRUPTED_TOOL -> continue
+                    KotlinTurnPhase.TITLE_PENDING, KotlinTurnPhase.TITLE_REQUESTING -> {
+                        val detail = "Title request was interrupted when the app stopped."
+                        rows.finishTitle(turn.copy(owner = null), KotlinTitleResult("", detail), mark, durableNotice = true)
+                        rows.addTurnFailure(turn, detail)
+                    }
+                    KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL -> {
+                        if (turn.invocationStarted) {
+                            rows.failTurn(turn.copy(owner = null), "Scheduled tool was interrupted; its outcome is unknown and requires recovery.", mark)
+                            continue
+                        }
+                        val safe = turn.copy(owner = null, phase = KotlinTurnPhase.READY_TOOL.name)
+                        if (claim.cancelRequested || turn.phase() == KotlinTurnPhase.CANCELLING_TOOL) rows.applyCancellation(safe, mark)
+                        else rows.failTurn(safe, "Scheduled run was interrupted when the app stopped. Retry manually.", mark)
+                    }
+                    else -> {
+                        val safe = turn.copy(owner = null)
+                        val inFlight = turn.phase() in setOf(KotlinTurnPhase.REQUESTING_PROVIDER, KotlinTurnPhase.SUMMARY_REQUESTING,
+                            KotlinTurnPhase.AUTO_APPROVAL_REQUESTING)
+                        val detail = if (inFlight)
+                            "Scheduled run was interrupted when the app stopped. The previous provider request may have completed and incurred a charge; check its outcome before retrying."
+                        else "Scheduled run was interrupted when the app stopped. Retry manually."
+                        if (claim.cancelRequested) {
+                            rows.applyCancellation(safe, mark)
+                            if (inFlight) rows.addTurnFailure(turn, detail)
+                        } else rows.failTurn(safe, detail, mark)
+                    }
+                }
+                rows.finishRecoveredScheduledClaim(claim, turn.conversationId)
+            }
+        }
+    }
+
     internal suspend fun reconcilePreviousChats(proof: PreviousChatWorkersStopped?) {
         proof?.verify()
         transaction { rows, mark ->

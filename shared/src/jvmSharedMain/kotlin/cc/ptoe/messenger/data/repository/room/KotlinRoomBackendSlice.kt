@@ -150,8 +150,9 @@ internal class KotlinRoomBackendSlice private constructor(
             mcpConnections: IsolatedRoomMcpConfig? = null,
         ): KotlinRoomBackendSlice {
             check(db.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
-            RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
-                .reconcilePreviousChats(previousChatWorkersStopped)
+            val recoveryStore = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+            if (schedulerRecovery != null) recoveryStore.reconcilePreviousScheduledTurns(schedulerRecovery)
+            recoveryStore.reconcilePreviousChats(previousChatWorkersStopped)
             val gate = RoomAssetGate()
             withContext(NonCancellable) { shutdown.registerStop { gate.shutdown() } }
             val assets = CoreAssetService(assetRoot, db.assetMetadata(), gate)

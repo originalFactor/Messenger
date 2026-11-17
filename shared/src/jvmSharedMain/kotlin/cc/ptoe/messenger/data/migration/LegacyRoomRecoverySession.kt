@@ -38,7 +38,9 @@ internal object LegacyRoomRecoverySession {
             // Before any source/Core SQLite descriptor opens, compare all main and sidecar paths.
             requireDisjoint(source, corePath, target)
             val parent = scratchParent.toAbsolutePath().normalize()
-            CoreStoreCutover.requirePrivateParent(parent)
+            // Android verifies private ownership and mode with lstat/fstat; Files.getFileStore
+            // can be denied there even for an app-private directory. Desktop uses its POSIX gate.
+            requireRoomPublicationParent(parent)
             check(Files.getOwner(parent, NOFOLLOW_LINKS) == Files.getOwner(source, NOFOLLOW_LINKS)) {
                 "Legacy source and private scratch must have the same owner"
             }

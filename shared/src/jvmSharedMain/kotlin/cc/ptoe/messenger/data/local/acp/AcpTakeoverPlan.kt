@@ -18,6 +18,8 @@ internal class AcpTakeoverEnvironment(environment: Map<String, String>) {
  * are excluded from the planner input. Callers must handle the entire result as sensitive.
  */
 internal object AcpTakeoverPlan {
+    private val supportedFormats = setOf("auto", "chat", "responses", "messages", "interactions")
+    internal fun supportsFormat(format: String): Boolean = format in supportedFormats
     /** Parse bounded output from an explicitly run OpenCode version probe. */
     fun parseOpenCodeMajor(output: String): Int {
         require(output.length <= 4096) { "OpenCode version output exceeds limit" }
@@ -45,8 +47,7 @@ internal object AcpTakeoverPlan {
         if (profileId == "opencode") require(openCodeMajor == 1 || openCodeMajor == 2) { "Only OpenCode versions 1 and 2 are supported" }
         require(models.map { it.id }.distinct().size == models.size && models.all { it.id.isNotBlank() && it.id.length <= 512 &&
             it.id.none { ch -> ch.code < 32 || ch == '/' } && it.displayName.length <= 4096 }) { "Invalid ACP model catalog" }
-        val supported = setOf("auto", "chat", "responses", "messages", "interactions")
-        val available = models.filter { it.enabled && it.apiFormat in supported }
+        val available = models.filter { it.enabled && supportsFormat(it.apiFormat) }
         val selected = available.firstOrNull { it.id == preferredModelId }
             ?: available.firstOrNull { it.apiFormat == requestedFormat }
             ?: available.firstOrNull() ?: error("Provider takeover requires an enabled compatible model")

@@ -34,6 +34,38 @@ internal data class KotlinScheduledTask(
 internal data class ScheduledRunClaim(val taskId: String, val token: String, val startedAt: Long, val cancelRequested: Boolean = false)
 internal class ScheduledTurnUnavailable(message: String) : kotlinx.coroutines.CancellationException(message)
 
+/** Caller holds the exclusive owner and the same write transaction as turn recovery. */
+internal suspend fun LocalRowsDao.scheduledClaimForRecovery(
+    claim: cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim, conversationId: String,
+): ScheduledRunClaim {
+    fun validUuid(id: String) = runCatching { java.util.UUID.fromString(id).toString() == id.lowercase() }.getOrDefault(false)
+    check(validUuid(claim.taskId) && validUuid(claim.token) && claim.startedAt > 0) { "Invalid scheduled turn claim" }
+    val current = getValue(ACTIVE + claim.taskId)?.value?.let { codec.decodeFromString<ScheduledRunClaim>(it) }
+        ?: error("Scheduled turn has no claim and requires recovery")
+    check(current.taskId == claim.taskId && current.token == claim.token && current.startedAt == claim.startedAt) {
+        "Scheduled turn claim changed"
+    }
+    getValue(TASK + claim.taskId)?.value?.let { raw ->
+        val task = codec.decodeFromString<KotlinScheduledTask>(raw)
+        check(task.id == claim.taskId && task.lastRunAt == claim.startedAt && task.lastConversationId == conversationId) {
+            "Scheduled task and turn disagree"
+        }
+    }
+    return current
+}
+
+/** Release only after the matching turn reservation has been cleared in this transaction. */
+internal suspend fun LocalRowsDao.finishRecoveredScheduledClaim(claim: ScheduledRunClaim, conversationId: String) {
+    check(getValue("kotlin_turn_active_v1:$conversationId") == null) { "Scheduled turn remains active" }
+    getValue(TASK + claim.taskId)?.value?.let { raw ->
+        val task = codec.decodeFromString<KotlinScheduledTask>(raw)
+        check(task.id == claim.taskId && task.lastRunAt == claim.startedAt && task.lastConversationId == conversationId)
+        val detail = if (claim.cancelRequested) "Execution cancelled" else "Execution interrupted when the app stopped"
+        upsertValues(listOf(KeyValueRow(TASK + claim.taskId, codec.encodeToString(task.copy(lastError = detail)))))
+    }
+    deleteValue(ACTIVE + claim.taskId)
+}
+
 /** Caller holds the same Room writer transaction that admits the turn. */
 internal suspend fun requireScheduledTurnAdmission(rows: LocalRowsDao,
     claim: cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim, conversation: cc.ptoe.messenger.data.local.room.ConversationRow,
