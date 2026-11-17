@@ -17,21 +17,22 @@
 package cc.ptoe.messenger.data
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 class WearChatRepository(
-    private val preferences: WearChatPreferences,
-    private val bridgeClient: WearBridgeClient,
+    private val preferences: WearChatStore,
+    private val bridgeClient: WearChatTransport,
     scope: CoroutineScope
 ) {
 
@@ -39,17 +40,40 @@ class WearChatRepository(
     private val _messageHistoryCache = MutableStateFlow<Map<String, List<WearChatMessage>>>(emptyMap())
     private val _conversationsCache = MutableStateFlow<List<WearConversation>>(emptyList())
     private val _agentsCache = MutableStateFlow<List<WearAgent>>(emptyList())
+    private val _userAvatarCache = MutableStateFlow<String?>(null)
 
-    // 标记当前是否有流式消息进行中
-    @Volatile private var isStreamingMessage = false
+    private data class PendingChat(
+        val requestId: String,
+        val user: WearChatMessage,
+        val assistant: WearChatMessage,
+        val userId: String? = null,
+        val assistantId: String? = null,
+        val accepted: Boolean = false,
+        val awaitingSync: Boolean = false,
+    )
+    private data class AwaitingSnapshot(val userId: String?, val assistantId: String?, val syncBarrier: Long,
+        var legacyRows: List<WearChatMessage>? = null)
+    private data class CachedSnapshot(val agents: List<WearAgent>, val conversations: List<WearConversation>,
+        val messages: Map<String, List<WearChatMessage>>, val avatar: String?)
+    private val stateLock = Any()
+    private val persistence = Mutex()
+    private val _storageError = MutableStateFlow<String?>(null)
+    val storageError: StateFlow<String?> = _storageError
+    private val pending = MutableStateFlow<Map<String, PendingChat>>(emptyMap())
+    private val legacyDivergence = MutableStateFlow<Set<String>>(emptySet())
+    private val awaitingSnapshot = mutableMapOf<String, AwaitingSnapshot>()
+    private var receivedSnapshot = false
+    private val initialLoad = CompletableDeferred<Unit>()
+    @Volatile private var initialLoadRecovered = false
 
     val agents: Flow<List<WearAgent>> = _agentsCache
     val conversations: Flow<List<WearConversation>> = _conversationsCache
     val selectedConversationId: Flow<String?> = preferences.selectedConversationId
     val messageHistory: Flow<Map<String, List<WearChatMessage>>> = _messageHistoryCache
-    val userAvatarPath: Flow<String?> = preferences.userAvatarPath
+    val userAvatarPath: Flow<String?> = _userAvatarCache
 
     val connectionState: StateFlow<WearConnectionState> = bridgeClient.connectionState
+    val syncError: StateFlow<String?> = bridgeClient.syncError
 
     fun requestReconnect() = bridgeClient.requestReconnect()
 
@@ -69,9 +93,43 @@ class WearChatRepository(
 
     val selectedMessages: Flow<List<WearChatMessage>> = combine(
         _messageHistoryCache,
+        pending,
         preferences.selectedConversationId
-    ) { history, selectedId ->
-        selectedId?.let { history[it].orEmpty() } ?: emptyList()
+    ) { _, _, selectedId -> synchronized(stateLock) {
+        if (selectedId == null) emptyList() else {
+            val base = _messageHistoryCache.value[selectedId].orEmpty()
+            val overlay = pending.value[selectedId]
+            if (overlay == null) base else {
+                val user = overlay.user.copy(id = overlay.userId ?: overlay.user.id)
+                val assistant = overlay.assistant.copy(id = overlay.assistantId ?: overlay.assistant.id)
+                base.filterNot { it.id == user.id || it.id == assistant.id } + listOf(user, assistant)
+            }
+        }
+    } }
+
+    val selectedHasUncertainTurn: Flow<Boolean> = combine(pending, legacyDivergence, preferences.selectedConversationId) { overlays, divergent, id ->
+        id != null && (overlays[id]?.awaitingSync == true || id in divergent)
+    }
+
+    fun requestReconciliation() { bridgeClient.requestSyncNow() }
+    suspend fun retrySync(): Boolean = bridgeClient.retrySync()
+
+    suspend fun dismissUncertainTurn() {
+        val id = preferences.selectedConversationId.first() ?: return
+        val changedHistory = synchronized(stateLock) {
+            if (id in inFlightChats) return@synchronized false
+            if (pending.value[id]?.awaitingSync == true) pending.value = pending.value - id
+            val legacyRows = awaitingSnapshot[id]?.legacyRows
+            if (id in legacyDivergence.value) {
+                legacyDivergence.value = legacyDivergence.value - id
+                if (legacyRows != null) {
+                    awaitingSnapshot.remove(id)
+                    _messageHistoryCache.value = _messageHistoryCache.value + (id to legacyRows)
+                    true
+                } else false
+            } else false
+        }
+        if (changedHistory) persistToDataStore()
     }
 
     /**
@@ -80,7 +138,7 @@ class WearChatRepository(
      * clobbering the local optimistic messages with a stale phone snapshot
      * while the phone is still generating the reply. See [sendMessage].
      */
-    private val inFlightChats = ConcurrentHashMap<String, String>()
+    private val inFlightChats = mutableMapOf<String, String>()
 
     private val streamTimeoutMs: Long = 180_000L
 
@@ -88,70 +146,86 @@ class WearChatRepository(
         bridgeClient.start()
         bridgeClient.loadExistingState()
 
-        // 启动时加载 DataStore 数据到内存缓存
         scope.launch {
-            preferences.messageHistory.first().let { _messageHistoryCache.value = it }
-        }
-        scope.launch {
-            preferences.conversations.first().let { _conversationsCache.value = it }
-        }
-        scope.launch {
-            preferences.agents.first().let { _agentsCache.value = it }
+            try {
+                loadPersistedState()
+                initialLoad.complete(Unit)
+            } catch (cancelled: CancellationException) {
+                initialLoad.completeExceptionally(cancelled)
+                throw cancelled
+            } catch (failure: Exception) {
+                _storageError.value = failure.message ?: "Could not load watch storage."
+                initialLoad.completeExceptionally(failure)
+            }
         }
 
         scope.launch {
             bridgeClient.syncUpdates.collect { snapshot ->
-                val currentSelection = preferences.selectedConversationId.first()
-                val conversationIds = snapshot.conversations.map { it.id }.toSet()
-                val nextSelection = when {
-                    snapshot.conversations.isEmpty() -> null
-                    currentSelection != null && currentSelection in conversationIds -> currentSelection
-                    else -> snapshot.conversations.firstOrNull()?.id
-                }
-                // While a chat is streaming for a conversation, the phone's
-                // sync snapshot lags behind the local optimistic messages
-                // (local user message + streaming assistant placeholder).
-                // Wholesale-replacing messages here would make the just-sent
-                // message vanish until the phone's next sync catches up — the
-                // "send -> message disappears" bug. So for in-flight
-                // conversations we keep the local messages AND conversations
-                // (the conversation's lastMessage/updatedAt may also be ahead
-                // locally) and only let the sync overwrite the rest.
-                val mergedMessages = snapshot.messages.toMutableMap()
-                var mergedConversations = snapshot.conversations
-                if (inFlightChats.isNotEmpty()) {
+                synchronized(stateLock) {
+                    receivedSnapshot = true
+                    val mergedMessages = snapshot.messages.toMutableMap()
+                    var mergedConversations = snapshot.conversations
                     val localHistory = _messageHistoryCache.value
-                    val localConversations = _conversationsCache.value
-                    for (convId in inFlightChats.keys) {
-                        // Preserve local messages (includes optimistic user msg + placeholder)
-                        localHistory[convId]?.let { localMsgs ->
-                            mergedMessages[convId] = localMsgs
-                        }
-                        // Preserve local conversation (includes updated lastMessage/updatedAt)
-                        val localConv = localConversations.firstOrNull { it.id == convId }
-                        if (localConv != null) {
-                            mergedConversations = mergedConversations.map { sc ->
-                                if (sc.id == convId) localConv else sc
+                    val localConversations = _conversationsCache.value.associateBy { it.id }
+                    val missingLegacyBatches = if (snapshot.messagesComplete) emptySet() else
+                        snapshot.conversations.map { it.id }.filterNot { it in snapshot.messages }.toSet()
+                    for (id in missingLegacyBatches) {
+                        localHistory[id]?.let { mergedMessages[id] = it }
+                    }
+                    val keep = inFlightChats.keys.toMutableSet()
+                    val reconciled = mutableListOf<String>()
+                    for ((id, expected) in awaitingSnapshot) {
+                        // An omitted legacy batch provides no evidence about this conversation.
+                        if (id in missingLegacyBatches) continue
+                        val rows = snapshot.messages[id].orEmpty()
+                        if ((snapshot.messagesComplete && snapshot.syncGeneration >= expected.syncBarrier) ||
+                            (expected.userId != null && expected.assistantId != null &&
+                            rows.any { it.id == expected.userId } && rows.any { it.id == expected.assistantId && !it.isPending }))
+                            reconciled.add(id) else {
+                                if (!snapshot.messagesComplete && snapshot.syncGeneration >= expected.syncBarrier) {
+                                    expected.legacyRows = rows
+                                    legacyDivergence.value = legacyDivergence.value + id
+                                }
+                                // Preserve only the two confirmed rows, never the whole old history:
+                                // the phone snapshot can have advanced beyond its bounded history window.
+                                val localRows = localHistory[id].orEmpty().filter { it.id == expected.userId || it.id == expected.assistantId }
+                                val remoteRows = mergedMessages[id].orEmpty()
+                                mergedMessages[id] = (remoteRows.filterNot { remote -> localRows.any { it.id == remote.id } } + localRows)
+                                    .sortedBy { it.timestamp }
                             }
-                        }
+                    }
+                    reconciled.forEach { awaitingSnapshot.remove(it) }
+                    legacyDivergence.value = legacyDivergence.value - reconciled.toSet()
+                    for (id in keep) {
+                        mergedMessages[id] = localHistory[id].orEmpty()
+                        localConversations[id]?.let { local -> mergedConversations = mergedConversations.map { if (it.id == id) local else it } }
+                    }
+                    _agentsCache.value = snapshot.agents
+                    _userAvatarCache.value = snapshot.userAvatarPath
+                    _conversationsCache.value = mergedConversations
+                    _messageHistoryCache.value = mergedMessages
+                    // Only matching phone identities can replace a transient outcome safely.
+                    pending.value = pending.value.filterNot { (id, turn) ->
+                        val rows = snapshot.messages[id].orEmpty()
+                        turn.awaitingSync && id !in inFlightChats && matchesPendingOutcome(rows, turn)
                     }
                 }
+                persistToDataStore()
+            }
+        }
+    }
 
-                // 更新内存缓存（UI 立即响应）
-                _agentsCache.value = snapshot.agents
-                _conversationsCache.value = mergedConversations
-                _messageHistoryCache.value = mergedMessages
-
-                // 非流式期间才写入 DataStore，流式期间仅更新内存
-                if (!isStreamingMessage) {
-                    preferences.applySnapshot(
-                        agents = snapshot.agents,
-                        conversations = mergedConversations,
-                        messages = mergedMessages,
-                        userAvatarPath = snapshot.userAvatarPath,
-                        selectedConversationId = nextSelection
-                    )
-                }
+    private suspend fun loadPersistedState() {
+        val history = preferences.messageHistory.first()
+        val conversations = preferences.conversations.first()
+        val agents = preferences.agents.first()
+        val avatar = preferences.userAvatarPath.first()
+        synchronized(stateLock) {
+            if (!receivedSnapshot) {
+                _messageHistoryCache.value = history
+                _conversationsCache.value = conversations
+                _agentsCache.value = agents
+                _userAvatarCache.value = avatar
             }
         }
     }
@@ -188,161 +262,164 @@ class WearChatRepository(
         }
     }
 
-    suspend fun sendMessage(text: String): Result<Unit> {
-        val conversation = selectedConversation.first()
-            ?: return Result.failure(IllegalStateException("Open a chat first."))
-        val agent = selectedAgent.first()
-            ?: return Result.failure(IllegalStateException("Agent not synced yet."))
-        if (!agent.isReady) {
-            return Result.failure(
-                IllegalStateException("This agent needs a model on your phone before it can chat.")
-            )
-        }
+    suspend fun sendMessage(text: String): Result<Unit> = sendMessage(preferences.selectedConversationId.first(), text)
 
-        val existingMessages = _messageHistoryCache.value[conversation.id].orEmpty()
-        val now = System.currentTimeMillis()
+    suspend fun sendMessage(conversationId: String?, text: String): Result<Unit> {
+        try { initialLoad.await() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            if (!initialLoadRecovered) return Result.failure(WearNotAdmittedException(failure.message ?: "Could not load watch storage.", failure))
+        }
+        val (conversation, agent) = synchronized(stateLock) {
+            val conversation = _conversationsCache.value.firstOrNull { it.id == conversationId }
+            conversation to _agentsCache.value.firstOrNull { it.id == conversation?.agentId }
+        }
+        if (conversation == null) return Result.failure(WearNotAdmittedException("Open a chat first."))
+        if (agent == null) return Result.failure(WearNotAdmittedException("Agent not synced yet."))
+        if (!agent.canSendExistingChat()) {
+            return Result.failure(WearModelRequiredException("This agent needs a model on your phone before it can chat."))
+        }
         val requestId = UUID.randomUUID().toString()
-        val userMessage = WearChatMessage(
-            id = "local-user-$requestId",
-            conversationId = conversation.id,
-            role = WearMessageRole.USER,
-            content = text,
-            timestamp = now
-        )
-        val assistantPlaceholder = WearChatMessage(
-            id = "local-assistant-$requestId",
-            conversationId = conversation.id,
-            role = WearMessageRole.ASSISTANT,
-            content = "",
-            timestamp = now + 1,
-            isPending = true
-        )
-
-        // Mark in-flight BEFORE writing to memory cache
-        inFlightChats[conversation.id] = requestId
-        isStreamingMessage = true  // 标记流式开始，阻止 DataStore 写入
-
-        // 内存更新：用户消息 + 占位符
-        updateMessagesInMemory(
-            conversation.id,
-            existingMessages + userMessage + assistantPlaceholder
-        )
-        updateConversationPreviewInMemory(conversation.id, text, now)
-
-        val sendResult = bridgeClient.requestChat(
-            requestId = requestId,
-            conversationId = conversation.id,
-            text = text
-        )
-
-        if (sendResult.isFailure) {
-            inFlightChats.remove(conversation.id)
-            isStreamingMessage = false
-            val error = sendResult.exceptionOrNull()?.message ?: "Phone is not connected."
-            replacePendingWithErrorInMemory(conversation.id, requestId, error)
-            // 错误时持久化到 DataStore
-            persistToDataStore()
-            return Result.failure(IllegalStateException(error))
+        val now = System.currentTimeMillis()
+        val turn = PendingChat(requestId,
+            WearChatMessage("local-user-$requestId", conversation.id, WearMessageRole.USER, text, now),
+            WearChatMessage("local-assistant-$requestId", conversation.id, WearMessageRole.ASSISTANT, "", now + 1, isPending = true))
+        synchronized(stateLock) {
+            if (conversation.id in inFlightChats) return Result.failure(WearNotAdmittedException("A chat is already in progress."))
+            if (pending.value[conversation.id]?.awaitingSync == true) return Result.failure(WearNotAdmittedException("Check the previous chat on your phone before dismissing it."))
+            if (conversation.id in legacyDivergence.value) return Result.failure(WearNotAdmittedException("Check phone history before dismissing it."))
+            inFlightChats[conversation.id] = requestId
+            pending.value = pending.value + (conversation.id to turn)
         }
-
-        // Collect streaming frames for this request: accumulate deltas into
-        // the placeholder content (so the bubble streams on the watch), until
-        // a terminal Done / Error frame arrives. onEach updates the bubble on
-        // every delta; `first` returns the terminal frame and cancels collection.
-        val currentContent = StringBuilder()
-        var lastUpdateTime = 0L
-        val throttleIntervalMs = 70L // TARGET.md §11: 60–80ms token batching window for watch battery/CPU saving
-        val terminal = try {
-            withTimeout(streamTimeoutMs) {
-                bridgeClient.chatFrames
-                    .filter { it.requestId == requestId }
-                    .onEach { frame ->
-                        if (frame is WearChatFrame.Delta) {
-                            currentContent.append(frame.delta)
-                            val now = System.currentTimeMillis()
-                            if (now - lastUpdateTime >= throttleIntervalMs) {
-                                lastUpdateTime = now
-                                updatePlaceholderContentInMemory(
-                                    conversation.id,
-                                    requestId,
-                                    currentContent.toString()
-                                )
+        val frames = try { bridgeClient.registerChat(requestId) } catch (cancelled: CancellationException) {
+            synchronized(stateLock) { inFlightChats.remove(conversation.id); pending.value = pending.value - conversation.id }
+            throw cancelled
+        } catch (failure: Exception) {
+            failPending(conversation.id, requestId, failure.message ?: "Could not start chat.", true)
+            return Result.failure(WearNotAdmittedException(failure.message ?: "Could not start chat.", failure))
+        }
+        try {
+            val sent = bridgeClient.requestChat(requestId, conversation.id, text)
+            if (sent.isFailure) {
+                val failure = sent.exceptionOrNull() ?: IllegalStateException("Phone is not connected.")
+                failPending(conversation.id, requestId, failure.message ?: "Phone is not connected.", false)
+                bridgeClient.requestSyncNow()
+                return Result.failure(failure)
+            }
+            val currentContent = StringBuilder()
+            var lastUpdateTime = 0L
+            val terminal = try {
+                withTimeout(streamTimeoutMs) {
+                    while (true) {
+                        when (val frame = frames.receive()) {
+                            is WearChatFrame.Accepted -> synchronized(stateLock) {
+                                val current = pending.value[conversation.id]
+                                if (current?.requestId == requestId) pending.value = pending.value + (conversation.id to current.copy(
+                                    accepted = true, userId = frame.userMessageId,
+                                    assistantId = frame.assistantMessageId ?: current.assistantId))
                             }
+                            is WearChatFrame.Delta -> {
+                                currentContent.append(frame.delta)
+                                val tick = System.currentTimeMillis()
+                                synchronized(stateLock) {
+                                    val current = pending.value[conversation.id]
+                                    if (current?.requestId == requestId) pending.value = pending.value + (conversation.id to current.copy(
+                                        accepted = true, assistant = if (tick - lastUpdateTime >= 70) current.assistant.copy(content = currentContent.toString()) else current.assistant))
+                                }
+                                if (tick - lastUpdateTime >= 70) lastUpdateTime = tick
+                            }
+                            is WearChatFrame.Done, is WearChatFrame.Error -> return@withTimeout frame
                         }
                     }
-                    .first { it is WearChatFrame.Done || it is WearChatFrame.Error }
+                    @Suppress("UNREACHABLE_CODE") error("Unreachable")
+                }
+            } catch (cancelled: kotlinx.coroutines.TimeoutCancellationException) {
+                failPending(conversation.id, requestId, "Timed out waiting for your phone.", false)
+                bridgeClient.requestSyncNow()
+                return Result.failure(IllegalStateException("Timed out waiting for your phone."))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                failPending(conversation.id, requestId, failure.message ?: "Phone connection ended.", false)
+                bridgeClient.requestSyncNow()
+                return Result.failure(failure)
             }
-        } catch (_: Exception) {
-            inFlightChats.remove(conversation.id)
-            isStreamingMessage = false
-            val error = "Timed out waiting for your phone."
-            replacePendingWithErrorInMemory(conversation.id, requestId, error)
-            persistToDataStore()
-            return Result.failure(IllegalStateException(error))
+            return when (terminal) {
+                is WearChatFrame.Error -> {
+                    val preAdmissionModelError = synchronized(stateLock) {
+                        terminal.code == "model_required" && pending.value[conversation.id]?.let { it.requestId == requestId && !it.accepted } == true
+                    }
+                    failPending(conversation.id, requestId, terminal.message, preAdmissionModelError)
+                    if (!preAdmissionModelError) bridgeClient.requestSyncNow()
+                    Result.failure(if (preAdmissionModelError) WearModelRequiredException(terminal.message) else IllegalStateException(terminal.message))
+                }
+                is WearChatFrame.Done -> {
+                    val content = terminal.content.ifEmpty { currentContent.toString() }
+                    completePending(conversation.id, requestId, terminal.userMessageId, terminal.assistantMessageId, content)
+                    persistToDataStore()
+                    bridgeClient.requestSyncNow()
+                    Result.success(Unit)
+                }
+                else -> error("Unexpected non-terminal chat frame")
+            }
+        } catch (cancelled: CancellationException) {
+            failPending(conversation.id, requestId, "Chat outcome is unknown. Check your phone.", false)
+            bridgeClient.requestSyncNow()
+            throw cancelled
+        } catch (failure: Exception) {
+            failPending(conversation.id, requestId, failure.message ?: "Phone connection ended.", false)
+            bridgeClient.requestSyncNow()
+            return Result.failure(failure)
+        } finally {
+            bridgeClient.unregisterChat(requestId)
         }
+    }
 
-        inFlightChats.remove(conversation.id)
-        isStreamingMessage = false  // 流式结束
+    /** An unconfirmed error is shown only as transient UI until a phone snapshot arrives. */
+    private fun matchesPendingOutcome(rows: List<WearChatMessage>, turn: PendingChat): Boolean {
+        val user = turn.userId ?: return false
+        val index = rows.indexOfFirst { it.id == user && it.role == WearMessageRole.USER }
+        if (index < 0) return false
+        val assistant = if (turn.assistantId != null) rows.firstOrNull { it.id == turn.assistantId }
+            else rows.getOrNull(index + 1)
+        return assistant?.role == WearMessageRole.ASSISTANT && !assistant.isPending
+    }
 
-        return when (terminal) {
-            is WearChatFrame.Error -> {
-                replacePendingWithErrorInMemory(conversation.id, requestId, terminal.message)
-                persistToDataStore()
-                Result.failure(IllegalStateException(terminal.message))
+    private fun failPending(conversationId: String, requestId: String, error: String, modelRequired: Boolean) {
+        synchronized(stateLock) {
+            if (inFlightChats[conversationId] == requestId) inFlightChats.remove(conversationId)
+            val current = pending.value[conversationId]
+            if (current?.requestId == requestId) {
+                pending.value = if (modelRequired) pending.value - conversationId else pending.value + (conversationId to current.copy(
+                    assistant = current.assistant.copy(content = error, isPending = false, isError = true), awaitingSync = true))
             }
-            is WearChatFrame.Done -> {
-                val content = terminal.content.ifEmpty { currentContent.toString() }
-                finalizePlaceholderInMemory(
-                    conversationId = conversation.id,
-                    requestId = requestId,
-                    content = content,
-                    userMessageId = terminal.userMessageId,
-                    assistantMessageId = terminal.assistantMessageId
-                )
-                updateConversationPreviewInMemory(
-                    conversation.id,
-                    content.ifBlank { text },
-                    System.currentTimeMillis()
-                )
-                // 流式完成后一次性写入 DataStore
-                persistToDataStore()
-                Result.success(Unit)
-            }
-            is WearChatFrame.Delta -> error("unreachable: delta is not terminal")
         }
     }
 
-    // ========== 内存操作方法（流式期间使用，避免 DataStore 写入）==========
-
-    private fun updateMessagesInMemory(conversationId: String, messages: List<WearChatMessage>) {
-        val updatedHistory = _messageHistoryCache.value.toMutableMap()
-        updatedHistory[conversationId] = messages
-        _messageHistoryCache.value = updatedHistory
-    }
-
-    private fun updateConversationPreviewInMemory(
-        conversationId: String,
-        preview: String,
-        updatedAt: Long
-    ) {
-        val conversations = _conversationsCache.value.map { conversation ->
-            if (conversation.id == conversationId) {
-                conversation.copy(
-                    lastMessage = stripThinkForPreview(preview),
-                    updatedAt = updatedAt
-                )
-            } else {
-                conversation
+    private fun completePending(conversationId: String, requestId: String, userId: String?, assistantId: String?, content: String) {
+        synchronized(stateLock) {
+            val current = pending.value[conversationId]?.takeIf { it.requestId == requestId } ?: return
+            if (inFlightChats[conversationId] == requestId) inFlightChats.remove(conversationId)
+            val actualUser = userId ?: current.userId
+            val actualAssistant = assistantId ?: current.assistantId
+            if (actualUser == null || actualAssistant == null) {
+                // Old phones may omit IDs. Do not invent durable rows that cannot be reconciled.
+                pending.value = pending.value + (conversationId to current.copy(
+                    assistant = current.assistant.copy(content = content, isPending = false), awaitingSync = true))
+                return
             }
-        }.sortedByDescending { it.updatedAt }
-        _conversationsCache.value = conversations
+            val user = current.user.copy(id = actualUser)
+            val assistant = current.assistant.copy(id = actualAssistant, content = content, isPending = false)
+            val history = _messageHistoryCache.value[conversationId].orEmpty().filterNot { it.id == actualUser || it.id == actualAssistant }
+            _messageHistoryCache.value = _messageHistoryCache.value + (conversationId to (history + user + assistant))
+            _conversationsCache.value = _conversationsCache.value.map {
+                if (it.id == conversationId) it.copy(lastMessage = stripThinkForPreview(content.ifBlank { user.content }), updatedAt = System.currentTimeMillis()) else it
+            }.sortedByDescending { it.updatedAt }
+            awaitingSnapshot[conversationId] = AwaitingSnapshot(actualUser, actualAssistant, bridgeClient.markSyncBarrier())
+            pending.value = pending.value - conversationId
+        }
     }
 
-    /**
-     * 剥离思考块（think/thinking 标签包裹的内容），用于聊天列表预览。
-     * wear 模块不依赖 shared，这里保留与 shared 的
-     * `ThinkBlockUtils.stripThinkBlock` 相同的语义：移除所有已闭合块 + 末尾未闭合块。
-     */
     private fun stripThinkForPreview(content: String): String {
         val closed = Regex(
             "<think(?:ing)?(?:\\s[^>]*)?>[\\s\\S]*?</think(?:ing)?>",
@@ -355,78 +432,44 @@ class WearChatRepository(
         return content.replace(closed, "").replace(unclosedTail, "").trim()
     }
 
-    private fun updatePlaceholderContentInMemory(
-        conversationId: String,
-        requestId: String,
-        content: String
-    ) {
-        val current = _messageHistoryCache.value[conversationId].orEmpty()
-        val updated = current.map { message ->
-            if (message.id == "local-assistant-$requestId") {
-                message.copy(content = content)
-            } else {
-                message
+    suspend fun retryStorage(): Boolean = persistence.withLock {
+        try {
+            try {
+                initialLoad.await()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (!initialLoadRecovered) {
+                    loadPersistedState()
+                    initialLoadRecovered = true
+                }
             }
+            writeSnapshot()
+            _storageError.value = null
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            _storageError.value = failure.message ?: "Could not save watch storage."
+            false
         }
-        updateMessagesInMemory(conversationId, updated)
     }
 
-    private fun finalizePlaceholderInMemory(
-        conversationId: String,
-        requestId: String,
-        content: String,
-        userMessageId: String?,
-        assistantMessageId: String?
-    ) {
-        val current = _messageHistoryCache.value[conversationId].orEmpty()
-        val updated = current.map { message ->
-            when (message.id) {
-                "local-user-$requestId" -> message.copy(
-                    id = userMessageId ?: message.id
-                )
-                "local-assistant-$requestId" -> message.copy(
-                    id = assistantMessageId ?: message.id,
-                    content = content,
-                    isPending = false,
-                    isError = false
-                )
-                else -> message
-            }
+    private suspend fun persistToDataStore() = persistence.withLock {
+        if (_storageError.value != null) return@withLock
+        try {
+            writeSnapshot()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            _storageError.value = failure.message ?: "Could not save watch storage."
         }
-        updateMessagesInMemory(conversationId, updated)
     }
 
-    private fun replacePendingWithErrorInMemory(
-        conversationId: String,
-        requestId: String,
-        error: String
-    ) {
-        val current = _messageHistoryCache.value[conversationId].orEmpty()
-        val updated = current.map { message ->
-            if (message.id == "local-assistant-$requestId") {
-                message.copy(
-                    content = error,
-                    isPending = false,
-                    isError = true
-                )
-            } else {
-                message
-            }
+    private suspend fun writeSnapshot() {
+        val snapshot = synchronized(stateLock) {
+            CachedSnapshot(_agentsCache.value, _conversationsCache.value, _messageHistoryCache.value, _userAvatarCache.value)
         }
-        updateMessagesInMemory(conversationId, updated)
-        updateConversationPreviewInMemory(conversationId, error, System.currentTimeMillis())
-    }
-
-    /**
-     * 将当前内存缓存持久化到 DataStore（流式结束后调用）
-     */
-    private suspend fun persistToDataStore() {
-        preferences.applySnapshot(
-            agents = _agentsCache.value,
-            conversations = _conversationsCache.value,
-            messages = _messageHistoryCache.value,
-            userAvatarPath = preferences.userAvatarPath.first(),
-            selectedConversationId = preferences.selectedConversationId.first()
-        )
+        preferences.applySnapshot(snapshot.agents, snapshot.conversations, snapshot.messages, snapshot.avatar)
     }
 }

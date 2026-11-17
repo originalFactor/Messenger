@@ -205,8 +205,8 @@ class RoomKotlinTurnStore(
         if (agent.defaultModelId == null) return@transaction KotlinTurnAdmission.ModelRequired
         val defaultAgent = rows.defaultAgents().singleOrNull() ?: return@transaction KotlinTurnAdmission.Rejected("Default agent is unavailable")
         val effectiveModel = if (!agent.isDefault && agent.followDefaultModel) defaultAgent.defaultModelId else agent.defaultModelId
-        if (effectiveModel == null) return@transaction KotlinTurnAdmission.ModelRequired
-        val model = rows.model(conversation.overrideModelId ?: effectiveModel)
+        val selectedModel = conversation.overrideModelId ?: effectiveModel ?: return@transaction KotlinTurnAdmission.ModelRequired
+        val model = rows.model(selectedModel)
             ?: return@transaction KotlinTurnAdmission.Rejected("Model not found")
         if (!model.isEnabled) return@transaction KotlinTurnAdmission.Rejected("Model is disabled")
         val provider = rows.provider(model.providerId) ?: return@transaction KotlinTurnAdmission.Rejected("Provider not found")

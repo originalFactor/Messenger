@@ -69,10 +69,10 @@ class RustMessageRepository(
 
     override suspend fun getByConversationIds(conversationIds: List<String>): List<Message> {
         return conversationIds.flatMap { id ->
-            val json = coreBridge.listMessagesByConversationJson(id)
-            runCatching {
+            if (id.startsWith("acp:")) readAcpHistory(coreBridge, id) else {
+                val json = coreBridge.listMessagesByConversationJson(id)
                 NetworkClient.json.decodeFromString<List<StoredMessageDto>>(json).map { it.toDomain() }
-            }.getOrDefault(emptyList())
+            }
         }
     }
 

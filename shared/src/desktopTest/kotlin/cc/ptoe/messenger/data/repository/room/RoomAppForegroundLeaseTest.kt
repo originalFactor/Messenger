@@ -32,6 +32,7 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -77,6 +78,14 @@ class RoomAppForegroundLeaseTest {
         val cleanupStarted = CompletableDeferred<Unit>()
         val releaseCleanup = CompletableDeferred<Unit>()
         val providerCalls = AtomicInteger()
+        val scopedFirstStarted = CompletableDeferred<Unit>()
+        val scopedSecondStarted = CompletableDeferred<Unit>()
+        val scopedCleanupStarted = CompletableDeferred<Unit>()
+        val releaseScopedCleanup = CompletableDeferred<Unit>()
+        val finishScopedSecond = CompletableDeferred<Unit>()
+        val terminalCleanupStarted = CompletableDeferred<Unit>()
+        val releaseTerminalCleanup = CompletableDeferred<Unit>()
+        val terminalSeen = CompletableDeferred<Unit>()
         var app: AppContainer? = null
         try {
             if (!Files.getFileStore(dir).supportsFileAttributeView("posix")) return@runBlocking
@@ -93,6 +102,12 @@ class RoomAppForegroundLeaseTest {
                     1 -> try { firstStarted.complete(Unit); emit(ChatStreamEvent.Content("first")); awaitCancellation() }
                         finally { withContext(NonCancellable) { cleanupStarted.complete(Unit); releaseCleanup.await() } }
                     2 -> { secondStarted.complete(Unit); awaitCancellation() }
+                    5 -> try { scopedFirstStarted.complete(Unit); emit(ChatStreamEvent.Content("first scoped")); awaitCancellation() }
+                        finally { withContext(NonCancellable) { scopedCleanupStarted.complete(Unit); releaseScopedCleanup.await() } }
+                    6 -> { scopedSecondStarted.complete(Unit); finishScopedSecond.await(); emit(ChatStreamEvent.Done("stop")) }
+                    7 -> try { emit(ChatStreamEvent.Done("stop")) }
+                        finally { withContext(NonCancellable) { terminalCleanupStarted.complete(Unit); releaseTerminalCleanup.await() } }
+                    8 -> emit(ChatStreamEvent.Done("stop"))
                     else -> emit(ChatStreamEvent.Error("HTTP 503: unavailable"))
                 }
             } }
@@ -157,10 +172,74 @@ class RoomAppForegroundLeaseTest {
             assertEquals(4, providerCalls.get())
             assertEquals(0, active.get())
             assertTrue(changes.toList().dropLast(1).all { it > 0 })
+
+            val firstScoped = async(Dispatchers.IO) {
+                container.coreBridge.runScopedTurn(config("one"), { _, _ -> error("tools disabled") }) { }
+            }
+            withTimeout(10_000) { scopedFirstStarted.await() }
+            assertFailsWith<IllegalStateException> {
+                container.coreBridge.runScopedTurn(config("one"), { _, _ -> error("tools disabled") }) { }
+            }
+            val secondEvents = ConcurrentLinkedQueue<String>()
+            val secondScoped = async(Dispatchers.IO) {
+                container.coreBridge.runScopedTurn(config("two"), { _, _ -> error("tools disabled") }) { secondEvents.add(it) }
+            }
+            withTimeout(10_000) { scopedSecondStarted.await() }
+            container.coreBridge.cancelTurn() // The unscoped API cannot cancel either scoped invocation.
+            firstScoped.cancel()
+            withTimeout(10_000) { scopedCleanupStarted.await() }
+            assertFalse(firstScoped.isCompleted, "disconnect waits for the exact worker cleanup")
+            finishScopedSecond.complete(Unit)
+            withTimeout(10_000) { secondScoped.await() }
+            assertTrue(secondEvents.any { it.contains("\"type\":\"Finished\"") })
+            releaseScopedCleanup.complete(Unit)
+            assertFailsWith<CancellationException> { withTimeout(10_000) { firstScoped.await() } }
+            withTimeout(10_000) { while (container.coreBridge.hasActiveTasks()) yield() }
+
+            val admissionHeld = CompletableDeferred<Unit>()
+            val releaseAdmission = CompletableDeferred<Unit>()
+            val held = async(Dispatchers.IO) {
+                db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                    admissionHeld.complete(Unit); releaseAdmission.await()
+                } }
+            }
+            try {
+                withTimeout(5_000) { admissionHeld.await() }
+                val pending = async(Dispatchers.IO) {
+                    container.coreBridge.runScopedTurn(config("one"), { _, _ -> error("tools disabled") }) { }
+                }
+                withTimeout(5_000) { while (active.get() != 1) yield() }
+                pending.cancel()
+                releaseAdmission.complete(Unit)
+                withTimeout(10_000) { held.await() }
+                assertFailsWith<CancellationException> { withTimeout(10_000) { pending.await() } }
+                withTimeout(10_000) { while (container.coreBridge.hasActiveTasks()) yield() }
+                assertEquals(6, providerCalls.get(), "cancelled admission must not dispatch a provider")
+            } finally { releaseAdmission.complete(Unit) }
+
+            val finishing = async(Dispatchers.IO) {
+                container.coreBridge.runScopedTurn(config("one"), { _, _ -> error("tools disabled") }) {
+                    if (it.contains("\"type\":\"Finished\"")) terminalSeen.complete(Unit)
+                }
+            }
+            withTimeout(10_000) { terminalCleanupStarted.await(); terminalSeen.await() }
+            assertFalse(finishing.isCompleted, "terminal stream must await its worker cleanup")
+            val independent = async(Dispatchers.IO) {
+                container.coreBridge.runScopedTurn(config("two"), { _, _ -> error("tools disabled") }) { }
+            }
+            withTimeout(10_000) { independent.await() }
+            assertFalse(finishing.isCompleted, "another conversation cannot release this worker")
+            assertTrue(container.coreBridge.hasActiveTasks())
+            releaseTerminalCleanup.complete(Unit)
+            withTimeout(10_000) { finishing.await() }
+            assertFalse(container.coreBridge.hasActiveTasks())
             container.shutdown()
         } finally {
             releaseWriter.complete(Unit)
             releaseCleanup.complete(Unit)
+            releaseScopedCleanup.complete(Unit)
+            finishScopedSecond.complete(Unit)
+            releaseTerminalCleanup.complete(Unit)
             app?.shutdown()
             if (lifecycle.state.value == RoomShutdownState.Running) lifecycle.stopAndAwait()
             ForegroundTaskRegistry.begin = previousBegin

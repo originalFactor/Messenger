@@ -54,6 +54,9 @@ class RustAgentRepository(
         }.getOrDefault(emptyList())
     }
 
+    override suspend fun getAllForSync(): List<Agent> =
+        NetworkClient.json.decodeFromString<List<StoredAgentDto>>(coreBridge.listAgentsForSyncJson()).map { it.toDomain() }
+
     override fun getById(id: String): Flow<Agent?> = version.map {
         val json = coreBridge.getAgentJson(id) ?: return@map null
         runCatching {

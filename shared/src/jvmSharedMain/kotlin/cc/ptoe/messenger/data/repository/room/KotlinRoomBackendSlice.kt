@@ -192,7 +192,7 @@ internal class KotlinRoomBackendSlice private constructor(
             }
             val conversations = RoomConversationRepository(db, acp) { _, _ -> cloud.requestLocalSync() }
             val projects = RoomProjectRepository(db) { _, _ -> cloud.requestLocalSync() }
-            val messages = RoomMessageRepository(db) { cloud.requestLocalSync() }
+            val messages = RoomMessageRepository(db, { cloud.requestLocalSync() }, acp)
             val selected = RoomCurrentAgentRepository(db, agents)
 
             val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = remoteSkills)
@@ -288,6 +288,10 @@ private class PartialChatBridge(
     override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit) = withForegroundAdmission {
         admitted { delegate.runTurn(config, toolExecutor, onEventJson) }
+    }
+    override suspend fun runScopedTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
+        onEventJson: (String) -> Unit) = withForegroundAdmission {
+        admitted { delegate.runScopedTurn(config, toolExecutor, onEventJson) }
     }
     override fun cancelTurn() { if (!calls.isClosing) delegate.cancelTurn() }
 

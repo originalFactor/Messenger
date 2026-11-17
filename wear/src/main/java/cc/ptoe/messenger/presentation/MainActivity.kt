@@ -81,7 +81,9 @@ private fun WearChatApp(
                     uiState = uiState,
                     onChatOpen = viewModel::openChat,
                     onNewChat = viewModel::startNewChat,
-                    onReconnect = { viewModel.requestReconnect() }
+                    onReconnect = { viewModel.requestReconnect() },
+                    onRetryStorage = viewModel::retryStorage,
+                    onRetrySync = viewModel::retrySync
                 )
             }
             WearScreen.NewChat -> {
@@ -96,7 +98,11 @@ private fun WearChatApp(
                     uiState = uiState,
                     onBack = viewModel::navigateBackToList,
                     onDraftChange = viewModel::updateDraft,
-                    onSend = viewModel::sendDraft
+                    onSend = viewModel::sendDraft,
+                    onReconcile = viewModel::requestReconciliation,
+                    onDismissUncertain = viewModel::dismissUncertainTurn,
+                    onRetryStorage = viewModel::retryStorage,
+                    onRetrySync = viewModel::retrySync
                 )
             }
         }

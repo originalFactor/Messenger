@@ -18,9 +18,12 @@ package cc.ptoe.messenger.domain.repository
 
 import cc.ptoe.messenger.domain.model.Agent
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 interface AgentRepository {
     fun getAll(): Flow<List<Agent>>
+    /** Fresh, complete enumeration for sync; failures must propagate. */
+    suspend fun getAllForSync(): List<Agent> = getAll().first()
     fun getById(id: String): Flow<Agent?>
     fun getDefaultAgent(): Flow<Agent?>
     suspend fun insert(agent: Agent)

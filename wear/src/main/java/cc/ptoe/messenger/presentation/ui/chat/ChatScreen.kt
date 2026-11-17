@@ -63,7 +63,10 @@ import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
 import cc.ptoe.messenger.data.WearAgent
 import cc.ptoe.messenger.data.WearConversation
+import cc.ptoe.messenger.data.canSendExistingChat
 import cc.ptoe.messenger.presentation.ui.components.BannerMessage
+import cc.ptoe.messenger.presentation.ui.components.StorageErrorNotice
+import cc.ptoe.messenger.presentation.ui.components.SyncErrorNotice
 import cc.ptoe.messenger.presentation.ui.components.MessageBubble
 import cc.ptoe.messenger.presentation.ui.components.verticalRotaryScroll
 import cc.ptoe.messenger.presentation.viewmodel.WearChatUiState
@@ -84,6 +87,10 @@ fun ChatScreen(
     onBack: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
+    onReconcile: () -> Unit,
+    onDismissUncertain: () -> Unit,
+    onRetryStorage: () -> Unit,
+    onRetrySync: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
@@ -95,10 +102,10 @@ fun ChatScreen(
             modifier = Modifier.fillMaxSize()
         ) { page ->
             when (page) {
-                0 -> ChatContent(uiState = uiState)
+                0 -> ChatContent(uiState = uiState, onReconcile = onReconcile, onDismissUncertain = onDismissUncertain, onRetryStorage = onRetryStorage, onRetrySync = onRetrySync)
                 1 -> ComposeContent(
                     draft = uiState.draft,
-                    enabled = uiState.selectedAgent?.isReady == true && !uiState.isSending,
+                    enabled = uiState.selectedAgent.canSendExistingChat() && !uiState.isSending && !uiState.hasUncertainTurn,
                     onDraftChange = onDraftChange,
                     onSend = {
                         onSend()
@@ -118,6 +125,10 @@ fun ChatScreen(
 @Composable
 private fun ChatContent(
     uiState: WearChatUiState,
+    onReconcile: () -> Unit,
+    onDismissUncertain: () -> Unit,
+    onRetryStorage: () -> Unit,
+    onRetrySync: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -173,7 +184,16 @@ private fun ChatContent(
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            if (selectedAgent?.isReady == false) {
+            if (uiState.hasUncertainTurn) {
+                BannerMessage("Check phone history before dismissing.")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Button(onClick = onReconcile) { Text("Sync") }
+                    Spacer(Modifier.width(4.dp))
+                    Button(onClick = onDismissUncertain) { Text("Dismiss") }
+                }
+            }
+
+            if (selectedAgent != null && !selectedAgent.canSendExistingChat()) {
                 BannerMessage("Set a model for this agent on your phone before chatting.")
                 Spacer(modifier = Modifier.height(6.dp))
             }
@@ -197,7 +217,7 @@ private fun ChatContent(
                 // 底部已被 HorizontalPageIndicator 占用一部分，扣除已预留的高度
                 val bottomInsetDp = (chordInsetDp - pageIndicatorReservedHeight).coerceAtLeast(0.dp)
 
-                if (uiState.messages.isEmpty()) {
+                if (uiState.messages.isEmpty() && uiState.storageError == null && uiState.syncError == null) {
                     EmptyConversation(
                         conversation = selectedConversation,
                         agent = selectedAgent
@@ -215,6 +235,16 @@ private fun ChatContent(
                             .fillMaxSize()
                             .verticalRotaryScroll(listState)
                     ) {
+                        uiState.storageError?.let { error ->
+                            item(key = "storage_error") {
+                                StorageErrorNotice(error, uiState.isRetryingStorage, onRetryStorage)
+                            }
+                        }
+                        uiState.syncError?.let { error ->
+                            item(key = "sync_error") {
+                                SyncErrorNotice(error, uiState.isRetryingSync, onRetrySync)
+                            }
+                        }
                         items(uiState.messages.asReversed(), key = { it.id }) { message ->
                             MessageBubble(message = message)
                         }

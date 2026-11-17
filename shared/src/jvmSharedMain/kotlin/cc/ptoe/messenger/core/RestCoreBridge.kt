@@ -60,6 +60,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -379,6 +380,21 @@ class RestCoreBridge(
         }
     }
 
+    override suspend fun localAcpHistory(sessionId: String, before: String?): JsonObject {
+        require(sessionId.startsWith("acp:")) { "Invalid ACP session" }
+        var result: JsonObject? = null
+        val command = buildJsonObject {
+            put("action", "history")
+            put("sessionId", sessionId)
+            before?.let { put("before", it) }
+        }
+        streamSsePost("/control/commands/${path(cc.ptoe.messenger.data.util.randomUuid())}", command.toString()) {
+            check(result == null) { "ACP history returned multiple results" }
+            result = NetworkClient.json.parseToJsonElement(it).jsonObject
+        }
+        return checkNotNull(result) { "ACP history ended without a result" }
+    }
+
     override suspend fun remoteControlCommand(requestId: String, deviceId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
         streamSsePost("/remote/client/commands/${path(requestId)}", buildJsonObject {
             put("target", deviceId)
@@ -448,6 +464,7 @@ class RestCoreBridge(
     override fun deleteModel(id: String) = blockingDelete("/models/${path(id)}")
 
     override fun listAgentsJson(): String = blockingItems("/agents")
+    override fun listAgentsForSyncJson(): String = blockingAllPages("/agents")
     override fun getAgentJson(id: String): String? = blockingOptional("/agents/${path(id)}")
     override fun getDefaultAgentJson(): String? = blockingOptional("/agents/default")
     override fun getTitleAgentJson(): String? = blockingOptional("/agents/title")
@@ -460,6 +477,7 @@ class RestCoreBridge(
     override fun deleteProject(id: String) = blockingDelete("/projects/${path(id)}")
 
     override fun listConversationsJson(): String = blockingItems("/conversations")
+    override fun listConversationsForSyncJson(): String = blockingAllPages("/conversations")
     override fun listConversationsByAgentJson(agentId: String): String =
         blockingItems("/agents/${path(agentId)}/conversations")
     override fun listConversationsByProjectJson(projectId: String): String =
@@ -876,6 +894,40 @@ class RestCoreBridge(
             if (beforeId == null) break
         }
         kotlinx.serialization.json.JsonArray(messages).toString()
+    }
+
+    private fun blockingAllPages(path: String): String = runBlocking {
+        val result = mutableListOf<kotlinx.serialization.json.JsonElement>()
+        val ids = mutableSetOf<String>()
+        var offset = 0L
+        var expectedTotal: Long? = null
+        while (true) {
+            val page = NetworkClient.json.parseToJsonElement(getText("$path?limit=500&offset=$offset")).jsonObject
+            val items = page.getValue("items").jsonArray
+            val returnedOffset = page.getValue("offset").jsonPrimitive.longOrNull
+            val total = page.getValue("total").jsonPrimitive.longOrNull
+            val pageLimit = page.getValue("limit").jsonPrimitive.longOrNull
+            check(returnedOffset == offset && total != null && total >= 0 && pageLimit != null && pageLimit in 1L..500L && items.size <= pageLimit) { "Invalid pagination for $path" }
+            if (expectedTotal == null) expectedTotal = total
+            check(total == expectedTotal) { "Pagination changed while reading $path" }
+            for (item in items) {
+                val id = item.jsonObject.getValue("id").jsonPrimitive.content
+                check(id.isNotBlank() && ids.add(id)) { "Duplicate or empty identifier while reading $path" }
+                result.add(item)
+            }
+            val end = offset + items.size
+            check(end <= total) { "Invalid page length for $path" }
+            val rawNext = page["nextOffset"]
+            val next = if (rawNext == null || rawNext is kotlinx.serialization.json.JsonNull) null else
+                rawNext.jsonPrimitive.longOrNull ?: error("Invalid continuation for $path")
+            if (end == total) {
+                check(next == null) { "Unexpected continuation for $path" }
+                break
+            }
+            check(next != null && next == end && next > offset) { "Invalid continuation for $path" }
+            offset = next
+        }
+        kotlinx.serialization.json.JsonArray(result).toString()
     }
 
     private fun blockingItems(path: String): String = runBlocking {

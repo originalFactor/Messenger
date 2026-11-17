@@ -836,7 +836,7 @@ class ChatViewModel(
                 if (message.isNotBlank() && !durableTurnFailureNotices) setError(message)
             }
             "TitleFailed" -> {
-                if (!(durableTurnFailureNotices && root["durableNotice"]?.jsonPrimitive?.contentOrNull == "true")) viewModelScope.launch {
+                if (!(durableTurnFailureNotices && root["durableNotice"]?.jsonPrimitive?.contentOrNull == "true")) {
                     val code = root["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     setError(code)
                 }

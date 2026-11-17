@@ -21,22 +21,21 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -89,7 +88,7 @@ class WearNetworkBridge(
 
     private val mutex = Mutex()
 
-    @Volatile private var webSocket: WebSocket? = null
+    private val socketOwner = WearSocketOwner<WebSocket>()
     @Volatile private var listenerJob: Job? = null
 
     // mDNS 发现缓存：记录上次成功发现的 endpoint，加速重连
@@ -105,71 +104,62 @@ class WearNetworkBridge(
     val connectionState: StateFlow<WearConnectionState> = _connectionState.asStateFlow()
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
-
-    /**
-     * Streaming chat frames from the phone. A chat request produces zero or
-     * more [WearChatFrame.Delta] frames, then exactly one terminal
-     * [WearChatFrame.Done] or [WearChatFrame.Error]. All share the
-     * originating request's id.
-     *
-     * `extraBufferCapacity` is large so that deltas emitted in the brief window
-     * between sending the chat request and the repository subscribing (and
-     * during any read pause) are not lost — SharedFlow with replay=0 still
-     * buffers up to `extraBufferCapacity` recent emissions for a slow/late
-     * subscriber.
-     */
-    private val _chatFrames = MutableSharedFlow<WearChatFrame>(
-        replay = 0,
-        extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    val chatFrames: SharedFlow<WearChatFrame> = _chatFrames.asSharedFlow()
+    private val chatRequests = WearChatFrameRegistry()
 
     suspend fun connect(): Boolean = mutex.withLock {
         if (_isConnected.value) return@withLock true
+        val result = CompletableDeferred<Result<Unit>>()
+        val attempt = socketOwner.begin { result.complete(Result.failure(IllegalStateException("Connection closed"))) }
 
         // 优先尝试缓存的 endpoint，加速重连
         val cached = synchronized(endpointCacheLock) { cachedEndpoint }
-        val endpoint = if (cached != null) {
-            Log.d(TAG, "Trying cached endpoint: ${cached.host}:${cached.port}")
-            cached
-        } else {
-            discoverPhone()
+        val endpoint = try {
+            if (cached != null) {
+                Log.d(TAG, "Trying cached endpoint: ${cached.host}:${cached.port}")
+                cached
+            } else {
+                discoverPhone()
+            }
+        } catch (failure: Throwable) {
+            socketOwner.cancel(attempt) { _isConnected.value = false; _connectionState.value = WearConnectionState.Disconnected }
+            throw failure
         }
 
         if (endpoint == null) {
-            _connectionState.value = WearConnectionState.Error(
-                "找不到手机服务 — 检查手表和手机是否在同一网络下（通过手表系统设置 > 蓝牙 PAN 走网络）"
-            )
+            socketOwner.cancel(attempt) {
+                _connectionState.value = WearConnectionState.Error(
+                    "找不到手机服务 — 检查手表和手机是否在同一网络下（通过手表系统设置 > 蓝牙 PAN 走网络）"
+                )
+            }
             return@withLock false
         }
 
-        _connectionState.value = WearConnectionState.Connecting("正在连 ${endpoint.host}:${endpoint.port}")
-        val builder = Request.Builder()
-            .url("ws://${endpoint.host}:${endpoint.port}")
-        // The server rejects any handshake without its token; the token comes
-        // from the mDNS TXT record, so only a device that discovered the
-        // service can connect.
-        endpoint.token?.let { builder.header(TOKEN_HEADER, it) }
-        val request = builder.build()
-
-        val result = CompletableDeferred<Result<Unit>>()
+        if (!socketOwner.ifActive(attempt) { _connectionState.value = WearConnectionState.Connecting("正在连 ${endpoint.host}:${endpoint.port}") })
+            return@withLock false
+        val request = try {
+            val builder = Request.Builder().url("ws://${endpoint.host}:${endpoint.port}")
+            // The server requires the token discovered in the mDNS TXT record.
+            endpoint.token?.let { builder.header(TOKEN_HEADER, it) }
+            builder.build()
+        } catch (failure: Exception) {
+            socketOwner.cancel(attempt) { _isConnected.value = false; _connectionState.value = WearConnectionState.Disconnected }
+            throw failure
+        }
 
         val socketListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket open: ${response.code} ${response.message}")
-                this@WearNetworkBridge.webSocket = webSocket
-                _isConnected.value = true
-                _connectionState.value = WearConnectionState.Connected
-                // 连接成功，缓存 endpoint 供下次重连使用
-                synchronized(endpointCacheLock) {
-                    cachedEndpoint = endpoint
+                val accepted = socketOwner.opened(attempt, webSocket) {
+                    _isConnected.value = true
+                    _connectionState.value = WearConnectionState.Connected
+                    synchronized(endpointCacheLock) { cachedEndpoint = endpoint }
+                    result.complete(Result.success(Unit))
                 }
-                if (!result.isCompleted) result.complete(Result.success(Unit))
+                if (!accepted) webSocket.cancel()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleIncoming(text)
+                socketOwner.ifOpen(attempt, webSocket) { handleIncoming(webSocket, text) }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -179,44 +169,51 @@ class WearNetworkBridge(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "WebSocket closed: $code $reason")
-                failAllPending("Phone closed the connection.")
-                this@WearNetworkBridge.webSocket = null
-                _isConnected.value = false
-                _connectionState.value = WearConnectionState.Disconnected
-                // 1008 = the phone rejected our bridge token (e.g. its data was
-                // cleared and a new token was minted). Drop the cached endpoint
-                // so the next attempt rediscovers the service and its token.
-                if (code == 1008) forgetCachedEndpoint()
+                chatRequests.disconnected(webSocket, "Phone closed the connection.")
+                socketOwner.closed(attempt, webSocket) {
+                    failAllPending("Phone closed the connection.")
+                    _isConnected.value = false
+                    _connectionState.value = WearConnectionState.Disconnected
+                    if (code == 1008) forgetCachedEndpoint()
+                    result.complete(Result.failure(IllegalStateException("Phone closed the connection.")))
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WebSocket failure: ${t.message}", t)
-                failAllPending(t.message ?: "Connection failed.")
-                this@WearNetworkBridge.webSocket = null
-                _isConnected.value = false
-                _connectionState.value = WearConnectionState.Error(
-                    "连不上手机: ${t.message ?: t.javaClass.simpleName}"
-                )
-                if (response?.code == 403 || response?.code == 401) forgetCachedEndpoint()
-                if (!result.isCompleted) result.complete(Result.failure(t))
+                chatRequests.disconnected(webSocket, t.message ?: "Connection failed.")
+                socketOwner.closed(attempt, webSocket) {
+                    failAllPending(t.message ?: "Connection failed.")
+                    _isConnected.value = false
+                    _connectionState.value = WearConnectionState.Error("连不上手机: ${t.message ?: t.javaClass.simpleName}")
+                    if (response?.code == 403 || response?.code == 401) forgetCachedEndpoint()
+                    result.complete(Result.failure(t))
+                }
             }
         }
 
-        val socket = okHttpClient.newWebSocket(request, socketListener)
-        webSocket = socket
+        val socket = try { okHttpClient.newWebSocket(request, socketListener) } catch (failure: Exception) {
+            socketOwner.cancel(attempt) { _isConnected.value = false; _connectionState.value = WearConnectionState.Disconnected }
+            throw failure
+        }
+        if (!socketOwner.attach(attempt, socket)) socket.cancel()
 
         try {
             val outcome = withTimeout(10_000L) { result.await() }
             outcome.isSuccess
         } catch (e: TimeoutCancellationException) {
             Log.w(TAG, "WebSocket connect timed out")
+            socketOwner.cancel(attempt) {
+                failAllPending("Connect timed out.")
+                _isConnected.value = false
+                _connectionState.value = WearConnectionState.Error("连接超时")
+            }
             runCatching { socket.cancel() }
-            failAllPending("Connect timed out.")
-            _isConnected.value = false
-            _connectionState.value = WearConnectionState.Error("连接超时")
             false
         } catch (e: Exception) {
+            socketOwner.cancel(attempt) { _isConnected.value = false; _connectionState.value = WearConnectionState.Disconnected }
             runCatching { socket.cancel() }
+            if (e is kotlinx.coroutines.CancellationException) throw e
             false
         }
     }
@@ -329,34 +326,27 @@ class WearNetworkBridge(
     /**
      * Sends a chat request to the phone. Returns true once the request frame
      * has been queued onto the socket; the actual streaming response arrives
-     * asynchronously as [chatFrames] (chat_delta* -> chat_done | chat_error).
+     * asynchronously to the request's registered channel.
      *
      * Unlike [requestSync] / [requestNewConversation] / [requestAvatar] this
-     * does NOT wait for a response — there are many response frames per
-     * request, so the repository subscribes to [chatFrames] and accumulates
-     * deltas itself.
+     * does NOT wait for a response — register the channel before sending.
      */
     suspend fun requestChat(
         requestId: String,
         conversationId: String,
         text: String
     ): Boolean = mutex.withLock {
-        val socket = webSocket
-        if (socket == null || !_isConnected.value) {
-            return@withLock false
-        }
         val request = JSONObject().apply {
             put("type", "chat")
             put("requestId", requestId)
             put("conversationId", conversationId)
             put("text", text)
         }
-        try {
-            socket.send(request.toString())
-        } catch (e: Exception) {
-            Log.w(TAG, "WebSocket chat send failed", e)
-            false
-        }
+        socketOwner.withOpen { socket ->
+            check(chatRequests.bind(requestId, socket)) { "Register the chat request before sending" }
+            try { socket.send(request.toString()) }
+            catch (e: Exception) { Log.w(TAG, "WebSocket chat send failed", e); false }
+        } ?: false
     }
 
     suspend fun requestNewConversation(
@@ -391,45 +381,42 @@ class WearNetworkBridge(
     }
 
     private suspend fun withRequest(buildRequest: () -> JSONObject): JSONObject? = mutex.withLock {
-        val socket = webSocket
-        if (socket == null || !_isConnected.value) {
-            return@withLock null
-        }
         val request = buildRequest()
         val requestId = request.optString("requestId")
         if (requestId.isBlank()) return@withLock null
 
         val deferred = CompletableDeferred<String>()
-        pendingRequests[requestId] = deferred
-
-        try {
-            val ok = socket.send(request.toString())
-            if (!ok) {
-                pendingRequests.remove(requestId)
-                return@withLock null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "WebSocket send failed", e)
-            pendingRequests.remove(requestId)
-            return@withLock null
-        }
+        val sent = socketOwner.withOpen { socket ->
+            pendingRequests[requestId] = deferred
+            try { socket.send(request.toString()) }
+            catch (e: Exception) { Log.w(TAG, "WebSocket send failed", e); false }
+        } ?: false
+        if (!sent) { pendingRequests.remove(requestId); return@withLock null }
 
         val text = try {
-            withTimeout(REQUEST_TIMEOUT_MS) { deferred.await() }
-        } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "Request $requestId timed out")
-            pendingRequests.remove(requestId)
-            return@withLock null
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) { deferred.await() }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Request $requestId failed", e)
-            pendingRequests.remove(requestId)
             return@withLock null
+        } finally {
+            pendingRequests.remove(requestId, deferred)
         }
+        if (text == null) { Log.w(TAG, "Request $requestId timed out"); return@withLock null }
 
         try { JSONObject(text) } catch (e: Exception) { null }
     }
 
-    private fun handleIncoming(text: String) {
+    fun registerChat(requestId: String): ReceiveChannel<WearChatFrame> = chatRequests.register(requestId)
+
+    fun unregisterChat(requestId: String) = chatRequests.unregister(requestId)
+
+    private fun publishChatFrame(socket: WebSocket, frame: WearChatFrame) {
+        chatRequests.deliver(socket, frame)
+    }
+
+    private fun handleIncoming(socket: WebSocket, text: String) {
         val response = try {
             JSONObject(text)
         } catch (e: Exception) {
@@ -442,17 +429,21 @@ class WearNetworkBridge(
             // today, but kept as a hook for future push-style messages.
             return
         }
-        // Streaming chat frames are multiplexed onto chatFrames (many per
-        // requestId) instead of the single-response pendingRequests map.
+        // Streaming chat frames are delivered to their registered request.
         when (response.optString("type")) {
+            "chat_accepted" -> {
+                val userMessageId = response.optString("userMessageId").takeIf { it.isNotBlank() } ?: return
+                publishChatFrame(socket, WearChatFrame.Accepted(requestId, userMessageId,
+                    response.optString("assistantMessageId").takeIf { it.isNotBlank() }))
+            }
             "chat_delta" -> {
                 val delta = response.optString("delta")
                 if (delta.isNotEmpty()) {
-                    _chatFrames.tryEmit(WearChatFrame.Delta(requestId, delta))
+                    publishChatFrame(socket, WearChatFrame.Delta(requestId, delta))
                 }
             }
             "chat_done" -> {
-                _chatFrames.tryEmit(
+                publishChatFrame(socket,
                     WearChatFrame.Done(
                         requestId = requestId,
                         content = response.optString("content"),
@@ -465,7 +456,8 @@ class WearNetworkBridge(
             }
             "chat_error" -> {
                 val message = response.optString("error").ifBlank { "Unknown error" }
-                _chatFrames.tryEmit(WearChatFrame.Error(requestId, message))
+                publishChatFrame(socket, WearChatFrame.Error(requestId, message,
+                    response.optString("code").takeIf { it.isNotBlank() }))
             }
             else -> {
                 // Single-response types (sync_response, new_conversation_response,
@@ -488,10 +480,13 @@ class WearNetworkBridge(
      * Public force-close hook used by the polling loop on reconnect.
      */
     fun close() {
-        runCatching { webSocket?.close(1000, "client closed") }
-        webSocket = null
-        _isConnected.value = false
-        _connectionState.value = WearConnectionState.Disconnected
+        socketOwner.stop { socket ->
+            if (socket != null) chatRequests.disconnected(socket, "Connection closed")
+            failAllPending("Connection closed")
+            _isConnected.value = false
+            _connectionState.value = WearConnectionState.Disconnected
+            runCatching { socket?.close(1000, "client closed") }
+        }
     }
 
     private fun newRequestId(): String =

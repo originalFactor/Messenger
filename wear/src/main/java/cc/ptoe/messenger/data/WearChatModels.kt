@@ -19,13 +19,20 @@ package cc.ptoe.messenger.data
 import org.json.JSONArray
 import org.json.JSONObject
 
+private fun JSONObject.optionalBoolean(key: String): Boolean? = opt(key) as? Boolean
+
 data class WearAgent(
     val id: String,
     val name: String,
     val avatarPath: String?,
     val isDefault: Boolean,
-    val isReady: Boolean
+    val isReady: Boolean,
+    /** Null means the phone predates this field; retain its isReady gate. */
+    val hasDefaultModel: Boolean? = null,
 )
+
+/** Older snapshots retain their original readiness gate until the phone provides model presence. */
+internal fun WearAgent?.canSendExistingChat(): Boolean = this != null && (hasDefaultModel ?: isReady)
 
 data class WearConversation(
     val id: String,
@@ -56,7 +63,11 @@ data class WearSyncSnapshot(
     val conversations: List<WearConversation>,
     val messages: Map<String, List<WearChatMessage>>,
     val userAvatarPath: String?,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Local generation captured before the corresponding phone sync request starts. */
+    val syncGeneration: Long = 0,
+    /** Older phones omit this proof that every message batch decoded successfully. */
+    val messagesComplete: Boolean = false
 )
 
 /**
@@ -67,6 +78,12 @@ data class WearSyncSnapshot(
  */
 sealed interface WearChatFrame {
     val requestId: String
+
+    data class Accepted(
+        override val requestId: String,
+        val userMessageId: String,
+        val assistantMessageId: String? = null
+    ) : WearChatFrame
 
     data class Delta(
         override val requestId: String,
@@ -82,7 +99,8 @@ sealed interface WearChatFrame {
 
     data class Error(
         override val requestId: String,
-        val message: String
+        val message: String,
+        val code: String? = null
     ) : WearChatFrame
 }
 
@@ -104,6 +122,7 @@ internal object WearChatJsonCodec {
                         put("avatarPath", agent.avatarPath)
                         put("isDefault", agent.isDefault)
                         put("isReady", agent.isReady)
+                        agent.hasDefaultModel?.let { put("hasDefaultModel", it) }
                     }
                 )
             }
@@ -123,7 +142,8 @@ internal object WearChatJsonCodec {
                         avatarPath = item.optString("avatarPath").takeIf { it.isNotBlank() }
                             ?: item.optString("avatar").takeIf { it.isNotBlank() },
                         isDefault = item.optBoolean("isDefault"),
-                        isReady = item.optBoolean("isReady")
+                        isReady = item.optBoolean("isReady"),
+                        hasDefaultModel = item.optionalBoolean("hasDefaultModel")
                     )
                 )
             }
@@ -243,7 +263,8 @@ internal object WearChatJsonCodec {
                         name = item.optString("name"),
                         avatarPath = avatarPaths[id],
                         isDefault = item.optBoolean("isDefault"),
-                        isReady = item.optBoolean("isReady")
+                        isReady = item.optBoolean("isReady"),
+                        hasDefaultModel = item.optionalBoolean("hasDefaultModel")
                     )
                 )
             }

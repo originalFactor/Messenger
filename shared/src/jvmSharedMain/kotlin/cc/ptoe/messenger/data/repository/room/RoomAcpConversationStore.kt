@@ -31,6 +31,12 @@ class RoomAcpConversationStore(private val db: LocalDatabase, private val gate: 
         decode(row?.value).map { (id, value) -> project(id, value) }
     }
 
+    override suspend fun messagesForSync(id: String): List<cc.ptoe.messenger.domain.model.Message> {
+        val record = decode(db.rows().getValue(ACP_SESSIONS)?.value)[id] ?: error("ACP session not found")
+        val messages = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
+        return cc.ptoe.messenger.data.repository.projectAcpHistory(id, messages)
+    }
+
     override suspend fun update(conversation: Conversation) {
         require(conversation.id.startsWith("acp:"))
         gate.withInactiveSession(conversation.id, false) {

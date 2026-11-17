@@ -76,6 +76,8 @@ class ChatWorkspaceCapabilityTest {
 
             val sent = Channel<TurnConfigBridge>(Channel.UNLIMITED)
             val observed = Channel<Unit>(Channel.UNLIMITED)
+            val titleAtDelivery = Channel<String?>(Channel.UNLIMITED)
+            var currentError: () -> String? = { null }
             var turnEvents = listOf("""{"type":"Finished"}""")
             val stub = Proxy.newProxyInstance(CoreBridge::class.java.classLoader, arrayOf(CoreBridge::class.java)) { _, _, _ ->
                 error("Unexpected Core call")
@@ -84,7 +86,10 @@ class ChatWorkspaceCapabilityTest {
                 override suspend fun backgroundTurnActive(conversationId: String) = false
                 override suspend fun startBackgroundTurn(config: TurnConfigBridge) { sent.send(config) }
                 override suspend fun observeBackgroundTurn(conversationId: String, onEventJson: (String) -> Unit) {
-                    turnEvents.forEach(onEventJson)
+                    for (event in turnEvents) {
+                        onEventJson(event)
+                        if (event.contains("\"type\":\"TitleFailed\"")) titleAtDelivery.send(currentError())
+                    }
                     observed.send(Unit)
                 }
             }
@@ -98,6 +103,7 @@ class ChatWorkspaceCapabilityTest {
                 val vm = ChatViewModel(messages, conversations, agents, modelRepository, providers, images,
                     builtinTools = { emptyList() }, projectRepository = projects, coreBridge = bridge,
                     platformToolsEnabled = platformToolsEnabled, durableTurnFailureNotices = durableNotices)
+                currentError = { vm.errorMessage.value }
                 viewModels.put("$id-$platformToolsEnabled", vm)
                 vm.loadConversation(id)
                 val collector = launch { vm.agent.collect() }
@@ -106,6 +112,9 @@ class ChatWorkspaceCapabilityTest {
                     vm.sendMessage("hello")
                     val config = withTimeout(5_000) { sent.receive() }
                     withTimeout(5_000) { observed.receive() }
+                    if (events.any { it.contains("\"type\":\"TitleFailed\"") }) {
+                        assertEquals(expectedError, withTimeout(5_000) { titleAtDelivery.receive() })
+                    }
                     assertEquals(expectedError, vm.errorMessage.value)
                     return config
                 } finally { collector.cancel() }

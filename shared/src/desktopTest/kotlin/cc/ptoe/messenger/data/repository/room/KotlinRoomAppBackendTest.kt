@@ -12,6 +12,7 @@ import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ChatImageStore
 import cc.ptoe.messenger.data.local.ThemePreferences
 import cc.ptoe.messenger.data.local.room.LocalDatabase
+import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.migration.RoomShutdownState
 import cc.ptoe.messenger.di.AppContainer
@@ -122,6 +123,23 @@ class KotlinRoomAppBackendTest {
             }
             app.messageRepository.delete("failed")
             assertEquals(0, requests.get())
+            val following = Agent("follow", "Follow", systemPrompt = "", defaultModelId = "m", temperature = 0.7f,
+                topP = 1f, maxTokens = null, followDefaultModel = true, createdAt = 1, updatedAt = 1)
+            app.agentRepository.insert(following)
+            app.conversationRepository.insert(Conversation("override", "Chat", "p", "follow", overrideModelId = "m",
+                createdAt = 1, updatedAt = 1, lastMessage = null))
+            app.conversationRepository.insert(Conversation("no-override", "Chat", "p", "follow",
+                createdAt = 1, updatedAt = 1, lastMessage = null))
+            val noOverride = app.conversationRepository.getById("no-override").first()
+            val noOverrideConfig = config.copy(conversationId = "no-override")
+            assertFailsWith<IllegalStateException> { app.coreBridge.startBackgroundTurn(noOverrideConfig) }
+            assertEquals(noOverride, app.conversationRepository.getById("no-override").first())
+            assertTrue(app.messageRepository.getByConversationId("no-override").first().isEmpty())
+            assertEquals(0, requests.get())
+            app.coreBridge.startBackgroundTurn(config.copy(conversationId = "override"))
+            withTimeout(10_000) { app.coreBridge.observeBackgroundTurn("override") { } }
+            assertEquals(listOf("hello", "reply"), app.messageRepository.getByConversationId("override").first().map { it.content })
+            assertEquals(1, requests.get())
             app.agentRepository.delete("a")
             assertEquals(listOf("a"), app.agentRepository.getAll().first().filter { it.isDefault }.map { it.id })
             val agent = app.agentRepository.getDefaultAgent().first()!!
@@ -132,7 +150,17 @@ class KotlinRoomAppBackendTest {
             app.coreBridge.startBackgroundTurn(config)
             withTimeout(10_000) { app.coreBridge.observeBackgroundTurn("c") { } }
             assertEquals(listOf("hello", "reply"), app.messageRepository.getByConversationId("c").first().map { it.content })
-            assertEquals(1, requests.get())
+            assertEquals(2, requests.get())
+            val acpRecord = """{"acp:session":{"id":"acp:session","title":"ACP","profile":"codex","updated_at":5,"messages":[{"id":"au","role":"user","text":"question","status":"sent","timestamp":2},{"id":"aa","role":"assistant","text":"failed","status":"error","timestamp":3}]}}"""
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", acpRecord)))
+            assertTrue(app.conversationRepository.getAllForSync().any { it.id == "acp:session" })
+            val mixed = app.messageRepository.getByConversationIds(listOf("c", "acp:session"))
+            assertEquals(listOf("au", "aa"), mixed.filter { it.conversationId == "acp:session" }.map { it.id })
+            assertEquals(MessageStatus.ERROR, mixed.last().status)
+            assertEquals("failed", mixed.last().content)
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", acpRecord.replace("\"timestamp\":3", "\"timestamp\":\"invalid\""))))
+            assertFailsWith<IllegalStateException> { app.messageRepository.getByConversationIds(listOf("c", "acp:session")) }
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", acpRecord)))
             assertEquals(0, mcpRequests.get())
             assertFailsWith<IllegalStateException> { app.clearAllDataAndReinit() }
             assertEquals(listOf("hello", "reply"), app.messageRepository.getByConversationId("c").first().map { it.content })

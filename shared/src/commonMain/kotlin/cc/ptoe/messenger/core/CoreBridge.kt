@@ -57,6 +57,7 @@ interface CoreBridge {
     fun deleteModel(id: String)
 
     fun listAgentsJson(): String
+    fun listAgentsForSyncJson(): String = listAgentsJson()
     fun getAgentJson(id: String): String?
     fun getDefaultAgentJson(): String?
     fun getTitleAgentJson(): String?
@@ -69,6 +70,7 @@ interface CoreBridge {
     fun deleteProject(id: String)
 
     fun listConversationsJson(): String
+    fun listConversationsForSyncJson(): String = listConversationsJson()
     fun listConversationsByAgentJson(agentId: String): String
     fun listConversationsByProjectJson(projectId: String): String
     fun getConversationJson(id: String): String?
@@ -191,6 +193,19 @@ interface CoreBridge {
         command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
     ) { error("Device control unavailable") }
+    /** Local, read-only ACP history; it must not require platform tool publication. */
+    suspend fun localAcpHistory(sessionId: String, before: String?): kotlinx.serialization.json.JsonObject {
+        var result: kotlinx.serialization.json.JsonObject? = null
+        controlCommand(cc.ptoe.messenger.data.util.randomUuid(), kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("history"))
+            put("sessionId", kotlinx.serialization.json.JsonPrimitive(sessionId))
+            before?.let { put("before", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }) { event ->
+            check(result == null) { "ACP history returned multiple results" }
+            result = event
+        }
+        return checkNotNull(result) { "ACP history ended without a result" }
+    }
     suspend fun remoteControlCommand(
         requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
@@ -223,6 +238,13 @@ interface CoreBridge {
         toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit
     )
+
+    /** A stream whose lifetime is owned by the caller's coroutine. */
+    suspend fun runScopedTurn(
+        config: TurnConfigBridge,
+        toolExecutor: suspend (name: String, argumentsJson: String) -> Pair<String, Boolean>,
+        onEventJson: (String) -> Unit
+    ) = runTurn(config, toolExecutor, onEventJson)
 
 }
 

@@ -22,6 +22,7 @@ import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,6 +78,29 @@ class IsolatedCoreTurnBridgeLifetimeTest {
             cloudGate.shutdown()
             db.close()
             dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun scopedCancellationWhileWorkerStartIsBlockedPreventsProviderDispatch() = runBlocking {
+        val startEntered = CompletableDeferred<Unit>()
+        val releaseStart = CompletableDeferred<Unit>()
+        val providerCalls = AtomicInteger()
+        val provider = KotlinTurnProvider { _, _ -> flow {
+            providerCalls.incrementAndGet()
+            emit(ChatStreamEvent.Done("stop"))
+        } }
+        withBridge(provider, beforeWorkerStart = {
+            withContext(NonCancellable) { startEntered.complete(Unit); releaseStart.await() }
+        }) { bridge ->
+            try {
+                val turn = async(Dispatchers.Default) { bridge.runScopedTurn(config(), { _, _ -> error("tools disabled") }) { } }
+                withTimeout(5_000) { startEntered.await() }
+                turn.cancel()
+                releaseStart.complete(Unit)
+                assertFailsWith<CancellationException> { withTimeout(5_000) { turn.await() } }
+                withTimeout(5_000) { while (bridge.hasActiveTasks()) yield() }
+                assertEquals(0, providerCalls.get())
+            } finally { releaseStart.complete(Unit) }
         }
     }
 

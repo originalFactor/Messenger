@@ -49,6 +49,9 @@ class RustConversationRepository(
         }.getOrDefault(emptyList())
     }
 
+    override suspend fun getAllForSync(): List<Conversation> =
+        NetworkClient.json.decodeFromString<List<StoredConversationDto>>(coreBridge.listConversationsForSyncJson()).map { it.toDomain() }
+
     override fun getByAgentId(agentId: String): Flow<List<Conversation>> = version.map {
         val json = coreBridge.listConversationsByAgentJson(agentId)
         runCatching {

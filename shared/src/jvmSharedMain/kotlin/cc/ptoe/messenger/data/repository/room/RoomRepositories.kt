@@ -227,6 +227,7 @@ private fun cc.ptoe.messenger.domain.model.ChatModel.row() = cc.ptoe.messenger.d
  * must enforce active-turn protection and preserve their agent/workspace bindings. */
 interface AcpConversationStore {
     fun observeAll(): Flow<List<cc.ptoe.messenger.domain.model.Conversation>>
+    suspend fun messagesForSync(id: String): List<cc.ptoe.messenger.domain.model.Message> = error("ACP history is unavailable")
     suspend fun update(conversation: cc.ptoe.messenger.domain.model.Conversation)
     suspend fun delete(id: String)
 }
@@ -287,7 +288,8 @@ private fun cc.ptoe.messenger.domain.model.Conversation.row() = cc.ptoe.messenge
     overrideReasoningEffort, overrideToolsEnabled, overrideToolsConfig?.let { cc.ptoe.messenger.data.util.ToolsConfigCodec.encode(it) }, writable,
     createdAt, updatedAt, lastMessage, reasoningFormat, contextSummary, contextSummaryUntil, contextTokens, contextTokensAt)
 
-class RoomMessageRepository(private val db: LocalDatabase, private val onChanged: (String) -> Unit = {}) : cc.ptoe.messenger.domain.repository.MessageRepository {
+class RoomMessageRepository(private val db: LocalDatabase, private val onChanged: (String) -> Unit = {},
+    private val acp: AcpConversationStore? = null) : cc.ptoe.messenger.domain.repository.MessageRepository {
     private val rows get() = db.rows()
     override fun getByConversationId(conversationId: String) = rows.observeMessages(conversationId).map { list -> list.map { it.domain() } }
     override fun observeChanges(conversationId: String) = rows.observeMessageCount(conversationId).map { }
@@ -300,7 +302,14 @@ class RoomMessageRepository(private val db: LocalDatabase, private val onChanged
         return rows.messagesBefore(conversationId, beforeId, limit).asReversed().map { it.domain() }
     }
     override suspend fun getFrom(conversationId: String, fromId: String) = rows.messagesFrom(conversationId, fromId).map { it.domain() }
-    override suspend fun getByConversationIds(conversationIds: List<String>) = if (conversationIds.isEmpty()) emptyList() else rows.messagesFor(conversationIds).groupBy { it.conversationId }.let { byConversation -> conversationIds.flatMap { id -> byConversation[id].orEmpty().map { it.domain() } } }
+    override suspend fun getByConversationIds(conversationIds: List<String>): List<cc.ptoe.messenger.domain.model.Message> {
+        val native = conversationIds.filterNot { it.startsWith("acp:") }
+        val byConversation = if (native.isEmpty()) emptyMap() else rows.messagesFor(native).groupBy { it.conversationId }
+        return conversationIds.flatMap { id ->
+            if (id.startsWith("acp:")) requireNotNull(acp) { "ACP history is unavailable" }.messagesForSync(id)
+            else byConversation[id].orEmpty().map { it.domain() }
+        }
+    }
     override suspend fun insert(message: cc.ptoe.messenger.domain.model.Message) = insertAll(listOf(message))
     override suspend fun insertAll(messages: List<cc.ptoe.messenger.domain.model.Message>) {
         db.writeLocal(workspaceAuthority = false) { dao, mark ->

@@ -10,6 +10,8 @@ import cc.ptoe.messenger.domain.chat.KotlinTurnCommand
 import cc.ptoe.messenger.domain.chat.KotlinTurnPhase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
@@ -54,13 +56,15 @@ class KotlinBackgroundTurnBridge(
         private var turnId: String? = null
         private var cancellationRequested = false
         private var retired = false
+        private var worker: Job? = null
 
         fun requestCancellation(): (suspend () -> Unit)? {
-            val id = synchronized(lock) {
+            val (id, activeWorker) = synchronized(lock) {
                 if (retired) return null
                 cancellationRequested = true
-                turnId
+                turnId to worker
             }
+            activeWorker?.cancel()
             return id?.let { captured -> suspend { runner.cancel(captured) } }
         }
 
@@ -70,7 +74,8 @@ class KotlinBackgroundTurnBridge(
         }
 
         suspend fun beforeWorkerStart(id: String) {
-            val cancel = synchronized(lock) { cancellationRequested }
+            val job = checkNotNull(currentCoroutineContext()[Job])
+            val cancel = synchronized(lock) { worker = job; cancellationRequested }
             if (cancel) runner.cancel(id)
         }
 
@@ -141,7 +146,7 @@ class KotlinBackgroundTurnBridge(
         runLegacyTurn(config, onEventJson, newLegacyInvocation())
 
     internal suspend fun runLegacyTurn(config: TurnConfigBridge, onEventJson: (String) -> Unit, invocation: LegacyInvocation,
-        beforeWorkerStart: suspend () -> Unit = {}) {
+        beforeWorkerStart: suspend () -> Unit = {}, awaitTerminalWorker: Boolean = false) {
         require(config.disableTools) { "Legacy Kotlin turns require tools to be disabled" }
         legacyLock.withLock {
             legacyInvocation = invocation
@@ -158,7 +163,10 @@ class KotlinBackgroundTurnBridge(
             } finally {
                 invocation.retire()
                 if (legacyInvocation === invocation) legacyInvocation = null
-                if (!terminal) admitted?.let { id -> withContext(NonCancellable) { runner.cancelAndAwait(id) } }
+                admitted?.let { id -> withContext(NonCancellable) {
+                    if (!terminal) runner.cancelAndAwait(id)
+                    else if (awaitTerminalWorker) runner.awaitStopped(id)
+                } }
             }
         }
     }

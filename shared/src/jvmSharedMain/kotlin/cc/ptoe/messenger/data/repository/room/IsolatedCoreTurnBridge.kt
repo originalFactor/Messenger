@@ -18,6 +18,9 @@ import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.chat.KotlinTurnLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -150,10 +153,17 @@ internal class IsolatedCoreTurnBridge(
     }
 
     override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
-        onEventJson: (String) -> Unit) {
+        onEventJson: (String) -> Unit) = runLegacy(config, onEventJson, scoped = false)
+
+    override suspend fun runScopedTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
+        onEventJson: (String) -> Unit) = runLegacy(config, onEventJson, scoped = true)
+
+    @OptIn(InternalCoroutinesApi::class)
+    private suspend fun runLegacy(config: TurnConfigBridge, onEventJson: (String) -> Unit, scoped: Boolean) {
         require(config.disableTools) { "Legacy turns require tools to be disabled" }
         val (runtime, invocation) = lock.withLock {
-            check(legacy.isEmpty()) { "A legacy turn is already active" }
+            check(config.conversationId !in legacy) { "A legacy turn is already active for this conversation" }
+            if (!scoped) check(currentLegacyInvocation == null) { "A legacy turn is already active" }
             reserve(config.conversationId)
             val old = runtimes[config.conversationId]
             check(old?.runner?.hasRunningJobs() != true) { "A turn worker is still stopping" }
@@ -162,15 +172,21 @@ internal class IsolatedCoreTurnBridge(
             val token = next.bridge.newLegacyInvocation()
             runtimes[config.conversationId] = next
             legacy.add(config.conversationId)
-            currentLegacyInvocation = token
+            if (!scoped) currentLegacyInvocation = token
             generation++
             next to token
         }
+        val cancellation = if (scoped) checkNotNull(currentCoroutineContext()[Job]).invokeOnCompletion(
+            onCancelling = true, invokeImmediately = true,
+        ) { failure ->
+            if (failure != null) invocation.requestCancellation()?.let { cancel -> scope.launch { cancel() } }
+        } else null
         try {
             beforeLegacyAdmission()
-            runtime.bridge.runLegacyTurn(config, onEventJson, invocation, beforeLegacyWorkerStart)
+            runtime.bridge.runLegacyTurn(config, onEventJson, invocation, beforeLegacyWorkerStart, awaitTerminalWorker = scoped)
         }
         finally { withContext(NonCancellable) { lock.withLock {
+            cancellation?.dispose()
             invocation.retire()
             if (currentLegacyInvocation === invocation) currentLegacyInvocation = null
             if (legacy.remove(config.conversationId)) generation++
