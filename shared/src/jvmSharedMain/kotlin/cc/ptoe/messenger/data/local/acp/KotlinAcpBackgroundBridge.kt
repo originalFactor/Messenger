@@ -11,9 +11,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 internal fun roomAcpSettings(settings: JsonObject, modeWritable: Boolean = false, modePending: Boolean = false,
-    modeInspected: Boolean = false, modePendingId: String? = null): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+    modeInspected: Boolean = false, modePendingId: String? = null, modeConfigId: String? = null): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
     put("settingsWritable", false); put("steering", false); put("modeWritable", modeWritable); put("modePending", modePending)
     put("modeInspected", modeInspected); if (modePendingId != null) put("modePendingId", modePendingId)
+    if (modeConfigId != null) put("modeConfigId", modeConfigId)
 }))
 
 /** Existing UI polling surface backed by the isolated ACP owner; other commands delegate. */
@@ -56,9 +57,12 @@ internal class KotlinAcpBackgroundBridge(
             onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) })
         } else if (action == "setSessionConfig" && session?.startsWith("acp:") == true) {
             val mode = (command["modeId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-                ?: error("Only ACP mode changes are available")
-            check(command["configId"] == null && command["value"] == null) { "Only ACP mode changes are available" }
-            owner.setMode(session, mode) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+            val config = (command["configId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val value = (command["value"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val deliver: (JsonObject) -> Unit = { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
+            if (mode != null && command["configId"] == null && command["value"] == null) owner.setMode(session, mode, deliver)
+            else if (config != null && value != null && command["modeId"] == null) owner.setModeOption(session, config, value, deliver)
+            else error("Only ACP mode changes are available")
         } else if (action == "inspectPendingMode" && session?.startsWith("acp:") == true) {
             owner.inspectPendingMode(session) { settings -> onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", settings) }) }
         } else if (action == "confirmPendingMode" && session?.startsWith("acp:") == true) {

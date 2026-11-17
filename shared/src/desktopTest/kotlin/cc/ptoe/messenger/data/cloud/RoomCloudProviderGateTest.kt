@@ -32,6 +32,29 @@ import okio.Path.Companion.toPath
 import kotlin.test.*
 
 class RoomCloudProviderGateTest {
+    @Test fun toolPermitRemainsRevokedAfterDurableSignOutAndDoesNotRevokeNewSession(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("cloud-tool-permit")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val dao = db.cloudSync()
+        val gate = RoomCloudProviderGate.forTesting(dao, KotlinTurnProvider { _, _ -> flow { awaitCancellation() } })
+        try {
+            val old = SyncSession("account", "old")
+            val fresh = SyncSession("account", "fresh")
+            dao.activate(old)
+            val permit = gate.registerToolPermit(old)
+            assertEquals("admitted", permit.authorize { "admitted" })
+            gate.invalidate(old)
+            assertFailsWith<IllegalStateException> { permit.authorize { error("must not dispatch") } }
+            gate.revoke(old) // Durable cleanup removes the temporary invalidation marker.
+            dao.activate(fresh)
+            val newPermit = gate.registerToolPermit(fresh)
+            assertFailsWith<IllegalStateException> { permit.authorize { error("must not dispatch") } }
+            assertEquals("fresh", newPermit.authorize { "fresh" })
+            permit.release(); newPermit.release()
+            assertFailsWith<IllegalStateException> { newPermit.authorize { error("released") } }
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun session401AfterProviderDoneRejectsPendingCompletionAndToolClaim(): Unit = runBlocking {
         for (holdAfterBeginTool in listOf(false, true)) {
             val dir = Files.createTempDirectory("room-cloud-401-done")

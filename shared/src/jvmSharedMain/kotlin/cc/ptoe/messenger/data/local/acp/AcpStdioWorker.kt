@@ -41,6 +41,7 @@ internal class AcpStdioWorker(
     private var active: Active? = null
     private var gatewayAvailable = false
     private var modeRevision = 0L
+    private var configRevision = 0L
     private var settings = buildJsonObject { put("configOptions", JsonArray(emptyList())); put("steering", JsonNull) }
 
     private fun mergeSettings(current: JsonObject, update: JsonObject): JsonObject {
@@ -77,6 +78,23 @@ internal class AcpStdioWorker(
             else if (modeRevision == before && "currentModeId" !in result && (result["modes"] as? JsonObject)?.get("currentModeId") == null)
                 settings = mergeSettings(settings, buildJsonObject { put("currentModeId", modeId) })
             settings
+        }
+    }
+
+    override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject {
+        val connection = checkNotNull(peer) { "ACP worker is unavailable" }
+        val sessionId = checkNotNull(session) { "ACP session is unavailable" }
+        val before = gate.withLock { configRevision }
+        val response = try { withTimeout(30_000) { connection.request("session/set_config_option", buildJsonObject {
+            put("sessionId", sessionId); put("configId", configId); put("value", value)
+        }, permit) } } catch (timeout: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw IllegalStateException("ACP mode change timed out; its outcome is unknown", timeout)
+        } as? JsonObject ?: error("Invalid ACP configuration response")
+        beforeModeResultMerge()
+        return gate.withLock {
+            val update = if (configRevision != before) JsonObject(response - "configOptions") else response
+            settings = mergeSettings(settings, update); settings
         }
     }
 
@@ -195,6 +213,7 @@ internal class AcpStdioWorker(
         val (turnId, snapshot) = gate.withLock {
             if (kind in setOf("config_option_update", "current_mode_update", "usage_update", "available_commands_update")) {
                 if (kind == "current_mode_update") modeRevision++
+                if (kind == "config_option_update") configRevision++
                 settings = mergeSettings(settings, update)
                 active?.turnId to settings
             } else active?.turnId to null

@@ -77,6 +77,30 @@ internal fun interface AcpNewSessionSource {
     suspend fun load(profileId: String, projectId: String): AcpNewSessionDraft
 }
 
+private fun acpModeOption(settings: JsonObject, id: String): JsonObject? {
+    val matches = (settings["configOptions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.filter {
+        (it["id"] as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull == id
+    }
+    val option = matches.singleOrNull() ?: return null
+    return option.takeIf { (it["category"] as? JsonPrimitive)?.contentOrNull == "mode" &&
+        (it["type"] as? JsonPrimitive)?.contentOrNull == "select" && it["options"] is JsonArray }
+}
+
+private fun acpModeChoiceExists(options: JsonArray, value: String, depth: Int = 0): Boolean {
+    require(depth <= 16) { "ACP mode options are too deeply nested" }
+    return options.any { item ->
+        val option = item as? JsonObject ?: return@any false
+        val selected = (option["value"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        selected == value || (option["options"] as? JsonArray)?.let { acpModeChoiceExists(it, value, depth + 1) } == true
+    }
+}
+
+private fun reportedAcpMode(settings: JsonObject, configId: String?): String? {
+    val raw = if (configId == null) (settings["modes"] as? JsonObject)?.get("currentModeId")
+        else acpModeOption(settings, configId)?.get("currentValue")
+    return (raw as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+}
+
 /**
  * Isolated ACP background owner. The caller holds the enclosing Room owner and must ensure all
  * ACP workers use this owner, all configuration/workspace writers use [withConfigurationWrite], and
@@ -421,20 +445,23 @@ internal class RoomAcpBackgroundOwner private constructor(
     }
 
     /** Read a live agent snapshot under the same configuration and worker ownership as a turn. */
-    suspend fun sessionSettings(sessionId: String): JsonObject = settingsOperation(sessionId, null, false, null, null, null)
+    suspend fun sessionSettings(sessionId: String): JsonObject = settingsOperation(sessionId, null, null, false, null, null, null)
 
     /** Only agent-advertised legacy modes are mutable; no request is repeated automatically. */
-    suspend fun setMode(sessionId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, mode, false, null, null, deliver)
+    suspend fun setMode(sessionId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, mode, null, false, null, null, deliver)
+
+    suspend fun setModeOption(sessionId: String, configId: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject =
+        settingsOperation(sessionId, mode, configId, false, null, null, deliver)
 
     /** Explicitly inspect the stopped agent's current settings before permitting another change. */
-    suspend fun inspectPendingMode(sessionId: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, null, true, null, null, deliver)
+    suspend fun inspectPendingMode(sessionId: String, deliver: (JsonObject) -> Unit): JsonObject = settingsOperation(sessionId, null, null, true, null, null, deliver)
 
     /** Clear only the exact marker after the user confirms a freshly rechecked displayed mode. */
     suspend fun confirmPendingMode(sessionId: String, marker: String, mode: String, deliver: (JsonObject) -> Unit): JsonObject =
-        settingsOperation(sessionId, null, true, marker, mode, deliver)
+        settingsOperation(sessionId, null, null, true, marker, mode, deliver)
 
     @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
-    private suspend fun settingsOperation(sessionId: String, mode: String?, inspect: Boolean,
+    private suspend fun settingsOperation(sessionId: String, mode: String?, configId: String?, inspect: Boolean,
         confirmMarker: String?, confirmMode: String?, deliver: ((JsonObject) -> Unit)?): JsonObject = admitted {
         admissions.withLock {
             synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
@@ -448,13 +475,15 @@ internal class RoomAcpBackgroundOwner private constructor(
                     sessionId in retained
                 }
                 val modeLedger = RoomAcpModeLedger(db)
-                val pending = modeLedger.pendingId(sessionId)
+                val pendingRecord = modeLedger.pendingRecord(sessionId)
+                val pending = pendingRecord?.id
                 if (confirmMarker != null) {
                     check(pending == confirmMarker && !confirmMode.isNullOrBlank()) { "The pending ACP mode change has changed" }
                     check(synchronized(lock) { inspectedModes[sessionId] == (confirmMarker to confirmMode) }) { "Inspect the current ACP mode before confirming" }
                 }
                 if (mode != null) {
                     require(mode.isNotBlank() && mode.length <= 256) { "Invalid ACP mode" }
+                    require(configId == null || configId.isNotBlank() && configId.length <= 256) { "Invalid ACP mode setting" }
                     check(pending == null) { "Check the previous ACP mode change before trying again" }
                     check(!retainedBefore) { "This retained ACP session cannot safely change mode" }
                 }
@@ -472,14 +501,19 @@ internal class RoomAcpBackgroundOwner private constructor(
                         settingsWorker = worker
                         val settings = worker.sessionSettings()
                         if (inspect && pending != null) {
-                            val current = ((settings["modes"] as? JsonObject)?.get("currentModeId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                            val current = reportedAcpMode(settings, pendingRecord?.configId)
                             check(!current.isNullOrBlank()) { "The agent did not report its current mode; the previous change remains unresolved" }
                         }
                         if (mode == null) settings else {
-                            val modes = (settings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray ?: error("This ACP session does not offer modes")
-                            check(modes.any { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.takeIf { id -> id.isString }?.contentOrNull == mode }) { "This ACP session does not offer that mode" }
+                            if (configId == null) {
+                                val modes = (settings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray ?: error("This ACP session does not offer modes")
+                                check(modes.any { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.takeIf { id -> id.isString }?.contentOrNull == mode }) { "This ACP session does not offer that mode" }
+                            } else {
+                                val option = acpModeOption(settings, configId) ?: error("This ACP session does not offer that mode setting")
+                                check(acpModeChoiceExists(option["options"] as? JsonArray ?: JsonArray(emptyList()), mode)) { "This ACP session does not offer that mode" }
+                            }
                             currentCoroutineContext().ensureActive()
-                            modeMarker = modeLedger.begin(sessionId, mode)
+                            modeMarker = modeLedger.begin(sessionId, mode, configId)
                             val caller = checkNotNull(currentCoroutineContext()[Job])
                             val dispatchLock = Any()
                             var cancelled = false
@@ -487,13 +521,14 @@ internal class RoomAcpBackgroundOwner private constructor(
                             val cancellation = caller.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
                                 if (cause != null) synchronized(dispatchLock) { cancelled = true }
                             }
-                            try { worker.setMode(mode) {
+                            val permit = {
                                 synchronized(dispatchLock) {
                                     if (cancelled || !caller.isActive) throw CancellationException("ACP mode change cancelled before dispatch")
                                     check(!dispatched) { "ACP mode change was already dispatched" }
                                     dispatched = true
                                 }
-                            } }
+                            }
+                            try { if (configId == null) worker.setMode(mode, permit) else worker.setModeOption(configId, mode, permit) }
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (failure: Exception) { throw IllegalStateException("ACP mode change may have completed; check the current settings before trying again", failure) }
                             finally { cancellation.dispose() }
@@ -519,7 +554,8 @@ internal class RoomAcpBackgroundOwner private constructor(
                 // A notification can arrive after the response but before the stopped worker's
                 // reader exits. Read its final cache only after retirement has joined that reader.
                 val finalSettings = if (mode != null || inspect && pending != null) checkNotNull(settingsWorker).sessionSettings() else settings
-                val observedMode = ((finalSettings["modes"] as? JsonObject)?.get("currentModeId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                val pendingConfigId = configId ?: pendingRecord?.configId
+                val observedMode = reportedAcpMode(finalSettings, pendingConfigId)
                 if (inspect && pending != null) check(!observedMode.isNullOrBlank()) { "The agent did not report its current mode; the previous change remains unresolved" }
                 val confirmed = confirmMarker != null && observedMode == confirmMode
                 if (confirmed) withContext(NonCancellable) { modeLedger.clear(sessionId, confirmMarker!!) }
@@ -531,11 +567,15 @@ internal class RoomAcpBackgroundOwner private constructor(
                 }
                 val modes = (finalSettings["modes"] as? JsonObject)?.get("availableModes") as? JsonArray
                 val options = (finalSettings["configOptions"] as? JsonArray).orEmpty()
-                val legacyModeAvailable = !modes.isNullOrEmpty() && options.none {
-                    ((it as? JsonObject)?.get("category") as? JsonPrimitive)?.contentOrNull == "mode"
-                }
-                val result = roomAcpSettings(finalSettings, modeWritable = legacyModeAvailable && !retainedBefore && pendingAfter == null,
-                    modePending = pendingAfter != null, modeInspected = pendingAfter != null && inspect, modePendingId = pendingAfter)
+                val modeOptions = options.mapNotNull { it as? JsonObject }.filter { (it["category"] as? JsonPrimitive)?.contentOrNull == "mode" }
+                val supportedOption = modeOptions.singleOrNull()?.let { option ->
+                    val id = (option["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                    id != null && acpModeOption(finalSettings, id) != null
+                } == true
+                val modeAvailable = supportedOption || (!modes.isNullOrEmpty() && modeOptions.isEmpty())
+                val result = roomAcpSettings(finalSettings, modeWritable = modeAvailable && !retainedBefore && pendingAfter == null,
+                    modePending = pendingAfter != null, modeInspected = pendingAfter != null && inspect, modePendingId = pendingAfter,
+                    modeConfigId = pendingConfigId.takeIf { pendingAfter != null })
                 if (deliver != null) {
                     currentCoroutineContext().ensureActive()
                     // The bridge callback must not reenter this owner.

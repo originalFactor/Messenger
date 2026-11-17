@@ -17,7 +17,7 @@ mcp_url = None
 def session_settings():
     return {
         "configOptions": [
-            {"id": "permissions", "name": "Permissions", "type": "select", "category": "permission",
+            {"id": "legacy-mode" if mode.startswith("settings-mode-option") else "permissions", "name": "Permissions", "type": "select", "category": "mode" if mode.startswith("settings-mode-option") else "permission",
              "currentValue": permissions, "options": [
                  {"group": "permissions", "name": "Access", "options": [
                      {"value": "read-only", "name": "Read only"},
@@ -78,7 +78,7 @@ for line in sys.stdin:
     if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
         mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "settings-mode-after", "mcp-load")}
+        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "settings-mode-after", "settings-mode-option", "settings-mode-option-after", "mcp-load")}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
@@ -134,6 +134,9 @@ for line in sys.stdin:
         else:
             permissions = "workspace-write" if params["value"] == "full-access" else params["value"]
             send(id=request_id, result={"configOptions": session_settings()["configOptions"]})
+            if mode == "settings-mode-option-after":
+                permissions = "read-only"
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "config_option_update", "configOptions": session_settings()["configOptions"]}})
     elif method == "session/set_mode":
         current_mode = packet["params"]["modeId"]
         if mode == "settings-mode-after":

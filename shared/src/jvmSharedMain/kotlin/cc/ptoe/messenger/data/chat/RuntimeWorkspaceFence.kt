@@ -39,6 +39,7 @@ class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
     private var active: Active? = null
     private var invalidated = false
     private var generation = 0L
+    private var authorityEpoch = 0L
     private val dispatchedTokens = mutableSetOf<String>()
 
     internal fun requireOwner(candidate: LocalDatabase) {
@@ -47,7 +48,21 @@ class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
 
     /** All authority-changing writers must use this gate, including Cloud restore. */
     suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
-        synchronized(admissionLock) { check(!invalidated && uncertain == null) { "Workspace execution requires recovery" } }
+        synchronized(admissionLock) {
+            check(!invalidated && uncertain == null) { "Workspace execution requires recovery" }
+            authorityEpoch++
+        }
+        block()
+    }
+
+    internal fun authoritySnapshot(): Long = synchronized(admissionLock) {
+        check(!invalidated && uncertain == null) { "Workspace execution requires recovery" }
+        authorityEpoch
+    }
+
+    /** Synchronous final admission; the block must not suspend or perform I/O. */
+    internal fun <T> authorizeAuthority(epoch: Long, block: () -> T): T = synchronized(admissionLock) {
+        check(!invalidated && uncertain == null && authorityEpoch == epoch) { "Workspace authority changed" }
         block()
     }
 
@@ -56,6 +71,7 @@ class RuntimeWorkspaceFence private constructor(db: LocalDatabase) {
     fun invalidateAdmissions() {
         val job = synchronized(admissionLock) {
             generation++
+            authorityEpoch++
             invalidated = true
             active?.also {
                 it.revoked = true

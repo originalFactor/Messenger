@@ -9,6 +9,10 @@ import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.channels.FileChannel
+import java.nio.ByteBuffer
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 
 /**
  * Experimental source-only SQLite writer lease. This is not a complete ownership gate: callers
@@ -37,6 +41,43 @@ internal class CoreSourceSqliteLease private constructor(
 
     /** Caller provides an isolated scratch snapshot and excludes path replacement and old writers. */
     fun previewLegacySnapshot(snapshot: Path): LegacyRoomRecoveryPreview {
+        val path = validateLegacySnapshot(snapshot)
+        return BundledSQLiteDriver().open(path.toString(), SQLITE_OPEN_READONLY).use { legacy ->
+            legacy.prepare("BEGIN").use { it.step() }
+            try { LegacyRoomRecoveryInspection.compare(legacy, db).also { verifyIdentity() } }
+            finally { legacy.prepare("ROLLBACK").use { it.step() } }
+        }
+    }
+
+    /** Hash the exact scratch database and durable sidecars without opening a Core alias. */
+    fun legacySnapshotFingerprint(snapshot: Path): String {
+        val path = validateLegacySnapshot(snapshot)
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (suffix in listOf("", "-wal", "-journal")) {
+            val candidate = path.resolveSibling(path.fileName.toString() + suffix)
+            digest.update(suffix.toByteArray(Charsets.UTF_8)); digest.update(0.toByte())
+            if (Files.notExists(candidate, NOFOLLOW_LINKS)) { digest.update(0.toByte()); continue }
+            val before = Files.readAttributes(candidate, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+            val key = requireNotNull(before.fileKey()) { "Legacy snapshot identity unavailable" }.toString()
+            digest.update(1.toByte()); digest.update(key.toByteArray(Charsets.UTF_8)); digest.update(0.toByte())
+            FileChannel.open(candidate, StandardOpenOption.READ, NOFOLLOW_LINKS).use { file ->
+                val buffer = ByteBuffer.allocate(64 * 1024)
+                while (true) {
+                    val count = file.read(buffer)
+                    if (count < 0) break
+                    check(count > 0) { "Legacy snapshot read made no progress" }
+                    buffer.flip(); digest.update(buffer); buffer.clear()
+                }
+            }
+            val after = Files.readAttributes(candidate, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+            check(after.isRegularFile && !after.isSymbolicLink && after.fileKey() == before.fileKey() &&
+                after.size() == before.size() && after.lastModifiedTime() == before.lastModifiedTime()) { "Legacy snapshot changed" }
+        }
+        validateLegacySnapshot(path)
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
+
+    private fun validateLegacySnapshot(snapshot: Path): Path {
         verifyIdentity()
         val path = snapshot.toAbsolutePath().normalize()
         val sourcePaths = listOf("").plus(listOf("-wal", "-shm", "-journal")).map { suffix ->
@@ -59,11 +100,7 @@ internal class CoreSourceSqliteLease private constructor(
             }
         }
         verifyIdentity()
-        return BundledSQLiteDriver().open(path.toString(), SQLITE_OPEN_READONLY).use { legacy ->
-            legacy.prepare("BEGIN").use { it.step() }
-            try { LegacyRoomRecoveryInspection.compare(legacy, db).also { verifyIdentity() } }
-            finally { legacy.prepare("ROLLBACK").use { it.step() } }
-        }
+        return path
     }
 
     fun fingerprint(): String {
@@ -102,13 +139,16 @@ internal class CoreSourceSqliteLease private constructor(
     /** Reject aliases before opening any file: closing an alias may release POSIX SQLite locks. */
     internal fun requireDistinct(path: Path) {
         verifyIdentity()
-        if (Files.exists(path, NOFOLLOW_LINKS)) {
-            check(!Files.isSameFile(source, path)) { "Path aliases Core source" }
-            val shm = source.resolveSibling(source.fileName.toString() + "-shm")
-            if (Files.exists(shm, NOFOLLOW_LINKS)) {
-                check(!Files.isSameFile(shm, path)) { "Path aliases Core WAL shared memory" }
-            } else check(Files.notExists(shm, NOFOLLOW_LINKS)) { "Cannot inspect Core WAL shared memory" }
-        } else check(Files.notExists(path, NOFOLLOW_LINKS)) { "Cannot inspect migration path" }
+        val candidate = path.toAbsolutePath().normalize()
+        val candidateExists = Files.exists(candidate, NOFOLLOW_LINKS)
+        check(candidateExists || Files.notExists(candidate, NOFOLLOW_LINKS)) { "Cannot inspect migration path" }
+        for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+            val sourcePath = source.resolveSibling(source.fileName.toString() + suffix)
+            check(candidate != sourcePath) { "Path aliases Core source or sidecar" }
+            val sourceExists = Files.exists(sourcePath, NOFOLLOW_LINKS)
+            check(sourceExists || Files.notExists(sourcePath, NOFOLLOW_LINKS)) { "Cannot inspect Core source sidecar" }
+            if (candidateExists && sourceExists) check(!Files.isSameFile(sourcePath, candidate)) { "Path aliases Core source or sidecar" }
+        }
     }
 
     internal fun requireDistinctDatabasePaths(path: Path) {

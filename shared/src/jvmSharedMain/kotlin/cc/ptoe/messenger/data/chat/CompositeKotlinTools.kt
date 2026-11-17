@@ -6,6 +6,7 @@ import cc.ptoe.messenger.data.local.room.ConversationRow
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.domain.chat.KotlinCoreToolGrant
+import cc.ptoe.messenger.domain.chat.KotlinMcpToolGrant
 import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
 
 /** Routes a frozen tool name to exactly one implementation. */
@@ -32,6 +33,11 @@ internal class CompositeKotlinTools(private val components: List<KotlinToolCompo
         val names = grants.flatMap { it.allowedNames }
         require(names.distinct().size == names.size) { "Duplicate Core tool grant" }
         return KotlinCoreToolGrant(grants.first().conversationId, names)
+    }
+    override fun mcpToolGrant(): KotlinMcpToolGrant? {
+        val grants = components.mapNotNull { it.catalog.mcpToolGrant() }
+        require(grants.size <= 1) { "Multiple MCP inventories are not supported" }
+        return grants.singleOrNull()
     }
     override fun promptSuffix() = components.joinToString("") { it.catalog.promptSuffix() }
     override fun declarations(conversation: ConversationRow, agent: AgentRow, defaultAgent: AgentRow) = components.flatMap { component ->

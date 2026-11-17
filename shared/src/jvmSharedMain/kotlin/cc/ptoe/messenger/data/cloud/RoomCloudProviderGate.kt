@@ -53,6 +53,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     private val deviceFence = RoomDeviceControlFence.forDao(dao)
     private val admissionLock = Any()
     private val requests = mutableSetOf<Request>()
+    private val toolPermits = mutableSetOf<ToolPermit>()
     private val invalidated = mutableSetOf<SyncSession>()
     private var stopped = false
 
@@ -113,6 +114,23 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
         check(!stopped && session !in invalidated) { "Cloud session expired" }
     }
 
+    /** A permit survives removal of the session's invalidation marker after durable logout. */
+    internal inner class ToolPermit internal constructor(internal val session: SyncSession) {
+        private var revoked = false
+        internal fun revoke() { revoked = true }
+        internal fun <T> authorize(block: () -> T): T = synchronized(admissionLock) {
+            check(!stopped && !revoked && this in toolPermits && session !in invalidated) { "Cloud session expired" }
+            block()
+        }
+        internal fun release() = synchronized(admissionLock) { toolPermits.remove(this); Unit }
+    }
+
+    /** Register only inside the same transaction that verified this exact session. */
+    internal fun registerToolPermit(session: SyncSession): ToolPermit = synchronized(admissionLock) {
+        check(!stopped && session !in invalidated) { "Cloud session expired" }
+        ToolPermit(session).also { toolPermits.add(it) }
+    }
+
     private fun dispatch(round: KotlinTurnSnapshot, completion: Boolean): Flow<ChatStreamEvent> = flow {
         val identity = checkNotNull(round.cloudIdentity) { "Cloud turn has no session identity" }
         val session = SyncSession(identity.accountId, identity.generation)
@@ -171,6 +189,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     internal fun invalidate(session: SyncSession) {
         val jobs = synchronized(admissionLock) {
             invalidated.add(session)
+            toolPermits.filter { it.session == session }.forEach { it.revoke() }
             requests.filter { it.session == session }.onEach { it.revoked.set(true) }.map { it.job }
         }
         jobs.forEach { it.cancel(CancellationException("Cloud session revoked")) }
@@ -194,6 +213,7 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     internal suspend fun shutdown() = withContext(NonCancellable) {
         val jobs = synchronized(admissionLock) {
             stopped = true
+            toolPermits.forEach { it.revoke() }
             requests.onEach { it.revoked.set(true) }.map { it.job }
         }
         jobs.forEach { it.cancel(CancellationException("Cloud provider gate closed")) }

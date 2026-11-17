@@ -351,6 +351,14 @@ internal interface CloudSyncDao {
         }
         val defaults = agents.filter { !it.tombstone() && it.agentRow(null).isDefault && !blocked(SyncCollection.AGENT, it.syncId()) }
         check(defaults.size <= 1) { "Cloud contains multiple default agents" }
+        // A different active Agent may follow the default's tool/model settings. Updating the
+        // current default or demoting it for an incoming default therefore affects that turn too.
+        if (defaults.isNotEmpty() || agents.any { doc ->
+                val id = doc.syncId()
+                !doc.tombstone() && !blocked(SyncCollection.AGENT, id) && agentRow(id)?.isDefault == true
+            }) {
+            check(!hasActiveTurn(ACTIVE_TURN_KEY_PREFIX)) { "Cloud default Agent change conflicts with an active turn" }
+        }
         if (replaceLocal) {
             check(defaults.size == 1) { "Cloud restore has no default agent" }
             clearCloudConversations(); clearCloudProjects(); clearCloudProviders(); clearCloudAgents()

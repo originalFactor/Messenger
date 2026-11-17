@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.currentCoroutineContext
@@ -47,6 +48,13 @@ data class KotlinRuntimeToolGrant(
 /** Per-turn Core capability ceiling; Core tools do not require a workspace. */
 @Serializable
 data class KotlinCoreToolGrant(val conversationId: String, val allowedNames: List<String>)
+
+/** Exact MCP identities and declarations approved when this turn was admitted. */
+@Serializable
+data class KotlinMcpToolBinding(val name: String, val serverId: String, val remoteName: String,
+    val description: String, val parameters: JsonObject)
+@Serializable
+data class KotlinMcpToolGrant(val conversationId: String, val tools: List<KotlinMcpToolBinding>)
 @Serializable
 data class KotlinDelegationParent(val turnId: String, val callId: String)
 
@@ -116,6 +124,8 @@ interface KotlinTurnStore {
     suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { error("Undispatched Runtime rejection unavailable") }
     /** Return true only when the exact Core call is atomically proven not to have been claimed. */
     suspend fun rejectUndispatchedCoreTool(turnId: String, call: ToolCallData, detail: String): Boolean = false
+    /** Return true only if the exact MCP invocation has not been durably claimed. */
+    suspend fun rejectUnclaimedMcpTool(turnId: String, call: ToolCallData, detail: String): Boolean = false
     suspend fun fail(turnId: String, detail: String)
     suspend fun cancel(turnId: String)
     suspend fun cancelRemote(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) { error("Remote cancellation unavailable") }
@@ -153,6 +163,7 @@ fun interface KotlinTurnToolExecutor {
 
 /** Only a Runtime executor that has not attempted dispatch may report this outcome. */
 internal class RuntimeToolNotDispatchedException(cause: Exception) : Exception(cause.message ?: "Runtime tool was not dispatched", cause)
+internal class McpTurnSettledException : Exception()
 
 /** Process lifecycle hooks must never contain message contents, credentials or tool arguments. */
 interface KotlinTurnLifecycle {
@@ -365,10 +376,17 @@ class KotlinChatTurnRunner(
                             store.rejectUndispatchedRuntimeTool(turnId, call, rejected.message ?: "Runtime tool was not dispatched")
                             null
                         }
+                        catch (settled: McpTurnSettledException) {
+                            check(store.snapshot(turnId).phase in setOf(KotlinTurnPhase.FAILED, KotlinTurnPhase.CANCELLED)) {
+                                "MCP invocation settlement is unverified"
+                            }
+                            null
+                        }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) {
-                            if (call.name.startsWith("messenger_") &&
-                                store.rejectUndispatchedCoreTool(turnId, call, failure.message ?: "Core tool failed")) null
+                            if ((call.name.startsWith("messenger_") &&
+                                store.rejectUndispatchedCoreTool(turnId, call, failure.message ?: "Core tool failed")) ||
+                                store.rejectUnclaimedMcpTool(turnId, call, failure.message ?: "MCP tool failed")) null
                             else throw failure
                         }
                     } ?: return

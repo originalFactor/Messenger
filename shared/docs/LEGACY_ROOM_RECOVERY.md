@@ -52,3 +52,20 @@ read-only can still use its WAL/shared-memory files, so this API does not itself
 acquire or preserve a source snapshot. A future device flow must acquire and
 validate that snapshot, present conflicts to the user and revalidate source and
 destination identities before applying explicitly selected recovery actions.
+
+`LegacyRoomRecoveryApply` is an isolated apply component, not a production
+entry point. It displays the selected legacy/Core fields alongside the current
+Room values, excluding provider credentials. The caller supplies a scoped
+provenance verifier that proves the scratch copy's original identity and holds
+writer and path exclusion from review through commit; no platform verifier or
+recovery UI exists yet. Review is cancellable and holds no Room writer
+transaction. Explicit project, association and provider-format selections are
+revalidated together before a single Room transaction applies them and queues
+cloud sync. A selected Room row differing from the displayed Core baseline or
+changing during review is rejected; absence never implies deletion intent.
+Projects with a non-null foreign device ID cannot be modified or associated;
+an explicitly selected legacy project with null ownership retains that value.
+Creating a missing project requires confirmation of the current device ID.
+Both original databases must remain untouched; the caller must provide a
+separate consistent scratch snapshot. This partial field recovery cannot prove
+the datasets are fully reconciled or make production cutover safe.

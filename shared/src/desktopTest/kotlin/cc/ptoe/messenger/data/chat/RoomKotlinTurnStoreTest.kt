@@ -59,6 +59,109 @@ class RoomKotlinTurnStoreTest {
         rows.upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", null, null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
     }
 
+    @Test fun mcpClaimUsesPersistedBindingAndLiveAgentPolicyOnlyOnce(): Unit = runBlocking {
+        for (scenario in listOf("success", "revoke", "restart", "pre-registration-stop")) {
+            val dir = Files.createTempDirectory("mcp-turn-claim")
+            val db = open(dir.resolve("store.db").toString())
+            try {
+                seed(db, model = true)
+                val rows = db.rows()
+                rows.upsertAgents(listOf(checkNotNull(rows.agent("a")).copy(toolsEnabled = true)))
+                val binding = KotlinMcpToolBinding("server_search", "server-id", "search", "Search", buildJsonObject {})
+                val grant = KotlinMcpToolGrant("c", listOf(binding))
+                val mcpPreparer = object : KotlinTurnRequestPreparer {
+                    override fun prepare(conversation: ConversationRow, agent: AgentRow, defaultAgent: AgentRow,
+                        model: ModelRow, provider: ProviderRow, history: List<MessageRow>) =
+                        ChatCompletionRequestDto(model.modelId, emptyList(), tools = listOf(ToolSpecDto("function",
+                            ToolSpecFunctionDto(binding.name, binding.description, binding.parameters))))
+                    override fun mcpToolGrant() = grant
+                }
+                val store = RoomKotlinTurnStore(db, mcpPreparer, policy)
+                val id = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "hi", null))).turnId
+                assertTrue(store.claim(id, false)); store.beginProvider(id)
+                val call = ToolCallData("call", binding.name, "{}")
+                store.completeProvider(id, listOf(call), null)
+                store.decideApproval(id, call.callId, true)
+                assertEquals(call, store.beginTool(id))
+                if (scenario == "restart") {
+                    store.release(id)
+                    val restored = RoomKotlinTurnStore(db, mcpPreparer, policy)
+                    assertTrue(restored.claim(id, recovery = true))
+                    assertFailsWith<IllegalStateException> { restored.registerMcpInvocation(id, call) }
+                    restored.reconcilePreviousChats(PreviousChatWorkersStopped {})
+                    assertEquals(KotlinTurnPhase.FAILED, restored.snapshot(id).phase)
+                    assertNull(rows.getValue("kotlin_turn_active_v1:c"))
+                    continue
+                }
+                if (scenario == "pre-registration-stop") {
+                    store.cancel(id)
+                    assertFailsWith<IllegalStateException> { store.registerMcpInvocation(id, call) }
+                    assertTrue(store.rejectUnclaimedMcpTool(id, call, "cancelled before registration"))
+                    assertEquals(KotlinTurnPhase.CANCELLED, store.snapshot(id).phase)
+                    assertNull(rows.getValue("kotlin_turn_active_v1:c"))
+                    assertFalse(store.rejectUnclaimedMcpTool(id, call, "stale"))
+                    continue
+                }
+                val receipt = store.registerMcpInvocation(id, call)
+                assertFailsWith<IllegalStateException> { store.registerMcpInvocation(id, call) }
+                if (scenario == "revoke") {
+                    rows.upsertAgents(listOf(checkNotNull(rows.agent("a")).copy(toolsEnabled = false)))
+                    assertFailsWith<IllegalStateException> { store.claimMcpToolInvocation(receipt, grant, binding) }
+                    assertFalse(store.coreToolInvocationStarted(id, call))
+                } else {
+                    assertFailsWith<IllegalStateException> {
+                        store.claimMcpToolInvocation(receipt, grant, binding.copy(serverId = "replacement"))
+                    }
+                    store.claimMcpToolInvocation(receipt, grant, binding)
+                    assertFailsWith<IllegalStateException> { store.claimMcpToolInvocation(receipt, grant, binding) }
+                    assertTrue(store.coreToolInvocationStarted(id, call))
+                }
+                store.releaseMcpInvocation(receipt)
+            } finally { db.close(); dir.toFile().deleteRecursively() }
+        }
+    }
+
+    @Test fun mcpCancellationBeforeAdmissionCanRetireButAfterAdmissionRemainsUncertain(): Unit = runBlocking {
+        for (admitBeforeCancel in listOf(false, true)) {
+            val dir = Files.createTempDirectory("mcp-turn-cancel")
+            val db = open(dir.resolve("store.db").toString())
+            try {
+                seed(db, model = true)
+                db.rows().upsertAgents(listOf(checkNotNull(db.rows().agent("a")).copy(toolsEnabled = true)))
+                val binding = KotlinMcpToolBinding("server_search", "server-id", "search", "Search", buildJsonObject {})
+                val grant = KotlinMcpToolGrant("c", listOf(binding))
+                val request = object : KotlinTurnRequestPreparer {
+                    override fun prepare(conversation: ConversationRow, agent: AgentRow, defaultAgent: AgentRow,
+                        model: ModelRow, provider: ProviderRow, history: List<MessageRow>) = ChatCompletionRequestDto(model.modelId,
+                        emptyList(), tools = listOf(ToolSpecDto("function", ToolSpecFunctionDto(binding.name, binding.description, binding.parameters))))
+                    override fun mcpToolGrant() = grant
+                }
+                val store = RoomKotlinTurnStore(db, request, policy)
+                val id = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "hi", null))).turnId
+                assertTrue(store.claim(id, false)); store.beginProvider(id)
+                val call = ToolCallData("call", binding.name, "{}")
+                store.completeProvider(id, listOf(call), null); store.decideApproval(id, call.callId, true); store.beginTool(id)
+                val receipt = store.registerMcpInvocation(id, call)
+                store.claimMcpToolInvocation(receipt, grant, binding)
+                if (admitBeforeCancel) receipt.authorize()
+                store.cancel(id)
+                if (admitBeforeCancel) {
+                    assertFailsWith<IllegalStateException> { store.rejectUndispatchedMcpTool(receipt, false, "not sent") }
+                    store.fail(id, "MCP outcome is unknown")
+                    assertEquals(KotlinTurnPhase.INTERRUPTED_TOOL, store.snapshot(id).phase)
+                    assertNotNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                } else {
+                    assertFailsWith<IllegalStateException> { receipt.authorize() }
+                    store.rejectUndispatchedMcpTool(receipt, false, "not sent")
+                    assertEquals(KotlinTurnPhase.CANCELLED, store.snapshot(id).phase)
+                    assertNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                }
+                store.releaseMcpInvocation(receipt)
+                assertFailsWith<IllegalStateException> { store.rejectUndispatchedMcpTool(receipt, true, "stale") }
+            } finally { db.close(); dir.toFile().deleteRecursively() }
+        }
+    }
+
     @Test fun multipleFailuresOfOneTurnRemainQueuedAndLegacyAcknowledgementIsConditional() = runBlocking {
         val dir = Files.createTempDirectory("turn-error-queue")
         val db = open(dir.resolve("store.db").toString())

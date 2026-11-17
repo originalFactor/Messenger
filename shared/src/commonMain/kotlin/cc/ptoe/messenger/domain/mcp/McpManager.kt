@@ -57,6 +57,8 @@ internal class McpInventorySnapshot internal constructor(
     val tools: List<McpInventoryTool> get() = frozenTools.map(::copyInventoryTool)
     internal fun matches(candidate: McpManager, current: Map<String, Pair<McpClient, McpClientInventory>>, currentEpoch: Long): Boolean =
         owner === candidate && epoch == currentEpoch && bindings == current
+    internal fun binding(serverId: String): Pair<McpClient, McpClientInventory>? = bindings[serverId]
+    internal fun matchesEpoch(candidate: McpManager, currentEpoch: Long): Boolean = owner === candidate && epoch == currentEpoch
 }
 
 private fun copyInventoryTool(tool: McpInventoryTool): McpInventoryTool =
@@ -81,6 +83,7 @@ class McpManager(
     private val shutdownMutex = Mutex()
     private val editMutex = Mutex()
     private val startLock = Any()
+    private val inventoryAdmissionLock = Any()
     private var started = false
     private var editing = false
     private var needsReload = false
@@ -134,7 +137,7 @@ class McpManager(
         val list = if (!rawJson.isNullOrBlank()) {
             val decoded = runCatching { json.decodeFromString(ListSerializer(McpServerConfig.serializer()), rawJson) }
             decoded.getOrElse {
-                mutex.withLock { inventoryEpoch++; needsReload = true; _configurationError.value = true; updateInventoryReadyLocked() }
+                mutex.withLock { synchronizedBlock(inventoryAdmissionLock) { inventoryEpoch++ }; needsReload = true; _configurationError.value = true; updateInventoryReadyLocked() }
                 return@withLock _servers.value
             }
         } else emptyList()
@@ -167,7 +170,7 @@ class McpManager(
         val retiring = mutex.withLock {
             check(!stopped) { "MCP manager is shut down" }
             editing = true
-            inventoryEpoch++
+            synchronizedBlock(inventoryAdmissionLock) { inventoryEpoch++ }
             val desired = enabledConfigs(configs)
             val removed = clients.keys.filter { id -> desired[id] != clients[id]?.config }
             for (id in removed) {
@@ -321,6 +324,33 @@ class McpManager(
         snapshot.matches(this, stableInventoryLocked(), inventoryEpoch)
     }
 
+    /**
+     * Serializes initial inventory validation and durable Room claim with configuration edits.
+     * The caller must still authorize at the actual transport send boundary.
+     */
+    internal suspend fun <T> admitInventoryCall(snapshot: McpInventorySnapshot, tool: McpInventoryTool,
+        claim: suspend () -> T): Pair<McpClient, T> = mutex.withLock {
+        check(_toolInventoryReady.value && !stopped && snapshot.matches(this, stableInventoryLocked(), inventoryEpoch)) {
+            "MCP inventory changed"
+        }
+        check(snapshot.tools.count { it == tool } == 1) { "MCP tool is unavailable" }
+        val (client, _) = checkNotNull(snapshot.binding(tool.serverId)) { "MCP server is unavailable" }
+        val claimed = claim()
+        check(_toolInventoryReady.value && !stopped && snapshot.matches(this, stableInventoryLocked(), inventoryEpoch)) {
+            "MCP inventory changed during claim"
+        }
+        client to claimed
+    }
+
+    /** Called immediately before transport send; no suspend, network or cleanup under these locks. */
+    internal fun authorizeInventorySend(snapshot: McpInventorySnapshot, tool: McpInventoryTool,
+        client: McpClient, authorize: () -> Unit) = synchronizedBlock(inventoryAdmissionLock) {
+        check(!stopped && snapshot.matchesEpoch(this, inventoryEpoch)) { "MCP configuration changed" }
+        val (expectedClient, captured) = checkNotNull(snapshot.binding(tool.serverId)) { "MCP server is unavailable" }
+        check(expectedClient === client) { "MCP client changed" }
+        client.admitInventory(captured, authorize)
+    }
+
     private fun stableInventoryLocked(): Map<String, Pair<McpClient, McpClientInventory>> {
         repeat(8) {
             val first = clients.mapValues { (_, client) -> client to client.inventory() }
@@ -333,7 +363,7 @@ class McpManager(
     suspend fun shutdown(): Unit = withContext(NonCancellable) {
         shutdownMutex.withLock {
             val job = scope.coroutineContext[Job]
-            synchronizedBlock(startLock) { stopped = true; job?.cancel() }
+            synchronizedBlock(startLock) { synchronizedBlock(inventoryAdmissionLock) { stopped = true }; job?.cancel() }
             val closing = mutex.withLock {
                 stopped = true
                 closingClients.addAll(clients.values)

@@ -22,6 +22,8 @@ internal fun interface RoomDeviceReplyGate {
  */
 internal class RoomDeviceControlFence private constructor() {
     private val mutex = Mutex()
+    private val admissionLock = Any()
+    private var epoch = 0L
 
     companion object {
         private val instances = WeakHashMap<CloudSyncDao, WeakReference<RoomDeviceControlFence>>()
@@ -30,7 +32,16 @@ internal class RoomDeviceControlFence private constructor() {
         }
     }
 
-    suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock { block() }
+    suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
+        synchronized(admissionLock) { epoch++ }
+        block()
+    }
+
+    internal fun authoritySnapshot(): Long = synchronized(admissionLock) { epoch }
+    internal fun <T> authorizeAuthority(expected: Long, block: () -> T): T = synchronized(admissionLock) {
+        check(epoch == expected) { "Device authority changed" }
+        block()
+    }
 
     fun replies(db: LocalDatabase, stored: StoredCloudSession, deviceId: String): RoomDeviceReplyGate {
         check(this === forDao(db.cloudSync())) { "Reply gate belongs to another Room database" }

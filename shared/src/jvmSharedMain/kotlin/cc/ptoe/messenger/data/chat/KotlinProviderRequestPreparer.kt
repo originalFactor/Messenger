@@ -7,6 +7,7 @@ import cc.ptoe.messenger.data.remote.dto.*
 import cc.ptoe.messenger.domain.model.ContentPart
 import cc.ptoe.messenger.domain.chat.KotlinRuntimeToolGrant
 import cc.ptoe.messenger.domain.chat.KotlinCoreToolGrant
+import cc.ptoe.messenger.domain.chat.KotlinMcpToolGrant
 import cc.ptoe.messenger.presentation.utils.extractThinkContent
 import cc.ptoe.messenger.presentation.utils.stripThinkBlock
 import kotlinx.serialization.json.*
@@ -16,6 +17,7 @@ fun interface KotlinToolCatalog {
     fun declarations(conversation: ConversationRow, agent: AgentRow, defaultAgent: AgentRow): List<ToolSpecDto>?
     fun toolGrant(): KotlinRuntimeToolGrant? = null
     fun coreToolGrant(): KotlinCoreToolGrant? = null
+    fun mcpToolGrant(): KotlinMcpToolGrant? = null
     fun promptSuffix(): String = ""
     suspend fun validateAdmission(conversation: ConversationRow, request: ChatCompletionRequestDto) {}
 }
@@ -24,6 +26,7 @@ fun interface KotlinToolCatalog {
 class KotlinProviderRequestPreparer(private val catalog: KotlinToolCatalog? = null) : KotlinTurnRequestPreparer {
     override fun toolGrant(): KotlinRuntimeToolGrant? = catalog?.toolGrant()
     override fun coreToolGrant(): KotlinCoreToolGrant? = catalog?.coreToolGrant()
+    override fun mcpToolGrant(): KotlinMcpToolGrant? = catalog?.mcpToolGrant()
     override suspend fun validateAdmission(conversation: ConversationRow, request: ChatCompletionRequestDto) { catalog?.validateAdmission(conversation, request) }
     override fun effectiveSystemPrompt(agent: AgentRow, defaultAgent: AgentRow, request: ChatCompletionRequestDto): String =
         super.effectiveSystemPrompt(agent, defaultAgent, request) +

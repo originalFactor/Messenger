@@ -51,6 +51,8 @@ class CloudSyncDaoTest {
                 delta(SyncCollection.CONVERSATION, """{"_id":"conversation","agentId":"agent","title":"Remote","messages":[]}"""),
                 delta(SyncCollection.CONVERSATION, """{"_id":"conversation","deleted":true}"""),
                 delta(SyncCollection.AGENT, """{"_id":"agent","deleted":true}"""),
+                delta(SyncCollection.AGENT, """{"_id":"default","isDefault":true,"toolsEnabled":false}"""),
+                delta(SyncCollection.AGENT, """{"_id":"new-default","isDefault":true,"toolsEnabled":false}"""),
                 delta(SyncCollection.PROJECT, """{"_id":"project","deleted":true}"""),
                 delta(SyncCollection.PROVIDER, """{"_id":"provider","deleted":true}"""),
             )

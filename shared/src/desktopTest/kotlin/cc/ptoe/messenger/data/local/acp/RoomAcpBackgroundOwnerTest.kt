@@ -219,7 +219,53 @@ class RoomAcpBackgroundOwnerTest {
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }
 
+    @Test fun modeConfigOptionUsesOpaqueIdAndRequiresInspectionOfThatOption(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-mode-option")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings-mode-option"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val initial = owner.sessionSettings(binding.conversationId)
+            assertTrue(initial.getValue("_messengerCapabilities").jsonObject.getValue("modeWritable").jsonPrimitive.boolean)
+            assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "network", "true") {} }
+            assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "legacy-mode", "not-offered") {} }
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
+                arrayOf(CoreBridge::class.java)) { _, _, _ -> error("Unexpected delegate call") })
+            val bridge = KotlinAcpBackgroundBridge(delegate, owner, AcpNewSessionSource { _, _ -> error("Unexpected creation") })
+            var changed: JsonObject? = null
+            withTimeout(10_000) { bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                put("action", "setSessionConfig"); put("sessionId", binding.conversationId); put("configId", "legacy-mode"); put("value", "workspace-write")
+            }) { changed = it.getValue("settings").jsonObject } }
+            val flags = checkNotNull(changed).getValue("_messengerCapabilities").jsonObject
+            assertEquals("workspace-write", checkNotNull(changed).getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertEquals("legacy-mode", flags.getValue("modeConfigId").jsonPrimitive.content)
+            assertTrue(flags.getValue("modePending").jsonPrimitive.boolean)
+            assertFalse(flags.getValue("modeInspected").jsonPrimitive.boolean)
+            val marker = flags.getValue("modePendingId").jsonPrimitive.content
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val inspected = owner.inspectPendingMode(binding.conversationId) {}
+            assertEquals("read-only", inspected.getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            owner.confirmPendingMode(binding.conversationId, marker, "read-only") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun interruptedModeChangeSurvivesRestartUntilUserInspectsActualState(): Unit = runBlocking {
+        checkInterruptedMode(option = false)
+    }
+
+    @Test fun interruptedModeOptionSurvivesRestartUntilUserInspectsThatOption(): Unit = runBlocking {
+        checkInterruptedMode(option = true)
+    }
+
+    private suspend fun checkInterruptedMode(option: Boolean) = kotlinx.coroutines.coroutineScope {
         val dir = Files.createTempDirectory("acp-mode-unknown")
         val (db, binding) = fixture(dir)
         val firstLifecycle = RoomManagedShutdown { }; firstLifecycle.enter()
@@ -229,18 +275,27 @@ class RoomAcpBackgroundOwnerTest {
         val calls = AtomicInteger()
         fun worker(): AcpWorkerProcess = object : AcpWorkerProcess, AcpWorkerSettings {
             override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
-            override suspend fun sessionSettings() = buildJsonObject { put("modes", buildJsonObject {
-                if (reportMode.get()) put("currentModeId", remoteMode.get())
-                put("availableModes", JsonArray(listOf(buildJsonObject { put("id", "plan"); put("name", "Plan") }, buildJsonObject { put("id", "code"); put("name", "Code") })))
-            }) }
+            override suspend fun sessionSettings() = buildJsonObject {
+                if (option) put("configOptions", JsonArray(listOf(buildJsonObject {
+                    put("id", "opaque-mode"); put("category", "mode"); put("type", "select")
+                    if (reportMode.get()) put("currentValue", remoteMode.get())
+                    put("options", JsonArray(listOf(buildJsonObject { put("value", "plan") }, buildJsonObject { put("value", "code") })))
+                }))) else put("modes", buildJsonObject {
+                    if (reportMode.get()) put("currentModeId", remoteMode.get())
+                    put("availableModes", JsonArray(listOf(buildJsonObject { put("id", "plan"); put("name", "Plan") }, buildJsonObject { put("id", "code"); put("name", "Code") })))
+                })
+            }
             override suspend fun setMode(modeId: String, permit: () -> Unit): JsonObject { permit(); calls.incrementAndGet(); remoteMode.set(modeId); applied.complete(Unit); awaitCancellation() }
+            override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject {
+                check(configId == "opaque-mode"); return setMode(value, permit)
+            }
             override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
             override suspend fun cancelAndConfirm() = false
             override suspend fun stopAndAwait() = Unit
         }
         try {
             val first = owner(db, binding, firstLifecycle, { _, _ -> worker() })
-            val call = async { first.setMode(binding.conversationId, "code") {} }
+            val call = async { if (option) first.setModeOption(binding.conversationId, "opaque-mode", "code") {} else first.setMode(binding.conversationId, "code") {} }
             withTimeout(5_000) { applied.await() }
             call.cancel()
             withTimeout(5_000) { call.join() }
@@ -251,7 +306,9 @@ class RoomAcpBackgroundOwnerTest {
             assertFailsWith<IllegalStateException> { second.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
             assertFailsWith<IllegalStateException> { second.setMode(binding.conversationId, "code") {} }
             val read = second.sessionSettings(binding.conversationId)
-            assertEquals("code", read.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            fun current(settings: JsonObject) = if (option) settings.getValue("configOptions").jsonArray.single().jsonObject.getValue("currentValue").jsonPrimitive.content
+                else settings.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content
+            assertEquals("code", current(read))
             assertTrue(read.getValue("_messengerCapabilities").jsonObject.getValue("modePending").jsonPrimitive.boolean)
             assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
             reportMode.set(false)
@@ -259,12 +316,12 @@ class RoomAcpBackgroundOwnerTest {
             assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
             reportMode.set(true)
             val inspected = second.inspectPendingMode(binding.conversationId) {}
-            assertEquals("code", inspected.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertEquals("code", current(inspected))
             assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
             val marker = inspected.getValue("_messengerCapabilities").jsonObject.getValue("modePendingId").jsonPrimitive.content
             remoteMode.set("plan")
             val changed = second.confirmPendingMode(binding.conversationId, marker, "code") {}
-            assertEquals("plan", changed.getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+            assertEquals("plan", current(changed))
             assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
             second.confirmPendingMode(binding.conversationId, marker, "plan") {}
             assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))

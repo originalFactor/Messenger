@@ -94,6 +94,28 @@ class AcpSessionSettingsScreenTest {
     }
 
     @Test
+    fun modeConfigOptionUsesItsOpaqueIdAndPendingConfirmationUsesItsValue() = runComposeUiTest {
+        val snapshot = mutableStateOf(Json.parseToJsonElement("""{
+            "_messengerCapabilities":{"settingsWritable":false,"modeWritable":true},
+            "configOptions":[{"id":"legacy-mode","name":"Mode","category":"mode","type":"select","currentValue":"plan","options":[{"name":"Group","options":[{"value":"plan","name":"Plan"},{"value":"code","name":"Code"}]}]}]
+        }""").jsonObject)
+        var submitted: JsonObject? = null
+        var confirmed: Pair<String, String>? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(snapshot.value, false, {}, { submitted = it }, onConfirmPendingMode = { id, mode -> confirmed = id to mode }) } }
+        onNodeWithText("Plan").performClick()
+        onNodeWithText("Code").performClick()
+        assertEquals("legacy-mode", submitted?.text("configId"))
+        assertEquals("code", submitted?.text("value"))
+        runOnIdle { snapshot.value = JsonObject(snapshot.value + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modeWritable", false); put("modePending", true); put("modeInspected", true)
+            put("modePendingId", "marker"); put("modeConfigId", "legacy-mode")
+        })) }
+        onNodeWithText("Current mode: plan. Confirm it before continuing.").assertExists()
+        onNodeWithText("Confirm current mode").performClick()
+        assertEquals("marker" to "plan", confirmed)
+    }
+
+    @Test
     fun agentOptionNamedLegacyModeRemainsDistinctFromSyntheticMode() = runComposeUiTest {
         val collision = Json.parseToJsonElement("""{
             "configOptions":[{"id":"legacy-mode","name":"Agent option","type":"select","currentValue":"a","options":[{"value":"a","name":"Option A"},{"value":"b","name":"Option B"}]}],

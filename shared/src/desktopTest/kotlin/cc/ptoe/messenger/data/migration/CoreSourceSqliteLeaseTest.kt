@@ -143,4 +143,28 @@ class CoreSourceSqliteLeaseTest {
         }
     }
 
+    @Test fun destinationSidecarsCannotAliasCoreWalOrJournal() {
+        val dir = Files.createTempDirectory("core-source-sidecar-alias")
+        val source = dir.resolve("source.db")
+        try {
+            fixture(source, "DELETE")
+            for (suffix in listOf("-wal", "-journal")) {
+                val sidecar = source.resolveSibling(source.fileName.toString() + suffix)
+                val target = dir.resolve("target.db")
+                val targetWal = dir.resolve("target.db-wal")
+                val bytes = "unopened source sidecar".toByteArray()
+                Files.write(sidecar, bytes)
+                Files.createLink(targetWal, sidecar)
+                try {
+                    CoreSourceSqliteLease.acquire(source).use { lease ->
+                        assertFails { lease.requireDistinctDatabasePaths(target) }
+                        assertFails { lease.importInto(target) }
+                        assertTrue(bytes.contentEquals(Files.readAllBytes(sidecar)))
+                        assertTrue(Files.notExists(target))
+                    }
+                } finally { Files.deleteIfExists(targetWal); Files.deleteIfExists(sidecar) }
+            }
+        } finally { dir.toFile().deleteRecursively() }
+    }
+
 }

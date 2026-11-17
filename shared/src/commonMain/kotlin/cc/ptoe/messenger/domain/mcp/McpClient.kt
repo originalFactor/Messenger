@@ -157,6 +157,7 @@ class McpClient(
     private var connectionAlive = false
     private var connectionAttempted = false
     internal var beforeToolPublication: suspend () -> Unit = {}
+    internal var beforeToolSend: suspend () -> Unit = {}
     private var closed = false
     private var closing = false
     private val admissionLock = Any()
@@ -170,6 +171,13 @@ class McpClient(
                 val definition = (it as McpChatTool).toolDef
                 definition.copy(inputSchema = Json.parseToJsonElement(definition.inputSchema.toString()).jsonObject)
             })
+    }
+
+    /** Synchronous admission only: callers must not perform transport I/O in [authorize]. */
+    internal fun admitInventory(expected: McpClientInventory, authorize: () -> Unit) = synchronizedBlock(connectionLock) {
+        check(expected.connected && inventory() == expected) { "MCP connection or inventory changed" }
+        check(synchronizedBlock(admissionLock) { !closing }) { "MCP client is closing" }
+        authorize()
     }
 
     /** Track actual coroutine completion so close can cancel and join blocked transports. */
@@ -339,7 +347,7 @@ class McpClient(
         }
 
     /** Cancellation after sending must be treated as an unknown outcome by the caller. */
-    internal suspend fun callToolOutcome(name: String, argumentsJson: String): McpToolCallOutcome {
+    internal suspend fun callToolOutcome(name: String, argumentsJson: String, authorizeSend: () -> Unit = {}): McpToolCallOutcome {
         val argsElement = runCatching {
             json.parseToJsonElement(argumentsJson)
         }.getOrDefault(JsonObject(emptyMap()))
@@ -351,7 +359,7 @@ class McpClient(
             )
         )
 
-        val outcome = when (val outcome = sendRequestOutcome("tools/call", params)) {
+        val outcome = when (val outcome = sendRequestOutcome("tools/call", params, authorizeSend)) {
             is McpRequestOutcome.Reply -> outcome
             McpRequestOutcome.NotDispatched -> return McpToolCallOutcome.NotDispatched
             is McpRequestOutcome.Unknown -> return McpToolCallOutcome.Unknown(outcome.legacyToolResult(), outcome.legacyFailure)
@@ -398,7 +406,7 @@ class McpClient(
                 ?: outcome.closeCode?.let { JsonRpcResponse(error = JsonRpcError(-32000, "MCP server process exited with code $it")) }
         }
 
-    private suspend fun sendRequestOutcome(method: String, params: JsonElement?): McpRequestOutcome {
+    private suspend fun sendRequestOutcome(method: String, params: JsonElement?, authorizeSend: (() -> Unit)? = null): McpRequestOutcome {
         val reqId = requestMutex.withLock { ++requestId }
         val deferred = CompletableDeferred<McpPendingResponse>()
         val registered = synchronizedBlock(connectionLock) {
@@ -419,6 +427,7 @@ class McpClient(
                     McpTransportType.STDIO -> sendMutex.withLock {
                         currentCoroutineContext().ensureActive()
                         val bridge = processBridge ?: return@withLock false
+                        if (authorizeSend != null) { beforeToolSend(); authorizeSend() }
                         started = true
                         try { bridge.sendLine(text) }
                         catch (cancelled: CancellationException) { throw cancelled }
@@ -429,6 +438,7 @@ class McpClient(
                         val endpoint = sseEndpointUrl ?: return@withAdmission false
                         val client = httpClient ?: return@withAdmission false
                         try {
+                            if (authorizeSend != null) { beforeToolSend(); authorizeSend() }
                             started = true
                             val resp = client.post(endpoint) {
                                 contentType(ContentType.Application.Json)

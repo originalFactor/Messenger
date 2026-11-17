@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.concurrent.ConcurrentHashMap
 
 /** Must prepare the complete provider request without changing state or doing network I/O.
  * Unsupported attachments, tools or provider features must be rejected explicitly. */
@@ -43,6 +44,7 @@ fun interface KotlinTurnRequestPreparer {
         }
     fun toolGrant(): KotlinRuntimeToolGrant? = null
     fun coreToolGrant(): KotlinCoreToolGrant? = null
+    fun mcpToolGrant(): KotlinMcpToolGrant? = null
     fun effectiveSystemPrompt(agent: AgentRow, defaultAgent: AgentRow, request: ChatCompletionRequestDto): String =
         if (!agent.isDefault && agent.followDefaultSystemPrompt) defaultAgent.systemPrompt else agent.systemPrompt
     fun supportsContextCompaction(): Boolean = false
@@ -81,6 +83,8 @@ private data class StoredTurn(
     val summaryFailure: String? = null,
     val remoteScope: KotlinRemoteControlScope? = null,
     val coreGrant: KotlinCoreToolGrant? = null,
+    val mcpGrant: KotlinMcpToolGrant? = null,
+    val mcpOwner: String? = null,
     val scheduledRun: Boolean = false,
     val imageFailed: Boolean = false,
     val delegatedRun: Boolean = false,
@@ -121,6 +125,25 @@ class RoomKotlinTurnStore(
     private val clock: () -> Long = ::currentTimeMillis,
 ) : KotlinTurnStore {
     private val owner = randomUuid()
+    private val mcpInvocations = ConcurrentHashMap<String, McpInvocationReceipt>()
+
+    /** Non-serializable, one-use capability for one invocation in this exact live store. */
+    internal class McpInvocationReceipt internal constructor(val turnId: String, val call: ToolCallData) {
+        private var admitted = false
+        private var cancelled = false
+        private var settled = false
+        fun cancelBeforeAdmission() = synchronized(this) { if (!admitted) cancelled = true }
+        fun authorize() = synchronized(this) {
+            check(!admitted && !cancelled && !settled) { "MCP invocation was cancelled or already admitted" }
+            admitted = true
+        }
+        fun settleBeforeAdmission() = synchronized(this) {
+            check(!admitted && !settled) { "MCP invocation may have been dispatched" }; settled = true
+        }
+        fun settleNotDispatched() = synchronized(this) {
+            check(admitted && !settled) { "MCP invocation was not admitted or is already settled" }; settled = true
+        }
+    }
     init { require(cloudGate == null || cloudGate === RoomCloudProviderGate.forDao(db.cloudSync())) { "Cloud gate belongs to another Room database" } }
     private suspend fun <T> transaction(block: suspend (LocalRowsDao, suspend (String) -> Unit) -> T): T =
         db.useWriterConnection { connection ->
@@ -289,7 +312,9 @@ class RoomKotlinTurnStore(
         val names = request.tools.orEmpty().map { it.function.name }
         if (names.distinct().size != names.size) return@transaction KotlinTurnAdmission.Rejected("Duplicate tool declaration")
         val coreNames = names.filter { it.startsWith("messenger_") }
-        val runtimeNames = names - coreNames.toSet()
+        val mcpGrant = prepare.mcpToolGrant()
+        val mcpNames = mcpGrant?.tools?.map { it.name }.orEmpty()
+        val runtimeNames = names - coreNames.toSet() - mcpNames.toSet()
         if (command.scheduledRun && coreNames.any { it == "messenger_schedule_task" || it == "messenger_agents" }) {
             return@transaction KotlinTurnAdmission.Rejected("Scheduled turns cannot schedule or delegate")
         }
@@ -298,8 +323,18 @@ class RoomKotlinTurnStore(
             ?: return@transaction KotlinTurnAdmission.Rejected("Runtime tool scope is unavailable")
         val coreGrant = if (coreNames.isEmpty()) null else prepare.coreToolGrant()
             ?: return@transaction KotlinTurnAdmission.Rejected("Core tool scope is unavailable")
+        if (mcpGrant != null) {
+            val bindings = mcpGrant.tools
+            if (command.scheduledRun || command.delegatedRun || mcpGrant.conversationId != conversation.id ||
+                bindings.map { it.name }.distinct().size != bindings.size || bindings.any {
+                    it.name.isBlank() || it.name.startsWith("messenger_") || it.serverId.isBlank() || it.remoteName.isBlank()
+                } || names.any { name -> name in mcpNames && request.tools.orEmpty().single { it.function.name == name }.function.let { spec ->
+                    val binding = bindings.single { it.name == name }
+                    spec.description != binding.description || spec.parameters != binding.parameters
+                } }) return@transaction KotlinTurnAdmission.Rejected("MCP tool scope does not match this conversation")
+        }
         if (grant != null) {
-            if (grant.conversationId != conversation.id || grant.projectId != conversation.projectId || grant.allowedNames.any { it.startsWith("messenger_") } ||
+            if (grant.conversationId != conversation.id || grant.projectId != conversation.projectId || grant.allowedNames.any { it.startsWith("messenger_") || it in mcpNames } ||
                 runtimeNames.any { it !in grant.allowedNames }) {
                 return@transaction KotlinTurnAdmission.Rejected("Tool scope does not match this conversation")
             }
@@ -336,7 +371,8 @@ class RoomKotlinTurnStore(
             if (summaryPlan == null) KotlinTurnPhase.READY_PROVIDER.name else KotlinTurnPhase.SUMMARY_PENDING.name,
             request, toolGrant = grant, cloudIdentity = cloudIdentity,
             userMessageId = if (command is KotlinTurnCommand.Send) history.last().id else null, title = titleConfig, summaryPlan = summaryPlan,
-            remoteScope = command.remoteScope, coreGrant = coreGrant, scheduledRun = command.scheduledRun, delegatedRun = command.delegatedRun,
+            remoteScope = command.remoteScope, coreGrant = coreGrant, mcpGrant = mcpGrant,
+            mcpOwner = if (mcpGrant != null) owner else null, scheduledRun = command.scheduledRun, delegatedRun = command.delegatedRun,
             supportsApproval = command.supportsToolApproval, approvalUserRequest = approvalUserRequest))
         rows.upsertValues(listOf(KeyValueRow(ACTIVE + conversation.id, id)))
         rows.upsertValues(listOf(KeyValueRow(LATEST + conversation.id, id)))
@@ -714,6 +750,47 @@ class RoomKotlinTurnStore(
         mark(turn.conversationId)
         true
     }
+
+    internal suspend fun rejectUndispatchedMcpTool(receipt: McpInvocationReceipt, afterAdmission: Boolean, detail: String) {
+        check(mcpInvocations[receipt.turnId] === receipt) { "MCP invocation receipt is not current" }
+        if (afterAdmission) receipt.settleNotDispatched() else receipt.settleBeforeAdmission()
+        val turnId = receipt.turnId
+        val call = receipt.call
+        transaction { rows, mark ->
+        val turn = rows.read(turnId); turn.requireOwner()
+        check(turn.mcpOwner == owner && turn.phase() in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) &&
+            rows.getValue(ACTIVE + turn.conversationId)?.value == turnId &&
+            turn.mcpGrant?.let { it.conversationId == turn.conversationId && it.tools.count { binding -> binding.name == call.name } == 1 } == true &&
+            turn.calls.getOrNull(turn.index)?.domain() == call) { "MCP invocation no longer matches the turn" }
+        val cancelled = turn.phase() == KotlinTurnPhase.CANCELLING_TOOL
+        val assistant = checkNotNull(rows.message(turn.assistantId))
+        check(assistant.conversationId == turn.conversationId && assistant.role.equals("assistant", ignoreCase = true)) { "Invalid turn message" }
+        rows.upsertMessages(listOf(assistant.copy(status = if (cancelled) "sent" else "error", errorMessage = if (cancelled) null else detail)))
+        rows.write(turn.copy(phase = if (cancelled) KotlinTurnPhase.CANCELLED.name else KotlinTurnPhase.FAILED.name, detail = if (cancelled) null else detail))
+        if (!cancelled) rows.addTurnFailure(turn, detail)
+        rows.deleteValue(ACTIVE + turn.conversationId)
+        rows.refreshConversationPreview(turn.conversationId)
+        mark(turn.conversationId)
+        }
+    }
+
+    override suspend fun rejectUnclaimedMcpTool(turnId: String, call: ToolCallData, detail: String): Boolean = transaction { rows, mark ->
+        val turn = rows.read(turnId)
+        if (turn.owner != owner || turn.mcpOwner != owner || turn.phase() !in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) ||
+            turn.invocationStarted || rows.getValue(ACTIVE + turn.conversationId)?.value != turnId ||
+            turn.calls.getOrNull(turn.index)?.domain() != call ||
+            turn.mcpGrant?.let { it.conversationId == turn.conversationId && it.tools.count { binding -> binding.name == call.name } == 1 } != true) return@transaction false
+        val cancelled = turn.phase() == KotlinTurnPhase.CANCELLING_TOOL
+        val assistant = checkNotNull(rows.message(turn.assistantId))
+        check(assistant.conversationId == turn.conversationId && assistant.role.equals("assistant", ignoreCase = true)) { "Invalid turn message" }
+        rows.upsertMessages(listOf(assistant.copy(status = if (cancelled) "sent" else "error", errorMessage = if (cancelled) null else detail)))
+        rows.write(turn.copy(phase = if (cancelled) KotlinTurnPhase.CANCELLED.name else KotlinTurnPhase.FAILED.name, detail = if (cancelled) null else detail))
+        if (!cancelled) rows.addTurnFailure(turn, detail)
+        rows.deleteValue(ACTIVE + turn.conversationId)
+        rows.refreshConversationPreview(turn.conversationId)
+        mark(turn.conversationId)
+        true
+    }
     private suspend fun LocalRowsDao.completeToolResult(turn: StoredTurn, call: ToolCallData, result: ToolExecutionResult) {
         val now = nextMessageTimestamp(turn.conversationId)
         val part = ContentPart.ToolResult(call.callId, call.name, result.output, result.isError, result.structuredContent)
@@ -776,7 +853,9 @@ class RoomKotlinTurnStore(
                             val detail = if (turn.phase() == KotlinTurnPhase.EXECUTING_TOOL || turn.phase() == KotlinTurnPhase.CANCELLING_TOOL)
                                 "Chat was interrupted while a tool was running; its outcome is unknown and requires recovery."
                             else "Chat was interrupted when the app stopped; the previous request may have completed. Retry manually."
-                            rows.failTurn(turn, detail, mark)
+                            val unclaimedMcp = turn.mcpOwner != null && turn.mcpGrant != null && !turn.invocationStarted &&
+                                turn.calls.getOrNull(turn.index)?.let { call -> turn.mcpGrant.tools.count { it.name == call.name } == 1 } == true
+                            rows.failTurn(if (unclaimedMcp) turn.copy(phase = KotlinTurnPhase.READY_TOOL.name) else turn, detail, mark)
                         }
                     }
                 }
@@ -797,7 +876,10 @@ class RoomKotlinTurnStore(
         }
     }
 
-    override suspend fun cancel(turnId: String) { transaction { rows, mark ->
+    override suspend fun cancel(turnId: String) {
+        mcpInvocations[turnId]?.cancelBeforeAdmission()
+        transaction { rows, mark ->
+        mcpInvocations[turnId]?.cancelBeforeAdmission()
         rows.applyCancellation(rows.read(turnId), mark)
     } }
 
@@ -806,6 +888,7 @@ class RoomKotlinTurnStore(
         check(rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Turn is no longer active" }
         val turn = rows.read(turnId)
         check(turn.conversationId == conversationId && turn.phase() !in terminal && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
+        mcpInvocations[turnId]?.cancelBeforeAdmission()
         rows.applyCancellation(turn, mark)
     } }
 
@@ -817,6 +900,7 @@ class RoomKotlinTurnStore(
         val turn = rows.read(turnId)
         turn.requireOwner()
         check(turn.conversationId == conversationId && turn.phase() !in terminal && (turn.remoteScope == null || turn.remoteScope == scope)) { "Turn does not match the remote session" }
+        mcpInvocations[turnId]?.cancelBeforeAdmission()
         rows.applyCancellation(turn, mark)
     } }
 
@@ -841,6 +925,9 @@ class RoomKotlinTurnStore(
     /** Tool executors must use the scope captured at admission, including after restart. */
     suspend fun toolGrant(turnId: String): KotlinRuntimeToolGrant? = db.rows().read(turnId).toolGrant
     suspend fun coreToolGrant(turnId: String): KotlinCoreToolGrant? = db.rows().read(turnId).coreGrant
+    internal suspend fun mcpToolGrant(turnId: String): KotlinMcpToolGrant? = db.rows().read(turnId).let {
+        it.mcpGrant.takeIf { _ -> it.mcpOwner == owner }
+    }
     private suspend fun LocalRowsDao.requireActiveDelegation(parent: KotlinDelegationParent, childId: String, admitted: Boolean): StoredTurn {
         val turn = read(parent.turnId)
         val call = turn.calls.getOrNull(turn.index)?.domain()
@@ -946,6 +1033,61 @@ class RoomKotlinTurnStore(
                 turn.calls.getOrNull(turn.index)?.domain() == call && !turn.invocationStarted) { "Tool invocation was already claimed" }
             rows.write(turn.copy(invocationStarted = true))
         }
+    }
+
+    /** The owner must hold its authority fence and the exact inventory admission through this claim. */
+    internal suspend fun registerMcpInvocation(turnId: String, call: ToolCallData): McpInvocationReceipt {
+        val receipt = McpInvocationReceipt(turnId, call)
+        var registered = false
+        try { return transaction { rows, _ ->
+            val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.EXECUTING_TOOL)
+            check(turn.mcpOwner == owner && !turn.invocationStarted && turn.calls.getOrNull(turn.index)?.domain() == call &&
+                turn.mcpGrant?.tools?.count { it.name == call.name } == 1 && rows.getValue(ACTIVE + turn.conversationId)?.value == turnId) {
+                "MCP invocation cannot be registered"
+            }
+            check(mcpInvocations.putIfAbsent(turnId, receipt) == null) { "MCP invocation is already registered" }
+            registered = true
+            receipt
+        } } catch (failure: Throwable) {
+            if (registered) mcpInvocations.remove(turnId, receipt)
+            throw failure
+        }
+    }
+
+    internal fun releaseMcpInvocation(receipt: McpInvocationReceipt) { mcpInvocations.remove(receipt.turnId, receipt) }
+
+    internal suspend fun claimMcpToolInvocation(receipt: McpInvocationReceipt, grant: KotlinMcpToolGrant,
+        binding: KotlinMcpToolBinding): List<RoomCloudProviderGate.ToolPermit> {
+        check(mcpInvocations[receipt.turnId] === receipt) { "MCP invocation receipt is not current" }
+        val turnId = receipt.turnId
+        val call = receipt.call
+        val permits = mutableListOf<RoomCloudProviderGate.ToolPermit>()
+        try { return transaction { rows, _ ->
+            val turn = rows.read(turnId)
+            turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.EXECUTING_TOOL)
+            rows.requireTurnCloudSession(turn)
+            turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
+            check(!turn.scheduledRun && !turn.delegatedRun && turn.mcpOwner == owner && turn.mcpGrant == grant &&
+                grant.conversationId == turn.conversationId && grant.tools.singleOrNull { it.name == call.name } == binding &&
+                rows.getValue(ACTIVE + turn.conversationId)?.value == turnId) { "MCP turn scope changed" }
+            val conversation = requireNotNull(rows.conversation(turn.conversationId)) { "Conversation is unavailable" }
+            val agent = requireNotNull(rows.agent(conversation.agentId)) { "Agent is unavailable" }
+            val default = rows.defaultAgents().singleOrNull() ?: error("Default Agent is unavailable")
+            check(runtimeToolAllowedByAgent(conversation, agent, default, call.name, false)) { "MCP tool is disabled by Agent policy" }
+            val spec = turn.request.tools.orEmpty().singleOrNull { it.function.name == call.name }
+            check(spec?.type == "function" && spec.function.description == binding.description &&
+                spec.function.parameters == binding.parameters && turn.calls.getOrNull(turn.index)?.domain() == call &&
+                !turn.invocationStarted) { "MCP invocation was already claimed or its declaration changed" }
+            val sessions = listOfNotNull(
+                turn.cloudIdentity?.let { SyncSession(it.accountId, it.generation) },
+                turn.remoteScope?.let { SyncSession(it.accountId, it.generation) },
+            ).distinct()
+            sessions.forEach { session ->
+                permits.add(checkNotNull(cloudGate) { "Cloud provider gate is unavailable" }.registerToolPermit(session))
+            }
+            rows.write(turn.copy(invocationStarted = true))
+            permits.toList()
+        } } catch (failure: Throwable) { permits.forEach { it.release() }; throw failure }
     }
 
     /** Persist this before dispatch so no second caller can invoke the same external side effect. */
