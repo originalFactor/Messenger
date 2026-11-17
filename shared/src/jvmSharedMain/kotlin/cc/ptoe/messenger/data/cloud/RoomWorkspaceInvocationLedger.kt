@@ -137,11 +137,12 @@ internal class RoomWorkspaceInvocationLedger(private val db: LocalDatabase) {
                 }
             }
         }
-        check((indexed == null && pending == null) ||
-            (indexed != null && pending != null && indexed.key == pending?.key && indexed.owner == pending?.owner)) {
+        val active = pending
+        check((indexed == null && active == null) ||
+            (indexed != null && active != null && indexed.key == active.key && indexed.owner == active.owner)) {
             "Workspace invocation index is inconsistent"
         }
-        return pending
+        return active
     }
 
     private fun index(raw: String): WorkspaceInvocationRef {

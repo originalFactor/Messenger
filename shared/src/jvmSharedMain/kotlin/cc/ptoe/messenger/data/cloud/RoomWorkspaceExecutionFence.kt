@@ -5,6 +5,8 @@ import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -18,11 +20,21 @@ internal fun interface WorkspaceExecutionRunner {
     suspend fun executeAndAwaitStop(grant: RoomInboundWorkspaceGrant): WorkspaceExecutionOutcome
 }
 
+/** The exact durable reference must be bound to the host invocation and stop evidence. */
+internal fun interface DurableWorkspaceExecutionRunner {
+    suspend fun executeAndAwaitStop(ref: WorkspaceInvocationRef, grant: RoomInboundWorkspaceGrant): WorkspaceExecutionOutcome
+}
+
+/** An output is not evidence the receiving peer obtained it; the reservation remains active. */
+internal class DurableWorkspaceExecutionResult(val ref: WorkspaceInvocationRef, val outcome: WorkspaceExecutionOutcome.Stopped)
+
 /**
  * Prototype admission and all-writer fence for exactly one Room owner. The owner must
  * route every session/project/workspace/conversation mutation through [mutate] and
- * retain this instance for its full lifetime. Uncertain stop permanently poisons this
- * instance. Process recovery needs an independent durable ledger and stop proof.
+ * retain this instance for its full lifetime. The older in-memory execution path is disabled
+ * because it cannot prevent replay after a restart. The durable path keeps a reservation across
+ * restart, but still requires a real all-writer/Cloud invalidation fence, exclusive Room
+ * ownership and a platform proof for each exact worker and its descendants. Not installed.
  */
 internal class RoomWorkspaceExecutionFence private constructor(db: LocalDatabase) {
     companion object {
@@ -31,32 +43,53 @@ internal class RoomWorkspaceExecutionFence private constructor(db: LocalDatabase
             instances[db]?.get() ?: RoomWorkspaceExecutionFence(db).also { instances[db] = WeakReference(it) }
         }
     }
-    private val authority = RoomWorkspaceRelayAuthority(db)
+    private val ledger = RoomWorkspaceInvocationLedger(db)
     private val mutex = Mutex()
-    private val seen = mutableSetOf<Pair<String, String>>()
-    private var uncertain = false
 
     suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
-        check(!uncertain) { "Workspace execution requires recovery" }
+        check(ledger.pending() == null) { "Workspace execution requires recovery" }
         block()
     }
 
-    suspend fun execute(scope: KotlinRemoteControlScope, call: RoomInboundWorkspaceCall, runner: WorkspaceExecutionRunner): WorkspaceExecutionOutcome.Stopped = mutex.withLock {
-        check(!uncertain) { "Workspace execution requires recovery" }
-        val key = call.fromDeviceId to call.callId
-        check(key !in seen && seen.size < 10_000) { "Workspace request was already admitted or the replay limit was reached" }
-        val grant = authority.prepare(scope, call)
-        seen.add(key)
-        val result = try { runner.executeAndAwaitStop(grant) } catch (failure: Throwable) {
-            uncertain = true
-            throw failure
+    /** The former in-memory-only path cannot safely coexist with persistent replay protection. */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun execute(scope: KotlinRemoteControlScope, call: RoomInboundWorkspaceCall, runner: WorkspaceExecutionRunner): WorkspaceExecutionOutcome.Stopped =
+        error("In-memory workspace execution is unavailable; durable admission is required")
+
+    /**
+     * Persist the one-shot identity before handing it to a trusted runner. An exception,
+     * cancellation or unknown result retains the durable reservation; it never retries.
+     * A returned result also stays reserved until a caller explicitly confirms the receiver
+     * obtained it. The enclosing owner must independently stop and join any worker after
+     * an exception. No result payload is persisted by this prototype.
+     */
+    suspend fun executeDurable(scope: KotlinRemoteControlScope, cookie: String, call: RoomInboundWorkspaceCall,
+        runner: DurableWorkspaceExecutionRunner): DurableWorkspaceExecutionResult = mutex.withLock {
+        val admission = when (val result = ledger.admit(scope, cookie, call)) {
+            is WorkspaceInvocationAdmission.Admitted -> result
+            WorkspaceInvocationAdmission.Busy -> error("Workspace execution requires recovery")
+            WorkspaceInvocationAdmission.Duplicate -> error("Workspace request was already admitted")
         }
-        when (result) {
-            is WorkspaceExecutionOutcome.Stopped -> result
-            WorkspaceExecutionOutcome.Unknown -> {
-                uncertain = true
-                error("Workspace execution outcome is unknown; recovery is required")
+        currentCoroutineContext().ensureActive()
+        when (val outcome = runner.executeAndAwaitStop(admission.ref, admission.grant)) {
+            WorkspaceExecutionOutcome.Unknown -> error("Workspace execution outcome is unknown; recovery is required")
+            is WorkspaceExecutionOutcome.Stopped -> {
+                currentCoroutineContext().ensureActive()
+                DurableWorkspaceExecutionResult(admission.ref, outcome)
             }
         }
     }
+
+    /** Call only after the result is received. The barrier must hold exact-worker exclusion. */
+    suspend fun confirmResultDelivered(ref: WorkspaceInvocationRef, barrier: WorkspaceInvocationStopBarrier) = mutex.withLock {
+        ledger.complete(ref, barrier)
+    }
+
+    /** Explicitly record an unknown result after independently proving that worker stopped. */
+    suspend fun acknowledgeUnknown(ref: WorkspaceInvocationRef, barrier: WorkspaceInvocationStopBarrier) = mutex.withLock {
+        ledger.acknowledgeUnknown(ref, barrier)
+    }
+
+    /** An opaque pending identity does not itself establish stop or disclose arguments. */
+    suspend fun pendingRecovery(): WorkspaceInvocationRef? = mutex.withLock { ledger.pending() }
 }
