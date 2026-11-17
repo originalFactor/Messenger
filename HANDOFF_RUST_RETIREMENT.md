@@ -34,6 +34,8 @@
 
 `AppContainer` 新增 `shutdownCompleted` 状态：失败关闭仍可重试，成功关闭后拒绝 clear/reinit；新增 `AppBackendTest` 覆盖失败/成功状态转换。`shared:allTests` 再次通过（901 项，1 skipped）。这只是注入 backend 的生命周期合同，不切换任何 app shell，也不提供平台 worker-stop 证明。
 
+`core/rust/crates/messenger-http/docs/BACKGROUND_TASKS.md` 盘点 `ServerHandle.stop()` 已跟踪与仍未跟踪的请求级任务，并给出 owner-scoped `TaskScope`、外部进程/付费请求 stop barrier 和测试顺序。当前 stop 仍只 join axum、remote 与 scheduler 循环；外部 ACP/Runtime 后代仍未证明停止，不能据此切换生产。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
