@@ -22,6 +22,10 @@ cutover.
   `ApiState` and joined by both `DELETE /control/agent-relay` and
   `ServerHandle::stop()`. Its upstream SSE conversion workers still stop through
   the shutdown token and remain part of the external-side-effect gap below.
+- Local `ImageGenerationService` workers are cancelled and joined by
+  `ServerHandle::stop()` and explicit local-data cleanup. A stop keeps the job
+  as cancelled/unknown with an explicit remote-charge uncertainty message; it
+  does not claim the provider request never happened or was free.
 
 ## Request-spawned tasks still needing an owner
 
@@ -32,7 +36,7 @@ cutover.
 | `control.rs` | local/background command dispatch, task-event recording and queued Cloud sync | now tracked/abort-joined; queued network work may remain ambiguous until sync recovery. |
 | `remote_client.rs` | remote control client lane | now tracked/abort-joined; a remote host command may have executed and must not be replayed. |
 | `scheduled_tasks.rs` | one task execution per tick | now tracked/abort-joined; externally dispatched work needs its durable claim and recovery. |
-| `image_generation.rs` | one provider job per admitted image request | explicit cancel or provider completion; a paid/remote request may remain ambiguous. |
+| `image_generation.rs` | one provider job per admitted image request | local worker is now cancelled and joined; a paid/remote generation or charge may still remain ambiguous and is retained as such. |
 | `delegation.rs` | ACP delegation event drain | awaited by the delegating request, but external ACP descendants are separate. |
 | `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | lifetime token/cancel or channel close; direct child exit does not prove descendants stopped. |
 | `agent_relay.rs` | model relay listener and SSE conversion workers | loopback listener is now taken and joined by relay stop / server stop; upstream SSE conversion workers still rely on the shutdown token and a provider-side stream ending. |
@@ -51,9 +55,11 @@ stopped.
    `ApiState` in this tracker. A failed or non-terminating task must keep
    ownership live and return a visible failure, never a timeout that silently
    releases the database.
-2. Still required: give `AgentRelay`, `ImageGenerationService`, external ACP sessions and
-   Android Runtime processes explicit stop-and-join barriers. Record ambiguous
-   outcomes durably; never replay a paid or remote call.
+2. Still required: give external ACP sessions, Android Runtime processes and
+   upstream relay/provider streams explicit platform stop barriers. Record
+   ambiguous outcomes durably; never replay a paid or remote call. Local agent
+   relay listener and image worker joins do not prove those external effects
+   stopped.
 3. Add shutdown tests that start one representative of each task class, cancel
    while it is in flight, and assert `stop()` does not return until all handles
    are joined. Real device tests must separately cover Runtime/ACP descendants.

@@ -11,9 +11,10 @@ axum server task, joins the remote-control and scheduler loops started with
 that server, and aborts/joins local in-process request tasks registered in
 `ApiState.tasks` (turn workers, background replay, control dispatch, remote
 client lanes, queued sync and individual scheduled executions). It still does
-not prove that every image job, upstream relay stream, ACP process, Runtime
-child or remote side effect outside the HTTP crate has stopped. A separately
-created `AgentRelay` loopback listener is now joined, but its upstream SSE
+not prove that every upstream relay stream, ACP process, Runtime child or
+remote side effect outside the HTTP crate has stopped. A separately created
+`AgentRelay` loopback listener and local image generation workers are now
+joined; image jobs retain explicit remote-charge uncertainty and upstream SSE
 conversion workers still rely on provider stream termination.
 `HttpServerHandle.stop()` delegates to this operation, and the Rust Core handle
 separately owns an `Arc<Store>`. Consequently a successful HTTP stop is still

@@ -485,6 +485,7 @@ impl ServerHandle {
 
     pub async fn stop(mut self) -> Result<(), std::io::Error> {
         self.shutdown.cancel();
+        self.state.images.stop_and_join().await;
         let mut relay = {
             let mut current = self.agent_relay.lock().await;
             current.take()
@@ -2240,6 +2241,7 @@ async fn cloud_clear_market_links(State(state): State<ApiState>) -> Result<Statu
 async fn clear_local_data(State(state): State<ApiState>) -> Result<StatusCode, ApiError> {
     scheduled_tasks::clear(&state).await?;
     for cancel in state.active_turns.lock().await.values() { cancel.cancel(); }
+    state.images.stop_and_join().await;
     state.images.clear().await?;
     state.assets.clear().await?;
     state.store.clear_learning().map_err(ApiError::store)?;
