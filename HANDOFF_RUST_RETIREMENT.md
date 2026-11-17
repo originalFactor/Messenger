@@ -13,20 +13,22 @@
 - Android `MessengerApplication.kt` 和 Desktop `Main.kt` 仍启动 Rust；`KotlinRoomBackendSlice` 是隔离组合，`asAppBackend()` 仍拒绝 ACP owner 和远程设备 host。生产切换未完成。
 - 草稿 TUI 已移除（`eca2939`）；Android debug 默认 ABI 为 `arm64-v8a` 和 `x86_64`（`824f429`）。renderer 子模块已嵌入并使用 Compose LaTeX；子模块当前提交 `cb42531`。
 - Kotlin/Room 已有大量隔离实现和测试：聊天、Cloud、Learning、图片、生成应用、定时任务、ACP、MCP、远控及迁移。部分能力仍有限制，具体以 `shared/AGENTS.md` 和各实现文档为准。
-- 最近工作检查点：`3c563b9`（ACP 设置、工作区恢复原型）、`31efca7`/`29a980b`（ACP Agent/project/provider/model 写入保护）、`892720a`（Runtime ACP 会话协议与设备测试变体）、`f21459b`（旧库审查记录与 Cloud 派发）、`b7f9ad6`（隔离远程文字及 BYOK 接管）、`cb852df`（恢复及 ACP 接管原型）。`git log` 包含更早的阶段提交。
+- 最近工作检查点：`32c01a6`（隔离候选工作区归档导入）、`ac0f9c5`（持久 workspace reservation）、`d92f7d2`（ACP 设置撤销远控）、`3c563b9`（ACP 设置、工作区恢复原型）、`31efca7`/`29a980b`（ACP Agent/project/provider/model 写入保护）、`892720a`（Runtime ACP 会话协议与设备测试变体）、`f21459b`（旧库审查记录与 Cloud 派发）、`b7f9ad6`（隔离远程文字及 BYOK 接管）、`cb852df`（恢复及 ACP 接管原型）。`git log` 包含更早的阶段提交。
 - 估计曾向用户说明约 **2–6 周全职工程量**，不保证交付日期；这是粗估，平台隔离、数据迁移及跨平台测试可能改变它。
 
-## 工作树与交接时中断的工作
+## 现场恢复与验证（2026-11-17 续）
 
-**先运行 `git status --short --untracked-files=all`，不要重置或直接全部暂存。** 交接时已中断各协作者，以下源代码尚未形成检查点，最终版本未经完整联合测试和独立复审：
+上一轮交接的三组改动已按功能复审、定向测试并分别提交（`d92f7d2`、`ac0f9c5`、`32c01a6`），生产仍保持 Rust 启动且所有原型均未接入：
 
-1. `shared/.../KotlinControlSettingsBridge.kt`、`KotlinRoomBackendSlice.kt` 和 `KotlinRoomAcpSliceTest.kt`：ACP profile 保存先撤销远控，再等待 ACP worker 并检查原 session/epoch；即使新 profile 或名称无效也先撤销。`PartialChatBridge` 设置调用加入 shutdown 生命周期。相关 `shared/AGENTS.md` 有未提交更新。最近一次相关联合运行 `/tmp/messenger-profile-workspace-fence.log` 的 13 项测试中有 1 项失败，失败在工作区测试，不应据此称这一批全部通过。
-2. `shared/.../RoomWorkspaceExecutionFence.kt` 和对应 `RoomWorkspaceExecutionFenceTest.kt`：将持久 workspace invocation ledger 与隔离执行 fence 组合。最后的修改据作者称禁用旧的仅内存执行入口，完成结果保留 reservation 直到明确确认，解决跨入口重复执行和取消后结果丢失；**这些最后修改未重新编译、未测试、未独立复审**。仍缺 Cloud 401 同步失效、所有写入者围栏和真实 worker 停止证明，不能接入生产。原失败为 `cancelledTrackedInvocationRetainsReservationUntilExplicitProofBackedAcknowledgement`。
-3. `runtime/workspace-transfer-shared/.../WorkspaceArchive.kt`、`runtime/.../WorkspaceTransfer.kt`、`androidApp/.../AndroidWorkspaceCandidateStager.kt`、`AndroidWorkspaceCandidateDeviceTest.kt` 和两个 Gradle/AGENTS 文件：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。最后一轮修改把共用源码注册到 Kotlin source set；构建被交接中断，**尚无可信最终编译或设备测试结果**。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束或来源快照一致。检查是否有 Gradle 客户端残留后再运行。
+1. `KotlinControlSettingsBridge.kt` 和 `KotlinRoomAcpSliceTest.kt`（`d92f7d2`）：ACP profile 保存先撤销远控，再等待 ACP worker 并检查原 session/epoch；即使新 profile 或名称无效也先撤销。`KotlinRoomBackendSlice.kt` 的 `configurationWrite` 接线和 `PartialChatBridge` 设置调用 shutdown 生命周期已在 `3c563b9` 提交。相关 `shared/AGENTS.md` 已同步。定向 shared 测试及 Android Kotlin 编译通过；这不是全量回归或生产 worker 证明。
+2. `RoomWorkspaceExecutionFence.kt`、`RoomWorkspaceInvocationLedger.kt` 和对应测试（`ac0f9c5`）：持久 workspace invocation ledger 与隔离执行 fence 组合，旧仅内存执行入口禁用，完成结果保留 reservation 直到明确确认；取消或异常保留 reservation 直到 stop barrier 支持的显式确认。5 项 fence 测试、4 项 ledger 测试及关联的 ACP/控制设置/授权测试均通过。仍缺 Cloud 401 同步失效、所有写入者围栏、可信 sender 身份和真实 worker 进程树停止证明，不能接入生产。
+3. `workspace-transfer-shared/WorkspaceArchive.kt`、`WorkspaceTransfer.kt`、`AndroidWorkspaceCandidateStager.kt`、设备测试及两个 Gradle/AGENTS 文件（`32c01a6`）：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。共用源码注册到两个 Kotlin source set；Runtime 单元测试、Runtime/Android debug APK 和 instrumentation APK 构建通过。隔离 `emulator-5562` 上跨 UID 候选设备测试 1/1 通过，Runtime 工作区设备测试 5/5 通过（含 adbd root 创建后交给普通 Runtime UID 的真实硬链接夹具，已清理）。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束、来源快照一致或全局元数据无损。
+
+本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
 
-先检查最近未提交代码的 diff、测试日志及正在运行的进程；与作者确认后逐块完成、审查、测试、提交。不要混入 `.idea`、凭据或 server gitlink。若原型无法安全完成，保持其未连接及 fail-closed，并明确记载。
+提交时不要混入 `.idea`、凭据或 server gitlink；保持无法证明的原型未连接及 fail-closed。
 
 ## 已完成的可验证成果
 
@@ -41,7 +43,7 @@
 
 ## 关键未完成事项与建议顺序
 
-1. **先恢复可验证工作现场。** 复审上面 3 组未提交改动及锁顺序，修复测试，按功能分开提交。workspace ledger 的 stop barrier 只是接口；服务端不认证声称的 sender。workspace 文件候选不提供可信来源、完整元数据或全局一致快照。
+1. **继续隔离原型的安全边界。** 三组交接改动已恢复检查点；workspace ledger 的 stop barrier 只是接口，服务端不认证声称的 sender，workspace 文件候选不提供可信来源、完整元数据或全局一致快照。
 2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录了实际障碍：Rust `ServerHandle.stop()` 只等待 axum，未 join 所有后台任务；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩冒充平台证明。
 3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
 4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
@@ -59,6 +61,6 @@ export PATH="$JAVA_HOME/bin:$PATH"
 ./gradlew-cli :runtime:testDebugUnitTest :runtime:assembleDebug :runtime:assembleDebugAndroidTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest -Pmessenger.debugAbis=x86_64 -Pmessenger.abis=x86_64 -Pmessenger.buildRuntimeNative=false
 ```
 
-根据实际变更补相应测试，特别是候选工作区的跨 UID instrumentation；不要把当前未验证文件视作上述旧测试已覆盖。设备测试仅使用临时 `emulator-5562`，明确 `adb -s emulator-5562`，结束后 `adb -s emulator-5562 emu kill`；不要操作物理设备。AVD 位于 `/tmp/messenger-avd-validation/avd`。运行状态和失败详情可先查看 `/tmp/messenger-profile-workspace-fence.log` 等 `/tmp/messenger-*.log`，但临时文件不是长期证据。Gradle 可能因 Kotlin 增量编译异常自动回退全量编译，需区分警告与失败。
+本轮已补跑候选工作区的跨 UID instrumentation 及 Runtime 工作区设备测试；不要把分阶段结果套到后续改动或视作全量回归。设备测试仅使用临时 `emulator-5562`，明确 `adb -s emulator-5562`，结束后 `adb -s emulator-5562 emu kill`；不要操作物理设备。AVD 位于 `/tmp/messenger-avd-validation/avd`。运行状态和失败详情可先查看 `/tmp/messenger-resume-*.log`，但临时文件不是长期证据。Gradle 可能因 Kotlin 增量编译异常自动回退全量编译，需区分警告与失败。
 
 自动命令审查此前拒绝了清理临时 checkout `/tmp/messenger-mcp-staged-AYYoEsYN` 的 `rm -rf` 命令形式；该目录被保留。不要绕过审查或将其误认为仓库内容。
