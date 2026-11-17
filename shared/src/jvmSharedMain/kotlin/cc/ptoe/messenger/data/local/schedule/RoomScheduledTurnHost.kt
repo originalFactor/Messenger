@@ -1,8 +1,6 @@
 /* Copyright 2026 originalFactor. Licensed under the Apache License, Version 2.0. */
 package cc.ptoe.messenger.data.local.schedule
 
-import androidx.room.Transactor
-import androidx.room.useWriterConnection
 import cc.ptoe.messenger.data.chat.KotlinTurnRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
@@ -90,8 +88,7 @@ internal class RoomScheduledTurnHost(
         runtime.bindStore(store)
         val runner = KotlinChatTurnRunner(store, runtime.provider, executor, runtime.scope, runtime.lifecycle)
         val timestamp = now()
-        db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
-            val rows = db.rows()
+        val published = tasks.publishConversation(scope, conversationId) { rows ->
             val agent = requireNotNull(rows.agent(scope.agentId)) { "Scheduled Agent is unavailable" }
             check(agent.defaultModelId != null) { "Scheduled Agent requires a model" }
             val default = rows.defaultAgents().singleOrNull() ?: error("Default Agent is unavailable")
@@ -106,13 +103,15 @@ internal class RoomScheduledTurnHost(
                 null, null, null, null, null, null, null, true, timestamp, timestamp, null, null, null, 0, 0, 0)
             rows.upsertConversations(listOf(conversation))
             db.cloudSync().enqueueLocal(SyncCollection.CONVERSATION, conversationId, SyncMutation.UPSERT)
-        } }
+        }
+        check(published) { "Scheduled run was stopped before conversation creation" }
         check(recordConversation(conversationId)) { "Scheduled run was stopped before turn admission" }
         currentCoroutineContext().ensureActive()
         var turnId: String? = null
         try {
             withContext(NonCancellable) {
-                when (val admission = runner.submit(KotlinTurnCommand.Send(conversationId, scope.prompt, null, scheduledRun = true)) { turnId = it }) {
+                when (val admission = runner.submit(KotlinTurnCommand.Send(conversationId, scope.prompt, null, scheduledRun = true,
+                    scheduledClaim = KotlinScheduledTurnClaim(scope.claim.taskId, scope.claim.token, scope.claim.startedAt))) { turnId = it }) {
                     is KotlinTurnAdmission.Accepted -> check(turnId == admission.turnId)
                     KotlinTurnAdmission.ModelRequired -> error("Scheduled Agent requires a model")
                     is KotlinTurnAdmission.Rejected -> error(admission.reason)

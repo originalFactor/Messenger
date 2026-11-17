@@ -291,6 +291,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                         }
                     }
                     check(!RoomAcpModeLedger(db).pending(sessionId)) { "Check the previous ACP mode change before starting a turn" }
+                    check(RoomAcpSteeringLedger(db).pending(sessionId) == null) { "The previous ACP steering outcome is unknown; recovery is required" }
                     val endForeground = foreground()
                     var handedOff = false
                     var admittedHere = false
@@ -446,6 +447,22 @@ internal class RoomAcpBackgroundOwner private constructor(
     }
 
     suspend fun decide(requestId: String, optionId: String): Boolean = admitted { observation.decide(requestId, optionId) }
+
+    /** Isolated steering; worker identity remains reserved until the outcome is recorded. */
+    suspend fun steer(requestId: String, sessionId: String, content: JsonArray): JsonObject = admitted {
+        val task = synchronized(lock) { tasks.values.lastOrNull { it.sessionId == sessionId && !it.finished } }
+            ?: return@admitted buildJsonObject { put("outcome", "promptRequired") }
+        val frozen = Json.parseToJsonElement(content.toString()).jsonArray
+        manager.withSteeringWorker(sessionId, task.id) { worker ->
+            val steering = RoomAcpSteeringLedger(db)
+            steering.admit(requestId, sessionId, task.id, frozen)
+            val result = worker.steer(task.id, frozen)
+            val outcome = (result["outcome"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                ?: error("ACP steering response is unknown")
+            withContext(NonCancellable) { steering.settle(requestId, sessionId, task.id, frozen, outcome, now()) }
+            result
+        }
+    }
 
     /** Includes completed or evicted turns whose IDs remain in the durable admission ledger. */
     suspend fun owns(requestId: String): Boolean = admitted {

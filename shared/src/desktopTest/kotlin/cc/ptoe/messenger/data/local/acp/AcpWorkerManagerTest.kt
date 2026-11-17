@@ -19,6 +19,40 @@ class AcpWorkerManagerTest {
     private fun config() = AcpWorkerConfiguration("agent", listOf("acp"), mapOf("SECRET" to "token"), JsonArray(emptyList()), true, setOf("messenger_learning"))
     private val content = JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", "hello") }))
 
+    @Test fun turnFinalizationWaitsForSteeringOnCompletionAndCancellation(): Unit = runBlocking {
+        for (cancel in listOf(false, true)) {
+            val promptStarted = CompletableDeferred<Unit>(); val finishPrompt = CompletableDeferred<Unit>()
+            val steerStarted = CompletableDeferred<Unit>(); val finishSteer = CompletableDeferred<Unit>()
+            val cleanupStarted = CompletableDeferred<Unit>()
+            val process = object : AcpWorkerProcess, AcpWorkerSteering, AcpTurnFinalizer {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true)
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
+                    promptStarted.complete(Unit); finishPrompt.await(); return buildJsonObject { put("type", "Finished") }
+                }
+                override suspend fun steer(turnId: String, content: JsonArray): JsonObject {
+                    steerStarted.complete(Unit); finishSteer.await(); return buildJsonObject { put("outcome", "injected") }
+                }
+                override suspend fun cancelAndConfirm(): Boolean { cleanupStarted.complete(Unit); return true }
+                override suspend fun stopAndAwait() { cleanupStarted.complete(Unit) }
+                override suspend fun finishTurn(turnId: String, result: JsonObject?, error: String?) { cleanupStarted.complete(Unit) }
+            }
+            val manager = AcpWorkerManager(AcpWorkerFactory { process }, AcpWorkspaceAuthority {}, backend, { false })
+            val id = java.util.UUID.randomUUID().toString()
+            val turn = async { manager.prompt(binding(), config(), content, id) }
+            withTimeout(5_000) { promptStarted.await() }
+            val steer = async { manager.withSteeringWorker(binding().conversationId, id) { it.steer(id, content) } }
+            withTimeout(5_000) { steerStarted.await() }
+            if (cancel) assertTrue(withTimeout(1_000) { manager.cancelTurn(binding().conversationId, id) }) else finishPrompt.complete(Unit)
+            delay(50)
+            assertFalse(cleanupStarted.isCompleted)
+            assertFalse(turn.isCompleted)
+            finishSteer.complete(Unit)
+            withTimeout(5_000) { steer.await(); turn.join() }
+            assertTrue(cleanupStarted.isCompleted)
+            manager.withInactiveSession(binding().conversationId, true) {}
+        }
+    }
+
     @Test fun cancellationStopsUnconfirmedWorkerBeforeReleasingReservation(): Unit = runBlocking {
         val entered = CompletableDeferred<Unit>(); val stopping = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         var created = 0

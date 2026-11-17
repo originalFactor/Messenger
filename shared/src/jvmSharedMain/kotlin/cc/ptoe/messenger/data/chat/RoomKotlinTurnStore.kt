@@ -86,6 +86,7 @@ private data class StoredTurn(
     val mcpGrant: KotlinMcpToolGrant? = null,
     val mcpOwner: String? = null,
     val scheduledRun: Boolean = false,
+    val scheduledClaim: KotlinScheduledTurnClaim? = null,
     val imageFailed: Boolean = false,
     val delegatedRun: Boolean = false,
     val delegation: StoredDelegation? = null,
@@ -226,6 +227,12 @@ class RoomKotlinTurnStore(
         if (command.conversationId.startsWith("acp:")) return@transaction KotlinTurnAdmission.Rejected("ACP turns require the ACP service")
         if (rows.getValue(ACTIVE + command.conversationId) != null) return@transaction KotlinTurnAdmission.Rejected("A turn is already active")
         val conversation = rows.conversation(command.conversationId) ?: return@transaction KotlinTurnAdmission.Rejected("Conversation not found")
+        val scheduledClaim = (command as? KotlinTurnCommand.Send)?.scheduledClaim
+        if (command.scheduledRun) {
+            if (command !is KotlinTurnCommand.Send || scheduledClaim == null || command.delegatedRun || command.remoteScope != null)
+                return@transaction KotlinTurnAdmission.Rejected("Scheduled turn claim is unavailable")
+            cc.ptoe.messenger.data.local.schedule.requireScheduledTurnAdmission(rows, scheduledClaim, conversation, command.content)
+        } else if (scheduledClaim != null) return@transaction KotlinTurnAdmission.Rejected("Unexpected scheduled turn claim")
         val delegationParent = command.delegationParent?.let { parent ->
             check(command is KotlinTurnCommand.Send && command.delegatedRun && !command.scheduledRun && command.remoteScope == null) { "Invalid delegated turn" }
             val turn = rows.requireActiveDelegation(parent, conversation.id, admitted = false)
@@ -377,7 +384,7 @@ class RoomKotlinTurnStore(
             request, toolGrant = grant, cloudIdentity = cloudIdentity,
             userMessageId = if (command is KotlinTurnCommand.Send) history.last().id else null, title = titleConfig, summaryPlan = summaryPlan,
             remoteScope = command.remoteScope, coreGrant = coreGrant, mcpGrant = mcpGrant,
-            mcpOwner = if (mcpGrant != null) owner else null, scheduledRun = command.scheduledRun, delegatedRun = command.delegatedRun,
+            mcpOwner = if (mcpGrant != null) owner else null, scheduledRun = command.scheduledRun, scheduledClaim = scheduledClaim, delegatedRun = command.delegatedRun,
             supportsApproval = command.supportsToolApproval, approvalUserRequest = approvalUserRequest))
         rows.upsertValues(listOf(KeyValueRow(ACTIVE + conversation.id, id)))
         rows.upsertValues(listOf(KeyValueRow(LATEST + conversation.id, id)))
@@ -437,8 +444,18 @@ class RoomKotlinTurnStore(
                     turn.titleFailureHasDurableNotice)
             } }
         }
+    private suspend fun LocalRowsDao.requireScheduledClaim(turn: StoredTurn) {
+        if (!turn.scheduledRun) return
+        val claim = turn.scheduledClaim ?: throw cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable("Scheduled turn claim is unavailable")
+        val conversation = checkNotNull(conversation(turn.conversationId)) { "Scheduled conversation is unavailable" }
+        val prompt = checkNotNull(turn.userMessageId?.let { message(it) }) { "Scheduled prompt is unavailable" }
+        check(prompt.conversationId == conversation.id && prompt.role == "user") { "Scheduled prompt changed" }
+        cc.ptoe.messenger.data.local.schedule.requireScheduledTurnAdmission(this, claim, conversation, prompt.content, matchDefinition = false)
+    }
+
     override suspend fun beginSummary(turnId: String): KotlinSummaryWork? = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.SUMMARY_PENDING)
+        rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val plan = checkNotNull(turn.summaryPlan) { "Summary plan is missing" }
         val original = rows.snapshot(turn)
@@ -500,6 +517,7 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginProvider(turnId: String): KotlinTurnSnapshot = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_PROVIDER)
+        rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         if (turn.providerId == BUILTIN_PROVIDER_ID) {
             check(cloudGate != null && turn.cloudIdentity != null && rows.getValue(DEFERRED_BUILTIN_PROVIDER_CLEANUP) == null) { "Cloud session is unavailable" }
@@ -567,6 +585,12 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginTitle(turnId: String): KotlinTitleWork? = transaction { rows, mark ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.TITLE_PENDING)
+        try { rows.requireScheduledClaim(turn) }
+        catch (_: cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable) {
+            // A completed assistant answer stays sent when cancellation makes title work obsolete.
+            rows.finishTitle(turn, null, mark)
+            return@transaction null
+        }
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val conversation = rows.conversation(turn.conversationId)
         val messages = rows.messagesFor(listOf(turn.conversationId)).filter { it.status == "sent" }
@@ -636,6 +660,7 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginAutomaticApproval(turnId: String): KotlinApprovalWork? = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.AUTO_APPROVAL_PENDING)
+        rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val call = turn.calls.getOrNull(turn.index)?.domain() ?: error("No pending tool")
         val phase = rows.approvalPhase(turn, call)
@@ -709,6 +734,7 @@ class RoomKotlinTurnStore(
     } }
     override suspend fun beginTool(turnId: String): ToolCallData = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_TOOL)
+        rows.requireScheduledClaim(turn)
         rows.requireTurnCloudSession(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val call = turn.calls.getOrNull(turn.index)?.domain() ?: error("No pending tool")

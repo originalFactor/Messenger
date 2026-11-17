@@ -6,6 +6,7 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
+import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.cloud.CloudUser
 import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
 import cc.ptoe.messenger.data.cloud.StoredCloudSession
@@ -14,6 +15,10 @@ import cc.ptoe.messenger.data.local.room.*
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
+import cc.ptoe.messenger.domain.chat.KotlinTurnAdmission
+import cc.ptoe.messenger.domain.chat.KotlinTurnCommand
+import cc.ptoe.messenger.domain.chat.KotlinTurnPhase
+import cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -26,10 +31,197 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import java.util.concurrent.atomic.AtomicInteger
 
 class RoomScheduledTurnHostTest {
+    @Test fun editingEnabledTaskAfterAdmissionKeepsTheOriginalRunSnapshot(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-edit-after-admission")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        try {
+            seed(db)
+            val tasks = RoomScheduledTasks(db)
+            val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(taskId, "Reminder", "original prompt", "agent", null, 1, 1))
+            val claim = tasks.claimDue(2000).single().second
+            val scope = tasks.executionScope(claim, emptySet())
+            val row = Json.parseToJsonElement("""{"_id":"conversation","agentId":"agent","writable":true}""").jsonObject.conversationRow()
+            assertTrue(tasks.publishConversation(scope, "conversation") { it.upsertConversations(listOf(row)) })
+            val store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+            val admitted = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("conversation", "original prompt", null,
+                scheduledRun = true, scheduledClaim = KotlinScheduledTurnClaim(claim.taskId, claim.token, claim.startedAt))))
+            assertTrue(store.claim(admitted.turnId, false))
+            tasks.update(tasks.list().single().copy(prompt = "next run prompt"))
+            assertEquals(KotlinTurnPhase.REQUESTING_PROVIDER, store.beginProvider(admitted.turnId).phase)
+            assertEquals("original prompt", db.rows().messagesFor(listOf("conversation")).first().content)
+            assertEquals("next run prompt", tasks.list().single().prompt)
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancellationBeforeTitleKeepsCompletedAnswerSent(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-title-fence")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        try {
+            seed(db)
+            db.rows().upsertAgents(listOf(Json.parseToJsonElement("""{"_id":"title-agent","role":"title","defaultModelId":"m"}""").jsonObject.agentRow(null)))
+            val tasks = RoomScheduledTasks(db)
+            val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(taskId, "Reminder", "hello", "agent", null, 1, 1))
+            val claim = tasks.claimDue(2000).single().second
+            val scope = tasks.executionScope(claim, emptySet())
+            val row = Json.parseToJsonElement("""{"_id":"conversation","title":"New Chat","agentId":"agent","writable":true}""").jsonObject.conversationRow()
+            assertTrue(tasks.publishConversation(scope, "conversation") { it.upsertConversations(listOf(row)) })
+            val store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+            val admitted = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("conversation", "hello", null,
+                scheduledRun = true, scheduledClaim = KotlinScheduledTurnClaim(claim.taskId, claim.token, claim.startedAt))))
+            assertTrue(store.claim(admitted.turnId, false))
+            store.beginProvider(admitted.turnId)
+            store.appendContent(admitted.turnId, "completed answer")
+            store.completeProvider(admitted.turnId, emptyList(), null)
+            assertEquals(KotlinTurnPhase.TITLE_PENDING, store.snapshot(admitted.turnId).phase)
+            tasks.update(tasks.list().single().copy(enabled = false))
+            assertEquals(null, store.beginTitle(admitted.turnId))
+            assertEquals(KotlinTurnPhase.FINISHED, store.snapshot(admitted.turnId).phase)
+            assertEquals("sent", db.rows().messagesFor(listOf("conversation")).last().status)
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancellationAfterAdmissionButBeforeProviderTransitionBlocksDispatch(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-provider-fence")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        try {
+            seed(db)
+            val tasks = RoomScheduledTasks(db)
+            val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(taskId, "Reminder", "hello", "agent", null, 1, 1))
+            val claim = tasks.claimDue(2000).single().second
+            val scope = tasks.executionScope(claim, emptySet())
+            val row = Json.parseToJsonElement("""{"_id":"conversation","agentId":"agent","writable":true}""").jsonObject.conversationRow()
+            assertTrue(tasks.publishConversation(scope, "conversation") { it.upsertConversations(listOf(row)) })
+            val store = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+            val admitted = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("conversation", "hello", null,
+                scheduledRun = true, scheduledClaim = KotlinScheduledTurnClaim(claim.taskId, claim.token, claim.startedAt))))
+            assertTrue(store.claim(admitted.turnId, false))
+            tasks.update(tasks.list().single().copy(enabled = false))
+            assertFailsWith<IllegalStateException> { store.beginProvider(admitted.turnId) }
+            assertEquals(KotlinTurnPhase.READY_PROVIDER, store.snapshot(admitted.turnId).phase)
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancellationOrClaimReplacementBeforeTurnAdmissionNeverStartsProvider(): Unit = runBlocking {
+        for (replace in listOf(false, true)) {
+            val dir = Files.createTempDirectory("schedule-turn-admission-fence")
+            val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+            val ownerJob = SupervisorJob()
+            val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+            try {
+                seed(db)
+                val tasks = RoomScheduledTasks(db)
+                val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+                tasks.create(KotlinScheduledTask(taskId, "Reminder", "hello", "agent", null, 1, 1))
+                val claim = tasks.claimDue(2000).single().second
+                val scope = tasks.executionScope(claim, emptySet())
+                val calls = AtomicInteger()
+                val runtime = ScheduledTurnRuntime(KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false },
+                    KotlinTurnToolExecutor { _, _ -> error("Unexpected tool") },
+                    KotlinTurnProvider { _, _ -> calls.incrementAndGet(); flowOf(ChatStreamEvent.Done("stop")) }, owner)
+                val host = RoomScheduledTurnHost(db, tasks, ScheduledTurnRuntimeFactory { _, _ -> runtime }, { emptySet() }) { 3000 }
+                assertFailsWith<IllegalStateException> { host.run(scope) { conversationId ->
+                    val recorded = tasks.recordConversation(claim, conversationId)
+                    if (replace) db.rows().upsertValues(listOf(KeyValueRow("kotlin_scheduled_active_v1:$taskId",
+                        Json.encodeToString(ScheduledRunClaim.serializer(), claim.copy(token = "new-owner")))))
+                    else tasks.update(tasks.list().single().copy(enabled = false))
+                    recorded
+                } }
+                val conversation = assertNotNull(tasks.list().single().lastConversationId)
+                assertTrue(db.rows().messagesFor(listOf(conversation)).isEmpty())
+                assertEquals(null, db.rows().getValue("kotlin_turn_active_v1:$conversation"))
+                assertEquals(0, calls.get())
+            } finally { ownerJob.cancelAndJoin(); db.close(); dir.toFile().deleteRecursively() }
+        }
+    }
+
+    @Test fun cancelledClaimAndCloudReplacementCannotCreateAConversation(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-conversation-admission")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val ownerJob = SupervisorJob()
+        val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+        try {
+            seed(db)
+            val tasks = RoomScheduledTasks(db)
+            val id = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(id, "Reminder", "hello", "agent", null, 1, 1))
+            val (_, claim) = tasks.claimDue(2000).single()
+            val scope = tasks.executionScope(claim, emptySet())
+            val calls = AtomicInteger()
+            val runtime = ScheduledTurnRuntime(KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false },
+                KotlinTurnToolExecutor { _, _ -> error("Unexpected tool") },
+                KotlinTurnProvider { _, _ -> calls.incrementAndGet(); flowOf(ChatStreamEvent.Done("stop")) }, owner)
+            db.rows().upsertValues(listOf(KeyValueRow(CLOUD_REPLACEMENT_LOCK_KEY, "replacement")))
+            val host = RoomScheduledTurnHost(db, tasks, ScheduledTurnRuntimeFactory { _, _ -> runtime }, { emptySet() }) { 3000 }
+            assertFailsWith<IllegalStateException> { host.run(scope) { tasks.recordConversation(claim, it) } }
+            assertTrue(db.rows().observeAllConversations().first().isEmpty())
+            assertEquals(null, tasks.list().single().lastConversationId)
+            db.rows().deleteValue(CLOUD_REPLACEMENT_LOCK_KEY)
+            val racingHost = RoomScheduledTurnHost(db, tasks, ScheduledTurnRuntimeFactory { _, _ ->
+                tasks.update(tasks.list().single().copy(enabled = false)); runtime
+            }, { emptySet() }) { 3000 }
+            assertFailsWith<IllegalStateException> { racingHost.run(scope) { tasks.recordConversation(claim, it) } }
+            assertTrue(db.rows().observeAllConversations().first().isEmpty())
+            assertEquals(null, tasks.list().single().lastConversationId)
+            assertEquals(0, calls.get())
+        } finally { ownerJob.cancelAndJoin(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun handoffFailureStillLeavesCreatedConversationAttachedToClaim(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-conversation-handoff")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val ownerJob = SupervisorJob()
+        val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+        try {
+            seed(db)
+            val tasks = RoomScheduledTasks(db)
+            val id = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(id, "Reminder", "hello", "agent", null, 1, 1))
+            val (_, claim) = tasks.claimDue(2000).single()
+            val scope = tasks.executionScope(claim, emptySet())
+            val calls = AtomicInteger()
+            val runtime = ScheduledTurnRuntime(KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false },
+                KotlinTurnToolExecutor { _, _ -> error("Unexpected tool") },
+                KotlinTurnProvider { _, _ -> calls.incrementAndGet(); flowOf(ChatStreamEvent.Done("stop")) }, owner)
+            val host = RoomScheduledTurnHost(db, tasks, ScheduledTurnRuntimeFactory { _, _ -> runtime }, { emptySet() }) { 3000 }
+            assertFailsWith<IllegalStateException> { host.run(scope) { error("handoff failed") } }
+            val conversation = assertNotNull(tasks.list().single().lastConversationId)
+            assertNotNull(db.rows().conversation(conversation))
+            assertTrue(db.rows().messagesFor(listOf(conversation)).isEmpty())
+            assertEquals(0, calls.get())
+        } finally { ownerJob.cancelAndJoin(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun failedConversationPublicationRollsBackConversationAndClaimLink(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-conversation-rollback")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        try {
+            seed(db)
+            val tasks = RoomScheduledTasks(db)
+            val id = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            tasks.create(KotlinScheduledTask(id, "Reminder", "hello", "agent", null, 1, 1))
+            val (_, claim) = tasks.claimDue(2000).single()
+            val scope = tasks.executionScope(claim, emptySet())
+            val row = Json.parseToJsonElement("""{"_id":"conversation","agentId":"agent","writable":true}""").jsonObject.conversationRow()
+            assertFailsWith<IllegalStateException> {
+                tasks.publishConversation(scope, "conversation") { rows ->
+                    rows.upsertConversations(listOf(row))
+                    error("injected publication failure")
+                }
+            }
+            assertEquals(null, db.rows().conversation("conversation"))
+            assertEquals(null, tasks.list().single().lastConversationId)
+            assertEquals(claim, tasks.active(id))
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun rawMissingAgentModelNeverCreatesScheduledConversationAndReportsFailure(): Unit = runBlocking {
         val dir = Files.createTempDirectory("schedule-missing-raw-model")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()

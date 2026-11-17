@@ -6,6 +6,7 @@ import androidx.room.useWriterConnection
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.LocalRowsDao
+import cc.ptoe.messenger.data.local.room.CLOUD_REPLACEMENT_LOCK_KEY
 import cc.ptoe.messenger.data.util.randomUuid
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -31,6 +32,22 @@ internal data class KotlinScheduledTask(
 
 @Serializable
 internal data class ScheduledRunClaim(val taskId: String, val token: String, val startedAt: Long, val cancelRequested: Boolean = false)
+internal class ScheduledTurnUnavailable(message: String) : kotlinx.coroutines.CancellationException(message)
+
+/** Caller holds the same Room writer transaction that admits the turn. */
+internal suspend fun requireScheduledTurnAdmission(rows: LocalRowsDao,
+    claim: cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim, conversation: cc.ptoe.messenger.data.local.room.ConversationRow,
+    prompt: String, matchDefinition: Boolean = true) {
+    val active = rows.getValue(ACTIVE + claim.taskId)?.value?.let { codec.decodeFromString<ScheduledRunClaim>(it) }
+        ?: throw ScheduledTurnUnavailable("Scheduled run is unavailable")
+    if (active.taskId != claim.taskId || active.token != claim.token || active.startedAt != claim.startedAt || active.cancelRequested)
+        throw ScheduledTurnUnavailable("Scheduled run was cancelled or replaced")
+    val task = rows.getValue(TASK + claim.taskId)?.value?.let { codec.decodeFromString<KotlinScheduledTask>(it) }
+        ?: throw ScheduledTurnUnavailable("Scheduled task was deleted")
+    if (task.id != claim.taskId || !task.enabled || task.lastRunAt != claim.startedAt || task.lastConversationId != conversation.id ||
+        (matchDefinition && (task.agentId != conversation.agentId || task.projectId != conversation.projectId || task.prompt != prompt)))
+        throw ScheduledTurnUnavailable("Scheduled task changed before admission")
+}
 
 /** Isolated persistence component. The scheduler must observe cancellation and wait for workers to stop. */
 internal class RoomScheduledTasks(private val db: LocalDatabase) {
@@ -137,6 +154,21 @@ internal class RoomScheduledTasks(private val db: LocalDatabase) {
         val task = rows.task(claim.taskId) ?: return@transaction false
         if (task.lastRunAt != claim.startedAt || (task.lastConversationId != null && task.lastConversationId != conversationId)) return@transaction false
         rows.write(task.copy(lastConversationId = conversationId)); true
+    }
+    /** Publish the conversation and attach it to the still-live claim in the same transaction. */
+    suspend fun publishConversation(scope: ScheduledExecutionScope, conversationId: String, create: suspend (LocalRowsDao) -> Unit): Boolean = transaction { rows ->
+        require(conversationId.isNotBlank()) { "Scheduled conversation ID is empty" }
+        val claim = scope.claim
+        val current = rows.claim(claim.taskId) ?: return@transaction false
+        if (current != claim || current.cancelRequested) return@transaction false
+        val task = rows.task(claim.taskId) ?: return@transaction false
+        if (!task.enabled || task.lastRunAt != claim.startedAt || task.lastConversationId != null ||
+            task.agentId != scope.agentId || task.projectId != scope.projectId || task.prompt != scope.prompt) return@transaction false
+        check(rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires completion or recovery" }
+        check(rows.conversation(conversationId) == null) { "Scheduled conversation already exists" }
+        create(rows)
+        rows.write(task.copy(lastConversationId = conversationId))
+        true
     }
     suspend fun finish(claim: ScheduledRunClaim, error: String?, conversationId: String?): Boolean =
         finishWithStatus(claim, error, conversationId) != null

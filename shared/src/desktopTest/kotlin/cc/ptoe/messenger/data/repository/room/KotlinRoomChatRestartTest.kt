@@ -109,8 +109,17 @@ class KotlinRoomChatRestartTest {
                     val store = RoomKotlinTurnStore(old, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
                     val normal = assertIs<KotlinTurnAdmission.Accepted>(store.admit(
                         KotlinTurnCommand.Send("a-normal", "normal", null, disableTools = true))).turnId
+                    val scheduledClaim = if (!delegated) {
+                        val tasks = cc.ptoe.messenger.data.local.schedule.RoomScheduledTasks(old)
+                        val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+                        tasks.create(cc.ptoe.messenger.data.local.schedule.KotlinScheduledTask(taskId, "Task", "owned", "a", null, 1, 1))
+                        val claim = tasks.claimDue(2).single().second
+                        check(tasks.recordConversation(claim, "z-owned"))
+                        cc.ptoe.messenger.domain.chat.KotlinScheduledTurnClaim(claim.taskId, claim.token, claim.startedAt)
+                    } else null
                     val owned = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send(
-                        "z-owned", "owned", null, disableTools = true, scheduledRun = !delegated, delegatedRun = delegated))).turnId
+                        "z-owned", "owned", null, disableTools = true, scheduledRun = !delegated, delegatedRun = delegated,
+                        scheduledClaim = scheduledClaim))).turnId
                     assertTrue(store.claim(owned, false))
                     store.beginProvider(owned)
                     ids = normal to owned

@@ -193,7 +193,7 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
 
 /** Adds durable input, transcript and replay without changing the ACP wire implementation. */
 internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val worker: AcpWorkerProcess, private val events: AcpTurnCoordinator,
-    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof, AcpWorkerSettings {
+    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof, AcpWorkerSettings, AcpWorkerSteering {
     @Volatile private var binding = initialBinding
     private val begun = mutableSetOf<String>()
     override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
@@ -225,6 +225,8 @@ internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val 
         (worker as? AcpWorkerSettings ?: error("ACP mode changes are unavailable")).setModeOption(configId, value, permit)
     override suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject =
         (worker as? AcpWorkerSettings ?: error("ACP boolean changes are unavailable")).setBooleanOption(configId, value, permit)
+    override suspend fun steer(turnId: String, content: JsonArray): JsonObject =
+        (worker as? AcpWorkerSteering ?: error("ACP steering is unavailable")).steer(turnId, content)
     override val supportsReusableTurns: Boolean get() = (worker as? AcpReusableWorkerProof)?.supportsReusableTurns == true
     override suspend fun requireInitialQuiescence() =
         (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireInitialQuiescence()

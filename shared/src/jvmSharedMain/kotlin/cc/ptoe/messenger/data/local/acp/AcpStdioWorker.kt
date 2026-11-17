@@ -29,7 +29,7 @@ internal class AcpStdioWorker(
     private val discovery: suspend () -> String?,
     private val events: AcpStdioEvents,
     private val beforeModeResultMerge: suspend () -> Unit = {},
-) : AcpWorkerProcess, AcpNewSessionBinding, AcpWorkerSettings {
+) : AcpWorkerProcess, AcpNewSessionBinding, AcpWorkerSettings, AcpWorkerSteering {
     private data class Active(val turnId: String, val broker: AcpPermissionBroker, val response: Deferred<JsonElement>)
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.IO)
@@ -38,7 +38,7 @@ internal class AcpStdioWorker(
     private var startupBinding: AcpWorkerBinding? = null
     private var peer: AcpJsonRpcPeer? = null
     private var endpoint: AcpGatewayEndpoint? = null
-    private var active: Active? = null
+    @Volatile private var active: Active? = null
     private var gatewayAvailable = false
     private var modeRevision = 0L
     private var configRevision = 0L
@@ -200,6 +200,24 @@ internal class AcpStdioWorker(
             // An interrupted request stays reachable until cancelAndConfirm or stopAndAwait.
             if (installed && response.isCompleted) withContext(NonCancellable) { gate.withLock { if (active === state) active = null } }
         }
+    }
+
+    override suspend fun steer(turnId: String, content: JsonArray): JsonObject {
+        val connection = checkNotNull(peer) { "ACP worker is unavailable" }
+        val sessionId = checkNotNull(session) { "ACP session is unavailable" }
+        val state = gate.withLock {
+            check((settings["steering"] as? JsonObject)?.get("supported") == JsonPrimitive(true)) { "ACP agent does not support steering" }
+            active?.takeIf { it.turnId == turnId && !it.response.isCompleted }
+        } ?: return buildJsonObject { put("outcome", "promptRequired") }
+        val result = try { withTimeout(10_000) { connection.request("_session/steering", buildJsonObject {
+            put("sessionId", sessionId); put("prompt", content)
+            put("_meta", buildJsonObject { put("steering", buildJsonObject { put("idleBehavior", "promptRequired") }) })
+        }) { check(active === state && !state.response.isCompleted) { "ACP turn is no longer active" } } } }
+        catch (timeout: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw IllegalStateException("ACP steering timed out; its outcome is unknown", timeout)
+        }
+        return result as? JsonObject ?: error("Invalid ACP steering response")
     }
 
     override suspend fun cancelAndConfirm(): Boolean {

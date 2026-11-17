@@ -43,6 +43,27 @@ class AcpStdioWorkerTest {
     private fun configuration() = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
     private fun prompt(text: String) = JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", text) }))
 
+    @Test fun steeringUsesLiveTurnAndPreservesTypedBlocks(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-stdio-steer")
+        val ready = CompletableDeferred<Unit>()
+        val worker = AcpStdioWorker(FixtureTransport(dir), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {
+            override suspend fun update(turnId: String?, update: JsonObject) {
+                if (turnId == "turn" && (update["content"] as? JsonObject)?.get("text") == JsonPrimitive("partial")) ready.complete(Unit)
+            }
+        })
+        val gateway = AcpGatewayCore(backend, false, emptySet())
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "fixture-session", false)
+        try {
+            worker.start(binding, configuration(), gateway)
+            assertEquals("promptRequired", worker.steer("turn", prompt("idle"))["outcome"]?.jsonPrimitive?.content)
+            val pending = async { worker.prompt("turn", prompt("wait"), AcpPermissionBroker()) }
+            withTimeout(5_000) { ready.await() }
+            val content = Json.parseToJsonElement("""[{"type":"text","text":"continue"},{"type":"image","data":"YWJj","mimeType":"image/png"}]""").jsonArray
+            assertEquals("injected", worker.steer("turn", content)["outcome"]?.jsonPrimitive?.content)
+            assertEquals("Finished", withTimeout(5_000) { pending.await() }["type"]?.jsonPrimitive?.content)
+        } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun settingsComeFromAgentRestoreAndLiveUpdates(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-stdio-settings")
         val updates = mutableListOf<JsonObject>()

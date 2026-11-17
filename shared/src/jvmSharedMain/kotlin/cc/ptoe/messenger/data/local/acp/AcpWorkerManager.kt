@@ -56,6 +56,11 @@ internal interface AcpWorkerSettings {
     suspend fun setBooleanOption(configId: String, value: Boolean, permit: () -> Unit): JsonObject = error("ACP boolean changes are unavailable")
 }
 
+/** An active worker accepts steering only for its exact current turn. */
+internal interface AcpWorkerSteering {
+    suspend fun steer(turnId: String, content: JsonArray): JsonObject
+}
+
 /**
  * Optional platform-provided proof for an ACP process which can remain alive between turns.
  * Both checks must establish that its prior work, descendants and external side effects have
@@ -94,6 +99,7 @@ internal class AcpWorkerManager(
     }
     private class Slot {
         val mutex = Mutex()
+        val steering = Mutex()
         var active: String? = null
         var activeJob: Job? = null
         var worker: Worker? = null
@@ -155,6 +161,18 @@ internal class AcpWorkerManager(
         val current = slot(sessionId)
         check(!current.unsafe && current.active == turnId) { "ACP turn is no longer active" }
         action()
+    }
+
+    /** Keep the same worker reserved until a steering response has been durably recorded. */
+    suspend fun <T> withSteeringWorker(sessionId: String, turnId: String, action: suspend (AcpWorkerSteering) -> T): T {
+        val current = slot(sessionId)
+        return current.steering.withLock {
+            val process = current.mutex.withLock {
+                check(!current.unsafe && current.active == turnId && current.activeJob?.isActive == true) { "ACP turn is no longer active" }
+                current.worker?.process as? AcpWorkerSteering ?: error("ACP steering is unavailable")
+            }
+            action(process)
+        }
     }
 
     /** Start and persist a new session while holding its reservation; never replay ambiguous startup. */
@@ -307,14 +325,16 @@ internal class AcpWorkerManager(
             // Always retire the worker and retain the reservation until stopAndAwait proves it.
             retire = true
             withContext(NonCancellable) {
-                permissions.close()
-                coroutineScope {
-                    val confirmation = async {
-                        try { withTimeoutOrNull(cancelTimeoutMillis) { worker.process.cancelAndConfirm() } }
-                        catch (_: Exception) { false }
+                current.steering.withLock {
+                    permissions.close()
+                    coroutineScope {
+                        val confirmation = async {
+                            try { withTimeoutOrNull(cancelTimeoutMillis) { worker.process.cancelAndConfirm() } }
+                            catch (_: Exception) { false }
+                        }
+                        if (gatewayActive) { worker.gateway.endTurn(turnId); gatewayActive = false }
+                        confirmation.await()
                     }
-                    if (gatewayActive) { worker.gateway.endTurn(turnId); gatewayActive = false }
-                    confirmation.await()
                 }
             }
             throw cancelled
@@ -324,6 +344,9 @@ internal class AcpWorkerManager(
             throw failure
         } finally {
             withContext(NonCancellable) {
+              // Rejected admissions never owned this slot and must not wait for its active worker.
+              if (acquired == null) return@withContext
+              current.steering.withLock {
                 var safe = false
                 try {
                     permissions.close()
@@ -353,6 +376,7 @@ internal class AcpWorkerManager(
                         }
                     }
                 }
+              }
             }
         }
     }

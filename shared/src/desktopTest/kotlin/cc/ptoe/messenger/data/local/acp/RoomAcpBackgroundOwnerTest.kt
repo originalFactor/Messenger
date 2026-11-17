@@ -119,6 +119,60 @@ class RoomAcpBackgroundOwnerTest {
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
     }
 
+    @Test fun steeringUsesLiveOwnerAndPersistsInjectedTypedContent(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-steering")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace)),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val turn = UUID.randomUUID().toString()
+            owner.start(turn, binding.conversationId, Json.parseToJsonElement("""[{"type":"text","text":"wait"}]""").jsonArray)
+            withTimeout(10_000) { while (!owner.events(turn, 0).toString().contains("partial")) delay(10) }
+            val steering = UUID.randomUUID().toString()
+            val blocks = Json.parseToJsonElement("""[{"type":"text","text":"continue"},{"type":"image","data":"YWJj","mimeType":"image/png"}]""").jsonArray
+            assertEquals("injected", owner.steer(steering, binding.conversationId, blocks)["outcome"]?.jsonPrimitive?.content)
+            withTimeout(10_000) { while (owner.events(turn, 0)["done"]?.jsonPrimitive?.boolean != true) delay(10) }
+            val history = owner.history(binding.conversationId, null).toString()
+            assertTrue(history.contains("continue"))
+            assertTrue(history.contains("YWJj"))
+            assertFalse(RoomAcpSteeringLedger(db).pending(binding.conversationId) != null)
+        } finally { lifecycle.stopAndAwait(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun ambiguousSteeringBlocksLaterTurnsEvenAfterTheCurrentWorkerStops(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-steering-unknown")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val started = CompletableDeferred<Unit>()
+        var sends = 0
+        val process = object : AcpWorkerProcess, AcpWorkerSteering {
+            override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true)
+            override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject { started.complete(Unit); awaitCancellation() }
+            override suspend fun steer(turnId: String, content: JsonArray): JsonObject { sends++; error("connection lost after dispatch") }
+            override suspend fun cancelAndConfirm() = false
+            override suspend fun stopAndAwait() {}
+        }
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ -> process })
+            val turn = UUID.randomUUID().toString()
+            val steering = UUID.randomUUID().toString()
+            owner.start(turn, binding.conversationId, content())
+            withTimeout(5_000) { started.await() }
+            assertFailsWith<IllegalStateException> { owner.steer(steering, binding.conversationId, content()) }
+            assertEquals(1, sends)
+            assertEquals(RoomAcpSteeringLedger.Pending(steering, turn), RoomAcpSteeringLedger(db).pending(binding.conversationId))
+            assertTrue(owner.cancel(turn))
+            withTimeout(5_000) { while (owner.events(turn, 0)["done"]?.jsonPrimitive?.boolean != true) delay(10) }
+            assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
+            assertEquals(1, sends)
+        } finally { lifecycle.stopAndAwait(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun settingsReadUsesOwnedWorkerAndRejectsActiveTurn(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-owner-settings")
         val (db, binding) = fixture(dir)
