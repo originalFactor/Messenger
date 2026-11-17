@@ -184,7 +184,8 @@ private fun MessengerChatScreen(
             platformToolsEnabled = AppContainerHolder.instance.platformToolsEnabled,
             durableTurnFailureNotices = AppContainerHolder.instance.turnFailureNotices != null,
             projectRepository = AppContainerHolder.instance.projectRepository,
-            cloud = AppContainerHolder.instance.cloud
+            cloud = AppContainerHolder.instance.cloud,
+            coreBridge = AppContainerHolder.instance.coreBridge
         )
     )
 ) {

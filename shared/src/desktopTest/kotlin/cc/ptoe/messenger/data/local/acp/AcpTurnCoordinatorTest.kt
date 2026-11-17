@@ -112,6 +112,13 @@ class AcpTurnCoordinatorTest {
             assertEquals(true, bridge.events(turnId, 0)["done"]!!.jsonPrimitive.boolean)
             assertEquals(null, bridge.bySession("acp:one"))
             assertEquals(null, snapshot.pendingPermission)
+            val snapshots = RoomAcpReplaySnapshots(db, gate)
+            val loaded = snapshots.list(binding.conversationId).single()
+            val raw = snapshots.page(binding.conversationId, loaded.id)
+            assertEquals("fixture-session", raw.source.getValue("agentSessionId").jsonPrimitive.content)
+            assertEquals("replayed question", raw.events.first().jsonObject.getValue("content").jsonObject.getValue("text").jsonPrimitive.content)
+            assertTrue(raw.events.any { it.jsonObject["sessionUpdate"]?.jsonPrimitive?.content == "agent_message_chunk" })
+            if (media) assertTrue(raw.events.any { (it.jsonObject["content"] as? JsonObject)?.get("type")?.jsonPrimitive?.content == "image" })
             assertFalse(coordinator.decide(turnId, pending.options.single().id))
             val saved = Json.parseToJsonElement(db.rows().getValue("local_acp_sessions")!!.value).jsonObject["acp:one"]!!.jsonObject
             val messages = saved["messages"]!!.jsonArray

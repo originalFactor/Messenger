@@ -19,22 +19,9 @@ internal interface AcpActiveTurnGuard {
 
 /** Preserves the existing Core KV record and unknown fields; no ACP content is sent to Cloud. */
 internal class RoomAcpSessionJournal(private val db: LocalDatabase, private val guard: AcpActiveTurnGuard) {
-    /** Seed an empty transcript from session/load without replacing locally preserved history. */
-    suspend fun seedReplay(sessionId: String, turnId: String, messages: JsonArray, now: Long) = guard.withActiveTurn(sessionId, turnId) {
-        require(messages.toString().encodeToByteArray().size <= 16 * 1024 * 1024) { "ACP replay exceeds limit" }
-        db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
-            val rows = db.rows()
-            val root = rows.getValue(SESSIONS)?.value?.let { Json.parseToJsonElement(it) as? JsonObject } ?: error("ACP sessions are unavailable")
-            val record = root[sessionId] as? JsonObject ?: error("ACP session not found")
-            val existing = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
-            if (existing.isNotEmpty()) return@withTransaction
-            val updated = JsonObject(record + mapOf("updated_at" to JsonPrimitive(now), "messages" to messages))
-            rows.upsertValues(listOf(KeyValueRow(SESSIONS, JsonObject(root + (sessionId to updated)).toString())))
-        } }
-    }
-
     /** Writes user input before sending an ACP prompt; repeated admission never duplicates it. */
-    suspend fun begin(sessionId: String, turnId: String, text: String, content: JsonArray, now: Long) = guard.withActiveTurn(sessionId, turnId) {
+    suspend fun begin(sessionId: String, turnId: String, text: String, content: JsonArray, now: Long,
+        replay: AcpCompletedReplay? = null, binding: AcpWorkerBinding? = null) = guard.withActiveTurn(sessionId, turnId) {
         require(turnId.isNotBlank() && turnId.length <= 256 && now >= 0 && content.isNotEmpty())
         require(text.encodeToByteArray().size <= 256 * 1024 && content.toString().encodeToByteArray().size <= 4 * 1024 * 1024) { "ACP user input exceeds limit" }
         val fingerprint = sha256(JsonObject(mapOf("text" to JsonPrimitive(text), "content" to content)).toString())
@@ -48,7 +35,14 @@ internal class RoomAcpSessionJournal(private val db: LocalDatabase, private val 
                 check(existing["sessionId"]?.jsonPrimitive?.contentOrNull == sessionId && existing["fingerprint"]?.jsonPrimitive?.contentOrNull == fingerprint) { "ACP turn identity reused" }
                 return@withTransaction
             }
-            val messages = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
+            var messages = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
+            if (replay != null) {
+                require(replay.messages.toString().encodeToByteArray().size <= 16 * 1024 * 1024) { "ACP replay projection exceeds limit" }
+                val bound = requireNotNull(binding) { "ACP replay binding is unavailable" }
+                require(bound.conversationId == sessionId) { "ACP replay belongs to another session" }
+                RoomAcpReplaySnapshots.record(rows, bound, replay.updates, now)
+                if (messages.isEmpty()) messages = replay.messages
+            }
             val row = buildJsonObject { put("id", randomUuid()); put("role", "user"); put("text", text); put("status", "sent"); put("timestamp", now); put("content", content) }
             val title = if (messages.isEmpty() && text.isNotBlank()) text.take(80) else (record["title"] as? JsonPrimitive)?.contentOrNull.orEmpty()
             val updated = JsonObject(record + mapOf("title" to JsonPrimitive(title), "updated_at" to JsonPrimitive(now), "messages" to JsonArray(messages + row)))

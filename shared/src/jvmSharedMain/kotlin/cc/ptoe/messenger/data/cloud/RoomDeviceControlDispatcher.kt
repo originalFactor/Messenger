@@ -3,6 +3,10 @@ package cc.ptoe.messenger.data.cloud
 
 import androidx.room.Transactor
 import androidx.room.useReaderConnection
+import androidx.room.useWriterConnection
+import cc.ptoe.messenger.data.chat.ACTIVE_TURN_KEY_PREFIX
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
+import cc.ptoe.messenger.data.local.room.CLOUD_REPLACEMENT_LOCK_KEY
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.LocalRowsDao
 import cc.ptoe.messenger.data.local.room.MessageRow
@@ -39,12 +43,17 @@ internal class RoomDeviceControlDispatcher(
     private val deviceId: String,
     private val tasks: RoomRemoteTaskSnapshots,
     private val operations: RoomRemoteTurnOperations? = null,
+    private val modeGate: RoomCloudProviderGate? = null,
+    private val onModeChanged: () -> Unit = {},
 ) : RoomDeviceCommandDispatcher {
     private class Failure(val code: String, override val message: String) : IllegalStateException(message)
     private data class SessionPage(val title: String, val writable: Boolean?, val messages: List<JsonObject>, val before: String?)
     internal val scope = KotlinRemoteControlScope(stored.session.accountId, stored.session.generation, stored.host, deviceId)
 
-    init { require(deviceId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) }
+    init {
+        require(deviceId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        modeGate?.requireOwner(db.cloudSync())
+    }
 
     override suspend fun dispatch(grantEpoch: Long, command: JsonObject, permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject {
         val scope = scope.copy(grantEpoch = grantEpoch)
@@ -109,7 +118,16 @@ internal class RoomDeviceControlDispatcher(
                     transaction(scope) { rows -> requireSession(rows, id, requireOwnedProject = true) }
                     (operations ?: throw Failure("unavailable", "Remote prompts are unavailable")).prompt(scope, id, text, permissions, update)
                 }
-                "create", "setMode", "steer", "sessionSettings", "setSessionConfig", "store" ->
+                "setMode" -> {
+                    command.only("action", "sessionId", "writable")
+                    val id = command.requiredText("sessionId").validatedId()
+                    if (id.startsWith("acp:")) throw Failure("unavailable", "Remote ACP mode is unavailable")
+                    val value = (command["writable"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+                        ?: throw Failure("bad_request", "Invalid writable mode")
+                    setMode(scope, id, value)
+                    buildJsonObject { put("type", "Mode"); put("writable", value) }
+                }
+                "create", "steer", "sessionSettings", "setSessionConfig", "store" ->
                     throw Failure("unavailable", "Remote command is not yet available")
                 else -> throw Failure("bad_request", "Unknown remote command")
             }
@@ -124,6 +142,33 @@ internal class RoomDeviceControlDispatcher(
             authorize(rows, scope)
             block(rows)
         } }
+
+    private suspend fun setMode(scope: KotlinRemoteControlScope, id: String, writable: Boolean) {
+        val gate = modeGate ?: throw Failure("unavailable", "Remote mode changes are unavailable")
+        var touched = false
+        try {
+            RuntimeWorkspaceFence.forDatabase(db).mutate {
+                db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                    val rows = db.rows()
+                    authorize(rows, scope)
+                    requireSession(rows, id, requireOwnedProject = true)
+                    check(db.cloudSync().value(CLOUD_REPLACEMENT_LOCK_KEY) == null) { "Cloud replacement requires recovery" }
+                    if (rows.getValue(ACTIVE_TURN_KEY_PREFIX + id) != null) throw Failure("turn_in_progress", "The session is generating")
+                    val conversation = rows.conversation(id) ?: throw Failure("not_found", "Session not found")
+                    gate.requireValid(stored.session)
+                    if (conversation.writable != writable) {
+                        rows.upsertConversations(listOf(conversation.copy(writable = writable)))
+                        db.cloudSync().enqueueLocal(SyncCollection.CONVERSATION, id, SyncMutation.UPSERT)
+                        touched = true
+                    }
+                } }
+            }
+        } finally {
+            // A cancellation at the transaction boundary may occur after commit. A redundant
+            // sync request after rollback is harmless; missing a committed change is not.
+            if (touched) onModeChanged()
+        }
+    }
 
     private suspend fun authorize(rows: LocalRowsDao, scope: KotlinRemoteControlScope) {
         try {

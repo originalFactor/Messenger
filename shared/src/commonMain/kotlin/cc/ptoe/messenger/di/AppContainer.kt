@@ -94,13 +94,6 @@ class AppContainer(
     val artifactUiHost = backend?.artifactUiHost
     val turnFailureNotices = backend?.turnFailureNotices
 
-    init {
-        // Some existing consumers still obtain the bridge through the registry. Refuse a
-        // mixed backend until those consumers have moved to constructor injection as well.
-        require(backend == null || CoreBridgeRegistry.bridge === backend.coreBridge) {
-            "Install the backend bridge in CoreBridgeRegistry before constructing AppContainer"
-        }
-    }
 
     /**
      * 平台内置工具工厂。参数是所属项目的 workspace 绝对路径（无项目时
@@ -111,7 +104,12 @@ class AppContainer(
     val platformToolsEnabled: Boolean = backend?.platformToolsEnabled != false
     val builtinTools: (String?) -> List<ChatTool> = { if (platformToolsEnabled) createBuiltinChatTools(it) else emptyList() }
 
-    val mcpManager = McpManager(appPreferences, enabled = platformToolsEnabled)
+    /** The injected backend owns the bridge used by this container and its consumers. */
+    val coreBridge: CoreBridge = backend?.coreBridge ?: requireNotNull(CoreBridgeRegistry.bridge) {
+        "Install CoreBridgeRegistry.bridge before constructing AppContainer"
+    }
+
+    val mcpManager = McpManager(appPreferences, enabled = platformToolsEnabled, bridgeProvider = { coreBridge })
 
     /**
      * Returns active tools: built-in tools for [workspaceRoot] + active MCP
@@ -131,14 +129,6 @@ class AppContainer(
     fun allTools(): List<ChatTool> =
         (coreToolCatalog.state.value.tools + builtinTools(defaultWorkspaceRoot()) +
             mcpManager.activeTools.value).distinctBy { it.name }
-
-    /**
-     * The bridge belongs to the same backend as the repositories. Production
-     * currently installs the Rust bridge before constructing this container.
-     */
-    val coreBridge: CoreBridge = backend?.coreBridge ?: requireNotNull(CoreBridgeRegistry.bridge) {
-        "Install CoreBridgeRegistry.bridge before constructing AppContainer"
-    }
 
     private fun providerChanged(id: String, deleted: Boolean) {
         // 内置云 AI 服务商不参与云同步（各设备本地自建）。
@@ -223,7 +213,6 @@ class AppContainer(
             applicationScope.coroutineContext[Job]?.cancelAndJoin()
             mcpManager.shutdown()
             backend?.shutdown?.invoke()
-            if (backend != null && CoreBridgeRegistry.bridge === backend.coreBridge) CoreBridgeRegistry.bridge = null
             shutDown = true
         }
     }

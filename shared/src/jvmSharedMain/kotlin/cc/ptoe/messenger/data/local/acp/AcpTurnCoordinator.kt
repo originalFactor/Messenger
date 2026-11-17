@@ -10,6 +10,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
+internal data class AcpCompletedReplay(val messages: JsonArray, val updates: JsonArray)
+
 /** Keeps active output bounded; completed buffers remain available to detached observers. */
 internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, private val now: () -> Long) {
     private class Turn(val binding: AcpWorkerBinding, val broker: AcpPermissionBroker) {
@@ -20,7 +22,11 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
         var transcriptBytes = 0L
         var completed = false
     }
-    private class Restore { var projector: AcpReplayProjector? = null; var completed: JsonArray? = null }
+    private class Restore {
+        var projector: AcpReplayProjector? = null
+        var capture: AcpReplayCapture? = null
+        var completed: AcpCompletedReplay? = null
+    }
     private val gate = Mutex()
     private val turns = linkedMapOf<String, Turn>()
     private val mutableActive = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -32,20 +38,25 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
     internal fun eventsFor(binding: () -> AcpWorkerBinding): AcpStdioEvents = object : AcpStdioEvents {
         override suspend fun restoreStarted(replay: Boolean) {
             val binding = binding()
-            gate.withLock { restores[binding.conversationId] = Restore().also { if (replay) it.projector = AcpReplayProjector(now) } }
+            gate.withLock { restores[binding.conversationId] = Restore().also {
+                if (replay) { it.projector = AcpReplayProjector(now); it.capture = AcpReplayCapture() }
+            } }
         }
         override suspend fun restoreFinished(success: Boolean) {
             val binding = binding()
             gate.withLock {
                 val state = restores[binding.conversationId] ?: return@withLock
-                state.completed = if (success) state.projector?.snapshot() else null
+                state.completed = if (success && state.projector != null && state.capture != null)
+                    AcpCompletedReplay(checkNotNull(state.projector).snapshot(), checkNotNull(state.capture).snapshot()) else null
                 state.projector = null
+                state.capture = null
             }
         }
         override suspend fun update(turnId: String?, update: JsonObject) {
             val binding = binding()
             gate.withLock {
                 if (turnId == null) {
+                    restores[binding.conversationId]?.capture?.append(update)
                     restores[binding.conversationId]?.projector?.accept(update)
                     return@withLock
                 }
@@ -104,15 +115,12 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
             restores[binding.conversationId]?.completed
         }
         try {
-            if (replay != null) {
-                journal.seedReplay(binding.conversationId, turnId, replay, now())
-                gate.withLock { restores[binding.conversationId]?.completed = null }
-            }
             val text = content.mapNotNull { item ->
                 val obj = item as? JsonObject ?: return@mapNotNull null
                 if ((obj["type"] as? JsonPrimitive)?.contentOrNull != "text") null else (obj["text"] as? JsonPrimitive)?.contentOrNull
             }.joinToString("\n")
-            journal.begin(binding.conversationId, turnId, text, content, now())
+            journal.begin(binding.conversationId, turnId, text, content, now(), replay, binding)
+            if (replay != null) gate.withLock { restores[binding.conversationId]?.completed = null }
             turn.replay.append(buildJsonObject { put("type", "TurnStarted") })
         } catch (failure: Throwable) {
             withContext(NonCancellable) {

@@ -7,11 +7,13 @@ import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.repository.room.AcpSessionMutationGate
 import cc.ptoe.messenger.data.repository.room.RoomAcpConversationStore
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -57,6 +59,13 @@ internal interface AcpConfigurationFence {
 /** Release is only permitted after stop proof; a failed release must retain writer exclusion. */
 internal fun interface AcpConfigurationLease { suspend fun release() }
 
+private fun acquireAcpForeground(): () -> Unit {
+    val begin = ForegroundTaskRegistry.begin ?: return {}
+    val end = ForegroundTaskRegistry.end ?: return {}
+    begin()
+    return end
+}
+
 /** Supplies an in-memory snapshot; the owner independently verifies it against Room. */
 internal fun interface AcpSessionConfigurationSource {
     suspend fun load(sessionId: String): Pair<AcpWorkerBinding, AcpWorkerConfiguration>
@@ -86,12 +95,16 @@ internal class RoomAcpBackgroundOwner private constructor(
     private val now: () -> Long,
     private val retainReusableWorkers: Boolean,
     private val afterQuiescentCommit: suspend () -> Unit,
+    private val foreground: () -> (() -> Unit),
+    private val afterAdmission: suspend () -> Unit,
+    private val beforeHandoff: suspend () -> Unit,
 ) {
     private class Task(val id: String, val sessionId: String) {
         lateinit var job: Job
         @Volatile var finished = false
         @Volatile var warning: String? = null
         @Volatile var cancelled = false
+        val started = AtomicBoolean(false)
     }
 
     private val lock = Any()
@@ -102,6 +115,7 @@ internal class RoomAcpBackgroundOwner private constructor(
     private val tasks = linkedMapOf<String, Task>()
     private val sessions = mutableSetOf<String>()
     private val leases = mutableMapOf<String, AcpConfigurationLease>()
+    private val foregroundEnds = mutableMapOf<String, () -> Unit>()
     private val retained = mutableSetOf<String>()
     private var pendingConfigurationWriters = 0
     private var closing = false
@@ -160,6 +174,10 @@ internal class RoomAcpBackgroundOwner private constructor(
         }
     }
 
+    private fun releaseForeground(sessionId: String) {
+        synchronized(lock) { foregroundEnds.remove(sessionId) }?.let { end -> runCatching { end() } }
+    }
+
     /** Creates a local session only after the live project/profile and MCP snapshot are verified. */
     suspend fun create(draft: AcpWorkerBinding, configuration: AcpWorkerConfiguration, title: String): AcpWorkerBinding = admitted {
         admissions.withLock {
@@ -199,12 +217,19 @@ internal class RoomAcpBackgroundOwner private constructor(
     }
 
     /** Admission is durable before the background job is published; detach never cancels it. */
+    @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
     suspend fun start(requestId: String, sessionId: String, content: JsonArray) = admitted {
         require(runCatching { UUID.fromString(requestId).toString() == requestId }.getOrDefault(false)) { "Invalid ACP request ID" }
         require(sessionId.startsWith("acp:") && content.isNotEmpty()) { "Invalid ACP prompt" }
         currentCoroutineContext().ensureActive()
+        val caller = checkNotNull(currentCoroutineContext()[Job])
         val frozenContent = Json.parseToJsonElement(content.toString()).jsonArray
-        withContext(NonCancellable) {
+        val handoffLock = Any()
+        var cancelled = false
+        val cancellation = caller.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(handoffLock) { cancelled = true }
+        }
+        try { withContext(NonCancellable) {
             admissions.withLock {
                 synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
                 exclusive.withOwner {
@@ -212,31 +237,65 @@ internal class RoomAcpBackgroundOwner private constructor(
                     synchronized(lock) {
                         check(!closing) { "ACP owner is shutting down" }
                         check(tasks.values.none { it.sessionId == sessionId && !it.finished }) { "ACP session already has an active request" }
+                        check(sessionId !in foregroundEnds) { "ACP session has an unresolved request" }
                         while (tasks.size >= 1024) {
                             val completed = tasks.entries.firstOrNull { it.value.finished && it.value.job.isCompleted } ?: error("Too many active ACP requests")
                             tasks.remove(completed.key)
                         }
                     }
-                    when (val admission = ledger.admit(requestId, sessionId, frozenContent)) {
-                        AcpAdmission.New -> Unit
-                        is AcpAdmission.Existing -> error(if (admission.sameRequest) "ACP request already admitted; do not resubmit" else "ACP request ID was reused")
-                        AcpAdmission.SessionBusy -> error("ACP session has an unresolved request")
+                    val endForeground = foreground()
+                    var handedOff = false
+                    var admittedHere = false
+                    try {
+                        when (val admission = ledger.admit(requestId, sessionId, frozenContent)) {
+                            AcpAdmission.New -> admittedHere = true
+                            is AcpAdmission.Existing -> error(if (admission.sameRequest) "ACP request already admitted; do not resubmit" else "ACP request ID was reused")
+                            AcpAdmission.SessionBusy -> error("ACP session has an unresolved request")
+                        }
+                        afterAdmission()
+                        if (!caller.isActive) return@withOwner
+                        beforeHandoff()
+                        val task = Task(requestId, sessionId)
+                        task.job = scope.launch(start = CoroutineStart.LAZY) { runTask(task, frozenContent) }
+                        task.job.invokeOnCompletion {
+                            synchronized(lock) {
+                                liveTasks.remove(task.job)
+                                if (!task.started.get()) {
+                                    task.warning = "ACP request stopped before its worker started; recovery is required"
+                                    task.finished = true
+                                }
+                            }
+                        }
+                        synchronized(handoffLock) {
+                            if (!cancelled && caller.isActive) {
+                                synchronized(lock) {
+                                    check(sessionId !in foregroundEnds) { "ACP foreground lease is already held" }
+                                    foregroundEnds[sessionId] = endForeground
+                                    tasks[requestId] = task
+                                    sessions.add(sessionId)
+                                    liveTasks.add(task.job)
+                                }
+                                handedOff = true
+                                task.job.start()
+                            }
+                        }
+                        if (!handedOff) task.job.cancel()
+                    } finally {
+                        if (!handedOff) {
+                            try {
+                                if (admittedHere) ledger.complete(requestId, sessionId, object : AcpCompletionBarrier {
+                                    override suspend fun <T> withCompleted(requestId: String, sessionId: String, action: suspend () -> T): T = action()
+                                })
+                            } finally { runCatching { endForeground() } }
+                        }
                     }
-                    val task = Task(requestId, sessionId)
-                    task.job = scope.launch(start = CoroutineStart.LAZY) { runTask(task, frozenContent) }
-                    synchronized(lock) {
-                        tasks[requestId] = task
-                        sessions.add(sessionId)
-                        liveTasks.add(task.job)
-                    }
-                    task.job.invokeOnCompletion { synchronized(lock) { liveTasks.remove(task.job) } }
-                    task.job.start()
                 }
             }
-        }
+        } } finally { cancellation.dispose() }
     }
 
     private suspend fun runTask(task: Task, content: JsonArray) {
+        task.started.set(true)
         var failed = false
         var completed = false
         var keep = false
@@ -290,6 +349,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                     coordinator.abandonUnsettled(task.id)
                     task.warning = "ACP request failed or its outcome is uncertain; do not resubmit automatically"
                 }
+                if (completed) releaseForeground(task.sessionId)
                 task.finished = true
             }
         }
@@ -359,7 +419,7 @@ internal class RoomAcpBackgroundOwner private constructor(
     }
 
     /** An unproven worker retains its lease even after its coroutine exits. */
-    suspend fun hasActiveTasks(): Boolean = admitted { synchronized(lock) { liveTasks.any { !it.isCompleted } || leases.isNotEmpty() } }
+    suspend fun hasActiveTasks(): Boolean = admitted { synchronized(lock) { liveTasks.any { !it.isCompleted } || leases.isNotEmpty() || foregroundEnds.isNotEmpty() } }
 
     /** Local catalog for the existing conversation picker; credentials never leave Room. */
     suspend fun catalog(): JsonObject = admitted {
@@ -453,6 +513,7 @@ internal class RoomAcpBackgroundOwner private constructor(
             manager.reconcileStopped(sessionId)
             manager.retireAndAwait(sessionId)
             releaseLease(sessionId)
+            releaseForeground(sessionId)
             result
         }
     }
@@ -471,6 +532,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                 manager.reconcileStopped(id)
                 manager.retireAndAwait(id)
                 releaseLease(id)
+                releaseForeground(id)
             }
             scope.coroutineContext[Job]?.cancelAndJoin()
         }
@@ -498,6 +560,9 @@ internal class RoomAcpBackgroundOwner private constructor(
             now: () -> Long,
             retainReusableWorkers: Boolean = false,
             afterQuiescentCommit: suspend () -> Unit = {},
+            foreground: () -> (() -> Unit) = ::acquireAcpForeground,
+            afterAdmission: suspend () -> Unit = {},
+            beforeHandoff: suspend () -> Unit = {},
         ): RoomAcpBackgroundOwner {
             db.useReaderConnection { connection -> connection.usePrepared("PRAGMA database_list") {
                 check(it.step() && it.getText(1) == "main" && Files.isSameFile(Paths.get(it.getText(2)), databasePath)) { "ACP owner database does not match Room" }
@@ -518,7 +583,7 @@ internal class RoomAcpBackgroundOwner private constructor(
                 manager = AcpWorkerManager(recorded, RoomAcpWorkspaceAuthority(db), backend, needsGateway,
                     holdForSettlement = retainReusableWorkers)
                 val owner = RoomAcpBackgroundOwner(db, exclusive, RoomAcpRequestLedger(db), manager, coordinator,
-                    RoomAcpNewSessionAuthority(db, catalog), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit)
+                    RoomAcpNewSessionAuthority(db, catalog), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit, foreground, afterAdmission, beforeHandoff)
                 withContext(NonCancellable) { shutdown.registerStop { owner.shutdown() } }
                 return owner
             } catch (failure: Throwable) {

@@ -9,9 +9,16 @@ import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.MessageRow
 import cc.ptoe.messenger.data.local.room.ProjectRow
+import cc.ptoe.messenger.data.chat.ACTIVE_TURN_KEY_PREFIX
+import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -22,15 +29,37 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RoomDeviceControlDispatcherTest {
-    private suspend fun runWithStore(block: suspend (LocalDatabase, RoomDeviceControlDispatcher) -> Unit) {
+    @Test fun modeGateMustBelongToTheDispatcherDatabase(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-remote-mode-owner")
+        val first = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("first.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val second = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("second.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val firstGate = RoomCloudProviderGate.forDao(first.cloudSync())
+        val secondGate = RoomCloudProviderGate.forDao(second.cloudSync())
+        try {
+            val stored = StoredCloudSession(SyncSession("account", "generation"), "messenger_session=cookie", "https://cloud.example", CloudUser(id = "account"))
+            val tasks = RoomRemoteTaskSnapshots { RoomRemoteTaskSnapshot(false) }
+            RoomDeviceControlDispatcher(first, stored, "device", tasks, modeGate = firstGate)
+            assertFailsWith<IllegalArgumentException> {
+                RoomDeviceControlDispatcher(first, stored, "device", tasks, modeGate = secondGate)
+            }
+            // Read-only dispatchers remain available without enabling mode mutation.
+            RoomDeviceControlDispatcher(first, stored, "device", tasks)
+        } finally {
+            firstGate.shutdown(); secondGate.shutdown()
+            first.close(); second.close(); dir.toFile().deleteRecursively()
+        }
+    }
+    private suspend fun runWithStore(onModeChanged: () -> Unit = {}, block: suspend (LocalDatabase, RoomDeviceControlDispatcher) -> Unit) {
         val dir = Files.createTempDirectory("room-remote-control")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()
         val session = SyncSession("account", "generation")
         val stored = StoredCloudSession(session, "messenger_session=secret", "https://cloud.example", CloudUser(id = "account"))
+        val gate = RoomCloudProviderGate.forDao(db.cloudSync())
         try {
             val rows = db.rows()
             rows.upsertValues(listOf(
@@ -59,9 +88,9 @@ class RoomDeviceControlDispatcherTest {
                     buildJsonObject { put("type", "Error"); put("message", "HTTP 429"); put("detail", "quota exhausted") },
                 ))
                 else RoomRemoteTaskSnapshot(false)
-            })
+            }, modeGate = gate, onModeChanged = onModeChanged)
             block(db, dispatcher)
-        } finally { db.close(); dir.toFile().deleteRecursively() }
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
     }
     private suspend fun RoomDeviceControlDispatcher.request(action: String, sessionId: String? = null, before: String? = null): JsonObject =
         dispatch(1L, buildJsonObject { put("action", action); sessionId?.let { put("sessionId", it) }; before?.let { put("before", it) } }, Channel(1)) {}
@@ -131,6 +160,55 @@ class RoomDeviceControlDispatcherTest {
                 assertFalse(result.toString().contains(image))
             }
             assertTrue(checkNotNull(db.rows().getValue("local_acp_sessions")).value.contains(image))
+        }
+    }
+
+    @Test fun modeChangeIsAuthorizedAtomicAndQueuedForSync(): Unit = runBlocking {
+        var syncRequests = 0
+        runWithStore(onModeChanged = { syncRequests++ }) { db, dispatcher ->
+            suspend fun mode(id: String, value: Boolean, epoch: Long = 1) = dispatcher.dispatch(epoch,
+                buildJsonObject { put("action", "setMode"); put("sessionId", id); put("writable", value) }, Channel(1)) {}
+            assertEquals("Mode", mode("local-chat", true).text("type"))
+            assertTrue(checkNotNull(db.rows().conversation("local-chat")).writable)
+            assertEquals(1, syncRequests)
+            val pending = db.cloudSync().pending(SyncSession("account", "generation"))
+            assertTrue(pending.any { it.collection == SyncCollection.CONVERSATION && it.id == "local-chat" && it.mutation == SyncMutation.UPSERT })
+            assertEquals("Mode", mode("local-chat", true).text("type"))
+            assertEquals(1, syncRequests)
+            assertEquals("project_unavailable", mode("foreign-chat", true).text("code"))
+            assertEquals("unavailable", mode("acp:one", true).text("code"))
+            db.rows().upsertValues(listOf(KeyValueRow(ACTIVE_TURN_KEY_PREFIX + "local-chat", "active")))
+            assertEquals("turn_in_progress", mode("local-chat", false).text("code"))
+            db.rows().deleteValue(ACTIVE_TURN_KEY_PREFIX + "local-chat")
+            db.rows().upsertValues(listOf(KeyValueRow(REMOTE_CONTROL_EPOCH_KEY, "2")))
+            assertEquals("control_disabled", mode("local-chat", false).text("code"))
+            RoomCloudProviderGate.forDao(db.cloudSync()).invalidate(SyncSession("account", "generation"))
+            assertEquals("device_error", mode("local-chat", false, 2).text("code"))
+            assertTrue(checkNotNull(db.rows().conversation("local-chat")).writable)
+            assertEquals(1, syncRequests)
+        }
+    }
+
+    @Test fun cancelledModeChangeWaitingForWorkspaceDoesNotMutate(): Unit = runBlocking {
+        var syncRequests = 0
+        runWithStore(onModeChanged = { syncRequests++ }) { db, dispatcher ->
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val holder = launch { RuntimeWorkspaceFence.forDatabase(db).mutate { entered.complete(Unit); release.await() } }
+            try {
+                withTimeout(5_000) { entered.await() }
+                val started = CompletableDeferred<Unit>()
+                val request = async {
+                    started.complete(Unit)
+                    dispatcher.dispatch(1, buildJsonObject {
+                        put("action", "setMode"); put("sessionId", "local-chat"); put("writable", true)
+                    }, Channel(1)) {}
+                }
+                withTimeout(5_000) { started.await() }
+                request.cancelAndJoin()
+                assertFalse(checkNotNull(db.rows().conversation("local-chat")).writable)
+                assertEquals(0, syncRequests)
+            } finally { release.complete(Unit); holder.join() }
         }
     }
 }

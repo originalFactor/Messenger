@@ -43,6 +43,7 @@ import cc.ptoe.messenger.data.util.ioDispatcher
 class McpManager(
     private val appPreferences: AppPreferences,
     private val enabled: Boolean = true,
+    private val bridgeProvider: () -> cc.ptoe.messenger.core.CoreBridge? = { cc.ptoe.messenger.core.CoreBridgeRegistry.bridge },
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
 ) {
     private val json = Json {
@@ -81,7 +82,7 @@ class McpManager(
         if (enabled) scope.launch {
             loadServers()
             delegationMutex.withLock {
-                cc.ptoe.messenger.core.CoreBridgeRegistry.bridge?.let {
+                bridgeProvider()?.let {
                     _agentDelegationEnabled.value = it.agentDelegationEnabled()
                 }
             }
@@ -90,7 +91,7 @@ class McpManager(
 
     suspend fun setAgentDelegationEnabled(enabled: Boolean) = delegationMutex.withLock {
         check(!stopped) { "MCP manager is shut down" }
-        requireNotNull(cc.ptoe.messenger.core.CoreBridgeRegistry.bridge).setAgentDelegationEnabled(enabled)
+        requireNotNull(bridgeProvider()).setAgentDelegationEnabled(enabled)
         _agentDelegationEnabled.value = enabled
     }
 

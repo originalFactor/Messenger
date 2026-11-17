@@ -4,6 +4,8 @@
  */
 package cc.ptoe.messenger.data.repository.room
 
+import cc.ptoe.messenger.data.local.acp.RoomAcpReplaySnapshots
+
 import androidx.room.Transactor
 import androidx.room.useWriterConnection
 import cc.ptoe.messenger.data.local.room.KeyValueRow
@@ -85,6 +87,7 @@ class RoomAcpConversationStore(private val db: LocalDatabase, private val gate: 
                 connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
                     val sessions = decode(db.rows().getValue(ACP_SESSIONS)?.value).toMutableMap()
                     sessions.remove(id)
+                    RoomAcpReplaySnapshots.deleteSession(db.rows(), id)
                     db.rows().upsertValues(listOf(KeyValueRow(ACP_SESSIONS, JsonObject(sessions).toString())))
                 }
             }

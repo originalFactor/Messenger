@@ -66,7 +66,8 @@ internal class IsolatedRoomDeviceHost private constructor(
                         RoomCloudDeviceControlHost(stored, deviceId, grant,
                             { session -> session == stored.session && source.stillCurrent(stored) },
                             { session -> if (session == stored.session) cloud.rejectDeviceHostSession(db, stored) },
-                            fence.replies(db, stored, deviceId), RoomDeviceControlDispatcher(db, stored, deviceId, snapshots))
+                            fence.replies(db, stored, deviceId), RoomDeviceControlDispatcher(db, stored, deviceId, snapshots,
+                                modeGate = cloud.providerGate, onModeChanged = cloud::requestLocalSync))
                     }, { failure.value = it })
                     manager = hostManager
                     scope.launch {

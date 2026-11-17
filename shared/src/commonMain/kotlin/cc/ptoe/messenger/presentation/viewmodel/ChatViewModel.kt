@@ -85,7 +85,6 @@ import cc.ptoe.messenger.presentation.ui.chat.buildChatItems
 import cc.ptoe.messenger.presentation.ui.chat.ChatListItem
 
 import cc.ptoe.messenger.core.CoreBridge
-import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.remote.NetworkClient
 import kotlinx.serialization.json.contentOrNull
@@ -114,7 +113,7 @@ class ChatViewModel(
      * finished reply would never be uploaded.
      */
     private val cloud: CloudFacade? = null,
-    private val coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
+    private val coreBridge: CoreBridge,
     private val platformToolsEnabled: Boolean = true,
     private val durableTurnFailureNotices: Boolean = false,
 ) : ViewModel() {
@@ -897,7 +896,7 @@ class ChatViewModel(
             builtinTools: (String?) -> List<ChatTool> = { createBuiltinChatTools(it) },
             projectRepository: ProjectRepository? = null,
             cloud: CloudFacade? = null,
-            coreBridge: CoreBridge = requireNotNull(CoreBridgeRegistry.bridge),
+            coreBridge: CoreBridge,
             platformToolsEnabled: Boolean = true,
             durableTurnFailureNotices: Boolean = false,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {

@@ -16,6 +16,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.lang.reflect.Proxy
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -95,25 +96,70 @@ class RoomAcpBackgroundOwnerTest {
         override suspend fun execute(turnId: String, name: String, arguments: JsonObject) = ToolExecutionResult("unavailable", isError = true)
     }
     private fun content() = JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", "hello") }))
+    private class Foreground {
+        val begins = AtomicInteger()
+        val ends = AtomicInteger()
+        fun acquire(): () -> Unit { begins.incrementAndGet(); return { ends.incrementAndGet(); Unit } }
+    }
 
     private suspend fun owner(db: LocalDatabase, binding: AcpWorkerBinding, lifecycle: RoomManagedShutdown,
         factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess, source: AcpSessionConfigurationSource = AcpSessionConfigurationSource { binding to config },
-        fence: Fence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {}) =
+        fence: Fence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {},
+        foreground: () -> (() -> Unit) = { {} }, afterAdmission: suspend () -> Unit = {}, beforeHandoff: suspend () -> Unit = {}) =
         RoomAcpBackgroundOwner.attach(db, Path.of(db.openHelperPathForTest()), lifecycle, AcpPriorOwnerBarrier { }, fence, source,
             AcpPublishedMcpCatalog { emptyList() }, backend, { false }, factory, now = { 1000 }, retainReusableWorkers = reuse,
-            afterQuiescentCommit = afterCommit)
+            afterQuiescentCommit = afterCommit, foreground = foreground, afterAdmission = afterAdmission, beforeHandoff = beforeHandoff)
 
     private suspend fun LocalDatabase.openHelperPathForTest(): String = useReaderConnection { connection ->
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
+    }
+
+    @Test fun cancellationDuringAdmissionRetiresUnstartedRequestAndForegroundLease(): Unit = runBlocking {
+        checkCancelledAdmission(afterInitialCheck = false)
+    }
+
+    @Test fun cancellationBeforeHandoffCannotStartAWorker(): Unit = runBlocking {
+        checkCancelledAdmission(afterInitialCheck = true)
+    }
+
+    private suspend fun checkCancelledAdmission(afterInitialCheck: Boolean) = kotlinx.coroutines.coroutineScope {
+        val dir = Files.createTempDirectory("acp-admission-foreground")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val admitted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val foreground = Foreground()
+        val starts = AtomicInteger()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, events -> starts.incrementAndGet(); Worker(events) },
+                foreground = foreground::acquire,
+                afterAdmission = { if (!afterInitialCheck) { admitted.complete(Unit); release.await() } },
+                beforeHandoff = { if (afterInitialCheck) { admitted.complete(Unit); release.await() } })
+            val id = UUID.randomUUID().toString()
+            val call = async { owner.start(id, binding.conversationId, content()) }
+            withTimeout(5_000) { admitted.await() }
+            assertEquals(1, foreground.begins.get())
+            assertEquals(0, foreground.ends.get())
+            call.cancel()
+            release.complete(Unit)
+            withTimeout(5_000) { call.join() }
+            assertEquals(0, starts.get())
+            assertEquals(1, foreground.ends.get())
+            assertEquals(AcpAdmission.Existing(AcpAdmissionState.COMPLETED, true), RoomAcpRequestLedger(db).admit(id, binding.conversationId, content()))
+            assertEquals(null, RoomAcpRequestLedger(db).activeRequest(binding.conversationId))
+            lifecycle.stopAndAwait()
+            assertEquals(1, foreground.ends.get())
+        } finally { release.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
     }
 
     @Test fun detachedObserverCanApproveAndReplayOneDurableTurn(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-owner-turn")
         val (db, binding) = fixture(dir)
         val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val foreground = Foreground()
         lateinit var worker: Worker
         try {
-            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events).also { worker = it } })
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events).also { worker = it } }, foreground = foreground::acquire)
             var delegated = 0
             val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
                 arrayOf(CoreBridge::class.java)) { _, _, _ -> delegated++; error("Unexpected delegate call") })
@@ -147,6 +193,8 @@ class RoomAcpBackgroundOwnerTest {
             assertTrue(done.getValue("events").jsonArray.any { it.jsonObject["type"]?.jsonPrimitive?.content == "Finished" })
             assertEquals(null, owner.bySession(binding.conversationId))
             assertTrue(worker.stopped)
+            assertEquals(1, foreground.begins.get())
+            assertEquals(1, foreground.ends.get())
             assertFailsWith<IllegalStateException> { owner.start(id, binding.conversationId, content()) }
             assertFailsWith<IllegalStateException> { bridge.controlCancel(id) }
             assertFailsWith<IllegalStateException> { bridge.controlPermission(id, option) }
@@ -171,18 +219,22 @@ class RoomAcpBackgroundOwnerTest {
         val (db, binding) = fixture(dir)
         val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
         val entered = CompletableDeferred<Unit>(); val stopEntered = CompletableDeferred<Unit>(); val allowStop = CompletableDeferred<Unit>()
+        val foreground = Foreground()
         try {
-            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, entered, stopEntered, allowStop) })
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, entered, stopEntered, allowStop) }, foreground = foreground::acquire)
             val id = UUID.randomUUID().toString()
             owner.start(id, binding.conversationId, content())
             withTimeout(5_000) { entered.await() }
             val stopping = async { lifecycle.stopAndAwait() }
             withTimeout(5_000) { stopEntered.await() }
+            assertEquals(1, foreground.begins.get())
+            assertEquals(0, foreground.ends.get())
             assertFalse(stopping.isCompleted)
             assertFailsWith<IllegalStateException> { AcpExclusiveOwner.acquire(dir.resolve("room.db"), AcpPriorOwnerBarrier { }) }
             assertFailsWith<IllegalStateException> { owner.start(UUID.randomUUID().toString(), binding.conversationId, content()) }
             allowStop.complete(Unit)
             withTimeout(5_000) { stopping.await() }
+            assertEquals(1, foreground.ends.get())
             val replacement = AcpExclusiveOwner.acquire(dir.resolve("room.db"), AcpPriorOwnerBarrier { })
             replacement.closeAndAwait { }
             assertFailsWith<IllegalStateException> { owner.events(id, 0) }
@@ -289,11 +341,12 @@ class RoomAcpBackgroundOwnerTest {
         val fence = Fence()
         var starts = 0
         lateinit var worker: Worker
+        val foreground = Foreground()
         try {
             val owner = owner(db, binding, lifecycle, { _, events ->
                 starts++
                 Worker(events, waiting = entered, holdPrompt = true, failFirstStop = true).also { worker = it }
-            }, fence = fence)
+            }, fence = fence, foreground = foreground::acquire)
             val id = UUID.randomUUID().toString()
             owner.start(id, binding.conversationId, content())
             withTimeout(5_000) { entered.await() }
@@ -311,6 +364,8 @@ class RoomAcpBackgroundOwnerTest {
             val writer = async(start = CoroutineStart.UNDISPATCHED) { fence.mutate { true } }
             assertFalse(writer.isCompleted)
             assertTrue(owner.hasActiveTasks())
+            assertEquals(1, foreground.begins.get())
+            assertEquals(0, foreground.ends.get())
             val barrier = object : AcpRecoveryBarrier {
                 override suspend fun <T> withStopped(requestId: String, sessionId: String, action: suspend () -> T): T {
                     worker.stopAndAwait()
@@ -328,6 +383,7 @@ class RoomAcpBackgroundOwnerTest {
                 writer.await()
             }
             assertFalse(owner.hasActiveTasks())
+            assertEquals(1, foreground.ends.get())
             assertEquals(1, starts)
             lifecycle.stopAndAwait()
         } finally { db.close(); dir.toFile().deleteRecursively() }

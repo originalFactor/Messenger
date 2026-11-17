@@ -221,7 +221,7 @@ class KotlinRoomAppBackendTest {
             assertFailsWith<IllegalStateException> { app.coreBridge.startBackgroundTurn(config) }
             assertFailsWith<IllegalStateException> { app.coreBridge.localAcpHistory("acp:pages", null) }
             assertFailsWith<IllegalStateException> { slice.asAppBackend() }
-            assertEquals(null, CoreBridgeRegistry.bridge)
+            assertSame(backend.coreBridge, CoreBridgeRegistry.bridge)
         } finally {
             container?.shutdown()
             if (lifecycle.state.value == RoomShutdownState.Running) lifecycle.stopAndAwait()

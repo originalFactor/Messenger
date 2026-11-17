@@ -16,9 +16,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import okio.Path.Companion.toPath
 import kotlin.test.Test
-import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -38,7 +39,7 @@ class AppBackendTest {
             maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1)
         val agents = fake<AgentRepository> { if (it == "getAll") flowOf(listOf(agent)) else null }
         val core = fake<CoreBridge> {
-            when (it) { "learningRequest" -> "{\"tools\":[]}"; "agentDelegationEnabled" -> false; else -> null }
+            when (it) { "learningRequest" -> "{\"tools\":[]}"; "agentDelegationEnabled" -> true; else -> null }
         }
         var cleared = false
         var shutdowns = 0
@@ -48,10 +49,10 @@ class AppBackendTest {
         val dirs = AppDirs("/unused/files".toPath(), "/unused/cache".toPath())
         val previous = CoreBridgeRegistry.bridge
         try {
-            CoreBridgeRegistry.bridge = fake<CoreBridge>()
-            assertFailsWith<IllegalArgumentException> { AppContainer(dirs, fake<ChatImageStore>(), backend) }
-            CoreBridgeRegistry.bridge = core
+            val unrelatedBridge = fake<CoreBridge> { if (it == "agentDelegationEnabled") false else null }
+            CoreBridgeRegistry.bridge = unrelatedBridge
             val container = AppContainer(dirs, fake<ChatImageStore>(), backend)
+            withTimeout(5_000) { container.mcpManager.agentDelegationEnabled.first { it } }
             assertSame(backend.stores, container.stores)
             assertSame(core, container.coreBridge)
             assertSame(backend.providers, container.providerRepository)
@@ -61,8 +62,14 @@ class AppBackendTest {
             assertTrue(cleared)
             container.shutdown()
             container.shutdown()
-            assertTrue(CoreBridgeRegistry.bridge == null)
+            assertSame(unrelatedBridge, CoreBridgeRegistry.bridge)
             assertTrue(shutdowns == 1)
+            // Equal identity does not make an injected container the registry owner.
+            CoreBridgeRegistry.bridge = core
+            val second = AppContainer(dirs, fake<ChatImageStore>(), backend)
+            second.shutdown()
+            assertSame(core, CoreBridgeRegistry.bridge)
+            assertTrue(shutdowns == 2)
         } finally { CoreBridgeRegistry.bridge = previous }
     }
 }

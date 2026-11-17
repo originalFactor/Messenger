@@ -56,6 +56,11 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     private val invalidated = mutableSetOf<SyncSession>()
     private var stopped = false
 
+    /** A gate can authorize work only for the exact Room DAO that owns its session state. */
+    internal fun requireOwner(candidate: CloudSyncDao) {
+        require(candidate === dao) { "Cloud provider gate belongs to another Room database" }
+    }
+
     internal companion object {
         private val gates = WeakHashMap<CloudSyncDao, WeakReference<RoomCloudProviderGate>>()
         fun forDao(dao: CloudSyncDao): RoomCloudProviderGate = synchronized(gates) {
