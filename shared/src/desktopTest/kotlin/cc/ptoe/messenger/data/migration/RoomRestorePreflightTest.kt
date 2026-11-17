@@ -185,4 +185,52 @@ class RoomRestorePreflightTest {
             assertTrue(Files.exists(f.source))
         } finally { dir.toFile().deleteRecursively() }
     }
+
+    @Test fun rebindFinalizesPendingRestoreOnlyWithExactCurrentSourceIdentity(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-restore-rebind")
+        try {
+            val f = fixture(dir)
+            val db = room(f.target)
+            val authorityCalls = java.util.concurrent.atomic.AtomicInteger()
+            val authority = RoomRestoreRebindAuthority { authorityCalls.incrementAndGet() }
+            try {
+                CoreSourceSqliteLease.acquire(f.source).use { lease ->
+                    assertFailsWith<IllegalStateException> {
+                        RoomRestorePreflight.finalize(db, f.target, f.newAssets, lease, Owner(), Gate(), authority)
+                    }
+                    assertEquals(0, authorityCalls.get())
+                    RoomRestorePreflight.inspect(db, f.target, f.newAssets, lease, Owner(), Gate())
+                    val first = RoomRestorePreflight.finalize(db, f.target, f.newAssets, lease, Owner(), Gate(), authority)
+                    assertEquals(1, authorityCalls.get())
+                    assertEquals(null, db.rows().getValue(RoomRestorePreflight.PENDING_KEY))
+                    assertEquals(first.text(), db.rows().getValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)?.value)
+                    val repeated = RoomRestorePreflight.finalize(db, f.target, f.newAssets, lease, Owner(), Gate(), authority)
+                    assertEquals(first, repeated)
+                    assertEquals(2, authorityCalls.get())
+                }
+            } finally { db.close() }
+            RoomStoreStartup.withLeasedCoreStore(f.source, f.target, f.oldAssets, f.newAssets, Owner(),
+                RoomManagedShutdown { }, ::room) { admitted ->
+                    assertEquals(1, admitted.rows().defaultAgents().size)
+                }
+            val changed = room(f.target)
+            try {
+                changed.rows().deleteValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)
+            } finally { changed.close() }
+            assertFailsWith<IllegalStateException> {
+                RoomStoreStartup.withLeasedCoreStore(f.source, f.target, f.oldAssets, f.newAssets, Owner(),
+                    RoomManagedShutdown { }, ::room) { }
+            }
+            val marker = RoomRestoreRebind.markerFor(f.target)
+            val original = Files.readString(marker)
+            Files.writeString(marker, original.replaceFirst("messenger-room-restore-v1:", "messenger-room-restore-v2:"))
+            val restoredReceipt = room(f.target)
+            try { restoredReceipt.rows().upsertValues(listOf(KeyValueRow(ROOM_RESTORE_REBIND_RECEIPT_KEY, original))) }
+            finally { restoredReceipt.close() }
+            assertFailsWith<IllegalStateException> {
+                RoomStoreStartup.withLeasedCoreStore(f.source, f.target, f.oldAssets, f.newAssets, Owner(),
+                    RoomManagedShutdown { }, ::room) { }
+            }
+        } finally { dir.toFile().deleteRecursively() }
+    }
 }

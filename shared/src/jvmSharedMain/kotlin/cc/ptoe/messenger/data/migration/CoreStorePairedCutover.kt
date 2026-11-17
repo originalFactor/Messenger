@@ -97,7 +97,16 @@ internal object CoreStorePairedCutover {
 
         // Existing complete files are verified before reuse. A partial or unexpected file is never
         // deleted or replaced, and remains available for explicit recovery.
-        CoreAssetTransfer.resume(lease, sourceAssets, assets, ASSET_MARKER)
+        val restore = RoomRestoreRebind.read(target)
+        if (restore != null) {
+            val evidence = CoreRestoreAssessment.assess(lease, target) as? CoreRestoreEvidence.ContentMatch
+                ?: error("Restored Core source contents cannot be proven")
+            check(restore.publicationId == evidence.publicationId && restore.previousIdentity == evidence.previousIdentity &&
+                restore.contentHash == evidence.contentHash && restore.reboundIdentity == lease.migrationFingerprint()) {
+                "Restore rebind no longer matches the Core source identity"
+            }
+            check(restore.previousIdentity == identity.fingerprint) { "Restore rebind does not match publication identity" }
+        } else CoreAssetTransfer.resume(lease, sourceAssets, assets, ASSET_MARKER)
         if (Files.notExists(target, NOFOLLOW_LINKS)) {
             if (Files.notExists(stage, NOFOLLOW_LINKS)) {
                 Files.createFile(stage, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))

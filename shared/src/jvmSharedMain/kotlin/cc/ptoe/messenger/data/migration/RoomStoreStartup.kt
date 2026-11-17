@@ -59,7 +59,7 @@ internal object RoomStoreStartup {
                     checkDatabasePath(room, target)
                     check(room.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
                     check(room.rows().getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
-                    check(room.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
+                    verifyRestoreAdmission(room, target, lease)
                     verifyLegacy()
                     shutdown.enter()
                     try { useRoom(room) } finally { shutdown.stopAndAwait() }
@@ -130,6 +130,23 @@ internal object RoomStoreStartup {
             check(db.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
         }
         finally { db.close() }
+    }
+
+    /** Admit a restored pair only with the durable rebind receipt bound to the held source. */
+    private suspend fun verifyRestoreAdmission(db: LocalDatabase, target: Path, lease: CoreSourceSqliteLease) {
+        val pending = db.rows().getValue(RoomRestorePreflight.PENDING_KEY)?.value
+        val receipt = db.rows().getValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)?.value
+        check(pending == null) { "Restore recovery is required" }
+        val external = RoomRestoreRebind.read(target)
+        check((receipt == null) == (external == null)) { "Restore rebind marker and receipt must agree" }
+        if (receipt == null) return
+        check(receipt == external!!.text()) { "Restore rebind receipt does not match its durable marker" }
+        val evidence = CoreRestoreAssessment.assess(lease, target) as? CoreRestoreEvidence.ContentMatch
+            ?: error("Core restore source contents cannot be proven")
+        check(external.publicationId == evidence.publicationId && external.previousIdentity == evidence.previousIdentity &&
+            external.contentHash == evidence.contentHash && external.reboundIdentity == lease.migrationFingerprint()) {
+            "Restore rebind no longer matches the Core source identity"
+        }
     }
 
     private suspend fun initializeFresh(source: Path, target: Path, work: Path, openRoom: (Path) -> LocalDatabase,

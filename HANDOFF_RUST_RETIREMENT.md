@@ -56,6 +56,8 @@
 
 此改动后的 `:shared:allTests` 全量通过；CI selector/audit fixture 通过，严格审计仍为 `blocking_references=29`、`rust_workspace=present`、`native_bindings=present`。这证明隔离 Kotlin 原型没有回归，不证明生产启动已切换或 Rust Core 可删除。
 
+恢复预检的 pending marker 现在有可验证的离线最终化协议：`RoomRestoreRebind` 将旧 publication identity、精确当前 Core source identity 和逻辑内容 hash 写成 durable 外部 marker；`RoomRestorePreflight.finalize` 只有在持有 source lease、平台 rebind authority、preflight 标记和 Room 身份证据全部匹配后才写入 Room receipt 并消费 pending marker。`withLeasedCoreStore` / paired cutover 要求外部 marker 与 Room receipt 成对且与当前 source lease 一致，缺失、单边、伪造或过期状态 fail-closed；中断后重复 finalization 会重做同一身份检查。新增 `rebindFinalizesPendingRestoreOnlyWithExactCurrentSourceIdentity` 及既有 restore/paired 测试通过。它仍是隔离原型，不证明备份时序、其他外部文件、旧进程排除或 Windows/Android 掉电行为。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。

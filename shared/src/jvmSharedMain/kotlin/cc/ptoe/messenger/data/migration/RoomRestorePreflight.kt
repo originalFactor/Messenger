@@ -26,8 +26,8 @@ import kotlinx.serialization.json.Json
  * A successful result means the current database's referenced asset bytes are present and have
  * valid hashes, and that artifact execution/network grants were revoked. It does not prove backup
  * chronology, completeness of external files, worker exclusion, or safe source-identity rebind.
- * The durable pending marker deliberately remains: ordinary startup must not admit this store
- * until a future fenced, crash-safe identity rebind and publication protocol is implemented.
+ * The durable pending marker remains until [finalize] consumes it under the same exclusive owner,
+ * held source lease, exact current source identity and an explicit platform rebind authority.
  */
 internal object RoomRestorePreflight {
     internal const val PENDING_KEY = "__messenger_room_restore_pending_v1"
@@ -112,5 +112,83 @@ internal object RoomRestorePreflight {
             val actual = statement.getText(2)
             check(actual.isNotEmpty() && Files.isSameFile(Paths.get(actual), expected)) { "Room factory opened the wrong database" }
         }
+    }
+
+    /**
+     * Offline finalization after a successful preflight. The caller must prove worker/path
+     * exclusion from preflight through startup and supply the exact source whose logical contents
+     * still match the stored migration evidence. Rebind is recorded durably before the pending
+     * marker is consumed; repetition after interruption rechecks the same identity transition.
+     */
+    suspend fun finalize(
+        db: LocalDatabase,
+        destination: Path,
+        destinationAssets: Path,
+        lease: CoreSourceSqliteLease,
+        ownership: RoomClearAllOwnership,
+        assets: CoreAssetGate,
+        authority: RoomRestoreRebindAuthority,
+    ): RoomRestoreRebindRecord = ownership.withStoppedExclusiveOwner {
+        val target = destination.toAbsolutePath().normalize()
+        val root = destinationAssets.toAbsolutePath().normalize()
+        lease.requireDistinctDatabasePaths(target)
+        val evidence = CoreRestoreAssessment.assess(lease, target) as? CoreRestoreEvidence.ContentMatch
+            ?: error("Core restore source contents cannot be proven")
+        CoreStorePairedCutover.verifyRestorePair(lease, target, root, evidence)
+        val marker = "v1:${evidence.publicationId}:${evidence.previousIdentity}:${evidence.contentHash}"
+        val reboundIdentity = lease.migrationFingerprint()
+        val record = RoomRestoreRebindRecord(evidence.publicationId, evidence.previousIdentity, reboundIdentity, evidence.contentHash)
+        withContext(NonCancellable) {
+            db.useWriterConnection { connection ->
+                checkDatabasePath(connection, target)
+                connection.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
+                    val rows = db.rows()
+                    check(rows.getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
+                    val pending = rows.getValue(PENDING_KEY)?.value
+                    val existingReceipt = rows.getValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)?.value
+                    check(pending == marker || (pending == null && existingReceipt == record.text())) {
+                        "Restore preflight marker is missing or changed"
+                    }
+                    check(rows.getValue(CoreStoreMigration.MARKER_KEY)?.value == CoreStoreMigration.MARKER_VALUE &&
+                        rows.getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY)?.value == evidence.previousIdentity &&
+                        rows.getValue(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY)?.value == evidence.contentHash &&
+                        rows.getValue(ROOM_PUBLICATION_ID_KEY)?.value == evidence.publicationId) {
+                        "Restore evidence no longer matches the Room database"
+                    }
+                    check(existingReceipt == null || existingReceipt == record.text()) { "Another restore rebind requires recovery" }
+                }
+            }
+        }
+        authority.verify(record)
+        RoomRestoreRebind.write(target, record)
+        withContext(NonCancellable) {
+            assets.withExclusiveAssets {
+                db.useWriterConnection { connection ->
+                    checkDatabasePath(connection, target)
+                    connection.usePrepared("PRAGMA synchronous=FULL") { it.step() }
+                    connection.usePrepared("PRAGMA synchronous") { check(it.step() && it.getLong(0) == 2L) { "SQLite FULL sync unavailable" } }
+                    connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                        val rows = db.rows()
+                        check(rows.getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
+                        val pending = rows.getValue(PENDING_KEY)?.value
+                        check(pending == marker || (pending == null && rows.getValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)?.value == record.text())) {
+                            "Restore preflight marker is missing or changed"
+                        }
+                        check(rows.getValue(CoreStoreMigration.MARKER_KEY)?.value == CoreStoreMigration.MARKER_VALUE &&
+                            rows.getValue(CoreStoreMigration.SOURCE_FINGERPRINT_KEY)?.value == evidence.previousIdentity &&
+                            rows.getValue(CoreStoreMigration.SOURCE_CONTENT_FINGERPRINT_KEY)?.value == evidence.contentHash &&
+                            rows.getValue(ROOM_PUBLICATION_ID_KEY)?.value == evidence.publicationId) {
+                            "Restore evidence no longer matches the Room database"
+                        }
+                        val previousReceipt = rows.getValue(ROOM_RESTORE_REBIND_RECEIPT_KEY)?.value
+                        check(previousReceipt == null || previousReceipt == record.text()) { "Another restore rebind requires recovery" }
+                        rows.upsertValues(listOf(KeyValueRow(ROOM_RESTORE_REBIND_RECEIPT_KEY, record.text())))
+                        rows.deleteValue(PENDING_KEY)
+                    }
+                }
+            }
+            syncRoomPublicationDirectory(requireNotNull(target.parent))
+        }
+        record
     }
 }

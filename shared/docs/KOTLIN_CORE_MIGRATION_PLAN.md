@@ -77,6 +77,14 @@ quota-counted orphan files after a normal or interrupted process, but it does
 not replace the platform owner proof, Windows/Android directory durability
 validation or cross-process file exclusion required for production cutover.
 
+Restore preflight now has an explicit proof-gated finalization protocol: a
+durable rebind receipt binds the original publication identity, the exact
+current Core source identity and the logical source content hash before the
+pending marker is removed. Startup and paired migration verify that the
+external marker and Room receipt agree with the held source lease. The
+authority remains caller-supplied; no production owner or cross-platform
+crash/power-loss validation is installed.
+
 The current Kotlin backend slice exercises Room-backed chat, selected local tools,
 optional scheduling, Skills and image jobs in isolation. It is not an AppBackend
 and is not selected by Android or Desktop. Cutover still needs platform ownership
