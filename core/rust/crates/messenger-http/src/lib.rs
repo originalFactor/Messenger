@@ -414,6 +414,8 @@ pub struct ServerHandle {
     task: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
     background: JoinSet<()>,
     tasks: TrackedTasks,
+    state: ApiState,
+    agent_relay: Arc<Mutex<Option<agent_relay::AgentRelay>>>,
 }
 
 impl ServerHandle {
@@ -446,6 +448,8 @@ impl ServerHandle {
             wait_for_catalog,
         );
         let tasks = state.tasks.clone();
+        let state_for_handle = state.clone();
+        let agent_relay = state.agent_relay.clone();
         let mut background = JoinSet::new();
         background.spawn(Arc::clone(&state.remote).run_with_control(
             Arc::new(LocalClientExecutor {
@@ -470,6 +474,8 @@ impl ServerHandle {
             task: Some(task),
             background,
             tasks,
+            state: state_for_handle,
+            agent_relay,
         })
     }
 
@@ -479,6 +485,13 @@ impl ServerHandle {
 
     pub async fn stop(mut self) -> Result<(), std::io::Error> {
         self.shutdown.cancel();
+        let mut relay = {
+            let mut current = self.agent_relay.lock().await;
+            current.take()
+        };
+        if let Some(relay) = relay.as_mut() {
+            relay.stop_and_join().await;
+        }
         let result = if let Some(task) = self.task.take() {
             task.await
                 .map_err(|e| std::io::Error::other(e.to_string()))?
@@ -4053,6 +4066,9 @@ mod tests {
             .unwrap();
         let background = server.background.len();
         assert_eq!(background, 2, "remote and scheduler tasks must be tracked");
+        let (base_url, _) = agent_relay::ensure(&server.state).await.unwrap();
+        assert!(base_url.starts_with("http://127.0.0.1:"));
+        assert!(server.agent_relay.lock().await.is_some());
         let (started, entered) = tokio::sync::oneshot::channel::<()>();
         server.tasks.spawn(async move {
             let _ = started.send(());

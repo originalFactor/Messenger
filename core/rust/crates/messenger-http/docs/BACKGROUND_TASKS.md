@@ -18,6 +18,10 @@ cutover.
   sync, remote control client lanes, and one scheduled task execution per tick.
   These are aborted and joined on `stop()`. A test registers a pending tracked
   task and verifies `stop()` does not leave the handle running.
+- The `AgentRelay` loopback listener created through the control API is held by
+  `ApiState` and joined by both `DELETE /control/agent-relay` and
+  `ServerHandle::stop()`. Its upstream SSE conversion workers still stop through
+  the shutdown token and remain part of the external-side-effect gap below.
 
 ## Request-spawned tasks still needing an owner
 
@@ -31,7 +35,7 @@ cutover.
 | `image_generation.rs` | one provider job per admitted image request | explicit cancel or provider completion; a paid/remote request may remain ambiguous. |
 | `delegation.rs` | ACP delegation event drain | awaited by the delegating request, but external ACP descendants are separate. |
 | `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | lifetime token/cancel or channel close; direct child exit does not prove descendants stopped. |
-| `agent_relay.rs` | model relay listener and SSE conversion workers | per-relay shutdown token; listener/workers are owned by `AgentRelay`, not `ServerHandle`. |
+| `agent_relay.rs` | model relay listener and SSE conversion workers | loopback listener is now taken and joined by relay stop / server stop; upstream SSE conversion workers still rely on the shutdown token and a provider-side stream ending. |
 
 Tasks that only forward bytes or settle a local channel can be joined by a
 single `ApiState` task tracker. Tasks that own an OS process, a detached
