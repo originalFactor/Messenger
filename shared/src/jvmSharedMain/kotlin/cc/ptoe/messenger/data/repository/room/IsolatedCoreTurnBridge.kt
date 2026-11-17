@@ -18,6 +18,9 @@ import cc.ptoe.messenger.domain.chat.KotlinTurnPhase
 import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.chat.KotlinTurnLifecycle
+import cc.ptoe.messenger.domain.mcp.McpManager
+import cc.ptoe.messenger.domain.mcp.McpInventorySnapshot
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
@@ -41,6 +44,8 @@ internal class IsolatedCoreTurnBridge(
     private val imageTool: IsolatedModelImageTool? = null,
     private val provider: KotlinTurnProvider? = null,
     private val lifecycle: KotlinTurnLifecycle = object : KotlinTurnLifecycle {},
+    private val mcpManager: () -> McpManager? = { null },
+    private val afterMcpSelection: suspend () -> Unit = {},
     private val afterActivitySnapshot: suspend () -> Unit = {},
     private val afterCancellationCapture: suspend () -> Unit = {},
     private val afterLegacyCancellationCapture: suspend () -> Unit = {},
@@ -49,6 +54,7 @@ internal class IsolatedCoreTurnBridge(
     private val beforeLegacyWorkerStart: suspend () -> Unit = {},
 ) : CoreBridge by delegate {
     private data class Runtime(val store: RoomKotlinTurnStore, val runner: KotlinChatTurnRunner, val bridge: KotlinBackgroundTurnBridge)
+    private data class McpSelection(val manager: McpManager, val inventory: McpInventorySnapshot, val names: Set<String>)
     private val lock = Mutex()
     private val runtimes = mutableMapOf<String, Runtime>()
     private val legacy = mutableSetOf<String>()
@@ -64,7 +70,7 @@ internal class IsolatedCoreTurnBridge(
         val iterator = runtimes.iterator()
         while (iterator.hasNext() && runtimes.size >= 1024) {
             val entry = iterator.next()
-            if (entry.key !in legacy && !entry.value.runner.hasRunningJobs() && entry.value.store.activeTurn(entry.key) == null) {
+            if (entry.key !in legacy && !entry.value.runner.hasRunningJobs() && entry.value.store.reservedTurn(entry.key) == null) {
                 iterator.remove()
                 generation++
             }
@@ -72,10 +78,11 @@ internal class IsolatedCoreTurnBridge(
         check(runtimes.size < 1024) { "Chat scope limit reached" }
     }
 
-    private suspend fun newRuntime(conversationId: String): Runtime {
+    private suspend fun newRuntime(conversationId: String, mcp: McpSelection? = null): Runtime {
         require(conversationId.isNotBlank()) { "Conversation ID is required" }
         val names = IsolatedCoreTools.supportedNames + if (imageTool != null) setOf(IsolatedCoreTools.imageName) else emptySet()
-        val bundle = IsolatedCoreTools.create(db, conversationId, learning, artifacts, names, now, imageTool)
+        val bundle = IsolatedCoreTools.create(db, conversationId, learning, artifacts, names, now, imageTool,
+            mcp?.manager, mcp?.inventory, mcp?.names.orEmpty())
         val store = RoomKotlinTurnStore(db, bundle.preparer, bundle.tools, cloudGate)
         bundle.bind(store)
         val runner = provider?.let { KotlinChatTurnRunner(store, it, bundle.tools, scope, lifecycle) }
@@ -87,23 +94,41 @@ internal class IsolatedCoreTurnBridge(
         runtimes[id] ?: run { reserve(id); newRuntime(id).also { runtimes[id] = it; generation++ } }
     }
 
-    private fun requireSupported(config: TurnConfigBridge) {
+    private suspend fun requireSupported(config: TurnConfigBridge): McpSelection? {
         if (!config.disableTools) {
-            require(!config.hasWorkspace && config.toolNames.isEmpty() && config.tools.isEmpty()) {
+            require(!config.hasWorkspace) {
                 "Runtime, workspace and external tools are unavailable"
             }
+            if (config.toolNames.isNotEmpty() || config.tools.isNotEmpty()) {
+                val manager = requireNotNull(mcpManager()) { "External tools are unavailable" }
+                val inventory = manager.inventorySnapshot()
+                require(config.toolNames.distinct().size == config.toolNames.size &&
+                    config.tools.map { it.name }.distinct().size == config.tools.size &&
+                    config.toolNames.toSet() == config.tools.map { it.name }.toSet() && config.tools.all { selected ->
+                        inventory.tools.singleOrNull { it.name == selected.name }?.let { tool ->
+                            tool.description == selected.description &&
+                                runCatching { Json.parseToJsonElement(selected.parametersJson) }.getOrNull() == tool.parameters
+                        } == true
+                    }) { "External tool configuration changed" }
+                return McpSelection(manager, inventory, config.toolNames.toSet())
+            }
         }
+        return null
     }
 
     override suspend fun startBackgroundTurn(config: TurnConfigBridge) {
-        requireSupported(config)
+        val selected = requireSupported(config)
+        if (selected != null) {
+            afterMcpSelection()
+            check(selected.manager.isInventoryCurrent(selected.inventory)) { "MCP inventory changed" }
+        }
         lock.withLock {
             check(config.conversationId !in legacy) { "A legacy turn is already active" }
             reserve(config.conversationId)
             val old = runtimes[config.conversationId]
             check(old?.runner?.hasRunningJobs() != true) { "A turn worker is still stopping" }
-            check(old?.store?.activeTurn(config.conversationId) == null) { "A turn is already active" }
-            val next = newRuntime(config.conversationId)
+            check(adminStore.reservedTurn(config.conversationId) == null) { "A turn is already active" }
+            val next = newRuntime(config.conversationId, selected)
             runtimes[config.conversationId] = next
             generation++
             next.bridge.startBackgroundTurn(config)
@@ -152,6 +177,24 @@ internal class IsolatedCoreTurnBridge(
     override suspend fun toolApprovalSettings(method: String, body: String?): String =
         adminBridge.toolApprovalSettings(method, body)
 
+    override val supportsUncertainMcpCalls: Boolean get() = true
+
+    override suspend fun uncertainMcpCall(conversationId: String): cc.ptoe.messenger.domain.chat.UncertainMcpCall? {
+        val runtime = lock.withLock { runtimes[conversationId] } ?: return adminStore.uncertainMcpCall(conversationId)
+        val call = runtime.store.uncertainMcpCall(conversationId) ?: return null
+        if (!call.canAcknowledge) return call
+        runtime.runner.awaitStopped(call.turnId)
+        return runtime.store.uncertainMcpCall(conversationId)?.takeIf { it == call }
+    }
+
+    override suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String) {
+        val runtime = lock.withLock { runtimes[conversationId] } ?: error("The local MCP worker is unavailable")
+        val call = runtime.store.uncertainMcpCall(conversationId) ?: error("Uncertain MCP call is unavailable")
+        check(call.canAcknowledge && call.turnId == turnId && call.callId == callId) { "Uncertain MCP call changed" }
+        runtime.runner.awaitStopped(turnId)
+        runtime.store.acknowledgeUncertainMcpCall(conversationId, turnId, callId)
+    }
+
     override suspend fun hasActiveTasks(): Boolean {
         // Never hold the bridge lock while querying workers or Room: cancellation and cleanup
         // must continue even when a caller checks whether it is safe to leave.
@@ -180,7 +223,7 @@ internal class IsolatedCoreTurnBridge(
             reserve(config.conversationId)
             val old = runtimes[config.conversationId]
             check(old?.runner?.hasRunningJobs() != true) { "A turn worker is still stopping" }
-            check(old?.store?.activeTurn(config.conversationId) == null) { "A turn is already active" }
+            check(adminStore.reservedTurn(config.conversationId) == null) { "A turn is already active" }
             val next = newRuntime(config.conversationId)
             val token = next.bridge.newLegacyInvocation()
             runtimes[config.conversationId] = next

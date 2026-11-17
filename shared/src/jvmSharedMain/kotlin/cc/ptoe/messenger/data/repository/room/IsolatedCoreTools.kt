@@ -5,6 +5,7 @@ import cc.ptoe.messenger.data.chat.CompositeKotlinTools
 import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
 import cc.ptoe.messenger.data.chat.KotlinToolComponent
 import cc.ptoe.messenger.data.chat.KotlinCoreSkillAdapter
+import cc.ptoe.messenger.data.chat.KotlinMcpToolAdapter
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.chat.coreArtifactSpec
 import cc.ptoe.messenger.data.chat.coreArtifactTool
@@ -16,6 +17,8 @@ import cc.ptoe.messenger.data.chat.coreSkillSpec
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.repository.LearningOwnership
+import cc.ptoe.messenger.domain.mcp.McpManager
+import cc.ptoe.messenger.domain.mcp.McpInventorySnapshot
 
 /** One admission snapshot, bound once to the exact turn store which owns its invocations. */
 internal class IsolatedCoreTools private constructor(
@@ -31,7 +34,8 @@ internal class IsolatedCoreTools private constructor(
 
         suspend fun create(db: LocalDatabase, conversationId: String, learning: LearningOwnership,
             artifacts: RoomArtifactService, allowedNames: Set<String>, now: () -> Long,
-            imageTool: IsolatedModelImageTool? = null): IsolatedCoreTools {
+            imageTool: IsolatedModelImageTool? = null, mcpManager: McpManager? = null,
+            mcpInventory: McpInventorySnapshot? = null, mcpNames: Set<String> = emptySet()): IsolatedCoreTools {
             val supported = supportedNames + if (imageTool != null) setOf(imageName) else emptySet()
             require(allowedNames.all { it in supported }) { "Unsupported Core tool" }
             val reference = StoreReference()
@@ -52,6 +56,11 @@ internal class IsolatedCoreTools private constructor(
                 val selected = checkNotNull(imageTool)
                 val tool = coreImageTool(db, conversationId, reference::get, selected.service, selected.authorization)
                 components += KotlinToolComponent(setOf(imageName), tool, tool, tool)
+            }
+            if (mcpManager != null) {
+                val inventory = requireNotNull(mcpInventory) { "MCP inventory is unavailable" }
+                val tool = KotlinMcpToolAdapter(db, conversationId, mcpManager, inventory, mcpNames, reference::get)
+                components += KotlinToolComponent(mcpNames, tool, tool, tool)
             }
             return IsolatedCoreTools(CompositeKotlinTools(components), reference)
         }

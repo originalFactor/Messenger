@@ -102,6 +102,15 @@ import cc.ptoe.messenger.generated.resources.Res
 import cc.ptoe.messenger.generated.resources.tools_approval_request
 import cc.ptoe.messenger.generated.resources.tools_approval_allow
 import cc.ptoe.messenger.generated.resources.tools_approval_deny
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_review
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_title
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_message
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_acknowledge
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_later
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_retry_check
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_previous_owner
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_arguments
+import cc.ptoe.messenger.generated.resources.mcp_uncertain_truncated
 import cc.ptoe.messenger.generated.resources.action_back
 import cc.ptoe.messenger.generated.resources.action_cancel
 import cc.ptoe.messenger.generated.resources.action_go_settings
@@ -196,6 +205,11 @@ private fun MessengerChatScreen(
     val agent by viewModel.agent.collectAsStateWithLifecycle()
     val toolApproval by viewModel.toolApproval.collectAsStateWithLifecycle()
     val approvalBusy by viewModel.approvalBusy.collectAsStateWithLifecycle()
+    val uncertainMcpCall by viewModel.uncertainMcpCall.collectAsStateWithLifecycle()
+    val uncertainMcpBusy by viewModel.uncertainMcpBusy.collectAsStateWithLifecycle()
+    val uncertainMcpChecking by viewModel.uncertainMcpChecking.collectAsStateWithLifecycle()
+    val uncertainMcpCheckFailed by viewModel.uncertainMcpCheckFailed.collectAsStateWithLifecycle()
+    val sendPreparing by viewModel.sendPreparing.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val needsModelSetup by viewModel.needsModelSetup.collectAsStateWithLifecycle()
@@ -211,6 +225,7 @@ private fun MessengerChatScreen(
     val userAvatar by AppContainerHolder.instance.appPreferences.userAvatar.collectAsStateWithLifecycle(initialValue = null)
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
+    var showUncertainMcp by rememberSaveable(conversationId) { mutableStateOf(false) }
     var learningMessageId by remember { mutableStateOf<String?>(null) }
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var showActionMenu by remember { mutableStateOf(false) }
@@ -342,19 +357,28 @@ private fun MessengerChatScreen(
                     .navigationBarsPadding()
                     .imePadding()
             ) {
+                if (uncertainMcpCall != null) TextButton(onClick = { showUncertainMcp = true }) {
+                    Text(stringResource(Res.string.mcp_uncertain_review))
+                }
+                if (uncertainMcpCheckFailed) TextButton(onClick = viewModel::retryUncertainMcpCheck) {
+                    Text(stringResource(Res.string.mcp_uncertain_retry_check))
+                }
                 ChatInputBar(
                     text = inputText,
                     onTextChange = { inputText = it },
                     onSendClick = {
-                        if (inputText.text.isNotBlank() || pendingImages.isNotEmpty()) {
-                            viewModel.sendMessage(inputText.text)
-                            inputText = TextFieldValue("")
+                        if (!uncertainMcpChecking && uncertainMcpCall == null && (inputText.text.isNotBlank() || pendingImages.isNotEmpty())) {
+                            val submitted = inputText
+                            viewModel.sendMessage(submitted.text) {
+                                if (inputText == submitted) inputText = TextFieldValue("")
+                            }
                         }
                     },
                     onStopClick = {
                         viewModel.stopGeneration()
                     },
                     isGenerating = isGenerating,
+                    sendEnabled = !sendPreparing && !uncertainMcpChecking && uncertainMcpCall == null,
                     pendingImages = pendingImages,
                     isAttachingImage = isAttachingImage,
                     onAddClick = {
@@ -490,6 +514,25 @@ private fun MessengerChatScreen(
             } },
             dismissButton = { TextButton(onClick = { viewModel.respondToolApproval(false) }, enabled = !approvalBusy) {
                 Text(stringResource(Res.string.tools_approval_deny))
+            } },
+        )
+    }
+    uncertainMcpCall?.takeIf { showUncertainMcp }?.let { call ->
+        AlertDialog(
+            onDismissRequest = { if (!uncertainMcpBusy) showUncertainMcp = false },
+            title = { Text(stringResource(Res.string.mcp_uncertain_title)) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(stringResource(Res.string.mcp_uncertain_message, call.toolName))
+                if (!call.canAcknowledge) Text(stringResource(Res.string.mcp_uncertain_previous_owner))
+                Text(stringResource(Res.string.mcp_uncertain_arguments), style = MaterialTheme.typography.titleSmall)
+                Text(call.argumentsJson)
+                if (call.argumentsTruncated) Text(stringResource(Res.string.mcp_uncertain_truncated))
+            } },
+            confirmButton = { if (call.canAcknowledge) TextButton(onClick = { viewModel.acknowledgeUncertainMcpCall() }, enabled = !uncertainMcpBusy) {
+                Text(stringResource(Res.string.mcp_uncertain_acknowledge))
+            } },
+            dismissButton = { TextButton(onClick = { showUncertainMcp = false }, enabled = !uncertainMcpBusy) {
+                Text(stringResource(Res.string.mcp_uncertain_later))
             } },
         )
     }

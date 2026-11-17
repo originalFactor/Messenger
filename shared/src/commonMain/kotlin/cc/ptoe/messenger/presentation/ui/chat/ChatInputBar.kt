@@ -145,7 +145,8 @@ fun ChatInputBar(
     onSendLongClick: (() -> Unit)? = null,
     sendWhileGenerating: Boolean = false,
     hasAttachments: Boolean = false,
-    showFunctionPanel: Boolean = true
+    showFunctionPanel: Boolean = true,
+    sendEnabled: Boolean = true,
 ) {
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -173,7 +174,7 @@ fun ChatInputBar(
                 true
             } else {
                 // Bare Enter → send, if there's anything to send.
-                if (text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments) {
+                if (sendEnabled && (text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments)) {
                     onSendClick()
                 }
                 true
@@ -348,7 +349,7 @@ fun ChatInputBar(
                 }
             }
             if (!isGenerating || sendWhileGenerating) {
-                val canSend = text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments
+                val canSend = sendEnabled && (text.text.isNotBlank() || pendingImages.isNotEmpty() || hasAttachments)
                 Box(
                     modifier = Modifier.clip(CircleShape).size(48.dp)
                         .background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)

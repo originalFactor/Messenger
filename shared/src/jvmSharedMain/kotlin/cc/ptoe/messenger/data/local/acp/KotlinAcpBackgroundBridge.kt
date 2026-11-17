@@ -11,8 +11,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 internal fun roomAcpSettings(settings: JsonObject, modeWritable: Boolean = false, modePending: Boolean = false,
-    modeInspected: Boolean = false, modePendingId: String? = null, modeConfigId: String? = null): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+    modeInspected: Boolean = false, modePendingId: String? = null, modeConfigId: String? = null,
+    writableConfigIds: List<String> = emptyList()): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
     put("settingsWritable", false); put("steering", false); put("modeWritable", modeWritable); put("modePending", modePending)
+    put("writableConfigIds", JsonArray(writableConfigIds.map(::JsonPrimitive)))
     put("modeInspected", modeInspected); if (modePendingId != null) put("modePendingId", modePendingId)
     if (modeConfigId != null) put("modeConfigId", modeConfigId)
 }))

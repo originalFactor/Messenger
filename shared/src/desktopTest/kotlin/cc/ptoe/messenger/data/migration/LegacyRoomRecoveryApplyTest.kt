@@ -142,6 +142,89 @@ class LegacyRoomRecoveryApplyTest {
         } finally { f.root.toFile().deleteRecursively() }
     }
 
+    @Test fun offlineReviewReadsCommittedLegacyWalAndKeepsOriginalBytes(): Unit = runBlocking {
+        val f = fixture(); val owner = Owner()
+        try {
+            BundledSQLiteDriver().open(f.legacy.toString()).use { anchor ->
+                anchor.exec("PRAGMA journal_mode=WAL")
+                anchor.exec("PRAGMA wal_autocheckpoint=0")
+                anchor.exec("UPDATE projects SET workspace='/committed-wal' WHERE id='old'")
+                val sourceBefore = Files.readAllBytes(f.legacy)
+                val wal = f.root.resolve("legacy-snapshot.db-wal")
+                val walBefore = Files.readAllBytes(wal)
+                val result = LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, owner, ::room, { 10 }) { review ->
+                    assertTrue(owner.held)
+                    assertEquals("/committed-wal", review.source.projects.single { it.id == "old" }.legacy?.workspace)
+                    assertFalse(review.toString().contains("SECRET"))
+                    selection()
+                }
+                assertEquals(LegacyRecoveryApplied(1, 1, 1), result)
+                assertTrue(sourceBefore.contentEquals(Files.readAllBytes(f.legacy)))
+                assertTrue(walBefore.contentEquals(Files.readAllBytes(wal)))
+                val db = room(f.target)
+                try { assertEquals("/committed-wal", db.rows().project("old")?.workspace) } finally { db.close() }
+                Files.list(f.root).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().startsWith("legacy-recovery-") }) }
+            }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun offlineReviewRejectsChangedOriginalAndOverlappingSources(): Unit = runBlocking {
+        val f = fixture()
+        try {
+            var opened = false
+            assertFails { LegacyRoomRecoverySession.run(f.core, f.core, f.target, f.root, Owner(),
+                { opened = true; room(it) }, { 10 }) { selection() } }
+            assertFalse(opened)
+            BundledSQLiteDriver().open(f.legacy.toString()).use { anchor ->
+                assertFails { LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, Owner(), ::room, { 10 }) {
+                    anchor.exec("UPDATE projects SET workspace='/changed' WHERE id='old'")
+                    selection()
+                } }
+            }
+            val db = room(f.target)
+            try {
+                assertNull(db.rows().project("old"))
+                assertNull(db.rows().conversation("c")?.projectId)
+                assertEquals("chat", db.rows().provider("p")?.apiFormat)
+            } finally { db.close() }
+            Files.list(f.root).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().startsWith("legacy-recovery-") }) }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun offlineReviewPreservesNonemptyRollbackJournalForSeparateRecovery(): Unit = runBlocking {
+        val f = fixture()
+        try {
+            val journal = f.root.resolve("legacy-snapshot.db-journal")
+            val evidence = "legacy rollback evidence".toByteArray()
+            Files.write(journal, evidence)
+            var opened = false
+            val failure = assertFailsWith<IllegalStateException> {
+                LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, Owner(),
+                    { opened = true; room(it) }, { 10 }) { selection() }
+            }
+            assertTrue(failure.message.orEmpty().contains("rollback journal"))
+            assertFalse(opened)
+            assertTrue(evidence.contentEquals(Files.readAllBytes(journal)))
+            Files.list(f.root).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().startsWith("legacy-recovery-") }) }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun offlineReviewCancellationRemovesScratchWithoutApplying(): Unit = runBlocking {
+        val f = fixture()
+        try {
+            val original = Files.readAllBytes(f.legacy)
+            assertFailsWith<CancellationException> {
+                LegacyRoomRecoverySession.run(f.core, f.legacy, f.target, f.root, Owner(), ::room, { 10 }) {
+                    throw CancellationException("user cancelled review")
+                }
+            }
+            assertTrue(original.contentEquals(Files.readAllBytes(f.legacy)))
+            val db = room(f.target)
+            try { assertNull(db.rows().project("old")) } finally { db.close() }
+            Files.list(f.root).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().startsWith("legacy-recovery-") }) }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
     @Test fun destinationWalAliasToCoreSidecarIsRejectedBeforeRoomOpen(): Unit = runBlocking {
         val f = fixture()
         try {

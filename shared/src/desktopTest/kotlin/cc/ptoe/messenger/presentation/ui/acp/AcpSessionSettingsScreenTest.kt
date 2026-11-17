@@ -32,6 +32,44 @@ class AcpSessionSettingsScreenTest {
     }
 
     @Test
+    fun isolatedSelectOptionUsesOpaqueIdAndExplicitConfirmation() = runComposeUiTest {
+        val snapshot = mutableStateOf(JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modeWritable", false); put("modePending", false)
+            put("writableConfigIds", JsonArray(listOf(JsonPrimitive("access-policy"))))
+        })))
+        var submitted: JsonObject? = null
+        var confirmed: Pair<String, String>? = null
+        setContent { MaterialTheme { AcpSessionSettingsScreen(snapshot.value, false, {}, { submitted = it },
+            onConfirmPendingMode = { id, value -> confirmed = id to value }) } }
+        onNodeWithText("Read only").performClick()
+        onNodeWithText("Workspace write").performClick()
+        assertEquals("access-policy", submitted?.text("configId"))
+        assertEquals("project-write", submitted?.text("value"))
+        runOnIdle { snapshot.value = JsonObject(snapshot.value + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("modeWritable", false); put("modePending", true); put("modeInspected", true)
+            put("modePendingId", "marker"); put("modeConfigId", "access-policy")
+            put("writableConfigIds", JsonArray(listOf(JsonPrimitive("access-policy"))))
+        })) }
+        onNodeWithText("Read only").assertIsNotEnabled()
+        onNodeWithText("Current setting: sandbox. Confirm it before continuing.").assertExists()
+        onNodeWithText("Confirm current setting").performClick()
+        assertEquals("marker" to "sandbox", confirmed)
+    }
+
+    @Test
+    fun isolatedComposerEnablesOnlyAdvertisedSelectIds() = runComposeUiTest {
+        val snapshot = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+            put("settingsWritable", false); put("writableConfigIds", JsonArray(listOf(JsonPrimitive("access-policy"))))
+        }))
+        var submitted: JsonObject? = null
+        setContent { MaterialTheme { AcpSessionControls(snapshot, false) { submitted = it } } }
+        onNodeWithText("Permissions: Read only").performClick()
+        onNodeWithText("Workspace write").performClick()
+        assertEquals("access-policy", submitted?.text("configId"))
+        assertEquals("project-write", submitted?.text("value"))
+    }
+
+    @Test
     fun aPendingSettingRequestDisablesItsSelectionControls() = runComposeUiTest {
         setContent { MaterialTheme { AcpSessionSettingsScreen(settings, true, {}, {}) } }
         onNodeWithText("Read only").assertIsNotEnabled()

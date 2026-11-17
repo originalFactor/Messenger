@@ -28,9 +28,12 @@ internal class KotlinMcpToolAdapter(
     private val conversationId: String,
     private val manager: McpManager,
     private val inventory: McpInventorySnapshot,
+    private val selectedNames: Set<String> = inventory.tools.map { it.name }.toSet(),
     private val store: () -> RoomKotlinTurnStore,
 ) : KotlinToolCatalog, KotlinTurnToolPolicy, KotlinTurnToolExecutor {
-    private val tools = inventory.tools
+    private val tools = inventory.tools.filter { it.name in selectedNames }.also {
+        require(it.map { tool -> tool.name }.toSet() == selectedNames) { "Selected MCP tools are unavailable" }
+    }
     private val grant = KotlinMcpToolGrant(conversationId, tools.map { it.binding() })
     private val authority = RuntimeWorkspaceFence.forDatabase(db)
     private val device = RoomDeviceControlFence.forDao(db.cloudSync())

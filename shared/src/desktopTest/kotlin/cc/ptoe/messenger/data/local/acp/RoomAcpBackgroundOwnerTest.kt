@@ -261,6 +261,78 @@ class RoomAcpBackgroundOwnerTest {
         checkInterruptedMode(option = false)
     }
 
+    @Test fun genericSelectUsesRealAgentAndRequiresInspectionBeforeConfirmation(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-generic-select")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val initial = owner.sessionSettings(binding.conversationId)
+            assertEquals(listOf("permissions"), initial.getValue("_messengerCapabilities").jsonObject.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
+            assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "network", "true") {} }
+            assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, "permissions", "not-offered") {} }
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
+                arrayOf(CoreBridge::class.java)) { _, _, _ -> error("Unexpected delegate call") })
+            val bridge = KotlinAcpBackgroundBridge(delegate, owner, AcpNewSessionSource { _, _ -> error("Unexpected creation") })
+            var changed: JsonObject? = null
+            withTimeout(10_000) { bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                put("action", "setSessionConfig"); put("sessionId", binding.conversationId)
+                put("configId", "permissions"); put("value", "workspace-write")
+            }) { changed = it.getValue("settings").jsonObject } }
+            val flags = checkNotNull(changed).getValue("_messengerCapabilities").jsonObject
+            assertEquals("workspace-write", checkNotNull(changed).getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertEquals("permissions", flags.getValue("modeConfigId").jsonPrimitive.content)
+            assertTrue(flags.getValue("writableConfigIds").jsonArray.isEmpty())
+            val marker = flags.getValue("modePendingId").jsonPrimitive.content
+            assertFailsWith<IllegalStateException> { owner.confirmPendingMode(binding.conversationId, marker, "workspace-write") {} }
+            val inspected = owner.inspectPendingMode(binding.conversationId) {}
+            assertEquals("read-only", inspected.getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertTrue(RoomAcpModeLedger(db).pending(binding.conversationId))
+            owner.confirmPendingMode(binding.conversationId, marker, "read-only") {}
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun ambiguousOrUnsupportedConfigOptionsAreNotAdvertisedOrDispatched(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-select-validation")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val calls = AtomicInteger()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) = AcpWorkerReady(true, binding.agentSessionId)
+                override suspend fun sessionSettings() = kotlinx.serialization.json.Json.parseToJsonElement("""{"configOptions":[
+                    {"id":"model","type":"select","category":"model","currentValue":"a","options":[{"value":"a"},{"value":"b"}]},
+                    {"id":"duplicate","type":"select","currentValue":"a","options":[{"value":"a"}]},
+                    {"id":"duplicate","type":"select","currentValue":"b","options":[{"value":"b"}]},
+                    {"id":"bad-value","type":"select","currentValue":"a","options":[{"value":true}]},
+                    {"id":"switch","type":"boolean","currentValue":false}
+                ]}""").jsonObject
+                override suspend fun setModeOption(configId: String, value: String, permit: () -> Unit): JsonObject {
+                    permit(); calls.incrementAndGet(); return sessionSettings()
+                }
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() = Unit
+            } })
+            val flags = owner.sessionSettings(binding.conversationId).getValue("_messengerCapabilities").jsonObject
+            assertEquals(listOf("model"), flags.getValue("writableConfigIds").jsonArray.map { it.jsonPrimitive.content })
+            for (id in listOf("duplicate", "bad-value", "switch")) {
+                assertFailsWith<IllegalStateException> { owner.setModeOption(binding.conversationId, id, "a") {} }
+            }
+            assertEquals(0, calls.get())
+            assertFalse(RoomAcpModeLedger(db).pending(binding.conversationId))
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun interruptedModeOptionSurvivesRestartUntilUserInspectsThatOption(): Unit = runBlocking {
         checkInterruptedMode(option = true)
     }

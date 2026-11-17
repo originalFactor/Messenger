@@ -77,6 +77,8 @@ class RoomKotlinTurnStoreTest {
                     override fun mcpToolGrant() = grant
                 }
                 val store = RoomKotlinTurnStore(db, mcpPreparer, policy)
+                assertIs<KotlinTurnAdmission.Rejected>(store.admit(KotlinTurnCommand.Send("c", "scheduled", null, scheduledRun = true)))
+                assertTrue(rows.messagesFor(listOf("c")).isEmpty())
                 val id = assertIs<KotlinTurnAdmission.Accepted>(store.admit(KotlinTurnCommand.Send("c", "hi", null))).turnId
                 assertTrue(store.claim(id, false)); store.beginProvider(id)
                 val call = ToolCallData("call", binding.name, "{}")

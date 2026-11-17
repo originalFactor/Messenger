@@ -117,9 +117,11 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) {
                 if (change != null && (settings["_messengerCapabilities"] as? JsonObject)?.containsKey("modeWritable") == true) {
-                    val capabilities = (settings["_messengerCapabilities"] as? JsonObject).orEmpty()
-                    settings = JsonObject(settings + ("_messengerCapabilities" to JsonObject(capabilities + mapOf(
-                        "modeWritable" to JsonPrimitive(false), "modePending" to JsonPrimitive(true)))))
+                    val capabilities = (settings["_messengerCapabilities"] as? JsonObject).orEmpty() - setOf("modePendingId", "modeConfigId")
+                    val pending = capabilities + mapOf("modeWritable" to JsonPrimitive(false), "modePending" to JsonPrimitive(true),
+                        "modeInspected" to JsonPrimitive(false), "writableConfigIds" to JsonArray(emptyList())) +
+                        (change["configId"]?.let { mapOf("modeConfigId" to it) } ?: emptyMap())
+                    settings = JsonObject(settings + ("_messengerCapabilities" to JsonObject(pending)))
                 }
                 settingsError = failure.message.orEmpty()
                 report(failure.message.orEmpty())
@@ -408,7 +410,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                         } }
                     }
                     if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    if (modePending) TextButton(onClick = { showSettings = true }) { Text(stringResource(Res.string.acp_mode_uncertain)) }
+                    if (modePending) TextButton(onClick = { showSettings = true }) { Text(stringResource(Res.string.acp_setting_uncertain)) }
                     if (queuePaused && queue.isNotEmpty()) TextButton(onClick = { queuePaused = false }) { Text(stringResource(Res.string.acp_resume_queue)) }
                     queue.forEach { queued -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(queued.text.ifBlank { queued.attachments.joinToString { it.name } }, Modifier.weight(1f), maxLines = 2)

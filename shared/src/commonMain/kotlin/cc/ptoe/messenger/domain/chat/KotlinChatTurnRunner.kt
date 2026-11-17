@@ -120,6 +120,8 @@ interface KotlinTurnStore {
     suspend fun decideRemoteApproval(scope: KotlinRemoteControlScope, conversationId: String, turnId: String, callId: String, allow: Boolean) { error("Remote approval unavailable") }
     suspend fun beginTool(turnId: String): ToolCallData
     suspend fun completeTool(turnId: String, call: ToolCallData, result: ToolExecutionResult)
+    /** Store a completed MCP response before cancellation can discard it. */
+    suspend fun completeMcpTool(turnId: String, call: ToolCallData, result: ToolExecutionResult): Boolean = false
     /** Atomically reject a proven undispatched Runtime call; fail closed if the claim is uncertain. */
     suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { error("Undispatched Runtime rejection unavailable") }
     /** Return true only when the exact Core call is atomically proven not to have been claimed. */
@@ -370,8 +372,13 @@ class KotlinChatTurnRunner(
                     // Some platform operations cannot acknowledge cancellation. Wait for the
                     // invocation to return before releasing its conversation reservation.
                     currentCoroutineContext().ensureActive()
+                    var mcpCompleted = false
                     val result = withContext(NonCancellable) {
-                        try { tools.execute(turnId, call) }
+                        try {
+                            val result = tools.execute(turnId, call)
+                            mcpCompleted = store.completeMcpTool(turnId, call, result)
+                            if (mcpCompleted) null else result
+                        }
                         catch (rejected: RuntimeToolNotDispatchedException) {
                             store.rejectUndispatchedRuntimeTool(turnId, call, rejected.message ?: "Runtime tool was not dispatched")
                             null
@@ -389,7 +396,9 @@ class KotlinChatTurnRunner(
                                 store.rejectUnclaimedMcpTool(turnId, call, failure.message ?: "MCP tool failed")) null
                             else throw failure
                         }
-                    } ?: return
+                    }
+                    if (mcpCompleted) continue
+                    if (result == null) return
                     currentCoroutineContext().ensureActive()
                     store.completeTool(turnId, call, result)
                 }

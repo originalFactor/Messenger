@@ -11,6 +11,15 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.core.CoreBridgeRegistry
 import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.TurnConfigBridge
+import cc.ptoe.messenger.core.ToolSpecBridge
+import cc.ptoe.messenger.data.chat.ACKNOWLEDGED_MCP_UNCERTAINTY
+import cc.ptoe.messenger.data.chat.KotlinProviderRequestPreparer
+import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
+import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
+import cc.ptoe.messenger.data.chat.PreviousChatWorkersStopped
+import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
+import cc.ptoe.messenger.data.remote.sse.ToolCallData
+import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ChatImageStore
 import cc.ptoe.messenger.data.local.ThemePreferences
@@ -32,6 +41,7 @@ import cc.ptoe.messenger.domain.model.MessageStatus
 import cc.ptoe.messenger.domain.model.Provider
 import cc.ptoe.messenger.domain.mcp.McpProcessBridge
 import cc.ptoe.messenger.domain.mcp.JsonRpcRequest
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
 import com.sun.net.httpserver.HttpServer
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
@@ -39,11 +49,17 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -60,6 +76,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class KotlinRoomAppBackendTest {
     private class MemoryPreferences : DataStore<Preferences> {
@@ -67,6 +85,191 @@ class KotlinRoomAppBackendTest {
         override val data: Flow<Preferences> = state
         override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
             transform(state.value).also { state.value = it }
+    }
+
+    @Test fun optedInRoomContainerExecutesMcpAndRequiresExplicitUnknownAcknowledgement(): Unit = runBlocking {
+        for (scenario in listOf("success", "unknown", "restart-unknown", "cancel-after-send", "config-after-selection")) {
+            val unknown = scenario == "unknown" || scenario == "restart-unknown"
+            val cancelAfterSend = scenario == "cancel-after-send"
+            val dir = Files.createTempDirectory("room-mcp-container")
+            val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+            val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+            val prefs = MemoryPreferences()
+            val preferences = AppPreferences(prefs)
+            val calls = AtomicInteger()
+            val foregroundEnds = AtomicInteger()
+            val cleanupEntered = CompletableDeferred<Unit>()
+            val releaseCleanup = CountDownLatch(1)
+            val enteredResponse = CompletableDeferred<Unit>()
+            val releaseResponse = CompletableDeferred<Unit>()
+            val selectionEntered = CompletableDeferred<Unit>()
+            val releaseSelection = CompletableDeferred<Unit>()
+            val previousBegin = ForegroundTaskRegistry.begin
+            val previousEnd = ForegroundTaskRegistry.end
+            if (unknown) {
+                ForegroundTaskRegistry.begin = {}
+                ForegroundTaskRegistry.end = {
+                    if (foregroundEnds.incrementAndGet() == 2) { cleanupEntered.complete(Unit); releaseCleanup.await() }
+                }
+            }
+            val requests = AtomicInteger()
+            val providerRequests = mutableListOf<cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto>()
+            var reply: ((String) -> Unit)? = null
+            val factory = { object : McpProcessBridge {
+                override suspend fun startProcess(command: String, env: Map<String, String>, onLine: (String) -> Unit,
+                    onError: (String) -> Unit, onClose: (Int) -> Unit): Boolean { reply = onLine; return true }
+                override suspend fun sendLine(line: String): Boolean {
+                    val request = Json.decodeFromString<JsonRpcRequest>(line)
+                    val id = request.id ?: return true
+                    when (request.method) {
+                        "initialize" -> reply?.invoke("""{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
+                        "tools/list" -> reply?.invoke("""{"jsonrpc":"2.0","id":$id,"result":{"tools":[{"name":"work","inputSchema":{"type":"object"}},{"name":"hidden","inputSchema":{"type":"object"}}]}}""")
+                        "tools/call" -> {
+                            calls.incrementAndGet()
+                            if (cancelAfterSend) { enteredResponse.complete(Unit); releaseResponse.await() }
+                            val result = if (unknown) """{"content":[{"type":"text"}]}""" else """{"content":[{"type":"text","text":"worked"}]}"""
+                            reply?.invoke("""{"jsonrpc":"2.0","id":$id,"result":$result}""")
+                        }
+                    }
+                    return true
+                }
+                override suspend fun close() {}
+            } }
+            val provider = KotlinTurnProvider { _, request -> flow {
+                synchronized(providerRequests) { providerRequests.add(request) }
+                if (requests.getAndIncrement() == 0) emit(ChatStreamEvent.Done("tool_calls", toolCalls = listOf(ToolCallData("call-1", "Server_work", """{"path":"private-test"}"""))))
+                else { emit(ChatStreamEvent.Content("answer")); emit(ChatStreamEvent.Done("stop")) }
+            } }
+            var container: AppContainer? = null
+            try {
+                RoomAgentRepository(db).ensureDefaultAgent(Agent("a", "Agent", systemPrompt = "prompt", defaultModelId = "m",
+                    temperature = 0.7f, topP = 1f, maxTokens = null, toolsEnabled = true, isDefault = true, createdAt = 1, updatedAt = 1))
+                preferences.setMcpServersJson("""[{"id":"server","name":"Server","transportType":"STDIO","command":"fake"}]""")
+                val slice = KotlinRoomBackendSlice.attach(db, lifecycle, preferences, ThemePreferences(prefs), Files.createDirectory(dir.resolve("assets")),
+                    dir.resolve("avatars"), dir.resolve("images"), turnProvider = provider,
+                    mcpConnections = IsolatedRoomMcpConfig(factory, enableExecution = true, afterSelection = {
+                        if (scenario == "config-after-selection") { selectionEntered.complete(Unit); releaseSelection.await() }
+                    }))
+                val images = ChatImageStore::class.java.cast(Proxy.newProxyInstance(ChatImageStore::class.java.classLoader,
+                    arrayOf(ChatImageStore::class.java)) { _, _, _ -> null })
+                val app = AppContainer(AppDirs(dir.toString().toPath(), dir.resolve("cache").toString().toPath()), images, slice.asAppBackend())
+                container = app
+                app.providerRepository.insert(Provider("p", "Provider", "https://example.test", "key", createdAt = 1, updatedAt = 1))
+                app.modelRepository.insert(ChatModel("m", "p", "model", "Model", true, supportsToolCalling = true, createdAt = 1))
+                app.conversationRepository.insert(Conversation("c", "Chat", "p", "a", createdAt = 1, updatedAt = 1, lastMessage = null))
+                withTimeout(5_000) { app.mcpManager.toolInventoryReady.first { it } }
+                val tool = app.availableTools(null).single { it.name == "Server_work" }
+                val config = TurnConfigBridge("c", "model", "", "", "chat", "", null, null, null, null,
+                    listOf(tool.name), false, 0, "", null, null, null, false, "",
+                    tools = listOf(ToolSpecBridge(tool.name, tool.description, tool.parametersJson)), operation = "send", content = "hello",
+                    disableTools = false, supportsToolApproval = true)
+                if (scenario == "config-after-selection") {
+                    val starting = async { runCatching { app.coreBridge.startBackgroundTurn(config) } }
+                    withTimeout(5_000) { selectionEntered.await() }
+                    app.mcpManager.saveServers(emptyList())
+                    releaseSelection.complete(Unit)
+                    assertTrue(withTimeout(5_000) { starting.await() }.isFailure)
+                    assertEquals(0, calls.get()); assertEquals(0, requests.get())
+                    assertTrue(app.messageRepository.getByConversationId("c").first().isEmpty())
+                    continue
+                }
+                app.coreBridge.startBackgroundTurn(config)
+                val approval = CompletableDeferred<Unit>()
+                val observer = async { app.coreBridge.observeBackgroundTurn("c") { event ->
+                    if (Json.parseToJsonElement(event).jsonObject["type"]?.jsonPrimitive?.content == "ToolApprovalRequested") approval.complete(Unit)
+                } }
+                withTimeout(5_000) { approval.await() }
+                assertEquals(0, calls.get())
+                assertTrue(synchronized(providerRequests) { providerRequests.first().tools.orEmpty().map { it.function.name } }.contains("Server_work"))
+                assertFalse(synchronized(providerRequests) { providerRequests.first().tools.orEmpty().map { it.function.name } }.contains("Server_hidden"))
+                app.coreBridge.respondToolApproval("call-1", true)
+                if (cancelAfterSend) {
+                    withTimeout(5_000) { enteredResponse.await() }
+                    app.coreBridge.cancelBackgroundTurn("c")
+                    releaseResponse.complete(Unit)
+                }
+                withTimeout(5_000) { observer.await() }
+                assertEquals(1, calls.get())
+                if (unknown) {
+                    withTimeout(5_000) { cleanupEntered.await() }
+                    val pending = async(Dispatchers.Default) { app.coreBridge.uncertainMcpCall("c") }
+                    assertNull(withTimeoutOrNull(150) { pending.await() })
+                    releaseCleanup.countDown()
+                    val uncertain = assertNotNull(withTimeout(5_000) { pending.await() })
+                    assertEquals("Server_work", uncertain.toolName)
+                    assertEquals("""{"path":"private-test"}""", uncertain.argumentsJson)
+                    assertFalse(uncertain.toString().contains("private-test"))
+                    assertTrue(uncertain.canAcknowledge)
+                    val previousOwner = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false })
+                    val oldView = assertNotNull(previousOwner.uncertainMcpCall("c"))
+                    assertFalse(oldView.canAcknowledge)
+                    assertEquals(uncertain.argumentsJson, oldView.argumentsJson)
+                    assertFailsWith<IllegalStateException> { previousOwner.acknowledgeUncertainMcpCall("c", oldView.turnId, oldView.callId) }
+                    if (scenario == "restart-unknown") {
+                        app.shutdown()
+                        container = null
+                        val nextLifecycle = RoomManagedShutdown { }; nextLifecycle.enter()
+                        var nextContainer: AppContainer? = null
+                        try {
+                            val reopened = KotlinRoomBackendSlice.attach(db, nextLifecycle, preferences, ThemePreferences(prefs),
+                                dir.resolve("assets"), dir.resolve("avatars"), dir.resolve("images"),
+                                previousChatWorkersStopped = PreviousChatWorkersStopped {})
+                            nextContainer = AppContainer(AppDirs(dir.toString().toPath(), dir.resolve("cache").toString().toPath()), images, reopened.asAppBackend())
+                            val pendingFromPrevious = assertNotNull(nextContainer.coreBridge.uncertainMcpCall("c"))
+                            assertFalse(pendingFromPrevious.canAcknowledge)
+                            assertEquals(uncertain.argumentsJson, pendingFromPrevious.argumentsJson)
+                            assertFailsWith<IllegalStateException> { nextContainer.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId) }
+                            assertNotNull(db.rows().getValue("kotlin_turn_active_v1:c"))
+                        } finally { nextContainer?.shutdown(); nextLifecycle.stopAndAwait() }
+                        continue
+                    }
+                    assertFailsWith<IllegalStateException> { app.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, "wrong") }
+                    val historyBefore = app.messageRepository.getByConversationId("c").first()
+                    for (operation in listOf("send", "retry", "regenerate")) {
+                        assertFailsWith<IllegalStateException> { app.coreBridge.startBackgroundTurn(config.copy(operation = operation, messageId = historyBefore.last().id)) }
+                        assertEquals(uncertain, app.coreBridge.uncertainMcpCall("c"))
+                    }
+                    assertEquals(historyBefore, app.messageRepository.getByConversationId("c").first())
+                    db.useWriterConnection { connection -> connection.usePrepared("CREATE TRIGGER reject_mcp_audit BEFORE INSERT ON kv WHEN NEW.`key` LIKE 'kotlin_mcp_uncertainty_ack_v1:%' BEGIN SELECT RAISE(ABORT, 'audit write failed'); END") { it.step() } }
+                    assertFailsWith<Exception> { app.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId) }
+                    assertEquals(uncertain, app.coreBridge.uncertainMcpCall("c"))
+                    assertNull(db.rows().getValue(ACKNOWLEDGED_MCP_UNCERTAINTY + uncertain.turnId))
+                    db.useWriterConnection { connection -> connection.usePrepared("DROP TRIGGER reject_mcp_audit") { it.step() } }
+                    app.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId)
+                    assertNull(app.coreBridge.uncertainMcpCall("c"))
+                    val audit = assertNotNull(db.rows().getValue(ACKNOWLEDGED_MCP_UNCERTAINTY + uncertain.turnId))
+                    assertTrue(audit.value.contains("Server_work"))
+                    assertFalse(audit.value.contains("private-test"))
+                    assertFailsWith<IllegalStateException> { app.coreBridge.acknowledgeUncertainMcpCall("c", uncertain.turnId, uncertain.callId) }
+                    app.coreBridge.startBackgroundTurn(config.copy(content = "next"))
+                    withTimeout(5_000) { app.coreBridge.observeBackgroundTurn("c") {} }
+                    val next = synchronized(providerRequests) { providerRequests.last() }
+                    assertTrue(next.messages.none { it.role == "tool" || !it.toolCalls.isNullOrEmpty() })
+                    assertEquals(1, calls.get())
+                } else if (cancelAfterSend) {
+                    assertNull(app.coreBridge.uncertainMcpCall("c"))
+                    assertTrue(app.messageRepository.getByConversationId("c").first().any { it.role == MessageRole.TOOL && it.content == "worked" })
+                    assertEquals(1, requests.get())
+                } else {
+                    assertNull(app.coreBridge.uncertainMcpCall("c"))
+                    assertTrue(app.messageRepository.getByConversationId("c").first().any { it.content == "worked" })
+                    assertEquals(2, requests.get())
+                    app.conversationRepository.insert(Conversation("empty", "Chat", "p", "a", createdAt = 1, updatedAt = 1, lastMessage = null))
+                    app.mcpManager.shutdown()
+                    app.coreBridge.startBackgroundTurn(config.copy(conversationId = "empty", toolNames = emptyList(), tools = emptyList(), content = "without MCP"))
+                    withTimeout(5_000) { app.coreBridge.observeBackgroundTurn("empty") {} }
+                    val withoutMcp = synchronized(providerRequests) { providerRequests.last() }
+                    assertTrue(withoutMcp.tools.orEmpty().none { it.function.name.startsWith("Server_") })
+                }
+            } finally {
+                releaseCleanup.countDown()
+                releaseResponse.complete(Unit)
+                releaseSelection.complete(Unit)
+                container?.shutdown(); lifecycle.stopAndAwait()
+                ForegroundTaskRegistry.begin = previousBegin; ForegroundTaskRegistry.end = previousEnd
+                db.close(); dir.toFile().deleteRecursively()
+            }
+        }
     }
 
     @Test fun optionalMcpManagerHasOneRoomOwnerAndCannotDispatchKotlinTools(): Unit = runBlocking {

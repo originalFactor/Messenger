@@ -102,6 +102,10 @@ data class KotlinTurnFailure(
 @Serializable
 private data class StoredTurnFailure(val turnId: String, val detail: String, val conversationId: String? = null)
 
+@Serializable
+private data class AcknowledgedMcpUncertainty(val conversationId: String, val turnId: String, val callId: String,
+    val serverIdHash: String, val toolName: String, val acknowledgedAt: Long)
+
 /** Platform evidence that every previous native chat worker and its side effects have stopped. */
 internal fun interface PreviousChatWorkersStopped {
     suspend fun verify()
@@ -113,6 +117,7 @@ private const val ACTIVE = ACTIVE_TURN_KEY_PREFIX
 private const val LATEST = "kotlin_turn_latest_v1:"
 private const val LEGACY_NOTICE = "kotlin_turn_error_v1:"
 private const val NOTICE = "kotlin_turn_error_v2:"
+internal const val ACKNOWLEDGED_MCP_UNCERTAINTY = "kotlin_mcp_uncertainty_ack_v1:"
 private const val APPROVAL_SETTINGS_REVISION = "kotlin_tool_approval_settings_revision_v1"
 private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
 
@@ -417,6 +422,9 @@ class RoomKotlinTurnStore(
         return id.takeUnless { db.rows().read(it).phase() in terminal }
     }
 
+    /** Includes interrupted calls, whose durable reservation must not be displaced. */
+    internal suspend fun reservedTurn(conversationId: String): String? = db.rows().getValue(ACTIVE + conversationId)?.value
+
     /** Observes both the state row and the message table, which changes on every streamed chunk. */
     fun observePresentation(turnId: String, conversationId: String): Flow<KotlinTurnPresentation> =
         combine(db.rows().observeValue(TURN + turnId), db.rows().observeMessages(conversationId)) { _, _ ->
@@ -718,6 +726,28 @@ class RoomKotlinTurnStore(
         rows.completeToolResult(turn, call, result)
         mark(turn.conversationId)
     } }
+
+    override suspend fun completeMcpTool(turnId: String, call: ToolCallData, result: ToolExecutionResult): Boolean = transaction { rows, mark ->
+        val turn = rows.read(turnId)
+        if (turn.mcpGrant?.tools?.none { it.name == call.name } != false) return@transaction false
+        turn.requireOwner()
+        check(turn.mcpOwner == owner && turn.invocationStarted &&
+            turn.phase() in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) &&
+            turn.calls.getOrNull(turn.index)?.domain() == call && rows.getValue(ACTIVE + turn.conversationId)?.value == turnId) {
+            "MCP result does not match the claimed invocation"
+        }
+        if (turn.phase() == KotlinTurnPhase.CANCELLING_TOOL) {
+            val assistant = checkNotNull(rows.message(turn.assistantId))
+            val part = ContentPart.ToolResult(call.callId, call.name, result.output, result.isError, result.structuredContent)
+            rows.upsertMessages(listOf(assistant.copy(status = "sent"), MessageRow(randomUuid(), turn.conversationId, "tool", result.output,
+                ContentPartCodec.encode(listOf(part)), rows.nextMessageTimestamp(turn.conversationId), "sent", null)))
+            rows.write(turn.copy(phase = KotlinTurnPhase.CANCELLED.name))
+            rows.deleteValue(ACTIVE + turn.conversationId)
+            rows.refreshConversationPreview(turn.conversationId)
+        } else rows.completeToolResult(turn, call, result)
+        mark(turn.conversationId)
+        true
+    }
     override suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { transaction { rows, mark ->
         val turn = rows.read(turnId); turn.requireOwner()
         check(turn.phase() in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) &&
@@ -927,6 +957,41 @@ class RoomKotlinTurnStore(
     suspend fun coreToolGrant(turnId: String): KotlinCoreToolGrant? = db.rows().read(turnId).coreGrant
     internal suspend fun mcpToolGrant(turnId: String): KotlinMcpToolGrant? = db.rows().read(turnId).let {
         it.mcpGrant.takeIf { _ -> it.mcpOwner == owner }
+    }
+
+    /** Previous-owner calls are visible but cannot be acknowledged without a local stop proof. */
+    internal suspend fun uncertainMcpCall(conversationId: String): UncertainMcpCall? {
+        val rows = db.rows()
+        val turnId = rows.getValue(ACTIVE + conversationId)?.value ?: return null
+        val turn = rows.read(turnId)
+        if (turn.conversationId != conversationId || turn.mcpOwner == null ||
+            turn.phase() != KotlinTurnPhase.INTERRUPTED_TOOL || !turn.invocationStarted) return null
+        val call = turn.calls.getOrNull(turn.index)?.domain() ?: return null
+        if (turn.mcpGrant?.let { it.conversationId == conversationId && it.tools.count { binding -> binding.name == call.name } == 1 } != true) return null
+        return UncertainMcpCall(turnId, call.callId, call.name, call.arguments.take(16_384),
+            argumentsTruncated = call.arguments.length > 16_384, canAcknowledge = turn.mcpOwner == owner)
+    }
+
+    /** Acknowledgement records uncertainty, not completion, and never invokes the remote tool. */
+    internal suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String) {
+        transaction { rows, _ ->
+            val turn = rows.read(turnId)
+            check(turn.conversationId == conversationId && turn.mcpOwner == owner && turn.owner == null &&
+                turn.phase() == KotlinTurnPhase.INTERRUPTED_TOOL && turn.invocationStarted &&
+                rows.getValue(ACTIVE + conversationId)?.value == turnId) { "Uncertain MCP call changed" }
+            val call = turn.calls.getOrNull(turn.index)?.domain() ?: error("Uncertain MCP call is unavailable")
+            check(call.callId == callId) { "Uncertain MCP call changed" }
+            val binding = turn.mcpGrant?.takeIf { it.conversationId == conversationId }?.tools?.singleOrNull { it.name == call.name }
+                ?: error("Uncertain MCP grant is unavailable")
+            val key = ACKNOWLEDGED_MCP_UNCERTAINTY + turnId
+            check(rows.getValue(key) == null) { "MCP uncertainty is already acknowledged" }
+            val serverIdHash = java.security.MessageDigest.getInstance("SHA-256").digest(binding.serverId.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            rows.upsertValues(listOf(KeyValueRow(key, json.encodeToString(AcknowledgedMcpUncertainty(
+                conversationId, turnId, callId, serverIdHash, call.name, clock())))))
+            rows.write(turn.copy(phase = KotlinTurnPhase.FAILED.name))
+            rows.deleteValue(ACTIVE + conversationId)
+        }
     }
     private suspend fun LocalRowsDao.requireActiveDelegation(parent: KotlinDelegationParent, childId: String, admitted: Boolean): StoredTurn {
         val turn = read(parent.turnId)

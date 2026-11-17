@@ -108,6 +108,7 @@ internal class KotlinRoomBackendSlice private constructor(
     val artifactUiHost: ArtifactUiHost?,
     val deviceHost: IsolatedRoomDeviceHost?,
     private val mcpOwner: McpManagerOwner?,
+    private val mcpExecutionEnabled: Boolean,
 ) {
     /** Experimental only: never expose this backend to production until parity is established. */
     fun asAppBackend(): AppBackend {
@@ -119,7 +120,7 @@ internal class KotlinRoomBackendSlice private constructor(
             currentAgent, learning, shutdown = { shutdownOwner.stopAndAwait() },
             clearLocalData = { error("Room clear/reset is unavailable until all owners and retained data can be safely cleared") },
             artifactUiHost = artifactUiHost, platformToolsEnabled = false,
-            mcpOwner = mcpOwner, mcpExecutionEnabled = false,
+            mcpOwner = mcpOwner, mcpExecutionEnabled = mcpExecutionEnabled,
             turnFailureNotices = TurnFailureNotices(turnStore.observeFailures().map { failures ->
                 failures.map { TurnFailureNotice(it.noticeId, it.turnId, it.detail, it.conversationId, it.conversationTitle) }
             }, { notice -> turnStore.acknowledgeFailure(notice.noticeId, notice.detail) }))
@@ -232,8 +233,11 @@ internal class KotlinRoomBackendSlice private constructor(
             val scheduledBridge = scheduledTasks?.let { ScheduledCoreBridge(media, RoomScheduledTaskBridge(it)) } ?: media
             val processJob = SupervisorJob()
             val processScope = CoroutineScope(processJob + Dispatchers.IO)
+            var ownedMcpManager: McpManager? = null
             val rawBridge = IsolatedCoreTurnBridge(scheduledBridge, db, learningOwnership, artifacts, cloud.providerGate,
-                processScope, now, modelImageTool, provider = turnProvider, lifecycle = composition.chatLifecycle)
+                processScope, now, modelImageTool, provider = turnProvider, lifecycle = composition.chatLifecycle,
+                mcpManager = { if (mcpConnections?.enableExecution == true) ownedMcpManager else null },
+                afterMcpSelection = mcpConnections?.afterSelection ?: {})
             val admissions = PartialChatCalls()
             val bridge = PartialChatBridge(rawBridge, processJob, scheduledTasks, imageOwner, sharedImageService, acpOwner, admissions)
             try { withContext(NonCancellable) { shutdown.registerStop { bridge.shutdown() } } }
@@ -244,6 +248,7 @@ internal class KotlinRoomBackendSlice private constructor(
             composition.bindChatWorkers(processJob)
             val mcpOwner = mcpConnections?.let { config ->
                 val manager = McpManager(appPreferences, bridgeProvider = { bridge }, startImmediately = false, bridgeFactory = config.bridgeFactory)
+                ownedMcpManager = manager
                 val owner = McpManagerOwner(manager, appPreferences) { shutdown.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running }
                 try {
                     withContext(NonCancellable) {
@@ -265,13 +270,14 @@ internal class KotlinRoomBackendSlice private constructor(
             val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it, remoteCancel = rawBridge.remoteCancel) }
             return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
-                artifactHost, attachedDeviceHost, mcpOwner)
+                artifactHost, attachedDeviceHost, mcpOwner, mcpConnections?.enableExecution == true)
         }
     }
 }
 
-/** Explicit opt-in to connection management only; Kotlin MCP dispatch remains unavailable. */
-internal class IsolatedRoomMcpConfig(val bridgeFactory: () -> McpProcessBridge = ::createPlatformMcpBridge)
+/** Explicitly isolated test owner; platform startup must not enable execution without parity. */
+internal class IsolatedRoomMcpConfig(val bridgeFactory: () -> McpProcessBridge = ::createPlatformMcpBridge,
+    val enableExecution: Boolean = false, internal val afterSelection: suspend () -> Unit = {})
 
 /** Tracks bridge calls separately from workers so shutdown cannot race turn admission. */
 private class PartialChatBridge(
@@ -301,6 +307,10 @@ private class PartialChatBridge(
     }
     override suspend fun respondToolApproval(callId: String, approved: Boolean) = admitted { delegate.respondToolApproval(callId, approved) }
     override suspend fun toolApprovalSettings(method: String, body: String?) = admitted { delegate.toolApprovalSettings(method, body) }
+    override val supportsUncertainMcpCalls: Boolean get() = !calls.isClosing && delegate.supportsUncertainMcpCalls
+    override suspend fun uncertainMcpCall(conversationId: String) = admitted { delegate.uncertainMcpCall(conversationId) }
+    override suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String) =
+        admitted { delegate.acknowledgeUncertainMcpCall(conversationId, turnId, callId) }
     override suspend fun hasActiveTasks() = admitted {
         delegate.hasActiveTasks() || scheduledTasks?.hasActiveRuns() == true || imageOwner?.hasActiveJobs() == true || acpOwner?.hasActiveTasks() == true
     }

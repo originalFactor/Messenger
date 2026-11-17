@@ -113,6 +113,7 @@ class RoomDeviceControlDispatcherTest {
             assertEquals("project_unavailable", dispatcher.request("history", "no-project").text("code"))
             assertEquals("History", dispatcher.request("history", "acp:one").text("type"))
             assertEquals("unavailable", dispatcher.request("create").text("code"))
+            assertEquals("bad_request", dispatcher.request("acknowledgeUncertainMcpCall", "local-chat").text("code"))
         }
     }
 

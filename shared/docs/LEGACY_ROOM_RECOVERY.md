@@ -69,3 +69,21 @@ Creating a missing project requires confirmation of the current device ID.
 Both original databases must remain untouched; the caller must provide a
 separate consistent scratch snapshot. This partial field recovery cannot prove
 the datasets are fully reconciled or make production cutover safe.
+
+`LegacyRoomRecoverySession` supplies an offline review entry that composes that
+apply operation with a private byte-for-byte copy of the legacy database and
+its durable WAL and rollback journal. It validates paths and inode aliases
+before opening Core, rejects unsafe source links, bounds the combined copy to
+1 GiB, and rechecks original identity and content after the user's selection.
+SQLite opens only the scratch copy; both original stores remain in place. The
+caller must hold a real lifetime ownership scope that excludes all writers,
+checkpointers, old processes and path replacement throughout copying, review
+and commit. No current production host supplies that proof. The private scratch
+contains the original credentials and conversation data: it is never included in
+the preview and is deleted after success, cancellation or ordinary failure. A
+process crash can leave a private staged copy requiring verified offline
+cleanup; do not automatically delete an unverified path or treat the copy as an
+ownership or source identity proof.
+Nonempty rollback journals are rejected before opening the scratch database;
+they require separate offline recovery because a read-only SQLite open cannot
+be relied on to recover a hot journal. The original journal is retained.

@@ -41,12 +41,31 @@ internal fun acpBackendAllows(settings: JsonObject, capability: String): Boolean
 internal fun acpSupportsSteering(settings: JsonObject): Boolean = acpBackendAllows(settings, "steering") &&
     (settings["steering"] as? JsonObject)?.get("supported") == JsonPrimitive(true)
 
+private fun acpConfigWritable(settings: JsonObject, option: JsonObject): Boolean {
+    val capabilities = settings["_messengerCapabilities"] as? JsonObject
+    if ((capabilities?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true) return false
+    if (acpBackendAllows(settings, "settingsWritable")) return true
+    if (option.text("type") != "select") return false
+    val ids = capabilities?.get("writableConfigIds") as? JsonArray
+    if (ids != null) return ids.any { (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull == option.text("id") }
+    return (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true && option.text("category") == "mode"
+}
+
 /** ACP select options may be flat or grouped; IDs are opaque, never inferred from labels. */
-internal fun acpSettingChoices(options: JsonArray): List<AcpSettingChoice> = options.flatMap { element ->
-    val option = element.jsonObject
-    val grouped = option["options"] as? JsonArray
-    if (grouped != null) acpSettingChoices(grouped).map { it.copy(group = option.text("name")) }
-    else listOfNotNull(option["value"]?.let { AcpSettingChoice(it, option.text("name"), option.text("description")) })
+internal fun acpSettingChoices(options: JsonArray): List<AcpSettingChoice> {
+    val choices = mutableListOf<AcpSettingChoice>()
+    fun visit(items: JsonArray, depth: Int, group: String) {
+        if (depth > 16 || choices.size >= 1_000) return
+        for (element in items) {
+            if (choices.size >= 1_000) return
+            val option = element as? JsonObject ?: continue
+            val grouped = option["options"] as? JsonArray
+            if (grouped != null) visit(grouped, depth + 1, option.text("name"))
+            else option["value"]?.let { choices.add(AcpSettingChoice(it, option.text("name"), option.text("description"), group)) }
+        }
+    }
+    visit(options, 0, "")
+    return choices
 }
 
 /** Connected settings and selection rows follow InstallerX-Revived's expressive list pattern. */
@@ -64,11 +83,12 @@ internal fun AcpSessionSettingsScreen(
 ) {
     val editable = acpBackendAllows(settings, "settingsWritable")
     val capabilities = settings["_messengerCapabilities"] as? JsonObject
-    val modeWritable = (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true
     val modePending = (capabilities?.get("modePending") as? JsonPrimitive)?.booleanOrNull == true
+    val modeWritable = !modePending && (capabilities?.get("modeWritable") as? JsonPrimitive)?.booleanOrNull == true
     val modeInspected = (capabilities?.get("modeInspected") as? JsonPrimitive)?.booleanOrNull == true
     val modePendingId = (capabilities?.get("modePendingId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
     val modeConfigId = (capabilities?.get("modeConfigId") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    val pendingIsMode = modeConfigId == null || settings.objects("configOptions").singleOrNull { it.text("id") == modeConfigId }?.text("category") == "mode"
     val options = settings.objects("configOptions").filter { it.text("type") in listOf("select", "boolean") }.map { AcpSettingRow(it, false) }.toMutableList()
     val modes = settings["modes"] as? JsonObject
     val modeLabel = stringResource(Res.string.acp_session_mode)
@@ -101,17 +121,17 @@ internal fun AcpSessionSettingsScreen(
                 Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (busy) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
-                    if (!editable) Text(stringResource(if (modeWritable) Res.string.acp_settings_mode_only else Res.string.acp_settings_read_only), style = MaterialTheme.typography.bodyMedium)
+                    if (!editable) Text(stringResource(if (modeWritable || options.any { !it.legacyMode && acpConfigWritable(settings, it.option) }) Res.string.acp_settings_select_only else Res.string.acp_settings_read_only), style = MaterialTheme.typography.bodyMedium)
                     if (modePending) {
                         if (modeInspected) {
                             val value = if (modeConfigId == null) modes?.get("currentModeId") else
                                 settings.objects("configOptions").singleOrNull { it.text("id") == modeConfigId }?.get("currentValue")
                             val current = ((value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull).orEmpty()
-                            Text(stringResource(Res.string.acp_mode_current, current), style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(if (pendingIsMode) Res.string.acp_mode_current else Res.string.acp_setting_current, current), style = MaterialTheme.typography.bodyMedium)
                             TextButton(enabled = !busy && !modePendingId.isNullOrBlank() && current.isNotBlank(),
-                                onClick = { onConfirmPendingMode(checkNotNull(modePendingId), current) }) { Text(stringResource(Res.string.acp_confirm_mode)) }
+                                onClick = { onConfirmPendingMode(checkNotNull(modePendingId), current) }) { Text(stringResource(if (pendingIsMode) Res.string.acp_confirm_mode else Res.string.acp_confirm_setting)) }
                         } else {
-                            Text(stringResource(Res.string.acp_mode_uncertain), style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(if (pendingIsMode) Res.string.acp_mode_uncertain else Res.string.acp_setting_uncertain), style = MaterialTheme.typography.bodyMedium)
                             TextButton(enabled = !busy, onClick = onInspectPendingMode) { Text(stringResource(Res.string.acp_check_mode)) }
                         }
                     }
@@ -128,7 +148,7 @@ internal fun AcpSessionSettingsScreen(
                             val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
                             val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = false, enabled = (editable || modeWritable && (row.legacyMode || option.text("category") == "mode" && option.text("type") == "select")) && !busy && (boolean || choices.isNotEmpty()),
+                                selected = false, enabled = (if (row.legacyMode) editable || modeWritable else acpConfigWritable(settings, option)) && !busy && (boolean || choices.isNotEmpty()),
                                 onClick = {
                                     if (boolean) onChange(buildJsonObject { put("configId", option.text("id")); put("value", !checked) })
                                     else choosing = option.text("id") to row.legacyMode
@@ -169,7 +189,7 @@ internal fun AcpSessionSettingsScreen(
                             }
                             val selectedChoice = choice.value == option["currentValue"]
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = selectedChoice, enabled = (editable || modeWritable && (row.legacyMode || option.text("category") == "mode" && option.text("type") == "select")) && !busy,
+                                selected = selectedChoice, enabled = (if (row.legacyMode) editable || modeWritable else acpConfigWritable(settings, option)) && !busy,
                                 onClick = {
                                     choosing = null
                                     onChange(buildJsonObject {
@@ -182,7 +202,7 @@ internal fun AcpSessionSettingsScreen(
                                 containerColor = MaterialTheme.colorScheme.surfaceBright,
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 supportingContent = choice.description.takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
-                                trailingContent = { RadioButton(selectedChoice, null, enabled = (editable || modeWritable && (row.legacyMode || option.text("category") == "mode" && option.text("type") == "select")) && !busy, modifier = Modifier.clearAndSetSemantics {}) },
+                                trailingContent = { RadioButton(selectedChoice, null, enabled = (if (row.legacyMode) editable || modeWritable else acpConfigWritable(settings, option)) && !busy, modifier = Modifier.clearAndSetSemantics {}) },
                                 headlineContent = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
                             )
                         }
@@ -198,13 +218,12 @@ internal fun AcpSessionSettingsScreen(
 internal fun AcpSessionControls(settings: JsonObject, busy: Boolean, onChange: (JsonObject) -> Unit) {
     val options = settings.objects("configOptions")
     val editable = acpBackendAllows(settings, "settingsWritable")
-    val modeWritable = (((settings["_messengerCapabilities"] as? JsonObject)?.get("modeWritable")) as? JsonPrimitive)?.booleanOrNull == true
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.sortedBy { when (it.text("category")) { "model" -> 0; "thought_level" -> 1; else -> 2 } }.forEach { option ->
             key(option.text("id")) {
                 when (option.text("type")) {
-                    "select" -> AcpSettingSelector(option, (editable || modeWritable && option.text("category") == "mode") && !busy, onChange)
+                    "select" -> AcpSettingSelector(option, acpConfigWritable(settings, option) && !busy, onChange)
                     "boolean" -> FilterChip(
                         selected = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true,
                         enabled = editable && !busy,

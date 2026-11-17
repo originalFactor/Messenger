@@ -212,6 +212,11 @@ interface CoreBridge {
     suspend fun listAcpReplaySnapshots(sessionId: String): List<AcpReplaySnapshot> = error("ACP replay snapshots unavailable")
     suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int): AcpReplayPage = error("ACP replay snapshots unavailable")
     suspend fun deleteAcpReplaySnapshot(sessionId: String, snapshotId: String): Unit = error("ACP replay snapshots unavailable")
+    /** Local-only, explicit acknowledgement; it does not prove a remote tool stopped. */
+    val supportsUncertainMcpCalls: Boolean get() = false
+    suspend fun uncertainMcpCall(conversationId: String): cc.ptoe.messenger.domain.chat.UncertainMcpCall? = null
+    suspend fun acknowledgeUncertainMcpCall(conversationId: String, turnId: String, callId: String): Unit =
+        error("MCP uncertainty acknowledgement is unavailable")
     suspend fun remoteControlCommand(
         requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,
