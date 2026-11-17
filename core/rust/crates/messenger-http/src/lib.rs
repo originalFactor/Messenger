@@ -53,7 +53,7 @@ use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
     sync::{broadcast, mpsc, oneshot, Mutex},
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
 };
 use tokio_stream::{
     wrappers::{BroadcastStream, UnboundedReceiverStream},
@@ -122,7 +122,99 @@ pub struct ApiState {
     /// and `ServerHandle::stop` hangs forever — which is exactly what froze the
     /// desktop app on window close while its `/events` subscription was open.
     shutdown: CancellationToken,
+    /// In-process, abort-safe request tasks joined by the server owner on stop.
+    tasks: TrackedTasks,
     _store_feed: Arc<StoreFeed>,
+}
+
+/// Tracks local fire-and-forget work that can be aborted without claiming that
+/// an external process, paid request or remote side effect has stopped.
+#[derive(Clone, Default)]
+struct TrackedTasks(Arc<TrackedTasksInner>);
+
+#[derive(Default)]
+struct TrackedTasksInner {
+    handles: std::sync::Mutex<Vec<JoinHandle<()>>>,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl TrackedTasks {
+    fn spawn<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(future);
+        let mut handles = self.0.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        handles.retain(|existing| !existing.is_finished());
+        if self.0.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            drop(handles);
+            handle.abort();
+            return;
+        }
+        handles.push(handle);
+    }
+
+    /// Register and start the task before returning, so a short-lived caller can
+    /// observe its synchronous prefix (for example the first SSE replay frames).
+    async fn spawn_started<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut handle = Some(tokio::spawn(future));
+        let closed = {
+            let mut handles = self.0.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            handles.retain(|existing| !existing.is_finished());
+            let closed = self.0.closed.load(std::sync::atomic::Ordering::SeqCst);
+            if !closed {
+                if let Some(handle) = handle.take() {
+                    handles.push(handle);
+                }
+            }
+            closed
+        };
+        if let Some(handle) = handle {
+            if closed { handle.abort(); }
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    async fn close_and_join(&self) -> Result<(), std::io::Error> {
+        self.0.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let handles = {
+            let mut current = self.0.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            current.drain(..).collect::<Vec<_>>()
+        };
+        let mut failure = None;
+        for handle in handles {
+            handle.abort();
+            match handle.await {
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => {
+                    let detail = std::io::Error::other(error.to_string());
+                    if failure.is_none() {
+                        failure = Some(detail);
+                    } else {
+                        eprintln!("messenger-http: tracked task failed during stop: {detail}");
+                    }
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for TrackedTasksInner {
+    fn drop(&mut self) {
+        let mut handles = self.handles.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for handle in handles.drain(..) {
+            handle.abort();
+        }
+    }
 }
 
 /// Owns the store-callback registration shared by every [`ApiState`] clone.
@@ -211,6 +303,7 @@ impl ApiState {
             events,
             remote: Arc::new(remote),
             shutdown,
+            tasks: TrackedTasks::default(),
         }
     }
 }
@@ -320,6 +413,7 @@ pub struct ServerHandle {
     shutdown: CancellationToken,
     task: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
     background: JoinSet<()>,
+    tasks: TrackedTasks,
 }
 
 impl ServerHandle {
@@ -351,6 +445,7 @@ impl ServerHandle {
             shutdown.clone(),
             wait_for_catalog,
         );
+        let tasks = state.tasks.clone();
         let mut background = JoinSet::new();
         background.spawn(Arc::clone(&state.remote).run_with_control(
             Arc::new(LocalClientExecutor {
@@ -374,6 +469,7 @@ impl ServerHandle {
             shutdown,
             task: Some(task),
             background,
+            tasks,
         })
     }
 
@@ -398,6 +494,13 @@ impl ServerHandle {
                 } else {
                     eprintln!("messenger-http: background task failed during stop: {detail}");
                 }
+            }
+        }
+        if let Err(error) = self.tasks.close_and_join().await {
+            if failure.is_none() {
+                failure = Some(error);
+            } else {
+                eprintln!("messenger-http: tracked task group failed during stop: {error}");
             }
         }
         match failure {
@@ -2635,7 +2738,7 @@ async fn start_turn_inner(
     let task_provider = provider.clone();
     let task_request = request.clone();
     let task_cancel = cancel.clone();
-    tokio::spawn(async move {
+    state.tasks.spawn(async move {
         let result = run_turn(TurnTask {
             route,
             state: task_state.clone(),
@@ -3950,6 +4053,15 @@ mod tests {
             .unwrap();
         let background = server.background.len();
         assert_eq!(background, 2, "remote and scheduler tasks must be tracked");
+        let (started, entered) = tokio::sync::oneshot::channel::<()>();
+        server.tasks.spawn(async move {
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered)
+            .await
+            .expect("tracked request task must start")
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), server.stop())
             .await
             .expect("stop must join tracked background tasks")

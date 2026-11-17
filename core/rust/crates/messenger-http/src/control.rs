@@ -359,12 +359,13 @@ pub(crate) async fn start_background(
     }
     let (updates, mut events) = mpsc::channel(64);
     let task_state = state.clone();
+    let tasks = state.tasks.clone();
     let task_cancel = cancel.clone();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let result = dispatch(task_state, request, task_cancel, choices, updates.clone(), ControlScope::Local).await;
         let _ = updates.send(result).await;
     });
-    tokio::spawn(async move {
+    state.tasks.clone().spawn(async move {
         while let Some(event) = events.recv().await {
             let status = match event["type"].as_str() {
                 Some("Permission") => Some("approval"),
@@ -427,8 +428,9 @@ pub(crate) async fn commands(
         );
     }
     let (updates, events) = mpsc::channel(64);
+    let tasks = state.tasks.clone();
     let task_cancel = cancel.clone();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let result = dispatch(
             state.clone(),
             request,
@@ -912,8 +914,9 @@ pub(crate) fn queue_sync(state: &ApiState, conversation_id: &str) {
         return;
     };
     let state = state.clone();
+    let tasks = state.tasks.clone();
     let conversation_id = conversation_id.to_owned();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let _sync = state.cloud_sync_gate.lock().await;
         if signed_in_scope(&state.store) != Some(scope) || state.shutdown.is_cancelled() {
             return;

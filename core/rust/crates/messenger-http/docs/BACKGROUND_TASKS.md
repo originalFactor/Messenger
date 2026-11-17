@@ -1,9 +1,10 @@
 # Background task shutdown inventory
 
 `ServerHandle::stop()` cancels the per-start shutdown token, joins the axum
-listener, and joins the remote-control and scheduler loops held in its
-`JoinSet`. That is not yet proof that every Core-owned task stopped. The
-inventory below is the gap between those two guarantees and is the reason
+listener, joins the remote-control and scheduler loops held in its `JoinSet`,
+and abort/joins local in-process tasks registered through `ApiState.tasks`.
+That is not yet proof that every external side effect or Core-owned worker
+stopped. The inventory below is the remaining gap and is the reason
 `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` still forbids a production Room
 cutover.
 
@@ -12,16 +13,21 @@ cutover.
 - axum listener with graceful shutdown and `ShutdownStream` for endless SSE;
 - `RemoteHub::run_with_control` (remote-control/workspace relay connection loop);
 - `scheduled_tasks::run` (timer loop).
+- `ApiState.tasks` local request tasks: native/legacy turn workers, background
+  turn replay and event fan-out, control command dispatch/event logging/queued
+  sync, remote control client lanes, and one scheduled task execution per tick.
+  These are aborted and joined on `stop()`. A test registers a pending tracked
+  task and verifies `stop()` does not leave the handle running.
 
 ## Request-spawned tasks still needing an owner
 
 | Source | Work started | Stop condition / missing proof |
 | --- | --- | --- |
-| `lib.rs::start_turn_inner` | legacy/native chat turn worker | cancellation token ends provider/tool await; the spawned `JoinHandle` is not joined by server stop. |
-| `background_turn.rs` | replay/event fan-out and SSE event iterators | channel close or shutdown token; detached handles are not joined. |
-| `control.rs` | local/background command dispatch, task-event recording and queued Cloud sync | request cancellation, channel close or shutdown check; worker handles are not joined. |
-| `remote_client.rs` | remote control client lane | lane cancel, observer close or session check; network timeout/host work is not joined by stop. |
-| `scheduled_tasks.rs` | one task execution per tick | task cancel token; individual execution handles are not joined. |
+| `lib.rs::start_turn_inner` | legacy/native chat turn worker | now tracked/abort-joined; a provider/tool side effect outside the process still needs its own ambiguity record. |
+| `background_turn.rs` | replay/event fan-out and SSE event iterators | now tracked/abort-joined; replay generation starts before returning the SSE response. |
+| `control.rs` | local/background command dispatch, task-event recording and queued Cloud sync | now tracked/abort-joined; queued network work may remain ambiguous until sync recovery. |
+| `remote_client.rs` | remote control client lane | now tracked/abort-joined; a remote host command may have executed and must not be replayed. |
+| `scheduled_tasks.rs` | one task execution per tick | now tracked/abort-joined; externally dispatched work needs its durable claim and recovery. |
 | `image_generation.rs` | one provider job per admitted image request | explicit cancel or provider completion; a paid/remote request may remain ambiguous. |
 | `delegation.rs` | ACP delegation event drain | awaited by the delegating request, but external ACP descendants are separate. |
 | `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | lifetime token/cancel or channel close; direct child exit does not prove descendants stopped. |
@@ -36,18 +42,17 @@ stopped.
 
 ## Required implementation sequence
 
-1. Add an owner-scoped `TaskScope` to `ApiState`; replace production
-   `tokio::spawn` calls that use `ApiState` with a tracked spawn helper.
-2. In `ServerHandle::stop`, cancel the shutdown token, close axum, then join
-   the server loops and every tracked request task. A failed or non-terminating
-   task must keep ownership live and return a visible failure, never a timeout
-   that silently releases the database.
-3. Give `AgentRelay`, `ImageGenerationService`, external ACP sessions and
+1. Done for local tasks: `ApiState.tasks` tracks abort-safe in-process work and
+   `ServerHandle::stop` joins it. Keep future `tokio::spawn` calls that use
+   `ApiState` in this tracker. A failed or non-terminating task must keep
+   ownership live and return a visible failure, never a timeout that silently
+   releases the database.
+2. Still required: give `AgentRelay`, `ImageGenerationService`, external ACP sessions and
    Android Runtime processes explicit stop-and-join barriers. Record ambiguous
    outcomes durably; never replay a paid or remote call.
-4. Add shutdown tests that start one representative of each task class, cancel
+3. Add shutdown tests that start one representative of each task class, cancel
    while it is in flight, and assert `stop()` does not return until all handles
    are joined. Real device tests must separately cover Runtime/ACP descendants.
-5. Only after those tests and platform fences pass may the Android/Desktop
+4. Only after those tests and platform fences pass may the Android/Desktop
    production lifecycle claim that an old Core instance and its workers cannot
    write after shutdown.

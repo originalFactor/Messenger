@@ -7,9 +7,12 @@ database and asset lifetime. A check that merely observes a quiet instant is
 not a fence. The current code does not provide the required platform proof.
 
 The old Core API's `ServerHandle.stop()` cancels its shutdown token, joins the
-axum server task and now joins the remote-control and scheduler loops started
-with that server. It still does not join every request-spawned chat, ACP, image,
-control, delegation or relay task, nor any task outside the HTTP crate.
+axum server task, joins the remote-control and scheduler loops started with
+that server, and aborts/joins local in-process request tasks registered in
+`ApiState.tasks` (turn workers, background replay, control dispatch, remote
+client lanes, queued sync and individual scheduled executions). It still does
+not prove that every image job, agent relay stream, ACP process, Runtime child
+or remote side effect outside the HTTP crate has stopped.
 `HttpServerHandle.stop()` delegates to this operation, and the Rust Core handle
 separately owns an `Arc<Store>`. Consequently a successful HTTP stop is still
 not evidence that all Core tasks and SQLite descriptors are gone. The Android
