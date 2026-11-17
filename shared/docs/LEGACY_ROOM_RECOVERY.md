@@ -116,3 +116,22 @@ Android validates the scratch parent with the existing platform directory
 gate (`lstat`/`fstat`, app UID, private mode and fsync). Desktop retains its
 POSIX attribute check. Android's `Files.getFileStore` can be denied even for an
 app-private directory and is not used for this verification.
+
+The optional isolated `runPreparingCore` composition can prepare the paired
+Core database and assets before review under that same lifetime owner. It first
+copies and fingerprints the legacy database and durable sidecars, rejects
+overlapping database, private scratch and symlink-resolved asset trees, and
+rechecks the original repeatedly during and after preparation. Preparation
+exposes no backend or workers. Declining the
+review retains the published Room pair and both original databases; a later
+attempt reuses it only if its receipt still matches the unchanged Core source.
+A completed selection reconciles only
+the fields selected by the user; it is not a full reconciliation receipt and
+does not remove the Android startup guard or establish platform ownership.
+Preparation requires the legacy database and new Room database to have distinct
+parent directories, including after symlink resolution, so legacy files cannot
+collide with publication receipts or staging names. Android's historical Room
+file is under `getDatabasePath(...)` while the isolated Room owner requires its
+destination under `filesDir`. Other layouts, including a Desktop destination
+beside the legacy database, need a separate private destination and fail closed
+if this separation cannot be verified.

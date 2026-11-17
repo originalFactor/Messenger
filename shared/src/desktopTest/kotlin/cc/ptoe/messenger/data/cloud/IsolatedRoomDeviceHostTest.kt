@@ -12,6 +12,7 @@ import cc.ptoe.messenger.data.local.room.AgentRow
 import cc.ptoe.messenger.data.local.room.ConversationRow
 import cc.ptoe.messenger.data.local.room.ModelRow
 import cc.ptoe.messenger.data.local.room.ProviderRow
+import cc.ptoe.messenger.data.local.room.ProjectRow
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
@@ -33,7 +34,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,9 +55,134 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class IsolatedRoomDeviceHostTest {
+    @Test fun revokingRemotePromptWaitsForProviderCleanupAndDoesNotRetry(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-remote-prompt-revoke")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val lifecycle = RoomManagedShutdown { }
+        val entered = CompletableDeferred<Unit>()
+        val stopping = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val provider = KotlinTurnProvider { _, _ -> flow {
+            calls.incrementAndGet(); entered.complete(Unit)
+            try { awaitCancellation() } finally { stopping.complete(Unit); withContext(NonCancellable) { release.await() } }
+        } }
+        Relay().use { relay ->
+            try {
+                db.rows().upsertValues(listOf(
+                    KeyValueRow("cloud_session", "messenger_session=one"), KeyValueRow("cloud_session_host", relay.base),
+                    KeyValueRow("cloud_user_json", """{"id":"account"}"""), KeyValueRow("device_id", "device-1"),
+                    KeyValueRow("device_control_grant", """["${relay.base}","account"]"""),
+                    KeyValueRow("device_control_config", config(true).toString()), KeyValueRow(REMOTE_CONTROL_EPOCH_KEY, "1"),
+                ))
+                db.rows().upsertProviders(listOf(ProviderRow("p", "Provider", "https://example.test", "key", "chat", false, 1, 1)))
+                db.rows().upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 1000, null, null, null, null, "text", "text", true, false, false, false, 1, null, null)))
+                db.rows().upsertAgents(listOf(AgentRow("a", "Agent", null, "prompt", "", "m", 0.7, 1.0, null, null,
+                    true, false, false, false, false, false, false, null, null, null, "chat", true, false, "", 1, 1)))
+                db.rows().upsertProjects(listOf(ProjectRow("project", "Project", "/workspace", "device-1", 1, 1)))
+                db.rows().upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", "project", null,
+                    null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+                lifecycle.enter()
+                val prefs = MemoryPreferences()
+                val slice = KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs),
+                    Files.createDirectory(dir.resolve("assets"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))),
+                    dir.resolve("avatars"), dir.resolve("images"), defaultServer = relay.base, catalogUrl = "${relay.base}/models.json",
+                    deviceHost = IsolatedRoomDeviceHostConfig { "Phone" }, turnProvider = provider)
+                eventually { relay.packets.any { it.second["enabled"]?.jsonPrimitive?.content == "true" } }
+                relay.command("messenger_session=one", buildJsonObject { put("action", "prompt"); put("sessionId", "c"); put("text", "hello") })
+                withTimeout(8_000) { entered.await() }
+                val session = checkNotNull(db.cloudSync().currentSession())
+                val authority = KotlinRemoteControlScope("account", session.generation, relay.base, "device-1")
+                RoomDeviceControlGrantStore(db).save(authority, 1, config(false))
+                withTimeout(8_000) { stopping.await() }
+                val local = TurnConfigBridge("c", "model", "", "", "chat", "", null, null, null, null,
+                    emptyList(), false, 0, "", null, null, null, false, "", operation = "send", content = "next",
+                    disableTools = true, supportsToolApproval = true)
+                assertFailsWith<IllegalStateException> { slice.bridge.startBackgroundTurn(local) }
+                assertEquals(1, calls.get())
+                release.complete(Unit)
+                withTimeout(8_000) { while (slice.bridge.hasActiveTasks()) delay(10) }
+                assertEquals(1, calls.get())
+                assertEquals(1, db.rows().messagesFor(listOf("c")).count { it.role == "user" })
+                slice.bridge.startBackgroundTurn(local)
+                withTimeout(8_000) { while (calls.get() != 2) delay(10) }
+                slice.bridge.cancelBackgroundTurn("c")
+                withTimeout(8_000) { while (slice.bridge.hasActiveTasks()) delay(10) }
+            } finally {
+                release.complete(Unit)
+                if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
+                db.close(); dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun remoteTextPromptRunsOnOwnedConversationAndRejectsReplayedIdentityAfterRestart(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-remote-prompt")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val provider = KotlinTurnProvider { _, request -> flow {
+            check(request.tools.isNullOrEmpty())
+            calls.incrementAndGet()
+            emit(cc.ptoe.messenger.data.remote.sse.ChatStreamEvent.Content("answer"))
+            emit(cc.ptoe.messenger.data.remote.sse.ChatStreamEvent.Done("stop"))
+        } }
+        Relay().use { relay ->
+            var lifecycle = RoomManagedShutdown { }
+            try {
+                db.rows().upsertValues(listOf(
+                    KeyValueRow("cloud_session", "messenger_session=one"), KeyValueRow("cloud_session_host", relay.base),
+                    KeyValueRow("cloud_user_json", """{"id":"account"}"""), KeyValueRow("device_id", "device-1"),
+                    KeyValueRow("device_control_grant", """["${relay.base}","account"]"""),
+                    KeyValueRow("device_control_config", config(true).toString()), KeyValueRow(REMOTE_CONTROL_EPOCH_KEY, "1"),
+                ))
+                db.rows().upsertProviders(listOf(ProviderRow("p", "Provider", "https://example.test", "key", "chat", false, 1, 1)))
+                db.rows().upsertModels(listOf(ModelRow("m", "p", "model", "Model", true, 1000, null, null, null, null, "text", "text", true, false, false, false, 1, null, null)))
+                db.rows().upsertAgents(listOf(AgentRow("a", "Agent", null, "prompt", "", "m", 0.7, 1.0, null, null,
+                    true, false, false, false, false, false, false, null, null, null, "chat", true, false, "", 1, 1)))
+                db.rows().upsertProjects(listOf(ProjectRow("project", "Project", "/workspace", "device-1", 1, 1)))
+                db.rows().upsertConversations(listOf(ConversationRow("c", "Chat", "p", "a", "project", null,
+                    null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+                val assets = Files.createDirectory(dir.resolve("assets"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
+                suspend fun attach(): KotlinRoomBackendSlice {
+                    lifecycle.enter()
+                    val prefs = MemoryPreferences()
+                    return KotlinRoomBackendSlice.attach(db, lifecycle, AppPreferences(prefs), ThemePreferences(prefs), assets,
+                        dir.resolve("avatars"), dir.resolve("images"), defaultServer = relay.base, catalogUrl = "${relay.base}/models.json",
+                        deviceHost = IsolatedRoomDeviceHostConfig { "Phone" }, turnProvider = provider)
+                }
+                attach()
+                eventually { relay.packets.any { it.second["enabled"]?.jsonPrimitive?.content == "true" } }
+                val id = UUID.randomUUID().toString()
+                val payload = buildJsonObject { put("action", "prompt"); put("sessionId", "c"); put("text", "hello") }
+                fun send() = relay.send("messenger_session=one", "controlRequest", """{"id":"$id","payload":$payload}""")
+                fun finalReply() = relay.packets.lastOrNull { it.second["id"]?.jsonPrimitive?.content == id &&
+                    it.second["done"]?.jsonPrimitive?.content == "true" }?.second
+                send()
+                eventually { finalReply()?.get("payload")?.jsonObject?.get("type")?.jsonPrimitive?.content == "Finished" }
+                assertEquals(listOf("hello", "answer"), db.rows().messagesFor(listOf("c")).map { it.content })
+                assertEquals(1, calls.get())
+                lifecycle.stopAndAwait()
+                lifecycle = RoomManagedShutdown { }
+                val previousConnections = relay.connections.size
+                attach()
+                eventually { relay.connections.size > previousConnections && relay.packets.count { it.second["enabled"]?.jsonPrimitive?.content == "true" } >= 2 }
+                val priorCount = relay.packets.count { it.second["id"]?.jsonPrimitive?.content == id && it.second["done"]?.jsonPrimitive?.content == "true" }
+                send()
+                eventually { relay.packets.count { it.second["id"]?.jsonPrimitive?.content == id && it.second["done"]?.jsonPrimitive?.content == "true" } > priorCount }
+                assertEquals("Error", finalReply()!!.getValue("payload").jsonObject.getValue("type").jsonPrimitive.content)
+                assertEquals(1, calls.get())
+                assertEquals(listOf("hello", "answer"), db.rows().messagesFor(listOf("c")).map { it.content })
+            } finally {
+                if (lifecycle.state.value == cc.ptoe.messenger.data.migration.RoomShutdownState.Running) lifecycle.stopAndAwait()
+                db.close(); dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
     private class MemoryPreferences : DataStore<Preferences> {
         private val state = MutableStateFlow(emptyPreferences())
         override val data: Flow<Preferences> = state

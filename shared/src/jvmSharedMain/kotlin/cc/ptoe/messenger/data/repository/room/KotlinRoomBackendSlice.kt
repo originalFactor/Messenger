@@ -188,7 +188,7 @@ internal class KotlinRoomBackendSlice private constructor(
                     config.configurationFence, config.sessions, config.mcpCatalog, AcpSkillsGatewayBackend(skillStore, unsupported),
                     { skillStore.discovery(permitted = true) != null }, { binding, events ->
                         AcpStdioWorker(config.transport(binding), config.endpoints, { skillStore.discovery(permitted = true) }, events)
-                    }, now)
+                    }, now, allowByokTakeover = config.allowByokTakeover)
             }
             val acpMutationGate = acpOwner?.mutationGate ?: object : AcpSessionMutationGate {
                 override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T =
@@ -270,7 +270,7 @@ internal class KotlinRoomBackendSlice private constructor(
                     .also { scheduler -> scheduler.start() }
             }
             val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it,
-                remoteCancel = rawBridge.remoteCancel, remoteDecision = rawBridge.remoteDecision) }
+                remoteCancel = rawBridge.remoteCancel, remoteDecision = rawBridge.remoteDecision, remotePrompt = rawBridge.remotePrompt) }
             return KotlinRoomBackendSlice(shutdown, rawBridge.adminStore, LocalStores(cloud, appPreferences, themePreferences), bridge,
                 providers, models, agents, conversations, projects, messages, selected, learning, gate, scheduler, imageOwner, acpOwner,
                 artifactHost, attachedDeviceHost, mcpOwner, mcpConnections?.enableExecution == true)

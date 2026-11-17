@@ -85,6 +85,7 @@ private data class StoredTurn(
     val summaryPlan: StoredSummaryPlan? = null,
     val summaryFailure: String? = null,
     val remoteScope: KotlinRemoteControlScope? = null,
+    val remoteCookieDigest: String? = null,
     val coreGrant: KotlinCoreToolGrant? = null,
     val mcpGrant: KotlinMcpToolGrant? = null,
     val mcpOwner: String? = null,
@@ -105,6 +106,19 @@ data class KotlinTurnFailure(
 
 @Serializable
 private data class StoredTurnFailure(val turnId: String, val detail: String, val conversationId: String? = null)
+
+private fun remoteCookieDigest(cookie: String, salt: ByteArray): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    digest.update(salt)
+    return salt.joinToString("") { "%02x".format(it.toInt() and 255) } + ":" +
+        digest.digest(cookie.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
+}
+
+private fun matchesRemoteCookie(expected: String, cookie: String): Boolean {
+    if (!expected.matches(Regex("[0-9a-f]{64}:[0-9a-f]{64}"))) return false
+    val salt = expected.substringBefore(':').chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    return java.security.MessageDigest.isEqual(expected.toByteArray(Charsets.US_ASCII), remoteCookieDigest(cookie, salt).toByteArray(Charsets.US_ASCII))
+}
 
 @Serializable
 private data class AcknowledgedMcpUncertainty(val conversationId: String, val turnId: String, val callId: String,
@@ -226,6 +240,20 @@ class RoomKotlinTurnStore(
 
     override suspend fun admit(command: KotlinTurnCommand): KotlinTurnAdmission = transaction { rows, mark ->
         command.remoteScope?.let { rows.requireRemoteControl(it, command.conversationId, requireOwnedProject = true) }
+        val remotePrompt = (command as? KotlinTurnCommand.Send)?.remotePrompt
+        if (remotePrompt != null) {
+            val send = command as KotlinTurnCommand.Send
+            val remote = command.remoteScope ?: return@transaction KotlinTurnAdmission.Rejected("Remote authority is unavailable")
+            if (!command.disableTools || command.scheduledRun || command.delegatedRun || send.partsJson != null ||
+                remotePrompt.cookie.isBlank() || remotePrompt.cookie.length > 4096 ||
+                !runCatching { java.util.UUID.fromString(remotePrompt.requestId).toString() == remotePrompt.requestId }.getOrDefault(false))
+                return@transaction KotlinTurnAdmission.Rejected("Invalid remote prompt admission")
+            check(rows.getValue("cloud_session")?.value == remotePrompt.cookie) { "Cloud session changed" }
+            checkNotNull(cloudGate) { "Cloud provider admission gate is unavailable" }.requireValid(SyncSession(remote.accountId, remote.generation))
+            val marker = "kotlin_remote_prompt_v1:${remotePrompt.requestId}"
+            check(rows.getValue(marker) == null) { "Remote prompt was already admitted" }
+            check(rows.valuesByPrefix("kotlin_remote_prompt_v1:").size < 10_000) { "Remote prompt history requires recovery" }
+        }
         if (rows.getValue(CLOUD_REPLACEMENT_LOCK_KEY) != null) return@transaction KotlinTurnAdmission.Rejected("Cloud replacement requires completion or recovery")
         if (command.conversationId.startsWith("acp:")) return@transaction KotlinTurnAdmission.Rejected("ACP turns require the ACP service")
         if (rows.getValue(ACTIVE + command.conversationId) != null) return@transaction KotlinTurnAdmission.Rejected("A turn is already active")
@@ -253,8 +281,11 @@ class RoomKotlinTurnStore(
             ?: return@transaction KotlinTurnAdmission.Rejected("Model not found")
         if (!model.isEnabled) return@transaction KotlinTurnAdmission.Rejected("Model is disabled")
         val provider = rows.provider(model.providerId) ?: return@transaction KotlinTurnAdmission.Rejected("Provider not found")
-        if (command.scheduledRun && scheduledClaim?.projectId != null && provider.nativeWebSearch)
-            return@transaction KotlinTurnAdmission.Rejected("Provider web search is unavailable for scheduled project runs")
+        if (provider.nativeWebSearch) {
+            if (remotePrompt != null) return@transaction KotlinTurnAdmission.Rejected("Provider web search is unavailable for remote prompts")
+            if (command.scheduledRun && scheduledClaim?.projectId != null)
+                return@transaction KotlinTurnAdmission.Rejected("Provider web search is unavailable for scheduled project runs")
+        }
         val cloudIdentity = if (provider.id == BUILTIN_PROVIDER_ID) {
             if (cloudGate == null || rows.getValue(DEFERRED_BUILTIN_PROVIDER_CLEANUP) != null || provider.apiKey.isBlank())
                 return@transaction KotlinTurnAdmission.Rejected("Cloud provider is unavailable")
@@ -384,13 +415,15 @@ class RoomKotlinTurnStore(
             rows.updateLastMessage(conversation.id, userMessage.content, userMessage.timestamp)
         }
         val id = randomUuid()
+        val remoteDigest = remotePrompt?.let { remoteCookieDigest(it.cookie, ByteArray(32).also(java.security.SecureRandom()::nextBytes)) }
+        remotePrompt?.let { rows.upsertValues(listOf(KeyValueRow("kotlin_remote_prompt_v1:${it.requestId}", id))) }
         val assistant = MessageRow(randomUuid(), conversation.id, "assistant", "", null, rows.nextMessageTimestamp(conversation.id), "sending", null)
         rows.upsertMessages(listOf(assistant))
         rows.write(StoredTurn(id, conversation.id, provider.id, assistant.id,
             if (summaryPlan == null) KotlinTurnPhase.READY_PROVIDER.name else KotlinTurnPhase.SUMMARY_PENDING.name,
             request, toolGrant = grant, cloudIdentity = cloudIdentity,
             userMessageId = if (command is KotlinTurnCommand.Send) history.last().id else null, title = titleConfig, summaryPlan = summaryPlan,
-            remoteScope = command.remoteScope, coreGrant = coreGrant, mcpGrant = mcpGrant,
+            remoteScope = command.remoteScope, remoteCookieDigest = remoteDigest, coreGrant = coreGrant, mcpGrant = mcpGrant,
             mcpOwner = if (mcpGrant != null) owner else null, scheduledRun = command.scheduledRun, scheduledClaim = scheduledClaim, delegatedRun = command.delegatedRun,
             supportsApproval = command.supportsToolApproval, approvalUserRequest = approvalUserRequest))
         rows.upsertValues(listOf(KeyValueRow(ACTIVE + conversation.id, id)))
@@ -466,8 +499,19 @@ class RoomKotlinTurnStore(
             throw cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable("Provider web search is unavailable for scheduled project runs")
     }
 
+    private suspend fun LocalRowsDao.requireRemotePrompt(turn: StoredTurn) {
+        val digest = turn.remoteCookieDigest ?: return
+        val remote = checkNotNull(turn.remoteScope) { "Remote authority is unavailable" }
+        requireRemoteControl(remote, turn.conversationId, requireOwnedProject = true)
+        val cookie = getValue("cloud_session")?.value ?: error("Cloud session changed")
+        check(matchesRemoteCookie(digest, cookie)) { "Cloud session changed" }
+        checkNotNull(cloudGate) { "Cloud provider admission gate is unavailable" }.requireValid(SyncSession(remote.accountId, remote.generation))
+        check(provider(turn.providerId)?.nativeWebSearch == false) { "Provider web search is unavailable for remote prompts" }
+    }
+
     override suspend fun beginSummary(turnId: String): KotlinSummaryWork? = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.SUMMARY_PENDING)
+        rows.requireRemotePrompt(turn)
         rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val plan = checkNotNull(turn.summaryPlan) { "Summary plan is missing" }
@@ -530,6 +574,7 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginProvider(turnId: String): KotlinTurnSnapshot = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_PROVIDER)
+        rows.requireRemotePrompt(turn)
         rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         if (turn.providerId == BUILTIN_PROVIDER_ID) {
@@ -598,6 +643,12 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginTitle(turnId: String): KotlinTitleWork? = transaction { rows, mark ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.TITLE_PENDING)
+        try { rows.requireRemotePrompt(turn) }
+        catch (_: IllegalStateException) {
+            // The response is already complete; revocation suppresses only the auxiliary title request.
+            rows.finishTitle(turn, null, mark)
+            return@transaction null
+        }
         try { rows.requireScheduledClaim(turn) }
         catch (_: cc.ptoe.messenger.data.local.schedule.ScheduledTurnUnavailable) {
             // A completed assistant answer stays sent when cancellation makes title work obsolete.
@@ -673,6 +724,7 @@ class RoomKotlinTurnStore(
 
     override suspend fun beginAutomaticApproval(turnId: String): KotlinApprovalWork? = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.AUTO_APPROVAL_PENDING)
+        rows.requireRemotePrompt(turn)
         rows.requireScheduledClaim(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }
         val call = turn.calls.getOrNull(turn.index)?.domain() ?: error("No pending tool")
@@ -747,6 +799,7 @@ class RoomKotlinTurnStore(
     } }
     override suspend fun beginTool(turnId: String): ToolCallData = transaction { rows, _ ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.READY_TOOL)
+        rows.requireRemotePrompt(turn)
         rows.requireScheduledClaim(turn)
         rows.requireTurnCloudSession(turn)
         turn.remoteScope?.let { rows.requireRemoteControl(it, turn.conversationId, requireOwnedProject = true) }

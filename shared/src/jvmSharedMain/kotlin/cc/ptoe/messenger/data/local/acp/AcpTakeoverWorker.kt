@@ -47,7 +47,7 @@ internal class AcpTakeoverWorker(
             val env = AcpTakeoverPlan.configure(binding.profileId, configuration.environment, models, preferredModelId,
                 opened.baseUrl, checkNotNull(relay).capability(), openCodeMajor).environment
             val configured = AcpWorkerConfiguration(configuration.command, configuration.arguments, env,
-                configuration.mcpServers, configuration.allowDelegation, configuration.coreToolScope)
+                configuration.mcpServers, configuration.allowDelegation, configuration.coreToolScope, configuration.providerTakeover)
             val ready = worker.start(binding, configured, gateway)
             started = true
             return ready

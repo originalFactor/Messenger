@@ -29,8 +29,9 @@ import org.junit.Test
 class AndroidLegacyRecoveryCoordinatorDeviceTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var root: Path
+    private var separateLegacyDirectory = false
     private val core get() = root.resolve("core.db")
-    private val legacy get() = root.resolve("legacy.db")
+    private val legacy get() = (if (separateLegacyDirectory) root.resolve("legacy") else root).resolve("legacy.db")
     private val destination get() = root.resolve("room.db")
 
     private class StubOwner : RoomStoreOwnership {
@@ -54,7 +55,9 @@ class AndroidLegacyRecoveryCoordinatorDeviceTest {
         if (::root.isInitialized && Files.exists(root)) Files.walk(root).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
     }
 
-    private suspend fun fixture() {
+    private suspend fun fixture(prepareDestination: Boolean = true, separateLegacy: Boolean = false) {
+        separateLegacyDirectory = separateLegacy
+        if (separateLegacy) Files.createDirectory(root.resolve("legacy"))
         val schema = InstrumentationRegistry.getInstrumentation().context.assets.open("core-store-v9.sql")
             .bufferedReader().use { it.readText() }
         BundledSQLiteDriver().open(core.toString()).use { db ->
@@ -73,12 +76,31 @@ class AndroidLegacyRecoveryCoordinatorDeviceTest {
             db.exec("INSERT INTO conversations VALUES ('c','Chat','old')")
             db.exec("INSERT INTO providers VALUES ('p','Provider','OTHER-SECRET','responses')")
         }
-        RoomStoreStartup.withLeasedCoreStore(core, destination, root.resolve("old-assets"), root.resolve("new-assets"), StubOwner(),
+        if (prepareDestination) RoomStoreStartup.withLeasedCoreStore(core, destination, root.resolve("old-assets"), root.resolve("new-assets"), StubOwner(),
             RoomManagedShutdown { }, ::openRoom) { }
     }
 
     private fun coordinator(owner: RoomStoreOwnership, clock: () -> Long = { 10 }) =
         AndroidLegacyRecoveryCoordinator(core, legacy, destination, root, owner, ::openRoom, clock)
+
+    @Test fun preparesAndReviewsUnderTheSameAndroidOwner() = runBlocking {
+        fixture(prepareDestination = false, separateLegacy = true)
+        val oldCore = Files.readAllBytes(core); val oldLegacy = Files.readAllBytes(legacy)
+        // Actual Android cooperative marker with test-only external worker proofs.
+        val owner = AndroidRoomDirectoryOwner.acquire(context, destination, RoomWritersStoppedProof { }, RoomWritersStoppedProof { })
+        val marker = root.resolve(".room.db.room-owner.active")
+        val coordinator = AndroidLegacyRecoveryCoordinator(core, legacy, destination, root, owner, ::openRoom, { 10 },
+            AndroidLegacyCorePreparation(root.resolve("old-assets"), root.resolve("new-assets")))
+        val work = async(Dispatchers.Default) { coordinator.run() }
+        val review = withTimeout(10_000) { coordinator.state.first { it is AndroidLegacyRecoveryState.Review } } as AndroidLegacyRecoveryState.Review
+        assertTrue(Files.exists(marker))
+        assertTrue(Files.exists(CoreStorePairedCutover.receiptFor(destination)))
+        val selection = checkNotNull(LegacyRecoveryChoices(review.review).selection(setOf("old"), setOf("c"), setOf("p")))
+        assertTrue(coordinator.apply(review.review, selection))
+        assertEquals(LegacyRecoveryApplied(1, 1, 1), withTimeout(10_000) { work.await() })
+        assertFalse(Files.exists(marker))
+        assertArrayEquals(oldCore, Files.readAllBytes(core)); assertArrayEquals(oldLegacy, Files.readAllBytes(legacy))
+    }
 
     @Test fun reviewKeepsOwnerHeldUntilExplicitSelectionCommitsAndPreservesSources() = runBlocking {
         fixture()

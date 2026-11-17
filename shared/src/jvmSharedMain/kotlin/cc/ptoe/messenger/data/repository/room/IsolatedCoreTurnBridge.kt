@@ -12,7 +12,10 @@ import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
 import cc.ptoe.messenger.data.cloud.RoomRemoteTaskCancel
 import cc.ptoe.messenger.data.cloud.RoomRemoteTaskDecision
+import cc.ptoe.messenger.data.cloud.RoomRemotePrompt
+import cc.ptoe.messenger.data.cloud.RoomRemoteTurnOperations
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
+import cc.ptoe.messenger.domain.chat.KotlinRemotePromptIdentity
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.repository.LearningOwnership
@@ -177,6 +180,22 @@ internal class IsolatedCoreTurnBridge(
             owner
         }
         runtime.store.decideRemoteApprovalAuthenticated(scope, cookie, conversationId, turnId, callId, allow)
+    }
+
+    /** A scoped remote prompt owns the same per-conversation runner as local chat. */
+    val remotePrompt = RoomRemotePrompt { authority, cookie, requestId, conversationId, text, permissions, update ->
+        val candidate = lock.withLock {
+            check(conversationId !in legacy) { "A legacy turn is already active" }
+            reserve(conversationId)
+            val old = runtimes[conversationId]
+            check(old?.runner?.hasRunningJobs() != true && adminStore.reservedTurn(conversationId) == null) { "A turn is already active" }
+            newRuntime(conversationId).also { runtimes[conversationId] = it; generation++ }
+        }
+        RoomRemoteTurnOperations(candidate.store, candidate.runner).prompt(authority, conversationId, text, permissions, update,
+            KotlinRemotePromptIdentity(requestId, cookie)) { action -> lock.withLock {
+                check(runtimes[conversationId] === candidate && conversationId !in legacy) { "Remote turn owner changed" }
+                action()
+            } }
     }
 
     override suspend fun respondToolApproval(callId: String, approved: Boolean) {

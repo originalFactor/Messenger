@@ -55,6 +55,8 @@ import okio.BufferedSink
  */
 internal fun interface RoomDeviceCommandDispatcher {
     suspend fun dispatch(grantEpoch: Long, command: JsonObject, permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject
+    suspend fun dispatchWithIdentity(grantEpoch: Long, requestId: String, command: JsonObject, permissions: ReceiveChannel<String>,
+        update: suspend (JsonObject) -> Unit): JsonObject = dispatch(grantEpoch, command, permissions, update)
 }
 
 internal data class RoomDeviceControlGrant(val name: String, val epoch: Long)
@@ -213,7 +215,7 @@ internal class RoomCloudDeviceControlHost(
                                     val worker = launch(start = CoroutineStart.LAZY) {
                                         try {
                                             ensureAdmitted(admittedGrant.epoch)
-                                            val final = dispatcher.dispatch(admittedGrant.epoch, command, permissions) { event ->
+                                            val final = dispatcher.dispatchWithIdentity(admittedGrant.epoch, id, command, permissions) { event ->
                                                 sendReply(credential, id, admittedGrant.epoch, event, false)
                                             }
                                             sendReply(credential, id, admittedGrant.epoch, final, true)

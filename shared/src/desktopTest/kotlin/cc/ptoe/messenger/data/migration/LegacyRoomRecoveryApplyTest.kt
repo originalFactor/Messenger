@@ -39,9 +39,10 @@ class LegacyRoomRecoveryApplyTest {
         }
     }
     private data class Fixture(val root: Path, val core: Path, val legacy: Path, val target: Path)
-    private suspend fun fixture(projectOwner: String? = null): Fixture {
+    private suspend fun fixture(projectOwner: String? = null, prepareDestination: Boolean = true, separateLegacyDirectory: Boolean = false): Fixture {
         val root = Files.createTempDirectory("legacy-room-recovery-apply")
-        val core = root.resolve("core.db"); val legacy = root.resolve("legacy-snapshot.db"); val target = root.resolve("room.db")
+        val legacyDir = if (separateLegacyDirectory) Files.createDirectory(root.resolve("legacy")) else root
+        val core = root.resolve("core.db"); val legacy = legacyDir.resolve("legacy-snapshot.db"); val target = root.resolve("room.db")
         BundledSQLiteDriver().open(core.toString()).use { db ->
             checkNotNull(javaClass.getResource("/core-store-v9.sql")).readText().split(';').map(String::trim).filter(String::isNotEmpty).forEach { db.exec(it) }
             db.exec("INSERT INTO agents(id,name,systemPrompt,isDefault,createdAt,updatedAt) VALUES ('a','Agent','',1,1,1)")
@@ -59,11 +60,69 @@ class LegacyRoomRecoveryApplyTest {
             db.exec("INSERT INTO conversations VALUES ('c','Chat','old')")
             db.exec("INSERT INTO providers VALUES ('p','Provider','OTHER-SECRET','responses')")
         }
-        RoomStoreStartup.withLeasedCoreStore(core, target, root.resolve("old-assets"), root.resolve("new-assets"), Owner(),
+        if (prepareDestination) RoomStoreStartup.withLeasedCoreStore(core, target, root.resolve("old-assets"), root.resolve("new-assets"), Owner(),
             RoomManagedShutdown { }, ::room) { }
         return Fixture(root, core, legacy, target)
     }
     private fun selection() = LegacyRecoverySelection(setOf("old"), setOf("c"), setOf("p"), "local-device")
+
+    @Test fun preparesCoreAndReviewsLegacyUnderOneOwnerAndResumesAfterDecline(): Unit = runBlocking {
+        val f = fixture(prepareDestination = false, separateLegacyDirectory = true)
+        val owner = Owner()
+        try {
+            val oldCore = Files.readAllBytes(f.core); val oldLegacy = Files.readAllBytes(f.legacy)
+            val decline = LegacyRoomRecoverySession.runPreparingCore(f.core, f.legacy, f.target, f.root,
+                f.root.resolve("old-assets"), f.root.resolve("new-assets"), owner, ::room, { 10 }) { review ->
+                assertTrue(owner.held)
+                assertTrue(Files.exists(CoreStorePairedCutover.receiptFor(f.target)))
+                assertEquals("responses", review.source.providers.single { it.id == "p" }.legacy?.apiFormat)
+                null
+            }
+            assertNull(decline)
+            assertFalse(owner.held)
+            val applied = LegacyRoomRecoverySession.runPreparingCore(f.core, f.legacy, f.target, f.root,
+                f.root.resolve("old-assets"), f.root.resolve("new-assets"), owner, ::room, { 10 }) { review ->
+                assertTrue(owner.held)
+                LegacyRecoveryChoices(review).selection(setOf("old"), setOf("c"), setOf("p"))
+            }
+            assertEquals(LegacyRecoveryApplied(1, 1, 1), applied)
+            assertTrue(oldCore.contentEquals(Files.readAllBytes(f.core)))
+            assertTrue(oldLegacy.contentEquals(Files.readAllBytes(f.legacy)))
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun rejectsLegacyAssetOverlapBeforeAnyCoreMigration(): Unit = runBlocking {
+        val f = fixture(prepareDestination = false, separateLegacyDirectory = true)
+        try {
+            val original = Files.readAllBytes(f.legacy)
+            var selected = false
+            assertFails { LegacyRoomRecoverySession.runPreparingCore(f.core, f.legacy, f.target, f.root,
+                f.legacy.parent, f.root.resolve("new-assets"), Owner(), ::room, { 10 }) { selected = true; null } }
+            assertFalse(selected)
+            assertFalse(Files.exists(f.target))
+            assertFalse(Files.exists(CoreStorePairedCutover.receiptFor(f.target)))
+            assertTrue(original.contentEquals(Files.readAllBytes(f.legacy)))
+        } finally { f.root.toFile().deleteRecursively() }
+    }
+
+    @Test fun rejectsAssetRootsContainingPrivateScratchIncludingSymlinkAliases(): Unit = runBlocking {
+        val f = fixture(prepareDestination = false, separateLegacyDirectory = true)
+        try {
+            val assets = Files.createDirectory(f.root.resolve("assets"))
+            val scratch = Files.createDirectory(assets.resolve("scratch"))
+            val alias = runCatching { Files.createSymbolicLink(f.root.resolve("asset-link"), assets) }.getOrNull()
+            val before = Files.readAllBytes(f.legacy)
+            for (sourceAssets in listOfNotNull(assets, alias)) {
+                var reviewed = false
+                assertFails { LegacyRoomRecoverySession.runPreparingCore(f.core, f.legacy, f.target, scratch,
+                    sourceAssets, f.root.resolve("new-assets"), Owner(), ::room, { 10 }) { reviewed = true; null } }
+                assertFalse(reviewed)
+                assertFalse(Files.exists(f.target))
+                assertFalse(Files.exists(CoreStorePairedCutover.receiptFor(f.target)))
+                assertTrue(before.contentEquals(Files.readAllBytes(f.legacy)))
+            }
+        } finally { f.root.toFile().deleteRecursively() }
+    }
 
     @Test fun explicitSelectionAppliesAtomicallyAndQueuesSyncWithoutChangingSources(): Unit = runBlocking {
         val f = fixture(); val owner = Owner(); val provenance = Provenance()

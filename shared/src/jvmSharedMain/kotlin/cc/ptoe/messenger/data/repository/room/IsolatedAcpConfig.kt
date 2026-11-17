@@ -22,4 +22,6 @@ internal data class IsolatedAcpConfig(
     val mcpCatalog: AcpPublishedMcpCatalog,
     val transport: (AcpWorkerBinding) -> AcpLineTransport,
     val endpoints: AcpGatewayEndpointFactory = LoopbackAcpGatewayEndpointFactory,
+    /** Requires the same lifetime fence on provider, model and Cloud writers as on ACP settings. */
+    val allowByokTakeover: Boolean = false,
 )

@@ -52,6 +52,9 @@ internal sealed interface AndroidLegacyRecoveryState {
     data object Uncertain : AndroidLegacyRecoveryState
 }
 
+/** Asset paths for the isolated paired Core-to-Room preparation. */
+internal data class AndroidLegacyCorePreparation(val sourceAssets: Path, val destinationAssets: Path)
+
 /**
  * Bridges an Android UI to the existing offline session. The supplied owner must already prove
  * lifetime exclusion of every old Core, Runtime, legacy and Room writer and path replacement;
@@ -69,6 +72,7 @@ internal class AndroidLegacyRecoveryCoordinator(
     private val ownership: RoomStoreOwnership,
     private val openRoom: (Path) -> LocalDatabase,
     private val now: () -> Long,
+    private val preparation: AndroidLegacyCorePreparation? = null,
 ) {
     private val lock = Any()
     private val mutableState = MutableStateFlow<AndroidLegacyRecoveryState>(AndroidLegacyRecoveryState.Idle)
@@ -86,7 +90,7 @@ internal class AndroidLegacyRecoveryCoordinator(
         }
         return try {
             val result = withContext(Dispatchers.IO) {
-                LegacyRoomRecoverySession.run(core, legacy, destination, scratchParent, ownership, openRoom, now) { review ->
+                val choose: suspend (LegacyRecoveryReview) -> LegacyRecoverySelection? = { review ->
                     val choice = CompletableDeferred<LegacyRecoverySelection?>()
                     synchronized(lock) {
                         pending = choice
@@ -94,6 +98,10 @@ internal class AndroidLegacyRecoveryCoordinator(
                     }
                     try { choice.await() } finally { synchronized(lock) { if (pending === choice) pending = null } }
                 }
+                val assets = preparation
+                if (assets == null) LegacyRoomRecoverySession.run(core, legacy, destination, scratchParent, ownership, openRoom, now, choose)
+                else LegacyRoomRecoverySession.runPreparingCore(core, legacy, destination, scratchParent,
+                    assets.sourceAssets, assets.destinationAssets, ownership, openRoom, now, choose)
             }
             synchronized(lock) { mutableState.value = result?.let(AndroidLegacyRecoveryState::Completed) ?: AndroidLegacyRecoveryState.Cancelled }
             result

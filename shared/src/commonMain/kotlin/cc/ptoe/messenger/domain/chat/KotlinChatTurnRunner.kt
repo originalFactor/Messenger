@@ -62,6 +62,11 @@ data class KotlinDelegationParent(val turnId: String, val callId: String)
 @Serializable
 data class KotlinScheduledTurnClaim(val taskId: String, val token: String, val startedAt: Long, val projectId: String? = null)
 
+/** Ephemeral relay credentials: never serialize or log this value. */
+class KotlinRemotePromptIdentity(val requestId: String, val cookie: String) {
+    override fun toString() = "KotlinRemotePromptIdentity(redacted)"
+}
+
 data class KotlinTurnSnapshot(
     val id: String,
     val conversationId: String,
@@ -151,7 +156,7 @@ sealed interface KotlinTurnCommand {
     val scheduledRun: Boolean
     val delegatedRun: Boolean
     val delegationParent: KotlinDelegationParent?
-    data class Send(override val conversationId: String, val content: String, val partsJson: String?, override val disableTools: Boolean = false, override val supportsToolApproval: Boolean = true, override val summarizePrompt: String = "Summarize the conversation while preserving decisions, facts, and open tasks.", override val remoteScope: KotlinRemoteControlScope? = null, override val scheduledRun: Boolean = false, override val delegatedRun: Boolean = false, override val delegationParent: KotlinDelegationParent? = null, val scheduledClaim: KotlinScheduledTurnClaim? = null) : KotlinTurnCommand
+    data class Send(override val conversationId: String, val content: String, val partsJson: String?, override val disableTools: Boolean = false, override val supportsToolApproval: Boolean = true, override val summarizePrompt: String = "Summarize the conversation while preserving decisions, facts, and open tasks.", override val remoteScope: KotlinRemoteControlScope? = null, override val scheduledRun: Boolean = false, override val delegatedRun: Boolean = false, override val delegationParent: KotlinDelegationParent? = null, val scheduledClaim: KotlinScheduledTurnClaim? = null, val remotePrompt: KotlinRemotePromptIdentity? = null) : KotlinTurnCommand
     data class Retry(override val conversationId: String, val messageId: String, override val disableTools: Boolean = false, override val supportsToolApproval: Boolean = true, override val summarizePrompt: String = "Summarize the conversation while preserving decisions, facts, and open tasks.", override val remoteScope: KotlinRemoteControlScope? = null, override val scheduledRun: Boolean = false, override val delegatedRun: Boolean = false, override val delegationParent: KotlinDelegationParent? = null) : KotlinTurnCommand
     data class Regenerate(override val conversationId: String, val messageId: String, val messageGroup: List<String>? = null, override val disableTools: Boolean = false, override val supportsToolApproval: Boolean = true, override val summarizePrompt: String = "Summarize the conversation while preserving decisions, facts, and open tasks.", override val remoteScope: KotlinRemoteControlScope? = null, override val scheduledRun: Boolean = false, override val delegatedRun: Boolean = false, override val delegationParent: KotlinDelegationParent? = null) : KotlinTurnCommand
 }

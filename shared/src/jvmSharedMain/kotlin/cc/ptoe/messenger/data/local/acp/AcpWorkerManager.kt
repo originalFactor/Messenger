@@ -22,6 +22,7 @@ internal data class AcpWorkerReady(val skillsGatewayAvailable: Boolean, val agen
 internal class AcpWorkerConfiguration(
     val command: String, arguments: List<String>, environment: Map<String, String>,
     mcpServers: JsonArray, val allowDelegation: Boolean, coreToolScope: Set<String>,
+    val providerTakeover: Boolean = false,
 ) {
     val arguments: List<String> = arguments.toList()
     val environment: Map<String, String> = environment.toMap()
@@ -35,7 +36,8 @@ internal class AcpWorkerConfiguration(
 
     internal fun sameAs(other: AcpWorkerConfiguration): Boolean =
         command == other.command && arguments == other.arguments && environment == other.environment &&
-            mcpServers == other.mcpServers && allowDelegation == other.allowDelegation && coreToolScope == other.coreToolScope
+            mcpServers == other.mcpServers && allowDelegation == other.allowDelegation && coreToolScope == other.coreToolScope &&
+            providerTakeover == other.providerTakeover
 }
 
 /** Creating a handle performs no I/O; stopAndAwait must prove the process and its side effects stopped. */
@@ -205,7 +207,7 @@ internal class AcpWorkerManager(
             currentCoroutineContext().ensureActive()
             authority.verify(draft, configuration)
             val snapshot = AcpWorkerConfiguration(configuration.command, configuration.arguments, configuration.environment, configuration.mcpServers,
-                configuration.allowDelegation && !draft.delegated, if (draft.delegated) emptySet() else configuration.coreToolScope)
+                configuration.allowDelegation && !draft.delegated, if (draft.delegated) emptySet() else configuration.coreToolScope, configuration.providerTakeover)
             val ready = withTimeout(startupTimeoutMillis) { worker.process.start(draft, snapshot, worker.gateway) }
             check(ready.skillsGatewayAvailable || !needsGateway()) { "This ACP agent needs MCP SSE or HTTP support" }
             val id = ready.agentSessionId?.takeIf { it.isNotBlank() } ?: error("ACP agent returned no session ID")
@@ -292,7 +294,7 @@ internal class AcpWorkerManager(
                 val snapshot = AcpWorkerConfiguration(configuration.command, configuration.arguments.toList(), configuration.environment,
                     kotlinx.serialization.json.Json.parseToJsonElement(configuration.mcpServers.toString()) as JsonArray,
                     configuration.allowDelegation && !binding.delegated,
-                    if (binding.delegated) emptySet() else configuration.coreToolScope.toSet())
+                    if (binding.delegated) emptySet() else configuration.coreToolScope.toSet(), configuration.providerTakeover)
                 worker.ready = withTimeout(startupTimeoutMillis) { worker.process.start(binding, snapshot, worker.gateway) }
                 worker.configuration = snapshot
                 check(worker.ready!!.agentSessionId == null || worker.ready!!.agentSessionId == binding.agentSessionId) { "ACP worker restored a different session" }
@@ -300,7 +302,7 @@ internal class AcpWorkerManager(
             } else {
                 val effective = AcpWorkerConfiguration(configuration.command, configuration.arguments, configuration.environment,
                     configuration.mcpServers, configuration.allowDelegation && !binding.delegated,
-                    if (binding.delegated) emptySet() else configuration.coreToolScope)
+                    if (binding.delegated) emptySet() else configuration.coreToolScope, configuration.providerTakeover)
                 check(worker.configuration?.sameAs(effective) == true) { "ACP worker configuration changed; restart is required" }
             }
             workspace.requireLocalUnchanged(binding)

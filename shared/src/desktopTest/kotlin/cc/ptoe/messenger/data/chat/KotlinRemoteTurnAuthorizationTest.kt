@@ -53,6 +53,54 @@ class KotlinRemoteTurnAuthorizationTest {
     }
     private fun store(db: LocalDatabase) = RoomKotlinTurnStore(db, prepare, KotlinTurnToolPolicy { _, _, _ -> true })
 
+    @Test fun remotePromptAdmissionBindsCookieEpochAndDurableIdentity(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("remote-prompt-identity")
+        val path = dir.resolve("store.db")
+        fun open() = Room.databaseBuilder<LocalDatabase>(name = path.toString()).setDriver(BundledSQLiteDriver()).build()
+        var db = open()
+        var gate = RoomCloudProviderGate.forDao(db.cloudSync())
+        val requestId = java.util.UUID.randomUUID().toString()
+        try {
+            seed(db)
+            fun newStore() = RoomKotlinTurnStore(db, KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false }, gate)
+            fun command(cookie: String = "messenger_session=secret") = KotlinTurnCommand.Send("c", "hello", null,
+                disableTools = true, remoteScope = scope, remotePrompt = KotlinRemotePromptIdentity(requestId, cookie))
+            val store = newStore()
+            assertFailsWith<IllegalStateException> { store.admit(command("wrong-cookie")) }
+            assertTrue(db.rows().messagesFor(listOf("c")).isEmpty())
+            val provider = checkNotNull(db.rows().provider("p"))
+            db.rows().upsertProviders(listOf(provider.copy(apiFormat = "responses", nativeWebSearch = true)))
+            val blocked = assertIs<KotlinTurnAdmission.Rejected>(store.admit(command()))
+            assertEquals("Provider web search is unavailable for remote prompts", blocked.reason)
+            assertNull(db.rows().getValue("kotlin_remote_prompt_v1:$requestId"))
+            db.rows().upsertProviders(listOf(provider))
+            val turn = assertIs<KotlinTurnAdmission.Accepted>(store.admit(command())).turnId
+            assertTrue(store.claim(turn, false))
+            val persisted = checkNotNull(db.rows().getValue("kotlin_turn_v1:$turn")).value
+            assertFalse(persisted.contains("messenger_session=secret"))
+            db.rows().upsertValues(listOf(KeyValueRow("cloud_session", "messenger_session=rotated")))
+            assertFailsWith<IllegalStateException> { store.beginProvider(turn) }
+            db.rows().upsertValues(listOf(KeyValueRow("cloud_session", "messenger_session=secret")))
+            store.cancel(turn); store.release(turn)
+            val second = command().copy(remotePrompt = KotlinRemotePromptIdentity(java.util.UUID.randomUUID().toString(), "messenger_session=secret"))
+            val secondTurn = assertIs<KotlinTurnAdmission.Accepted>(store.admit(second)).turnId
+            assertTrue(store.claim(secondTurn, false))
+            gate.invalidate(SyncSession("account", "generation"))
+            assertFailsWith<IllegalStateException> { store.beginProvider(secondTurn) }
+            store.cancel(secondTurn); store.release(secondTurn)
+            gate.shutdown(); db.close()
+            db = open(); gate = RoomCloudProviderGate.forDao(db.cloudSync())
+            val before = db.rows().messagesFor(listOf("c"))
+            assertFailsWith<IllegalStateException> { newStore().admit(command()) }
+            assertEquals(before, db.rows().messagesFor(listOf("c")))
+            gate.invalidate(SyncSession("account", "generation"))
+            val expired = KotlinTurnCommand.Send("c", "second", null, disableTools = true, remoteScope = scope,
+                remotePrompt = KotlinRemotePromptIdentity(java.util.UUID.randomUUID().toString(), "messenger_session=secret"))
+            assertFailsWith<IllegalStateException> { newStore().admit(expired) }
+            assertEquals(before, db.rows().messagesFor(listOf("c")))
+        } finally { gate.shutdown(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun authenticatedCancelRequiresExactOwnerCookieEpochAndUnexpiredSession(): Unit = runBlocking {
         val dir = Files.createTempDirectory("remote-cancel-authority")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("store.db").toString()).setDriver(BundledSQLiteDriver()).build()

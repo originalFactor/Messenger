@@ -45,7 +45,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 
 /**
- * All profile, MCP, capability, project and Cloud writers must honor the same lease.
+ * All profile, MCP, capability, project, provider, model and Cloud writers must honor the same lease.
  * A production fence supporting multiple retained workers must admit shared reader leases.
  * All writers must enter through the ACP owner's [RoomAcpBackgroundOwner.withConfigurationWrite].
  */
@@ -812,6 +812,7 @@ internal class RoomAcpBackgroundOwner private constructor(
             foreground: () -> (() -> Unit) = ::acquireAcpForeground,
             afterAdmission: suspend () -> Unit = {},
             beforeHandoff: suspend () -> Unit = {},
+            allowByokTakeover: Boolean = false,
         ): RoomAcpBackgroundOwner {
             db.useReaderConnection { connection -> connection.usePrepared("PRAGMA database_list") {
                 check(it.step() && it.getText(1) == "main" && Files.isSameFile(Paths.get(it.getText(2)), databasePath)) { "ACP owner database does not match Room" }
@@ -826,13 +827,14 @@ internal class RoomAcpBackgroundOwner private constructor(
                 val coordinator = AcpTurnCoordinator(RoomAcpSessionJournal(db, guard), now)
                 val recorded = AcpWorkerFactory { binding ->
                     val current = AtomicReference(binding)
-                    val worker = factory(binding, coordinator.eventsFor { current.get() })
+                    val raw = factory(binding, coordinator.eventsFor { current.get() })
+                    val worker = if (allowByokTakeover) RoomAcpConfiguredWorker(db, raw) else raw
                     RecordingAcpWorker(binding, worker, coordinator) { current.set(it) }
                 }
                 manager = AcpWorkerManager(recorded, RoomAcpWorkspaceAuthority(db), backend, needsGateway,
                     holdForSettlement = retainReusableWorkers)
                 val owner = RoomAcpBackgroundOwner(db, exclusive, RoomAcpRequestLedger(db), manager, coordinator,
-                    RoomAcpNewSessionAuthority(db, catalog), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit, foreground, afterAdmission, beforeHandoff)
+                    RoomAcpNewSessionAuthority(db, catalog, allowByokTakeover), configurationFence, source, now, retainReusableWorkers, afterQuiescentCommit, foreground, afterAdmission, beforeHandoff)
                 withContext(NonCancellable) { shutdown.registerStop { owner.shutdown() } }
                 return owner
             } catch (failure: Throwable) {

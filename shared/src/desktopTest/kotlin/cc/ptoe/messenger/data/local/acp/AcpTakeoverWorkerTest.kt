@@ -17,7 +17,7 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class AcpTakeoverWorkerTest {
-    private class Transport(private val script: Path) : AcpLineTransport {
+    internal class Transport(private val script: Path) : AcpLineTransport {
         lateinit var process: Process
         lateinit var input: BufferedWriter
         lateinit var output: BufferedReader
@@ -40,7 +40,7 @@ class AcpTakeoverWorkerTest {
         override suspend fun liveTools() = emptyList<AcpGatewayTool>()
         override suspend fun execute(turnId: String, name: String, arguments: JsonObject) = ToolExecutionResult("unexpected", isError = true)
     }
-    private val script = """
+    internal val script = """
 import json, os, sys, urllib.request, urllib.error
 def send(**fields):
     print(json.dumps(dict(jsonrpc="2.0", **fields)), flush=True)

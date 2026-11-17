@@ -40,6 +40,12 @@ internal fun interface RoomRemoteTaskDecision {
     suspend fun decide(scope: KotlinRemoteControlScope, cookie: String, conversationId: String, turnId: String, option: String)
 }
 
+/** The relay identity is durably admitted by the same Room owner as the chat turn. */
+internal fun interface RoomRemotePrompt {
+    suspend fun run(scope: KotlinRemoteControlScope, cookie: String, requestId: String, conversationId: String,
+        text: String, permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject
+}
+
 /**
  * Remote read-only commands over the same Room owner as chat and Cloud. Each database
  * snapshot checks the account-scoped explicit control grant. Notification access is
@@ -57,6 +63,7 @@ internal class RoomDeviceControlDispatcher(
     private val onModeChanged: () -> Unit = {},
     private val remoteCancel: RoomRemoteTaskCancel? = null,
     private val remoteDecision: RoomRemoteTaskDecision? = null,
+    private val remotePrompt: RoomRemotePrompt? = null,
 ) : RoomDeviceCommandDispatcher {
     private class Failure(val code: String, override val message: String) : IllegalStateException(message)
     private data class SessionPage(val title: String, val writable: Boolean?, val messages: List<JsonObject>, val before: String?)
@@ -67,7 +74,15 @@ internal class RoomDeviceControlDispatcher(
         modeGate?.requireOwner(db.cloudSync())
     }
 
-    override suspend fun dispatch(grantEpoch: Long, command: JsonObject, permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject {
+    override suspend fun dispatch(grantEpoch: Long, command: JsonObject, permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject =
+        dispatchCommand(grantEpoch, null, command, permissions, update)
+
+    override suspend fun dispatchWithIdentity(grantEpoch: Long, requestId: String, command: JsonObject,
+        permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject =
+        dispatchCommand(grantEpoch, requestId, command, permissions, update)
+
+    private suspend fun dispatchCommand(grantEpoch: Long, requestId: String?, command: JsonObject,
+        permissions: ReceiveChannel<String>, update: suspend (JsonObject) -> Unit): JsonObject {
         val scope = scope.copy(grantEpoch = grantEpoch)
         return try {
             when (val action = command.requiredText("action")) {
@@ -130,7 +145,9 @@ internal class RoomDeviceControlDispatcher(
                     if (parts.isNotEmpty() && parts.joinToString("") { (it as JsonObject)["text"].stringOrNull().orEmpty() } != text)
                         throw Failure("bad_request", "Prompt text and content differ")
                     transaction(scope) { rows -> requireSession(rows, id, requireOwnedProject = true) }
-                    (operations ?: throw Failure("unavailable", "Remote prompts are unavailable")).prompt(scope, id, text, permissions, update)
+                    if (remotePrompt != null) remotePrompt.run(scope, stored.cookie,
+                        requestId ?: throw Failure("unavailable", "Remote request identity is unavailable"), id, text, permissions, update)
+                    else (operations ?: throw Failure("unavailable", "Remote prompts are unavailable")).prompt(scope, id, text, permissions, update)
                 }
                 "setMode" -> {
                     command.only("action", "sessionId", "writable")

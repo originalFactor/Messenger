@@ -31,6 +31,30 @@ internal object LegacyRoomRecoverySession {
     suspend fun run(core: Path, legacy: Path, destination: Path, scratchParent: Path,
         ownership: RoomStoreOwnership, openRoom: (Path) -> LocalDatabase, now: () -> Long,
         choose: suspend (LegacyRecoveryReview) -> LegacyRecoverySelection?): LegacyRecoveryApplied? =
+        runInternal(core, legacy, destination, scratchParent, ownership, openRoom, now, null, choose)
+
+    /** Prepare a paired Core migration before review, while retaining the same external owner. */
+    suspend fun runPreparingCore(core: Path, legacy: Path, destination: Path, scratchParent: Path,
+        sourceAssets: Path, destinationAssets: Path, ownership: RoomStoreOwnership,
+        openRoom: (Path) -> LocalDatabase, now: () -> Long,
+        choose: suspend (LegacyRecoveryReview) -> LegacyRecoverySelection?): LegacyRecoveryApplied? =
+        runInternal(core, legacy, destination, scratchParent, ownership, openRoom, now,
+            { scratch, verify ->
+                requirePreparationPaths(core, legacy, destination, sourceAssets, destinationAssets, scratch)
+                verify()
+                // No backend is exposed during preparation, so there are no Room users to join.
+                val borrowed = object : RoomStoreOwnership {
+                    override suspend fun <T> withExclusiveOwnership(block: suspend () -> T): T = block()
+                }
+                RoomStoreStartup.withLeasedCoreStore(core, destination, sourceAssets, destinationAssets,
+                    borrowed, RoomManagedShutdown { }, openRoom, verifyLegacy = verify) { }
+                verify()
+            }, choose)
+
+    private suspend fun runInternal(core: Path, legacy: Path, destination: Path, scratchParent: Path,
+        ownership: RoomStoreOwnership, openRoom: (Path) -> LocalDatabase, now: () -> Long,
+        prepare: (suspend (scratch: Path, verify: suspend () -> Unit) -> Unit)?,
+        choose: suspend (LegacyRecoveryReview) -> LegacyRecoverySelection?): LegacyRecoveryApplied? =
         ownership.withExclusiveOwnership {
             val source = legacy.toAbsolutePath().normalize()
             val corePath = core.toAbsolutePath().normalize()
@@ -51,6 +75,10 @@ internal object LegacyRoomRecoverySession {
                 check(original["-journal"]?.size.let { it == null || it == 0L }) {
                     "A nonempty legacy rollback journal requires separate offline recovery"
                 }
+                val verifyOriginal: suspend () -> Unit = {
+                    check(capture(source, null) == original) { "Legacy source changed during recovery" }
+                }
+                prepare?.invoke(directory, verifyOriginal)
                 val borrowed = object : RoomStoreOwnership {
                     override suspend fun <T> withExclusiveOwnership(block: suspend () -> T): T = block()
                 }
@@ -130,6 +158,32 @@ internal object LegacyRoomRecoverySession {
             check(aExists || Files.notExists(a, NOFOLLOW_LINKS)) { "Cannot inspect recovery path" }
             check(bExists || Files.notExists(b, NOFOLLOW_LINKS)) { "Cannot inspect recovery path" }
             if (aExists && bExists) check(!Files.isSameFile(a, b)) { "Recovery database paths alias" }
+        }
+    }
+
+    /** Publication and asset paths may never be inside, alias, or contain an original database. */
+    private fun requirePreparationPaths(core: Path, legacy: Path, destination: Path, sourceAssets: Path, destinationAssets: Path, scratch: Path) {
+        fun normalized(path: Path) = path.toAbsolutePath().normalize()
+        fun resolved(path: Path): Path {
+            val absolute = normalized(path)
+            return if (Files.exists(absolute, NOFOLLOW_LINKS)) absolute.toRealPath()
+            else requireNotNull(absolute.parent).toRealPath().resolve(absolute.fileName)
+        }
+        val sources = listOf(normalized(core), normalized(legacy), normalized(destination))
+        check(sources[1].parent != sources[2].parent && sources[1].parent.toRealPath() != sources[2].parent.toRealPath()) {
+            "Legacy database and Room publication require separate directories"
+        }
+        val roots = listOf(sourceAssets, destinationAssets).map(::resolved)
+        val scratchRoot = scratch.toRealPath()
+        for (root in roots) check(!scratchRoot.startsWith(root) && !root.startsWith(scratchRoot)) {
+            "Private recovery scratch and asset paths overlap"
+        }
+        for (db in sources) for (suffix in allSuffixes) {
+            val path = db.resolveSibling(db.fileName.toString() + suffix)
+            val absolute = resolved(path)
+            for (root in roots) check(!absolute.startsWith(root) && !root.startsWith(absolute)) {
+                "Recovery database and asset paths overlap"
+            }
         }
     }
 }

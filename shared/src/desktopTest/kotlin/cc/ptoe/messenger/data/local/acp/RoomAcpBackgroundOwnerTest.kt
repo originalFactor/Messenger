@@ -8,10 +8,16 @@ import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.ProjectRow
+import cc.ptoe.messenger.data.local.room.ProviderRow
+import cc.ptoe.messenger.data.local.room.ModelRow
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
 import cc.ptoe.messenger.data.repository.room.AcpSessionMutationGate
 import cc.ptoe.messenger.data.repository.room.RoomAcpConversationStore
+import cc.ptoe.messenger.data.repository.room.RoomAgentRepository
+import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.tool.ToolExecutionResult
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.lang.reflect.Proxy
@@ -81,13 +87,13 @@ class RoomAcpBackgroundOwnerTest {
         }
     }
 
-    private suspend fun fixture(dir: Path, agentSessionId: String = "session"): Pair<LocalDatabase, AcpWorkerBinding> {
+    private suspend fun fixture(dir: Path, agentSessionId: String = "session", profileId: String = "agent"): Pair<LocalDatabase, AcpWorkerBinding> {
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
         val workspace = Files.createDirectory(dir.resolve("project")).toString()
         db.rows().upsertValues(listOf(KeyValueRow("device_id", "device"), KeyValueRow("device_control_config",
             """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"fake","args":[],"env":{}}]}""")))
         db.rows().upsertProjects(listOf(ProjectRow("project", "Project", workspace, "device", 1, 1)))
-        val binding = AcpWorkerBinding("acp:one", "agent", "project", workspace, agentSessionId, false)
+        val binding = AcpWorkerBinding("acp:one", profileId, "project", workspace, agentSessionId, false)
         val setup = object : AcpSessionMutationGate {
             override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T = action()
         }
@@ -110,13 +116,56 @@ class RoomAcpBackgroundOwnerTest {
     private suspend fun owner(db: LocalDatabase, binding: AcpWorkerBinding, lifecycle: RoomManagedShutdown,
         factory: (AcpWorkerBinding, AcpStdioEvents) -> AcpWorkerProcess, source: AcpSessionConfigurationSource = AcpSessionConfigurationSource { binding to config },
         fence: Fence = Fence(), reuse: Boolean = false, afterCommit: suspend () -> Unit = {},
-        foreground: () -> (() -> Unit) = { {} }, afterAdmission: suspend () -> Unit = {}, beforeHandoff: suspend () -> Unit = {}) =
+        foreground: () -> (() -> Unit) = { {} }, afterAdmission: suspend () -> Unit = {}, beforeHandoff: suspend () -> Unit = {}, allowByokTakeover: Boolean = false) =
         RoomAcpBackgroundOwner.attach(db, Path.of(db.openHelperPathForTest()), lifecycle, AcpPriorOwnerBarrier { }, fence, source,
             AcpPublishedMcpCatalog { emptyList() }, backend, { false }, factory, now = { 1000 }, retainReusableWorkers = reuse,
-            afterQuiescentCommit = afterCommit, foreground = foreground, afterAdmission = afterAdmission, beforeHandoff = beforeHandoff)
+            afterQuiescentCommit = afterCommit, foreground = foreground, afterAdmission = afterAdmission, beforeHandoff = beforeHandoff, allowByokTakeover = allowByokTakeover)
 
     private suspend fun LocalDatabase.openHelperPathForTest(): String = useReaderConnection { connection ->
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
+    }
+
+    @Test fun optedInByokTakeoverUsesRoomScopeThroughRealStdioAndRelay(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-takeover")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session", profileId = "claude-code")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val script = dir.resolve("agent.py"); Files.writeString(script, AcpTakeoverWorkerTest().script)
+        val requests = AtomicInteger()
+        var authorization: String? = null
+        val upstream = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        upstream.createContext("/v1/messages") { exchange ->
+            requests.incrementAndGet(); authorization = exchange.requestHeaders.getFirst("x-api-key")
+            exchange.requestBody.readBytes()
+            val body = """{"id":"response","content":[{"type":"text","text":"relayed"}]}""".encodeToByteArray()
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, body.size.toLong()); exchange.responseBody.use { it.write(body) }
+        }
+        upstream.start()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet(), providerTakeover = true)
+        var transport: AcpTakeoverWorkerTest.Transport? = null
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"claude-code","name":"Claude","enabled":true,"command":"python3","args":[],"env":{},"providerTakeover":true}]}""")))
+            db.rows().upsertProviders(listOf(ProviderRow("p", "BYOK", "http://127.0.0.1:${upstream.address.port}/v1", "PROVIDER-SECRET", "messages", false, 1, 1)))
+            db.rows().upsertModels(listOf(ModelRow("model", "p", "upstream-model", "Model", true, 0, null, null, null, null,
+                "text", "text", false, false, false, false, 1, null, null)))
+            RoomAgentRepository(db).ensureDefaultAgent(Agent("default", "Default", systemPrompt = "", defaultModelId = "model", temperature = 0.7f,
+                topP = 1f, maxTokens = null, isDefault = true, toolsEnabled = false, createdAt = 1, updatedAt = 1))
+            val owner = owner(db, binding, lifecycle, { _, events ->
+                val wire = AcpTakeoverWorkerTest.Transport(script).also { transport = it }
+                AcpStdioWorker(wire, AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config }, allowByokTakeover = true)
+            val turn = UUID.randomUUID().toString()
+            owner.start(turn, binding.conversationId, content())
+            withTimeout(15_000) { while (owner.events(turn, 0)["done"]?.jsonPrimitive?.boolean != true) delay(10) }
+            assertTrue(owner.history(binding.conversationId, null).toString().contains("relayed"))
+            assertEquals(1, requests.get())
+            assertEquals("PROVIDER-SECRET", authorization)
+            assertFalse(checkNotNull(transport).suppliedEnvironment.values.any { it.contains("PROVIDER-SECRET") })
+            assertFalse(checkNotNull(transport).process.isAlive)
+            val authority = RoomAcpNewSessionAuthority(db, AcpPublishedMcpCatalog { emptyList() }, allowTakeover = true)
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config", """{"agents":[{"id":"claude-code","name":"Claude","enabled":true,"command":"python3","args":[],"env":{},"providerTakeover":false}]}""")))
+            assertFailsWith<IllegalStateException> { authority.verify(binding, config) }
+        } finally { lifecycle.stopAndAwait(); upstream.stop(0); db.close(); dir.toFile().deleteRecursively() }
     }
 
     @Test fun steeringUsesLiveOwnerAndPersistsInjectedTypedContent(): Unit = runBlocking {

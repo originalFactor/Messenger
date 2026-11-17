@@ -14,7 +14,8 @@ import kotlinx.serialization.json.*
 internal fun interface AcpPublishedMcpCatalog { suspend fun snapshotWhenReady(): List<cc.ptoe.messenger.domain.mcp.McpServerConfig> }
 
 /** New workers may use only the currently configured profile and device-local project. */
-internal class RoomAcpNewSessionAuthority(private val db: LocalDatabase, private val catalog: AcpPublishedMcpCatalog) : AcpNewSessionAuthority {
+internal class RoomAcpNewSessionAuthority(private val db: LocalDatabase, private val catalog: AcpPublishedMcpCatalog,
+    private val allowTakeover: Boolean = false) : AcpNewSessionAuthority {
     override suspend fun verify(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration) {
         val published = withTimeout(10_000) { acpMcpSnapshot(catalog.snapshotWhenReady()) }
         check(published == configuration.mcpServers) { "ACP MCP configuration changed" }
@@ -35,7 +36,9 @@ internal class RoomAcpNewSessionAuthority(private val db: LocalDatabase, private
                 value.booleanOrNull ?: error("Invalid ACP profile setting")
             } ?: default
             check(booleanField("enabled", true)) { "ACP profile is disabled" }
-            check(!booleanField("providerTakeover", false)) { "ACP model relay is not yet available" }
+            val takeover = booleanField("providerTakeover", false)
+            check(configuration.providerTakeover == takeover) { "ACP provider takeover setting changed" }
+            check(!takeover || allowTakeover && binding.profileId in setOf("codex", "claude-code")) { "ACP model relay is unavailable for this profile" }
             val command = (profile["command"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP command")
             val args = (profile["args"] as? JsonArray)?.map { (it as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP argument") } ?: emptyList()
             val env = (profile["env"] as? JsonObject)?.mapValues { (_, value) -> (value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP environment") } ?: emptyMap()

@@ -5,6 +5,7 @@ import cc.ptoe.messenger.data.chat.KotlinTurnPresentation
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.domain.chat.KotlinChatTurnRunner
 import cc.ptoe.messenger.domain.chat.KotlinRemoteControlScope
+import cc.ptoe.messenger.domain.chat.KotlinRemotePromptIdentity
 import cc.ptoe.messenger.domain.chat.KotlinTurnAdmission
 import cc.ptoe.messenger.domain.chat.KotlinTurnCommand
 import cc.ptoe.messenger.domain.chat.KotlinTurnPhase
@@ -43,12 +44,15 @@ internal class RoomRemoteTurnOperations(private val store: RoomKotlinTurnStore, 
         text: String,
         permissions: ReceiveChannel<String>,
         update: suspend (JsonObject) -> Unit,
+        identity: KotlinRemotePromptIdentity? = null,
+        admit: suspend (suspend () -> KotlinTurnAdmission) -> KotlinTurnAdmission = { it() },
     ): JsonObject = coroutineScope {
         var accepted: String? = null
         var terminal = false
         var decisions: Job? = null
         try {
-            val admitted = runner.submit(KotlinTurnCommand.Send(conversationId, text, null, remoteScope = scope)) { accepted = it }
+            val admitted = admit { runner.submit(KotlinTurnCommand.Send(conversationId, text, null, disableTools = identity != null,
+                remoteScope = scope, remotePrompt = identity)) { accepted = it } }
             val turnId = when (admitted) {
                 is KotlinTurnAdmission.Accepted -> admitted.turnId
                 KotlinTurnAdmission.ModelRequired -> return@coroutineScope errorEvent("A model is required")
