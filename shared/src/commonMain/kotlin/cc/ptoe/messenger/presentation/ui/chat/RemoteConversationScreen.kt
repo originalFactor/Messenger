@@ -135,9 +135,24 @@ internal fun RemoteConversationScreen(deviceId: String, sessionId: String, onBac
         }
     }
     val permission = events.lastOrNull { it.text("type") == "Permission" }
-    val live = events.filter { it.text("type") == "TextDelta" }.joinToString("") { it.text("text") }
-    val messages = remember(sessionId, rows, live, running, taskFailure, taskId) {
-        val history = acpChatMessages(sessionId, rows).let { existing ->
+    val mediaLabels = AcpContentLabels(stringResource(Res.string.chat_picture), stringResource(Res.string.acp_media_audio),
+        stringResource(Res.string.acp_media_attachment), stringResource(Res.string.acp_details_omitted))
+    val live = buildString {
+        events.filter { it.text("type") == "TextDelta" }.forEach { event ->
+            val label = when (event.text("contentType")) {
+                "image" -> mediaLabels.image
+                "audio" -> mediaLabels.audio
+                "resource", "resource_link" -> mediaLabels.attachment
+                else -> null
+            }
+            if (label == null) append(event.text("text")) else {
+                if (isNotEmpty() && last() != '\n') append('\n')
+                append(label).append('\n')
+            }
+        }
+    }
+    val messages = remember(sessionId, rows, live, running, taskFailure, taskId, mediaLabels) {
+        val history = acpChatMessages(sessionId, rows, labels = mediaLabels).let { existing ->
             if (running && live.isNotBlank() && existing.lastOrNull()?.let { it.role == MessageRole.ASSISTANT && it.content.isBlank() } == true)
                 existing.dropLast(1)
             else existing

@@ -236,16 +236,24 @@ internal class RoomDeviceControlDispatcher(
     private fun sanitizeAcp(row: JsonObject, notification: Boolean): JsonObject {
         require(!row["id"].stringOrNull().isNullOrBlank()) { "ACP message has no identity" }
         val text = shortText(row["text"].stringOrNull().orEmpty(), if (notification) 12_000 else 36_000)
+        val hasExtraContent = (row["content"] as? JsonArray).orEmpty().any {
+            (it as? JsonObject)?.get("type").stringOrNull() != "text"
+        }
+        val hasExtraEvents = (row["events"] as? JsonArray).orEmpty().any {
+            (it as? JsonObject)?.get("type").stringOrNull() != "TextDelta"
+        }
         val result = buildMap {
             listOf("id", "role", "status").forEach { key -> row[key].stringOrNull()?.let { put(key, JsonPrimitive(it)) } }
             put("text", JsonPrimitive(text))
             if (!notification) {
                 listOf("timestamp", "events", "content").forEach { key -> row[key]?.let { put(key, it) } }
+            } else if (hasExtraContent || hasExtraEvents) {
+                put("detailsOmitted", JsonPrimitive(true))
             }
         }
         val full = JsonObject(result)
         if (full.toString().encodeToByteArray().size <= 220_000) return full
-        return JsonObject(result - "events" - "content" + ("eventsTruncated" to JsonPrimitive(true)))
+        return JsonObject(result - "events" - "content" + mapOf("eventsTruncated" to JsonPrimitive(true), "detailsOmitted" to JsonPrimitive(true)))
     }
 
     private fun sanitizeTaskEvent(event: JsonObject): JsonObject? = when (event["type"].stringOrNull()) {

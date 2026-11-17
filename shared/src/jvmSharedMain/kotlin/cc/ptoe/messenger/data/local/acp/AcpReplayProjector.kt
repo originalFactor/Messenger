@@ -28,8 +28,15 @@ internal class AcpReplayProjector(private val now: () -> Long) {
             row = buildJsonObject { put("id", providedId ?: randomUuid()); put("role", role); put("text", ""); put("status", "sent"); put("timestamp", now()); if (role == "assistant") put("events", JsonArray(emptyList())) }
             messages.add(row)
         }
+        val content = update["content"] as? JsonObject
+        val contentType = (content?.get("type") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        val priorBlocks = (row["content"] as? JsonArray).orEmpty()
+        val keepBlock = kind in setOf("user_message_chunk", "agent_message_chunk") && contentType != null
         val extra = when (kind) {
-            "agent_message_chunk" -> buildJsonObject { put("type", "TextDelta"); put("text", text) }
+            "agent_message_chunk" -> buildJsonObject {
+                put("type", "TextDelta"); put("text", text)
+                if (keepBlock && contentType != "text") put("contentIndex", priorBlocks.size)
+            }
             "agent_thought_chunk" -> buildJsonObject { put("type", "ThoughtDelta"); put("text", text) }
             "tool_call", "tool_call_update" -> buildJsonObject { put("type", "ToolUpdate"); put("update", update) }
             else -> null
@@ -37,7 +44,12 @@ internal class AcpReplayProjector(private val now: () -> Long) {
         val currentText = row["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val nextText = if (kind == "user_message_chunk" || kind == "agent_message_chunk") currentText + text else currentText
         val entries = (row["events"] as? JsonArray).orEmpty() + listOfNotNull(extra)
-        messages[messages.lastIndex] = JsonObject(row + mapOf("text" to JsonPrimitive(nextText)) + if (role == "assistant") mapOf("events" to JsonArray(entries)) else emptyMap())
+        // Keep the original typed ACP blocks, including image/resource data and metadata.
+        // Text remains in the existing text/events fields used by the chat renderer.
+        val blocks = priorBlocks + if (keepBlock) listOfNotNull(content) else emptyList()
+        messages[messages.lastIndex] = JsonObject(row + mapOf("text" to JsonPrimitive(nextText)) +
+            (if (role == "assistant") mapOf("events" to JsonArray(entries)) else emptyMap()) +
+            (if (blocks.isNotEmpty()) mapOf("content" to JsonArray(blocks)) else emptyMap()))
     }
     fun snapshot(): JsonArray = JsonArray(messages.toList())
 }

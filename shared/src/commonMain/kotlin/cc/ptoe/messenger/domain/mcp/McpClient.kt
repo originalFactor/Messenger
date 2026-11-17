@@ -60,6 +60,70 @@ import kotlinx.serialization.json.jsonPrimitive
 
 import cc.ptoe.messenger.data.util.ioDispatcher
 
+/** A protocol error is an actual reply, but does not prove that no side effect occurred. */
+internal sealed interface McpToolCallOutcome {
+    /** Retain the complete response so non-text blocks are not lost by the legacy text view. */
+    data class Result(val result: ToolExecutionResult, val rawResult: JsonObject) : McpToolCallOutcome
+    data class ProtocolError(val code: Int, val message: String) : McpToolCallOutcome
+    data object NotDispatched : McpToolCallOutcome
+    data class Unknown(val legacyResult: ToolExecutionResult, val legacyFailure: Exception? = null) : McpToolCallOutcome
+}
+
+private sealed interface McpPendingResponse {
+    data class Reply(val response: JsonRpcResponse, val validProtocol: Boolean) : McpPendingResponse
+    data class Closed(val code: Int) : McpPendingResponse
+}
+
+private sealed interface McpRequestOutcome {
+    data class Reply(val response: JsonRpcResponse, val validProtocol: Boolean) : McpRequestOutcome
+    data object NotDispatched : McpRequestOutcome
+    data class Unknown(val closeCode: Int? = null, val legacyFailure: Exception? = null) : McpRequestOutcome
+}
+
+private fun validMcpBase64(value: String?): Boolean {
+    if (value == null || value.length % 4 != 0) return false
+    var padding = 0
+    if (value.endsWith('=')) padding++
+    if (value.endsWith("==")) padding++
+    fun digit(c: Char): Int = when (c) {
+        in 'A'..'Z' -> c - 'A'
+        in 'a'..'z' -> c - 'a' + 26
+        in '0'..'9' -> c - '0' + 52
+        '+' -> 62
+        '/' -> 63
+        else -> -1
+    }
+    val end = value.length - padding
+    if ((0 until end).any { digit(value[it]) < 0 }) return false
+    if (padding > 0 && end == 0) return false
+    return when (padding) {
+        1 -> (digit(value[end - 1]) and 3) == 0
+        2 -> (digit(value[end - 1]) and 15) == 0
+        else -> true
+    }
+}
+
+private fun validMcpContent(content: JsonArray): Boolean = content.all { value ->
+    val block = value as? JsonObject ?: return@all false
+    fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    when (block.string("type")) {
+        "text" -> block.string("text") != null
+        "image", "audio" -> validMcpBase64(block.string("data")) && !block.string("mimeType").isNullOrBlank()
+        "resource_link" -> !block.string("name").isNullOrBlank() && !block.string("uri").isNullOrBlank()
+        "resource" -> {
+            val resource = block["resource"] as? JsonObject
+            if (resource == null) false else {
+                val hasText = resource.containsKey("text")
+                val hasBlob = resource.containsKey("blob")
+                !resource.string("uri").isNullOrBlank() && (hasText != hasBlob) &&
+                    (!hasText || resource.string("text") != null) && (!hasBlob || validMcpBase64(resource.string("blob"))) &&
+                    (resource["mimeType"] == null || resource.string("mimeType") != null)
+            }
+        }
+        else -> false
+    }
+}
+
 class McpClient(
     val config: McpServerConfig,
     private val bridgeFactory: () -> McpProcessBridge = { createPlatformMcpBridge() }
@@ -77,7 +141,7 @@ class McpClient(
     private val scope = CoroutineScope(ioDispatcher + Job())
     private var requestId = 0L
 
-    private val pendingRequests = mutableMapOf<Long, CompletableDeferred<JsonRpcResponse>>()
+    private val pendingRequests = mutableMapOf<Long, CompletableDeferred<McpPendingResponse>>()
     private val _tools = MutableStateFlow<List<ChatTool>>(emptyList())
     val tools: StateFlow<List<ChatTool>> = _tools.asStateFlow()
 
@@ -253,7 +317,16 @@ class McpClient(
         }
     }
 
-    suspend fun callTool(name: String, argumentsJson: String): ToolExecutionResult {
+    suspend fun callTool(name: String, argumentsJson: String): ToolExecutionResult =
+        when (val outcome = callToolOutcome(name, argumentsJson)) {
+            is McpToolCallOutcome.Result -> outcome.result
+            is McpToolCallOutcome.ProtocolError -> ToolExecutionResult("MCP error (${outcome.code}): ${outcome.message}", isError = true)
+            McpToolCallOutcome.NotDispatched -> ToolExecutionResult("Tool call failed: server timeout or disconnected.", isError = true)
+            is McpToolCallOutcome.Unknown -> outcome.legacyFailure?.let { throw it } ?: outcome.legacyResult
+        }
+
+    /** Cancellation after sending must be treated as an unknown outcome by the caller. */
+    internal suspend fun callToolOutcome(name: String, argumentsJson: String): McpToolCallOutcome {
         val argsElement = runCatching {
             json.parseToJsonElement(argumentsJson)
         }.getOrDefault(JsonObject(emptyMap()))
@@ -265,11 +338,17 @@ class McpClient(
             )
         )
 
-        val response = sendRequest("tools/call", params)
-            ?: return ToolExecutionResult("Tool call failed: server timeout or disconnected.", isError = true)
+        val outcome = when (val outcome = sendRequestOutcome("tools/call", params)) {
+            is McpRequestOutcome.Reply -> outcome
+            McpRequestOutcome.NotDispatched -> return McpToolCallOutcome.NotDispatched
+            is McpRequestOutcome.Unknown -> return McpToolCallOutcome.Unknown(outcome.legacyToolResult(), outcome.legacyFailure)
+        }
+        val response = outcome.response
 
         if (response.error != null) {
-            return ToolExecutionResult("MCP error (${response.error.code}): ${response.error.message}", isError = true)
+            if (response.result != null || !outcome.validProtocol) return McpToolCallOutcome.Unknown(
+                ToolExecutionResult("MCP error (${response.error.code}): ${response.error.message}", isError = true))
+            return McpToolCallOutcome.ProtocolError(response.error.code, response.error.message)
         }
 
         val callResult = response.result?.let {
@@ -278,40 +357,66 @@ class McpClient(
 
         if (callResult != null) {
             val textOutput = callResult.content.joinToString("\n") { it.text.orEmpty() }
-            return ToolExecutionResult(
+            val result = ToolExecutionResult(
                 output = textOutput.ifEmpty { "(no output)" },
                 isError = callResult.isError
             )
+            // The serializer has defaults for absent content. Such a malformed reply
+            // cannot prove the invocation completed even if legacy UI can display it.
+            val rawResult = response.result as? JsonObject
+            val content = rawResult?.get("content")
+            return if (outcome.validProtocol && rawResult != null && content is JsonArray && validMcpContent(content) &&
+                (!rawResult.containsKey("structuredContent") || rawResult["structuredContent"] is JsonObject)) McpToolCallOutcome.Result(result, rawResult)
+            else McpToolCallOutcome.Unknown(result)
         }
 
-        return ToolExecutionResult(response.result?.toString() ?: "(no result)", isError = false)
+        return McpToolCallOutcome.Unknown(ToolExecutionResult(response.result?.toString() ?: "(no result)", isError = false))
     }
 
-    suspend fun sendRequest(method: String, params: JsonElement?): JsonRpcResponse? {
+    private fun McpRequestOutcome.Unknown.legacyToolResult() = if (closeCode != null)
+        ToolExecutionResult("MCP error (-32000): MCP server process exited with code $closeCode", isError = true)
+    else ToolExecutionResult("Tool call failed: server timeout or disconnected.", isError = true)
+
+    suspend fun sendRequest(method: String, params: JsonElement?): JsonRpcResponse? =
+        when (val outcome = sendRequestOutcome(method, params)) {
+            is McpRequestOutcome.Reply -> outcome.response
+            McpRequestOutcome.NotDispatched -> null
+            is McpRequestOutcome.Unknown -> outcome.legacyFailure?.let { throw it }
+                ?: outcome.closeCode?.let { JsonRpcResponse(error = JsonRpcError(-32000, "MCP server process exited with code $it")) }
+        }
+
+    private suspend fun sendRequestOutcome(method: String, params: JsonElement?): McpRequestOutcome {
         val reqId = requestMutex.withLock { ++requestId }
-        val deferred = CompletableDeferred<JsonRpcResponse>()
+        val deferred = CompletableDeferred<McpPendingResponse>()
         val registered = synchronizedBlock(connectionLock) {
             if (!connectionAlive) false else {
                 synchronizedBlock(pendingRequests) { pendingRequests[reqId] = deferred }
                 true
             }
         }
-        if (!registered) return null
+        if (!registered) return McpRequestOutcome.NotDispatched
 
         try {
             val request = JsonRpcRequest(id = reqId, method = method, params = params)
             val text = json.encodeToString(JsonRpcRequest.serializer(), request)
+            var started = false
+            var sendFailure: Exception? = null
             val sent = withAdmission(false) {
                 when (config.transportType) {
                     McpTransportType.STDIO -> sendMutex.withLock {
                         currentCoroutineContext().ensureActive()
-                        processBridge?.sendLine(text) ?: false
+                        val bridge = processBridge ?: return@withLock false
+                        started = true
+                        try { bridge.sendLine(text) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) { sendFailure = failure; false }
                     }
                     McpTransportType.SSE -> {
                         currentCoroutineContext().ensureActive()
                         val endpoint = sseEndpointUrl ?: return@withAdmission false
                         val client = httpClient ?: return@withAdmission false
                         try {
+                            started = true
                             val resp = client.post(endpoint) {
                                 contentType(ContentType.Application.Json)
                                 config.headers.forEach { (k, v) -> header(k, v) }
@@ -326,8 +431,12 @@ class McpClient(
                     }
                 }
             }
-            if (!sent) return null
-            return withTimeoutOrNull(30_000) { deferred.await() }
+            if (!sent) return if (started) McpRequestOutcome.Unknown(legacyFailure = sendFailure) else McpRequestOutcome.NotDispatched
+            return when (val response = withTimeoutOrNull(30_000) { deferred.await() }) {
+                is McpPendingResponse.Reply -> McpRequestOutcome.Reply(response.response, response.validProtocol)
+                is McpPendingResponse.Closed -> McpRequestOutcome.Unknown(response.code)
+                null -> McpRequestOutcome.Unknown()
+            }
         } finally { synchronizedBlock(pendingRequests) { pendingRequests.remove(reqId) } }
     }
 
@@ -370,7 +479,14 @@ class McpClient(
         // The callback can arrive on a transport thread, so it uses the same
         // synchronous lock as request registration and cancellation.
         val deferred = synchronizedBlock(pendingRequests) { pendingRequests.remove(id) }
-        deferred?.complete(response)
+        val envelope = runCatching { json.parseToJsonElement(trimmed) as? JsonObject }.getOrNull()
+        val version = envelope?.get("jsonrpc") as? JsonPrimitive
+        val hasResult = envelope?.containsKey("result") == true
+        val hasError = envelope?.containsKey("error") == true
+        val validEnvelope = envelope != null && version?.isString == true && version.content == "2.0" &&
+            (hasResult != hasError) && !envelope.containsKey("method") && !envelope.containsKey("params") &&
+            (!hasError || envelope["error"] is JsonObject)
+        deferred?.complete(McpPendingResponse.Reply(response, validEnvelope))
     }
 
     private fun handleConnectionClosed(code: Int, generation: Long = connectionGeneration) {
@@ -381,7 +497,7 @@ class McpClient(
                 _tools.value = emptyList()
                 synchronizedBlock(pendingRequests) {
                     for ((_, deferred) in pendingRequests) {
-                        deferred.complete(JsonRpcResponse(error = JsonRpcError(-32000, "MCP server process exited with code $code")))
+                        deferred.complete(McpPendingResponse.Closed(code))
                     }
                     pendingRequests.clear()
                 }

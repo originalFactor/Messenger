@@ -78,7 +78,7 @@ for line in sys.stdin:
     if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
         mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "settings", "settings-hang", "mcp-load")}
+        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "mcp-load")}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
@@ -108,7 +108,19 @@ for line in sys.stdin:
         if mode == "mcp-load":
             assert packet["params"]["mcpServers"][0]["name"] == "test-mcp"
         update("user_message_chunk", "replayed question")
+        if mode == "load-media":
+            for content in [
+                {"type": "image", "data": "aW1hZ2U=", "mimeType": "image/png"},
+                {"type": "resource", "resource": {"uri": "file:///notes.txt", "mimeType": "text/plain", "text": "notes"}},
+            ]:
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "user_message_chunk", "messageId": "user-media", "content": content}})
         update("agent_message_chunk", "replayed answer")
+        if mode == "load-media":
+            for content in [
+                {"type": "audio", "data": "YXVkaW8=", "mimeType": "audio/wav"},
+                {"type": "resource_link", "uri": "file:///result.txt", "name": "result.txt", "mimeType": "text/plain"},
+            ]:
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "agent_message_chunk", "messageId": "assistant-media", "content": content}})
         send(id=request_id, result=session_settings() if mode.startswith("settings") else {})
     elif method == "session/set_config_option":
         params = packet["params"]
@@ -193,4 +205,15 @@ for line in sys.stdin:
         send(id=pending, result={"stopReason": "cancelled"})
     elif request_id == "permission":
         update("agent_message_chunk", packet["result"]["outcome"]["outcome"])
+        if mode == "load-live-media":
+            for index, content in enumerate([
+                {"type": "image", "data": "aW1hZ2U=", "mimeType": "image/png"},
+                {"type": "audio", "data": "YXVkaW8=", "mimeType": "audio/wav"},
+                {"type": "resource", "resource": {"uri": "file:///notes.txt", "text": "notes"}},
+                {"type": "resource_link", "uri": "file:///result.txt", "name": "result.txt"},
+            ]):
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "agent_message_chunk", "content": content}})
+                if index == 0:
+                    send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "tool_call", "toolCallId": "media-tool", "title": "Media tool", "status": "completed"}})
+            update("agent_message_chunk", "continued")
         send(id=pending, result={"stopReason": "end_turn"})

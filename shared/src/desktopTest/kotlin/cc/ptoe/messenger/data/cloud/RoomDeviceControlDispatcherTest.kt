@@ -15,6 +15,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -101,6 +103,34 @@ class RoomDeviceControlDispatcherTest {
             assertEquals("control_disabled", dispatcher.request("notificationOpen", "foreign-chat").text("code"))
             db.rows().upsertValues(listOf(KeyValueRow("device_control_grant", """["https://cloud.example","account"]"""), KeyValueRow("kotlin_sync_session", """["account","different"]""")))
             assertEquals("control_disabled", dispatcher.request("catalog").text("code"))
+        }
+    }
+
+    @Test fun boundedAcpPreviewsMarkOmittedMediaAndToolDetails(): Unit = runBlocking {
+        runWithStore { db, dispatcher ->
+            val image = "a".repeat(230_000)
+            val messages = JsonArray(listOf(
+                Json.parseToJsonElement("""{"id":"plain","role":"user","text":"hello","status":"sent","content":[{"type":"text","text":"hello"}]}"""),
+                buildJsonObject {
+                    put("id", "media"); put("role", "assistant"); put("text", ""); put("status", "sent")
+                    put("content", JsonArray(listOf(buildJsonObject { put("type", "image"); put("mimeType", "image/png"); put("data", image) })))
+                    put("events", JsonArray(listOf(buildJsonObject { put("type", "ToolUpdate"); put("update", buildJsonObject { put("title", "tool") }) })))
+                },
+            ))
+            val record = buildJsonObject {
+                put("id", "acp:one"); put("title", "ACP"); put("project", "local"); put("messages", messages)
+            }
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", JsonObject(mapOf("acp:one" to record)).toString())))
+
+            for (action in listOf("history", "notificationOpen")) {
+                val result = dispatcher.request(action, "acp:one")
+                val returned = (result.getValue("messages") as JsonArray).map { it as JsonObject }
+                assertEquals(listOf("plain", "media"), returned.map { it.text("id") })
+                assertFalse((returned.first()["detailsOmitted"] as? JsonPrimitive)?.booleanOrNull == true)
+                assertEquals(true, (returned.last()["detailsOmitted"] as JsonPrimitive).booleanOrNull)
+                assertFalse(result.toString().contains(image))
+            }
+            assertTrue(checkNotNull(db.rows().getValue("local_acp_sessions")).value.contains(image))
         }
     }
 }

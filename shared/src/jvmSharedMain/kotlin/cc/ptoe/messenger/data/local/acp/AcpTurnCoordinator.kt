@@ -16,6 +16,7 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
         val replay = AcpEventBuffer()
         val text = StringBuilder()
         val transcript = mutableListOf<JsonElement>()
+        val content = mutableListOf<JsonObject>()
         var transcriptBytes = 0L
         var completed = false
     }
@@ -50,9 +51,15 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
                 }
                 val turn = turns[turnId]?.takeIf { it.binding == binding && !it.completed } ?: return@withLock
                 val kind = (update["sessionUpdate"] as? JsonPrimitive)?.contentOrNull ?: return@withLock
-                val text = ((update["content"] as? JsonObject)?.get("text") as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val content = update["content"] as? JsonObject
+                val contentType = (content?.get("type") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                val text = (content?.get("text") as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val media = content?.takeIf { kind == "agent_message_chunk" && contentType != null && contentType != "text" }
                 val event = when (kind) {
-                    "agent_message_chunk" -> buildJsonObject { put("type", "TextDelta"); put("text", text) }
+                    "agent_message_chunk" -> buildJsonObject {
+                        put("type", "TextDelta"); put("text", text)
+                        if (media != null) { put("contentIndex", turn.content.size); put("contentType", contentType) }
+                    }
                     "agent_thought_chunk" -> buildJsonObject { put("type", "ThoughtDelta"); put("text", text) }
                     "tool_call", "tool_call_update" -> buildJsonObject { put("type", "ToolUpdate"); put("update", update) }
                     "config_option_update", "current_mode_update", "usage_update", "available_commands_update" ->
@@ -64,8 +71,9 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
                     turn.text.append(text)
                 }
                 if (kind in setOf("agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update")) {
-                    turn.transcriptBytes += event.toString().encodeToByteArray().size
+                    turn.transcriptBytes += event.toString().encodeToByteArray().size + (media?.toString()?.encodeToByteArray()?.size ?: 0)
                     require(turn.transcriptBytes <= 8 * 1024 * 1024 && turn.transcript.size < 10_000) { "ACP transcript exceeds limit" }
+                    if (media != null) turn.content.add(media)
                     turn.transcript.add(event)
                 }
                 turn.replay.append(event)
@@ -97,7 +105,7 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
         }
         try {
             if (replay != null) {
-                journal.replaceReplay(binding.conversationId, turnId, replay, now())
+                journal.seedReplay(binding.conversationId, turnId, replay, now())
                 gate.withLock { restores[binding.conversationId]?.completed = null }
             }
             val text = content.mapNotNull { item ->
@@ -124,12 +132,12 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
         val (turn, snapshot) = gate.withLock {
             val current = turns[turnId]?.takeIf { !it.completed } ?: return
             current.completed = true
-            current to Triple(current.text.toString(), JsonArray(current.transcript.toList()), current.binding)
+            current to Triple(current.text.toString(), JsonArray(current.transcript.toList()), JsonArray(current.content.toList()))
         }
         val agentError = error ?: if ((result?.get("type") as? JsonPrimitive)?.contentOrNull == "Error")
             (result?.get("message") as? JsonPrimitive)?.contentOrNull ?: "ACP agent failed" else null
         try {
-            journal.finish(snapshot.third.conversationId, turnId, snapshot.first, snapshot.second, agentError, now())
+            journal.finish(turn.binding.conversationId, turnId, snapshot.first, snapshot.second, agentError, now(), snapshot.third)
             turn.replay.append(result ?: buildJsonObject { put("type", if (error == null) "Cancelled" else "Error"); if (error != null) put("message", error) })
         } catch (failure: Throwable) {
             turn.replay.append(buildJsonObject { put("type", "Error"); put("message", "ACP transcript could not be saved") })

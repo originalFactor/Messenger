@@ -17,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,7 @@ class McpSseDisconnectTest {
     private class FakeSseServer : AutoCloseable {
         private val server = ServerSocket(0)
         private val streamReady = CountDownLatch(1)
+        val toolReceived = CompletableDeferred<Unit>()
         private val outputLock = Any()
         private lateinit var stream: OutputStream
         val url = "http://127.0.0.1:${server.localPort}/sse"
@@ -90,6 +92,7 @@ class McpSseDisconnectTest {
                     repeat(length) { body.write(input.read()) }
                 }
                 val request = Json.decodeFromString<JsonRpcRequest>(body.toByteArray().toString(Charsets.UTF_8))
+                if (request.method == "tools/call") toolReceived.complete(Unit)
                 assertTrue(streamReady.await(5, TimeUnit.SECONDS))
                 val result = when (request.method) {
                     "initialize" -> """{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1"}}"""
@@ -126,6 +129,19 @@ class McpSseDisconnectTest {
 
     @Test fun cleanEofWithdrawsSseInventory() = verifyStreamEnd(failure = false)
     @Test fun malformedStreamWithdrawsSseInventory() = verifyStreamEnd(failure = true)
+
+    @Test fun sseDisconnectAfterToolPostHasUnknownOutcome(): Unit = runBlocking {
+        val server = FakeSseServer()
+        val client = McpClient(McpServerConfig(id = "sse", name = "SSE", transportType = McpTransportType.SSE, url = server.url))
+        try {
+            assertTrue(withTimeout(5_000) { client.connect() })
+            val call = async { client.callToolOutcome("work", "{}") }
+            withTimeout(5_000) { server.toolReceived.await() }
+            server.finish(failure = false)
+            assertIs<McpToolCallOutcome.Unknown>(withTimeout(5_000) { call.await() })
+            assertIs<McpToolCallOutcome.NotDispatched>(client.callToolOutcome("work", "{}"))
+        } finally { client.close(); server.close() }
+    }
 
     private fun verifyStreamEnd(failure: Boolean): Unit = runBlocking {
         val server = FakeSseServer()

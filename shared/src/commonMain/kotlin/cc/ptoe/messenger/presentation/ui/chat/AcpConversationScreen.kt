@@ -314,7 +314,8 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         put("id", id); put("role", "assistant"); put("text", partial); put("status", if (active.isEmpty()) "sent" else "sending")
         put("timestamp", liveTimestamp); put("events", JsonArray(events))
     } }, error?.takeUnless { local -> history.lastOrNull()?.let { it.text("status") == "error" && it.text("text") == local.text("text") } == true })
-    val messages = remember(rows, historyTimestamp) { acpChatMessages(sessionId, rows, historyTimestamp) }
+    val mediaLabels = AcpContentLabels(stringResource(Res.string.chat_picture), stringResource(Res.string.acp_media_audio), stringResource(Res.string.acp_media_attachment))
+    val messages = remember(rows, historyTimestamp, mediaLabels) { acpChatMessages(sessionId, rows, historyTimestamp, mediaLabels) }
     val chatItems = remember(messages) { buildChatItems(messages) }
     val liveContent = messages.firstOrNull { it.id == liveId }?.content
     val originalToolbar = LocalTextToolbar.current
