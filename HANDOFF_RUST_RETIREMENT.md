@@ -24,7 +24,7 @@
 2. `RoomWorkspaceExecutionFence.kt`、`RoomWorkspaceInvocationLedger.kt` 和对应测试（`ac0f9c5`）：持久 workspace invocation ledger 与隔离执行 fence 组合，旧仅内存执行入口禁用，完成结果保留 reservation 直到明确确认；取消或异常保留 reservation 直到 stop barrier 支持的显式确认。5 项 fence 测试、4 项 ledger 测试及关联的 ACP/控制设置/授权测试均通过。仍缺 Cloud 401 同步失效、所有写入者围栏、可信 sender 身份和真实 worker 进程树停止证明，不能接入生产。
 3. `workspace-transfer-shared/WorkspaceArchive.kt`、`WorkspaceTransfer.kt`、`AndroidWorkspaceCandidateStager.kt`、设备测试及两个 Gradle/AGENTS 文件（`32c01a6`）：候选跨 UID 工作区导入，源归档由调用方提供、导入到新建 app-private 目录，保留原件。共用源码注册到两个 Kotlin source set；Runtime 单元测试、Runtime/Android debug APK 和 instrumentation APK 构建通过。隔离 `emulator-5562` 上跨 UID 候选设备测试 1/1 通过，Runtime 工作区设备测试 5/5 通过（含 adbd root 创建后交给普通 Runtime UID 的真实硬链接夹具，已清理）。这不是可用的 Runtime 新 UID 迁移，不证明旧任务结束、来源快照一致或全局元数据无损。
 
-续作检查点：`1f1ba9b` 修复 `:shared:allTests` 的 5 项既有失败（委派 ACP 未知结果、Core sidecar 别名、scheduler proof 计数、image recovery 顺序及 Compose 测试污染），901 项测试通过、1 skipped。`c491be6` 让 `ServerHandle.stop()` join 随服务器启动的 remote-control 与 scheduler 循环，并有 1 项 Rust 回归测试；`cargo test --workspace` 通过（其中 `messenger-http` 143 项通过、2 ignored）。这仍不证明所有请求级任务、ACP/Runtime 后代或旧进程停止；Android 生产切换仍不可执行。Wine 11.21 的简单 Windows 文件创建/读取/删除检查通过，`icacls`、硬链接和 file-ID 命令在该 Wine 环境中不可用；这些结果仅作为有限环境证据，不证明 NTFS ACL、持久化、链接、句柄身份或目录 fsync。
+续作检查点：`1f1ba9b` 修复 `:shared:allTests` 的 5 项既有失败（委派 ACP 未知结果、Core sidecar 别名、scheduler proof 计数、image recovery 顺序及 Compose 测试污染），901 项测试通过、1 skipped。本轮用户纠正了迁移方向：之后的 Rust `ServerHandle.stop()` / 本地任务 join 增强把旧 Core 当成维护对象，且不能替代真实平台 worker/进程树停止证明，因此本次回退 `c491be6^..HEAD` 对 `core/rust/crates/messenger-http/src/**` 的全部生命周期增强，仅保留退役说明。Wine 11.21 的简单 Windows 文件创建/读取/删除检查通过，`icacls`、硬链接和 file-ID 命令在该 Wine 环境中不可用；这些结果仅作为有限环境证据，不证明 NTFS ACL、持久化、链接、句柄身份或目录 fsync。
 
 `shared/docs/RUST_CORE_DEPENDENCY_AUDIT.md` 与 `.github/scripts/audit-rust-core-dependencies.sh` 提供最终删除前的源码、Gradle、CI、AIDL、ProGuard、文档、版本脚本及 native 产物扫描。当前扫描仍列出 Android/Desktop 生产启动、绑定模块、Cargo/UniFFI CI 与 native 库，确认不能执行“单独删除 Rust Core”的最终提交。
 
@@ -34,17 +34,9 @@
 
 `AppContainer` 新增 `shutdownCompleted` 状态：失败关闭仍可重试，成功关闭后拒绝 clear/reinit；新增 `AppBackendTest` 覆盖失败/成功状态转换。`shared:allTests` 再次通过（901 项，1 skipped）。这只是注入 backend 的生命周期合同，不切换任何 app shell，也不提供平台 worker-stop 证明。
 
-`core/rust/crates/messenger-http/docs/BACKGROUND_TASKS.md` 盘点 `ServerHandle.stop()` 已跟踪与仍未跟踪的请求级任务，并给出外部进程/付费请求 stop barrier 和测试顺序。`ApiState.tasks` 已实现 owner-scoped 本地任务跟踪并接入 `ServerHandle.stop()`：turn worker、background replay/event、control dispatch/queue_sync、remote client lane 和单个 scheduled execution 等本地 `tokio::spawn` 会登记、在 stop 时 abort/join；回归测试包含 pending tracked task。`cargo test --workspace` 全绿（`messenger-http` 143 项通过、2 ignored）。image job、agent relay、ACP/Runtime 子进程、付费 provider 请求和远程 tool 副作用仍明确列为未证明停止，不能据此切换生产。
+`core/rust/crates/messenger-http/docs/BACKGROUND_TASKS.md` 现在只记录退役边界：旧 Core 的 request-spawned 任务、ACP/Runtime 后代、upstream/provider 流、付费请求和远程副作用必须由平台所有权边界处理，不通过继续增强 Rust 代码来“完成”。`ServerHandle.stop()` 的 HTTP listener/SSE 关闭不等于旧进程或 worker 已停止。
 
-`AgentRelay` 的 loopback listener 现在由 `DELETE /control/agent-relay` 与 `ServerHandle.stop()` 显式 cancel/join，stop 测试会先启动 relay 再验证关闭；`cargo test --workspace` 再次全绿。其 upstream SSE conversion worker、image job、ACP/Runtime 子进程、付费 provider 请求和远程 tool 副作用仍未证明停止，生产切换仍禁止。
-
-`ImageGenerationService.stop_and_join()` 现在由 `ServerHandle.stop()` 和 `/local-data` 清理调用：先取消 active job token，再 join 本地 worker，并保留 `Cancelled`/`Unknown` 的“远程可能已生成/计费”可见记录；新增 `stop_joins_worker_and_keeps_charge_uncertainty` 回归测试，`cargo test --workspace` 全绿。它不证明 provider 端付费/生成副作用停止，也不允许自动重放；upstream SSE conversion、ACP/Runtime 子进程与远程 tool 副作用仍列为未证明停止。
-
-Rust 生命周期本轮提交：`b362dbc`（`ApiState.tasks` 跟踪并 join 本地请求任务）、`35a32e7`（AgentRelay listener join）、`3e9fd2b`（image worker cancel/join 与收费不确定记录）。每次均通过 `cargo test --workspace`；`BACKGROUND_TASKS.md`、`core/rust/AGENTS.md` 和 Android cutover 文档同步。最终硬阻塞仍在：Android/Desktop 生产仍启动 Rust，`asAppBackend()` 仍拒绝 ACP/device host 且 clear-all 抛错，依赖审计仍有 326 行命中，`core/rust` 未删除。外部 ACP/Runtime 后代、upstream/provider 流、付费或远程副作用没有平台 stop 证明；旧数据完整恢复、功能对等、Windows/真实设备验证、生产切换和最终单独删除 commit 仍未完成。
-
-`ExternalSessions::stop_and_join()` 已把 Rust 进程内的 external-ACP worker task 取消并 join 到 `ServerHandle.stop()`，并有 `stop_joins_local_acp_worker_tasks` 回归测试；`cargo test --workspace` 通过。它仍不证明 OS 子进程树、Android Runtime 独立 UID 后代、per-worker MCP listener、upstream/provider 流或远程副作用停止。
-
-`acp_mcp` 的 per-worker listener/RPC 与 `android_acp` 的本地 duplex 转发任务现已登记到 `ApiState.tasks` 并由 `ServerHandle.stop()` abort/join；`cargo test --workspace` 再次通过。仍未证明 OS 子进程树、Android Runtime 独立 UID 后代、upstream/provider 流或远程副作用停止，生产切换仍禁止。
+本次回退覆盖 `AgentRelay`、`ImageGenerationService`、`ExternalSessions`、per-worker ACP MCP、Android bridge、request-spawned tasks 和 server loops 的本地 join/跟踪增强。它们不再作为迁移成果，也不能证明 upstream SSE、image job、ACP/Runtime 子进程、付费 provider 请求或远程 tool 副作用停止。另修复旧 `cloud_session_expiry_maps_to_terminal_401` 测试夹具只设置 `KV_SESSION_HOST`、未设置 `KV_SERVER_URL` 导致请求落到默认公网域名的问题；这是测试隔离修复，不是 Rust 功能增强。生产切换必须由 Kotlin 侧 owner 与平台边界证明；付费或远程结果无法确认时在 Kotlin 退役流程中保留 unknown/恢复记录。最终硬阻塞仍是：Android/Desktop 生产启动 Rust，`asAppBackend()` 拒绝 ACP/device host，依赖审计列出生产/构建引用，`core/rust` 未删除；旧数据恢复、功能对等、平台验证、生产切换和最终单独删除 commit 均未完成。
 
 审计脚本已修好 clean-tree 计数并增强：`--strict` 在仍存在生产/构建引用时返回非零，`--summary FILE` 输出 `blocking_references`，`test-audit-rust-core-dependencies.sh` 覆盖当前阻断树与 clean tree，并在 CI selector job 中运行。当前真实树严格审计结果仍为 `blocking_references=29`、`rust_workspace=present`、`native_bindings=present`，明确不能删除 Core。`server` 子模块另有 `13261bb`，为禁用 workspace relay v2 增加可注入的 durable replay ledger 合同；无 ledger 时 503，reserve 重复/失败 fail-closed，测试覆盖跨 relay 实例 replay 拒绝；仍无生产设备 verifier 或持久账本实现，父仓库 gitlink 未提交。
 
@@ -76,7 +68,7 @@ Rust 生命周期本轮提交：`b362dbc`（`ApiState.tasks` 跟踪并 join 本�
 ## 关键未完成事项与建议顺序
 
 1. **继续隔离原型的安全边界。** 三组交接改动已恢复检查点；workspace ledger 的 stop barrier 只是接口，服务端不认证声称的 sender，workspace 文件候选不提供可信来源、完整元数据或全局一致快照。
-2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录了实际障碍：Rust `ServerHandle.stop()` 现在 join axum、remote-control、scheduler 循环以及 `ApiState.tasks` 登记的本地请求任务，但仍未证明 image job、agent relay、ACP/Runtime 子进程、远程/付费副作用全部停止；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩冒充平台证明。
+2. **明确并实现 Android 生产生命周期。** `androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` 记录实际障碍：旧 Core 的 HTTP listener/SSE 关闭不等于 request-spawned 任务、image job、agent relay、ACP/Runtime 子进程、远程/付费副作用全部停止；Runtime 独立 UID 的旧后代可能脱离直接子进程；旧 Runtime 不服从新协议。SQLite 租约、Binder death、包升级、force-stop 一次观察或用户确认都不能证明整个所有权期间无旧写入。探索可验证的新 UID/受限工作进程和旧工作区隔离迁移；必须保留旧数据并处理安装工具、外部工作区及无法确认的远程副作用。不能用测试桩或继续增强 Rust 冒充平台证明。
 3. **完成旧数据和 clear-all。** 审查记录绑定来源，只说明用户对所展示字段作过决定，不代表所有记录已经一致。给 v20/v21/v22、WAL、冲突、删除、过程终止、备份恢复和多设备提供可靠路径。旧 Core 源与备份的可验证退休、clear-all、资源清理和凭据保护仍缺；不得自动复活已删除记录。
 4. **完成 Kotlin 功能对等并接入实际 AppBackend。** ACP 仍缺完整配置写入 fence、可信 worker 退出、Cloud takeover 会话 gate、OpenCode 版本探测、Core 工具/委派等；MCP 未知结果跨进程恢复未完成；远控附件、ACP 控制、工作区 relay 和受保护副作用未完成；定时任务工作区/工具范围不完整。复查 Learning、图片、生成应用、Wear、通知、Cloud、错误可见性和任务后台生命周期。`asAppBackend()` 限制不能简单删除来假装对等。
 5. **Desktop 与存储。** Windows 存储的 ACL、链接/路径和持久化及旧 Core/资源独占问题未解决；参见 `shared/docs/WINDOWS_ROOM_STORAGE.md`。macOS/Linux/Windows 都需真实设备或 CI 验证。Android 系统 SQLite 的事务、游标和 WAL 语义尚待真实设备验证，不能仅为减小包而替换 driver。

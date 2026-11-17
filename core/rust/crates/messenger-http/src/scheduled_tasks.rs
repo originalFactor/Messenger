@@ -257,8 +257,7 @@ pub(super) async fn run(state: ApiState) {
         };
         for (task, cancel) in tasks {
             let state = state.clone();
-            let tracked = state.tasks.clone();
-            tracked.spawn(async move {
+            tokio::spawn(async move {
                 execute(state, task, cancel).await;
             });
         }

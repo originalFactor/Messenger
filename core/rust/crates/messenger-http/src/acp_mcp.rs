@@ -32,11 +32,10 @@ pub(crate) async fn start(
         state, project, output, secret: secret.clone(), outgoing: Default::default(), stream_cancel: Default::default(),
         calls: Default::default(), lifetime: lifetime.clone(), allow_delegation, core_tool_scope,
     };
-    let tasks = gateway.state.tasks.clone();
     let app = Router::new().route("/:secret/events", get(events))
         .route("/:secret/messages", post(messages))
         .route("/:secret/rpc", post(rpc)).with_state(gateway);
-    tasks.spawn(async move {
+    tokio::spawn(async move {
         let _ = axum::serve(listener, app).with_graceful_shutdown(lifetime.cancelled_owned()).await;
     });
     Ok(format!("http://{addr}/{secret}/events"))
@@ -68,8 +67,7 @@ async fn messages(State(gateway): State<Gateway>, Path(secret): Path<String>, Js
     if !authorized(&gateway, &secret) { return StatusCode::NOT_FOUND; }
     let Some(sender) = gateway.outgoing.lock().await.clone().filter(|sender| !sender.is_closed()) else { return StatusCode::CONFLICT; };
     let Some(stream_cancel) = gateway.stream_cancel.lock().await.clone() else { return StatusCode::CONFLICT; };
-    let tasks = gateway.state.tasks.clone();
-    tasks.spawn(async move {
+    tokio::spawn(async move {
         if let Some(response) = process_request(gateway, request, Some(stream_cancel)).await {
             let _ = sender.send(Event::default().event("message").data(response.to_string()));
         }

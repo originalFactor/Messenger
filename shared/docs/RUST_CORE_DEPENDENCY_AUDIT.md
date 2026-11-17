@@ -43,9 +43,10 @@ prerequisite, not an optional cleanup.
 
 - A real Android/Desktop owner that excludes every old Core/source, SQLite
   sidecar, asset and competing Room writer for the full database lifetime.
-- Verified stop-and-join for request-spawned Core tasks, external ACP workers,
-  Runtime descendants and old processes. Joining the server's remote and
-  scheduler loops is only one step.
+- A real Kotlin/platform ownership boundary that excludes old Core instances,
+  SQLite sidecars, assets, Runtime/ACP descendants and remote side effects for
+  the full lifetime. Rust HTTP-listener shutdown and in-process task joins are
+  not platform stop proof; do not close this gap by extending Rust Core.
 - Complete ACP, MCP, Cloud takeover, remote attachments, workspace relay,
   scheduled-task and generated-application parity; explicit visible failures
   for anything not installed.

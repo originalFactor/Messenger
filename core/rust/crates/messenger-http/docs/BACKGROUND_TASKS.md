@@ -1,77 +1,50 @@
-# Background task shutdown inventory
+# Retirement-only background task inventory
 
-`ServerHandle::stop()` cancels the per-start shutdown token, joins the axum
-listener, joins the remote-control and scheduler loops held in its `JoinSet`,
-and abort/joins local in-process tasks registered through `ApiState.tasks`.
-That is not yet proof that every external side effect or Core-owned worker
-stopped. The inventory below is the remaining gap and is the reason
-`androidApp/docs/CORE_CUTOVER_OWNERSHIP.md` still forbids a production Room
-cutover.
+This document records the ownership gap that prevents a production Kotlin/Room
+cutover. It is **not** a plan to keep improving Rust Core. The product direction
+is to migrate business behavior to Kotlin, prove a platform lifetime boundary
+around the old process, then delete this crate and its bindings in one commit.
+Do not add new Rust lifecycle features here.
 
-## Tracked by `ServerHandle`
+`ServerHandle::stop()` cancels the per-start shutdown token and waits for the
+axum listener. Endless `/events` streams are closed through `ShutdownStream`, so
+the HTTP listener can return. A successful HTTP stop is not evidence that old
+Core tasks, SQLite descriptors, assets, ACP workers, Runtime children, provider
+calls or remote side effects have stopped.
 
-- axum listener with graceful shutdown and `ShutdownStream` for endless SSE;
-- `RemoteHub::run_with_control` (remote-control/workspace relay connection loop);
-- `scheduled_tasks::run` (timer loop).
-- `ApiState.tasks` local request tasks: native/legacy turn workers, background
-  turn replay and event fan-out, control command dispatch/event logging/queued
-  sync, remote control client lanes, and one scheduled task execution per tick.
-  These are aborted and joined on `stop()`. A test registers a pending tracked
-  task and verifies `stop()` does not leave the handle running.
-- The `AgentRelay` loopback listener created through the control API is held by
-  `ApiState` and joined by both `DELETE /control/agent-relay` and
-  `ServerHandle::stop()`. Its upstream SSE conversion workers still stop through
-  the shutdown token and remain part of the external-side-effect gap below.
-- Local `ImageGenerationService` workers are cancelled and joined by
-  `ServerHandle::stop()` and explicit local-data cleanup. A stop keeps the job
-  as cancelled/unknown with an explicit remote-charge uncertainty message; it
-  does not claim the provider request never happened or was free.
-- Local external-ACP worker tasks are cancelled and joined from
-  `ExternalSessions::stop_and_join()` during `ServerHandle::stop()`. This covers
-  the in-process stdio/ACP bridge only; OS subprocess trees, Android Runtime
-  descendants, per-worker MCP listeners and remote side effects still need a
-  platform stop proof.
-- Per-worker ACP MCP listener/RPC tasks and Android ACP local duplex bridge
-  tasks now use `ApiState.tasks` and are abort-joined with the server. This
-  joins only local forwarding tasks; an ACP child process tree, an Android
-  Runtime child under another UID, or a remote side effect remains unproven.
+## What the production cutover must prove instead
 
-## Request-spawned tasks still needing an owner
+- Exclude every older Core instance, source SQLite file, WAL/sidecar, asset
+  directory and competing Room writer for the entire ownership interval.
+- Establish a platform authority boundary for Runtime and ACP process trees,
+  including detached descendants, prior process generations and old companion
+  versions. A Binder death, direct-child exit, in-process `JoinHandle` or
+  cooperative marker is not such a proof.
+- Prevent new work during the handoff and retain ambiguous outcomes without
+  automatic replay. Preserve originals, backups and credentials privately.
+- Keep the proof valid through cancellation, shutdown, process death and
+  recovery. A user acknowledgement records uncertainty; it does not prove a
+  detached or remote operation stopped.
+- Verify on supported Android versions/OEMs and real Desktop platforms before
+  switching Android/Desktop startup or deleting Rust Core.
 
-| Source | Work started | Stop condition / missing proof |
+## Known request-spawned work in the retired implementation
+
+These are reasons the old binary cannot be fenced by an HTTP listener alone;
+they are not todos to fix inside Rust:
+
+| Source | Work started | Cutover concern |
 | --- | --- | --- |
-| `lib.rs::start_turn_inner` | legacy/native chat turn worker | now tracked/abort-joined; a provider/tool side effect outside the process still needs its own ambiguity record. |
-| `background_turn.rs` | replay/event fan-out and SSE event iterators | now tracked/abort-joined; replay generation starts before returning the SSE response. |
-| `control.rs` | local/background command dispatch, task-event recording and queued Cloud sync | now tracked/abort-joined; queued network work may remain ambiguous until sync recovery. |
-| `remote_client.rs` | remote control client lane | now tracked/abort-joined; a remote host command may have executed and must not be replayed. |
-| `scheduled_tasks.rs` | one task execution per tick | now tracked/abort-joined; externally dispatched work needs its durable claim and recovery. |
-| `image_generation.rs` | one provider job per admitted image request | local worker is now cancelled and joined; a paid/remote generation or charge may still remain ambiguous and is retained as such. |
-| `delegation.rs` | ACP delegation event drain | awaited by the delegating request, but external ACP descendants are separate. |
-| `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP process reader/writer, per-worker loopback MCP servers, RPC/message tasks | local ACP bridges, MCP listener/RPC tasks and Android duplex forwarding tasks are now tracked/joined; direct child exit does not prove OS descendants or Android Runtime children stopped. |
-| `agent_relay.rs` | model relay listener and SSE conversion workers | loopback listener is now taken and joined by relay stop / server stop; upstream SSE conversion workers still rely on the shutdown token and a provider-side stream ending. |
+| `lib.rs::start_turn_inner` | legacy/native chat turn worker | provider/tool calls can outlive or have remote side effects. |
+| `background_turn.rs` | replay/event fan-out and SSE event iterators | detached observers and event streams can survive a listener shutdown. |
+| `control.rs` | local/background command dispatch, task logging, queued Cloud sync | network work and ACP commands may remain ambiguous. |
+| `remote_client.rs` | remote control client lane | a remote host command may already have executed. |
+| `scheduled_tasks.rs` | one task execution per tick | durable claims and externally dispatched work need recovery. |
+| `image_generation.rs` | one provider job per admitted image request | paid/remote generation or charge may remain unknown. |
+| `delegation.rs` | ACP delegation event drain | external ACP descendants are separate from the delegating request. |
+| `external_acp.rs`, `android_acp.rs`, `acp_mcp.rs` | ACP readers/writers, per-worker MCP servers, RPC/message tasks | direct child exit does not prove OS descendants or Android Runtime children stopped. |
+| `agent_relay.rs` | model relay listener and SSE conversion workers | upstream/provider streams and conversion tasks are external side effects. |
 
-Tasks that only forward bytes or settle a local channel can be joined by a
-single `ApiState` task tracker. Tasks that own an OS process, a detached
-descendant, a paid remote request or a remote tool call also need an
-authoritative stop/ambiguity barrier. An in-process `JoinHandle` alone cannot
-prove an Android Runtime child, ACP subprocess tree or remote side effect has
-stopped.
-
-## Required implementation sequence
-
-1. Done for local tasks: `ApiState.tasks` tracks abort-safe in-process work and
-   `ServerHandle::stop` joins it. Keep future `tokio::spawn` calls that use
-   `ApiState` in this tracker. A failed or non-terminating task must keep
-   ownership live and return a visible failure, never a timeout that silently
-   releases the database.
-2. Still required: give external ACP sessions, Android Runtime processes and
-   upstream relay/provider streams explicit platform stop barriers. Record
-   ambiguous outcomes durably; never replay a paid or remote call. Local agent
-   relay listener and image worker joins do not prove those external effects
-   stopped.
-3. Add shutdown tests that start one representative of each task class, cancel
-   while it is in flight, and assert `stop()` does not return until all handles
-   are joined. Real device tests must separately cover Runtime/ACP descendants.
-4. Only after those tests and platform fences pass may the Android/Desktop
-   production lifecycle claim that an old Core instance and its workers cannot
-   write after shutdown.
+Only after Kotlin parity and a real platform fence are proven may the final
+separate commit delete Rust Core, the native bindings, and their CI/build
+wiring.

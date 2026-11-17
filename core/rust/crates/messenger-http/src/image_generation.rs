@@ -91,7 +91,6 @@ pub(crate) struct ImageGenerationService {
     assets: Arc<AssetService>,
     gate: Mutex<()>,
     active: Mutex<HashMap<String, CancellationToken>>,
-    workers: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 impl ImageGenerationService {
     pub(crate) async fn active_count(&self) -> usize {
@@ -104,7 +103,6 @@ impl ImageGenerationService {
             assets,
             gate: Mutex::new(()),
             active: Mutex::new(HashMap::new()),
-            workers: std::sync::Mutex::new(Vec::new()),
         };
         for mut job in service.jobs()? {
             if !job.status.terminal() {
@@ -115,20 +113,6 @@ impl ImageGenerationService {
             }
         }
         Ok(service)
-    }
-    /** Cancel admitted jobs and join local worker tasks. Remote charges remain explicitly unknown. */
-    pub(crate) async fn stop_and_join(&self) {
-        for token in self.active.lock().await.values() {
-            token.cancel();
-        }
-        let workers = {
-            let mut current = self.workers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            current.retain(|handle| !handle.is_finished());
-            current.drain(..).collect::<Vec<_>>()
-        };
-        for handle in workers {
-            let _ = handle.await;
-        }
     }
     pub(crate) async fn clear(&self) -> Result<(), ApiError> {
         let _guard = self.gate.lock().await;
@@ -245,14 +229,11 @@ impl ImageGenerationService {
         self.active.lock().await.insert(id, cancel.clone());
         let service = self.clone();
         let worker_job = job.clone();
-        let worker = tokio::spawn(async move {
+        tokio::spawn(async move {
             service
                 .run(worker_job, provider.base_url, provider.api_key, cancel, events)
                 .await;
         });
-        let mut workers = self.workers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        workers.retain(|handle| !handle.is_finished());
-        workers.push(worker);
         Ok(job)
     }
     async fn run(
@@ -870,25 +851,6 @@ mod tests {
         let reopened =
             ImageGenerationService::new(service.store.clone(), service.assets.clone()).unwrap();
         assert_eq!(reopened.get(&job.id).unwrap().status, JobStatus::Unknown);
-    }
-    #[tokio::test]
-    async fn stop_joins_worker_and_keeps_charge_uncertainty() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)).set_body_json(json!({"data":[]})))
-            .mount(&server)
-            .await;
-        let (_dir, service) = setup(&server).await;
-        service.store.kv_set(ENABLED, "true").unwrap();
-        let job = service.submit(request(), CancellationToken::new()).await.unwrap();
-        assert_eq!(service.active_count().await, 1);
-        tokio::time::timeout(Duration::from_secs(2), service.stop_and_join())
-            .await
-            .expect("image worker stop must join");
-        assert_eq!(service.active_count().await, 0);
-        let stopped = service.get(&job.id).unwrap();
-        assert_eq!(stopped.status, JobStatus::Cancelled);
-        assert!(stopped.error.unwrap().contains("charged"));
     }
     #[tokio::test]
     async fn tool_discovers_only_enabled_profiles_without_credentials_jobs_or_charges() {

@@ -26,7 +26,6 @@ pub(crate) struct AgentRelay {
     pub base_url: String,
     pub token: String,
     shutdown: CancellationToken,
-    listener: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AgentRelay {
@@ -53,27 +52,15 @@ impl AgentRelay {
             .layer(middleware::from_fn_with_state(state.clone(), require_relay_token))
             .with_state(state);
         let signal = shutdown.clone();
-        let listener = tokio::spawn(async move {
+        tokio::spawn(async move {
             let _ = axum::serve(listener, app).with_graceful_shutdown(signal.cancelled_owned()).await;
         });
-        Ok(Self { base_url: format!("http://{address}/v1"), token, shutdown,
-            listener: Some(listener) })
-    }
-
-    /** Cancels the per-relay listener and joins its local task. Upstream streams are not proven stopped. */
-    pub async fn stop_and_join(&mut self) {
-        self.shutdown.cancel();
-        if let Some(listener) = self.listener.take() {
-            let _ = listener.await;
-        }
+        Ok(Self { base_url: format!("http://{address}/v1"), token, shutdown })
     }
 }
 
 impl Drop for AgentRelay {
-    fn drop(&mut self) {
-        self.shutdown.cancel();
-        if let Some(listener) = self.listener.take() { listener.abort(); }
-    }
+    fn drop(&mut self) { self.shutdown.cancel(); }
 }
 
 pub(crate) async fn status(State(state): State<ApiState>) -> Json<Value> {
@@ -101,13 +88,7 @@ pub(crate) async fn ensure(state: &ApiState) -> Result<(String, String), ApiErro
 }
 
 pub(crate) async fn stop(State(state): State<ApiState>) -> StatusCode {
-    let mut relay = {
-        let mut current = state.agent_relay.lock().await;
-        current.take()
-    };
-    if let Some(relay) = relay.as_mut() {
-        relay.stop_and_join().await;
-    }
+    state.agent_relay.lock().await.take();
     StatusCode::NO_CONTENT
 }
 

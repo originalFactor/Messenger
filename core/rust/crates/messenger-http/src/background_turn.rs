@@ -150,8 +150,7 @@ async fn start(State(state): State<ApiState>, Path(id): Path<String>, headers: a
     }
     drop(turns);
     let event_sender = state.events.clone();
-    let tasks = state.tasks.clone();
-    tasks.spawn(async move {
+    tokio::spawn(async move {
         while let Some(mut data) = rx.recv().await {
             if data.len() > MAX_APPROVAL_BYTES {
                 if let Ok(mut value) = serde_json::from_str::<Value>(&data) {
@@ -268,9 +267,8 @@ async fn events(State(state): State<ApiState>, Path(id): Path<String>) -> Result
     let turn = find(&state, &id).await?;
     let (tx, rx) = mpsc::channel::<String>(64);
     let shutdown = state.shutdown.clone();
-    let tasks = state.tasks.clone();
     let stream_shutdown = shutdown.clone();
-    tasks.spawn_started(async move {
+    tokio::spawn(async move {
         let mut cursor = 0u64;
         let mut replay_complete = false;
         loop {
@@ -321,7 +319,7 @@ async fn events(State(state): State<ApiState>, Path(id): Path<String>) -> Result
                 _ = changed.recv() => {},
             }
         }
-    }).await;
+    });
     let stream = ReceiverStream::new(rx).map(|data| Ok(Event::default().event("message").data(data)));
     Ok(Sse::new(ShutdownStream::new(stream, &stream_shutdown)).keep_alive(KeepAlive::default()))
 }

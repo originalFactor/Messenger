@@ -84,8 +84,7 @@ async fn command(State(state): State<ApiState>, Path(id): Path<Uuid>, Json(reque
     let cancel = state.shutdown.child_token();
     let task_cancel = cancel.clone();
     let task_state = state.clone();
-    let tasks = state.tasks.clone();
-    tasks.spawn(async move {
+    tokio::spawn(async move {
         let work = async {
             let device = format!("client-{}", Uuid::new_v4());
             let response = tokio::time::timeout(Duration::from_secs(15), client.get(format!("{host}/api/remote/events"))
