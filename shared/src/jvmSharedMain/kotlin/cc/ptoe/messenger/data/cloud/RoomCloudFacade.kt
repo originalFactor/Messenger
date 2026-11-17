@@ -177,8 +177,9 @@ internal class RoomCloudFacade private constructor(
 
     /** A relay 401 may only expire the exact session that owned that connection. */
     internal suspend fun rejectDeviceHostSession(owner: LocalDatabase, expected: StoredCloudSession) = withContext(NonCancellable) {
+        check(owner === db) { "Device host belongs to another Room owner" }
+        providerGate.invalidate(expected.session)
         operation.withLock {
-            check(owner === db) { "Device host belongs to another Room owner" }
             check(!closed) { "Cloud facade is closed" }
             if (!RoomDeviceHostAccessSource(db) { it }.stillCurrent(expected)) return@withLock
             val selected = coordinator

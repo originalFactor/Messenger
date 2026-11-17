@@ -17,6 +17,7 @@ import cc.ptoe.messenger.domain.chat.KotlinTurnToolExecutor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
@@ -29,6 +30,49 @@ import kotlin.test.assertTrue
 import java.util.concurrent.atomic.AtomicInteger
 
 class RoomScheduledTurnHostTest {
+    @Test fun rawMissingAgentModelNeverCreatesScheduledConversationAndReportsFailure(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("schedule-missing-raw-model")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val ownerJob = SupervisorJob()
+        val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+        try {
+            seed(db)
+            val rows = db.rows()
+            val follower = checkNotNull(rows.agent("agent")).copy(id = "follower", isDefault = false,
+                defaultModelId = "m", followDefaultModel = true)
+            rows.upsertAgents(listOf(follower))
+            val tasks = RoomScheduledTasks(db)
+            val first = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+            val second = "d3bc81a8-0589-49da-8cb1-8dc6a82507c7"
+            tasks.create(KotlinScheduledTask(first, "First", "hello", "follower", null, 1, 1))
+            val (_, claim) = tasks.claimDue(2000).single()
+            val scope = tasks.executionScope(claim, emptySet())
+            rows.upsertAgents(listOf(follower.copy(defaultModelId = null)))
+            val providerCalls = AtomicInteger()
+            val runtime = ScheduledTurnRuntime(KotlinProviderRequestPreparer(), KotlinTurnToolPolicy { _, _, _ -> false },
+                KotlinTurnToolExecutor { _, _ -> error("Unexpected tool") },
+                KotlinTurnProvider { _, _ -> providerCalls.incrementAndGet(); flowOf(ChatStreamEvent.Done("stop")) }, owner)
+            val host = RoomScheduledTurnHost(db, tasks, ScheduledTurnRuntimeFactory { _, _ -> runtime }, { emptySet() }) { 3000 }
+            val before = rows.observeAllConversations().first()
+            assertFailsWith<IllegalStateException> { host.run(scope) { tasks.recordConversation(claim, it) } }
+            assertEquals(before, rows.observeAllConversations().first())
+            assertEquals(null, tasks.list().single().lastConversationId)
+            assertTrue(tasks.finish(claim, "test cleanup", null))
+
+            tasks.create(KotlinScheduledTask(second, "Second", "hello", "follower", null, 1, 1))
+            val status = CompletableDeferred<String>()
+            val runner = RoomScheduledTaskRunner(tasks, host, { emptySet() }, ScheduledRecoveryBarrier {}, owner, { 3000 },
+                object : ScheduledTaskLifecycle { override fun status(taskId: String, result: String) { if (taskId == second) status.complete(result) } })
+            runner.tick()
+            assertEquals("failed", withTimeout(5_000) { status.await() })
+            val failed = tasks.list().single { it.id == second }
+            assertEquals("Scheduled Agent requires a model", failed.lastError)
+            assertEquals(null, failed.lastConversationId)
+            assertEquals(before, rows.observeAllConversations().first())
+            assertEquals(0, providerCalls.get())
+        } finally { ownerJob.cancelAndJoin(); db.close(); dir.toFile().deleteRecursively() }
+    }
+
     @Test fun realTurnPersistsTheScheduledConversationAndCompletion(): Unit = runBlocking {
         val dir = Files.createTempDirectory("schedule-turn")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()

@@ -19,23 +19,21 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class KotlinRoomSchedulerLifetimeTest {
@@ -56,10 +54,12 @@ class KotlinRoomSchedulerLifetimeTest {
         val source = dir.resolve("missing-core.db")
         val target = dir.resolve("room.db")
         val taskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c6"
+        val secondTaskId = "d3bc81a8-0589-49da-8cb1-8dc6a82507c7"
         val ownership = Ownership()
         val shutdown = RoomManagedShutdown { }
         val holdClaim = AtomicBoolean(false)
         val firstPoll = CompletableDeferred<Unit>()
+        val clock = AtomicLong(1)
         val claimed = CompletableDeferred<Unit>()
         val cleanupStarted = CompletableDeferred<Unit>()
         val releaseCleanup = CompletableDeferred<Unit>()
@@ -79,23 +79,24 @@ class KotlinRoomSchedulerLifetimeTest {
                     val assets = CoreAssetService(root, db.assetMetadata(), gate)
                     val tasks = RoomScheduledTasks(db)
                     val scheduler = IsolatedRoomScheduler(db, tasks, LearningOwnership(db, assets), RoomArtifactService(db, assets),
-                        cloud, processScope, ScheduledRecoveryBarrier { }, { 1000 }, calls,
+                        cloud, processScope, ScheduledRecoveryBarrier { }, { clock.get().also { firstPoll.complete(Unit) } }, calls,
                         claimDue = { now ->
                             val claims = tasks.claimDue(now)
                             if (holdClaim.get() && claims.isNotEmpty()) {
                                 claimed.complete(Unit)
-                                try { awaitCancellation() } finally {
-                                    withContext(NonCancellable) { cleanupStarted.complete(Unit); releaseCleanup.await() }
-                                }
-                            } else firstPoll.complete(Unit)
+                                cleanupStarted.complete(Unit)
+                                releaseCleanup.await()
+                            }
                             claims
                         })
                     assertFailsWith<IllegalStateException> { scheduler.tick() }
                     scheduler.start()
                     withTimeout(5_000) { firstPoll.await() }
                     val agentId = db.rows().defaultAgents().single().id
-                    tasks.create(KotlinScheduledTask(taskId, "Task", "run", agentId, intervalMinutes = 1, nextRunAt = 1))
+                    tasks.create(KotlinScheduledTask(taskId, "Task", "run", agentId, intervalMinutes = 1, nextRunAt = 1000))
+                    tasks.create(KotlinScheduledTask(secondTaskId, "Second", "run", agentId, intervalMinutes = 1, nextRunAt = 1000))
                     holdClaim.set(true)
+                    clock.set(1000)
                     ready.complete(scheduler)
                     exit.await()
                 }
@@ -103,19 +104,25 @@ class KotlinRoomSchedulerLifetimeTest {
             val scheduler = withTimeout(5_000) { ready.await() }
             val ticking = async(start = CoroutineStart.UNDISPATCHED) { runCatching { scheduler.tick() } }
             withTimeout(5_000) { claimed.await() }
+            ticking.cancel()
             exit.complete(Unit)
             withTimeout(5_000) { cleanupStarted.await() }
             assertTrue(ownership.held)
             assertFalse(startup.isCompleted)
             releaseCleanup.complete(Unit)
-            withTimeout(5_000) { assertTrue(ticking.await().isFailure); startup.await() }
+            withTimeout(5_000) { ticking.join(); startup.await() }
+            assertTrue(ticking.isCancelled)
             assertFalse(ownership.held)
             assertFailsWith<IllegalStateException> { scheduler.tick() }
             assertFailsWith<IllegalStateException> { scheduler.start() }
             val reopened = room(target)
             try {
-                assertNotNull(RoomScheduledTasks(reopened).active(taskId))
-                assertEquals("Execution interrupted before completion", RoomScheduledTasks(reopened).list().single().lastError)
+                val tasks = RoomScheduledTasks(reopened)
+                assertEquals(null, tasks.active(taskId))
+                assertEquals(null, tasks.active(secondTaskId))
+                assertEquals(setOf(taskId, secondTaskId), tasks.list().map { it.id }.toSet())
+                assertTrue(tasks.list().all { it.lastError == "Execution interrupted or cancelled" })
+                assertTrue(reopened.rows().observeAllConversations().first().isEmpty())
             } finally { reopened.close() }
         } finally { releaseCleanup.complete(Unit); exit.complete(Unit); dir.toFile().deleteRecursively() }
     }

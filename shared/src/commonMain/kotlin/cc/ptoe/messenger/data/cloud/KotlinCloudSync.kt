@@ -6,11 +6,11 @@ package cc.ptoe.messenger.data.cloud
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ResponseException
-import io.ktor.client.request.delete
-import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
-import io.ktor.client.request.put
+import io.ktor.client.request.prepareDelete
+import io.ktor.client.request.prepareGet
+import io.ktor.client.request.preparePut
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -80,46 +80,49 @@ internal class KtorSyncTransport(
     private val root = baseUrl.trimEnd('/')
 
     override suspend fun page(collection: SyncCollection, since: Long, ack: Long?, cursor: String?): SyncPage {
-        val response = client.get("$root/api/sync") {
+        return client.prepareGet("$root/api/sync") {
             header(HttpHeaders.Cookie, sessionCookie)
             parameter("collection", collection.path)
             parameter("since", since)
             parameter("limit", 200)
             ack?.let { parameter("ack", it) }
             cursor?.let { parameter("cursor", it) }
+        }.execute { response ->
+            if (response.status.value == 401) throw CloudSessionExpired()
+            check(response.status.value in 200..299) { "Cloud sync HTTP ${response.status.value}" }
+            val payload = json.parseToJsonElement(response.bodyAsText()) as? JsonObject
+                ?: error("Invalid cloud sync page")
+            val documents = (payload["documents"] as? JsonArray)?.map {
+                it as? JsonObject ?: error("Invalid cloud sync document")
+            } ?: error("Cloud sync page has no documents")
+            val version = payload["latestVersion"]?.jsonPrimitive?.longOrNull
+                ?: error("Cloud sync page has no version")
+            check(payload["collection"]?.jsonPrimitive?.contentOrNull == collection.path) { "Cloud sync collection mismatch" }
+            val hasMore = payload["hasMore"]?.jsonPrimitive?.booleanOrNull
+                ?: error("Cloud sync page has no hasMore flag")
+            val next = payload["nextCursor"]?.jsonPrimitive?.contentOrNull
+            check(!hasMore || !next.isNullOrBlank()) { "Cloud sync page has no next cursor" }
+            SyncPage(documents, version, if (hasMore) next else null)
         }
-        if (response.status.value == 401) throw CloudSessionExpired()
-        check(response.status.value in 200..299) { "Cloud sync HTTP ${response.status.value}" }
-        val payload = json.parseToJsonElement(response.bodyAsText()) as? JsonObject
-            ?: error("Invalid cloud sync page")
-        val documents = (payload["documents"] as? JsonArray)?.map {
-            it as? JsonObject ?: error("Invalid cloud sync document")
-        } ?: error("Cloud sync page has no documents")
-        val version = payload["latestVersion"]?.jsonPrimitive?.longOrNull
-            ?: error("Cloud sync page has no version")
-        check(payload["collection"]?.jsonPrimitive?.contentOrNull == collection.path) { "Cloud sync collection mismatch" }
-        val hasMore = payload["hasMore"]?.jsonPrimitive?.booleanOrNull
-            ?: error("Cloud sync page has no hasMore flag")
-        val next = payload["nextCursor"]?.jsonPrimitive?.contentOrNull
-        check(!hasMore || !next.isNullOrBlank()) { "Cloud sync page has no next cursor" }
-        return SyncPage(documents, version, if (hasMore) next else null)
     }
 
     override suspend fun push(change: PendingSyncChange): Long {
         val url = "$root/api/${change.collection.path}/${change.id.encodeURLPathPart().replace("/", "%2F")}"
-        val response = when (change.mutation) {
-            SyncMutation.DELETE -> client.delete(url) { header(HttpHeaders.Cookie, sessionCookie) }
-            SyncMutation.UPSERT -> client.put(url) {
+        val statement = when (change.mutation) {
+            SyncMutation.DELETE -> client.prepareDelete(url) { header(HttpHeaders.Cookie, sessionCookie) }
+            SyncMutation.UPSERT -> client.preparePut(url) {
                 header(HttpHeaders.Cookie, sessionCookie)
                 contentType(ContentType.Application.Json)
                 setBody(requireNotNull(change.body) { "An upsert requires a snapshot" }.toString())
             }
         }
-        if (response.status.value == 401) throw CloudSessionExpired()
-        check(response.status.value in 200..299) { "Cloud sync HTTP ${response.status.value}" }
-        val payload = json.parseToJsonElement(response.bodyAsText()) as? JsonObject
-            ?: error("Invalid cloud sync push response")
-        return payload["version"]?.jsonPrimitive?.longOrNull ?: error("Cloud sync push has no version")
+        return statement.execute { response ->
+            if (response.status.value == 401) throw CloudSessionExpired()
+            check(response.status.value in 200..299) { "Cloud sync HTTP ${response.status.value}" }
+            val payload = json.parseToJsonElement(response.bodyAsText()) as? JsonObject
+                ?: error("Invalid cloud sync push response")
+            payload["version"]?.jsonPrimitive?.longOrNull ?: error("Cloud sync push has no version")
+        }
     }
 }
 

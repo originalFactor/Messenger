@@ -55,6 +55,8 @@ internal class KotlinRoomBridgeComposition private constructor(
         }
     }
 
+    fun scheduledTaskStatus(taskId: String, status: String) = events.scheduledTaskStatus(taskId, status)
+
     /** Bind before exposing chat; a failed worker stop must not close its event subscribers. */
     fun bindChatWorkers(job: Job) {
         check(chatWorkers == null) { "Chat workers already bound" }

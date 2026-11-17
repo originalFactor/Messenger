@@ -14,9 +14,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 
 private const val ACP_SESSIONS = "local_acp_sessions"
 
@@ -35,6 +38,26 @@ class RoomAcpConversationStore(private val db: LocalDatabase, private val gate: 
         val record = decode(db.rows().getValue(ACP_SESSIONS)?.value)[id] ?: error("ACP session not found")
         val messages = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
         return cc.ptoe.messenger.data.repository.projectAcpHistory(id, messages)
+    }
+
+    /** Read stored ACP history without starting or asserting ownership of a worker. */
+    suspend fun history(id: String, before: String?): JsonObject {
+        require(id.startsWith("acp:") && id.length in 5..256) { "Invalid ACP session" }
+        val record = decode(db.rows().getValue(ACP_SESSIONS)?.value)[id] ?: error("ACP session not found")
+        val rows = record["messages"] as? JsonArray ?: error("Invalid ACP transcript")
+        val end = before?.let { cursor -> rows.indexOfFirst { (it as? JsonObject)?.text("id") == cursor }.takeIf { it >= 0 } }
+            ?: rows.size
+        val page = rows.subList((end - 20).coerceAtLeast(0), end)
+        val next = if (page.size < end) {
+            (page.firstOrNull() as? JsonObject)?.text("id")?.takeIf { it.isNotBlank() }
+                ?: error("Invalid ACP history cursor")
+        } else null
+        return buildJsonObject {
+            put("type", "History")
+            put("messages", JsonArray(page))
+            put("before", next?.let(::JsonPrimitive) ?: JsonNull)
+            put("writable", JsonNull)
+        }
     }
 
     override suspend fun update(conversation: Conversation) {

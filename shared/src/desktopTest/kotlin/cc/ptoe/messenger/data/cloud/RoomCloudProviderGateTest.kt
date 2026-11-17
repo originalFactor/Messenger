@@ -4,15 +4,20 @@ package cc.ptoe.messenger.data.cloud
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.data.chat.KotlinTurnToolPolicy
+import cc.ptoe.messenger.data.chat.KotlinTurnRequestPreparer
 import cc.ptoe.messenger.data.chat.RoomKotlinTurnStore
 import cc.ptoe.messenger.data.chat.RuntimeWorkspaceFence
 import cc.ptoe.messenger.data.local.room.*
 import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
+import cc.ptoe.messenger.data.remote.dto.ToolSpecDto
+import cc.ptoe.messenger.data.remote.dto.ToolSpecFunctionDto
 import cc.ptoe.messenger.data.remote.sse.ChatStreamEvent
+import cc.ptoe.messenger.data.remote.sse.ToolCallData
 import cc.ptoe.messenger.data.repository.room.RoomAgentRepository
 import cc.ptoe.messenger.domain.chat.*
 import cc.ptoe.messenger.domain.model.Agent
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.domain.tool.ToolExecutionResult
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
@@ -22,9 +27,86 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
+import kotlinx.serialization.json.buildJsonObject
+import okio.Path.Companion.toPath
 import kotlin.test.*
 
 class RoomCloudProviderGateTest {
+    @Test fun session401AfterProviderDoneRejectsPendingCompletionAndToolClaim(): Unit = runBlocking {
+        for (holdAfterBeginTool in listOf(false, true)) {
+            val dir = Files.createTempDirectory("room-cloud-401-done")
+            val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+            val scope = CoroutineScope(Dispatchers.Default + Job())
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val doneSent = CompletableDeferred<Unit>()
+            val call = ToolCallData("call", "read", "{}")
+            val upstream = KotlinTurnProvider { _, _ -> flow {
+                emit(ChatStreamEvent.Done("tool_calls", toolCalls = listOf(call)))
+                doneSent.complete(Unit)
+            } }
+            val dao = db.cloudSync()
+            val gate = RoomCloudProviderGate.forTesting(dao, upstream)
+            try {
+                val session = SyncSession("account", "generation")
+                val user = CloudUser(id = "account", aiApiKey = "secret")
+                val host = "https://cloud.example"
+                dao.saveCredentials(StoredCloudSession(session, "messenger_session=cookie", host, user))
+                dao.updateCloudUser(session, user, host)
+                val rows = db.rows()
+                rows.upsertModels(listOf(ModelRow("model", BUILTIN_PROVIDER_ID, "model-name", "Model", true, 100,
+                    null, null, null, null, "text", "text", false, false, false, false, 1, null, null)))
+                RoomAgentRepository(db).ensureDefaultAgent(Agent("agent", "Agent", systemPrompt = "prompt", defaultModelId = "model",
+                    temperature = 0.7f, topP = 1f, maxTokens = null, isDefault = true, createdAt = 1, updatedAt = 1))
+                rows.upsertConversations(listOf(ConversationRow("conversation", "Chat", BUILTIN_PROVIDER_ID, "agent", null,
+                    null, null, null, null, null, null, null, false, 1, 1, null, null, null, 0, 0, 0)))
+                val preparer = object : KotlinTurnRequestPreparer {
+                    override fun prepare(conversation: ConversationRow, agent: AgentRow, defaultAgent: AgentRow,
+                        model: ModelRow, provider: ProviderRow, history: List<MessageRow>) =
+                        ChatCompletionRequestDto(model.modelId, emptyList(), tools = listOf(
+                            ToolSpecDto("function", ToolSpecFunctionDto("read", "read", buildJsonObject {}))))
+                    override fun toolGrant() = KotlinRuntimeToolGrant("conversation", null, "/workspace", null, "host", listOf("read"))
+                }
+                val actual = RoomKotlinTurnStore(db, preparer, KotlinTurnToolPolicy { _, _, _ -> true }, gate)
+                val held = object : KotlinTurnStore by actual {
+                    override suspend fun completeProvider(turnId: String, calls: List<ToolCallData>, usage: cc.ptoe.messenger.data.remote.dto.UsageDto?) {
+                        if (!holdAfterBeginTool) { entered.complete(Unit); release.await() }
+                        actual.completeProvider(turnId, calls, usage)
+                    }
+                    override suspend fun beginTool(turnId: String): ToolCallData {
+                        val result = actual.beginTool(turnId)
+                        if (holdAfterBeginTool) { entered.complete(Unit); release.await() }
+                        return result
+                    }
+                }
+                val dispatched = AtomicInteger()
+                val runner = KotlinChatTurnRunner(held, upstream, KotlinTurnToolExecutor { id, tool ->
+                    actual.claimToolInvocation(id, tool)
+                    dispatched.incrementAndGet()
+                    ToolExecutionResult("executed")
+                }, scope)
+                val admission = runner.submit(KotlinTurnCommand.Send("conversation", "hi", null))
+                val turn = assertIs<KotlinTurnAdmission.Accepted>(admission, "Unexpected admission: $admission").turnId
+                withTimeout(5_000) { entered.await(); doneSent.await() }
+                // Model a 401 observed while durable credential cleanup is blocked by a reply.
+                gate.invalidate(session)
+                assertEquals(session, dao.currentSession())
+                release.complete(Unit)
+                withTimeout(5_000) { runner.awaitStopped(turn) }
+                assertEquals(0, dispatched.get())
+                assertEquals(if (holdAfterBeginTool) KotlinTurnPhase.INTERRUPTED_TOOL else KotlinTurnPhase.FAILED, actual.snapshot(turn).phase)
+                assertNotNull(actual.observeFailure(turn).first())
+                if (!holdAfterBeginTool) assertNull(rows.getValue("kotlin_turn_active_v1:conversation"))
+            } finally {
+                release.complete(Unit)
+                scope.cancel()
+                scope.coroutineContext[Job]?.join()
+                gate.shutdown()
+                db.close()
+                dir.toFile().deleteRecursively()
+            }
+        }
+    }
     @Test fun builtInTransportStreamsWithoutFollowingCredentialRedirects() = runBlocking {
         val dir = Files.createTempDirectory("room-cloud-gate-http")
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
@@ -130,6 +212,7 @@ class RoomCloudProviderGateTest {
                 withTimeout(5000) { workspaceEntered.await() }
                 val revoke = async(Dispatchers.Default) { if (logout) auth.logout(host) else auth.expireIfCurrent(session) }
                 withTimeout(5000) { stopping.await() }
+                withTimeout(5000) { while (dao.currentSession() != null) yield() }
                 assertNull(dao.currentSession())
                 assertNull(dao.value("cloud_session"))
                 assertFalse(workspace.isCompleted, "session revocation must not wait for the workspace fence")
@@ -166,6 +249,141 @@ class RoomCloudProviderGateTest {
                 server.stop(0)
                 dir.toFile().deleteRecursively()
             }
+        }
+    }
+
+    @Test fun session401InvalidatesProviderBeforeBlockedDeviceReplyAndIgnoresStale401(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-cloud-early-401")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val dao = db.cloudSync()
+        val started = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        val releaseReply = CompletableDeferred<Unit>()
+        val enteredReply = CompletableDeferred<Unit>()
+        val calls = AtomicInteger()
+        val upstream = KotlinTurnProvider { _, _ -> flow {
+            calls.incrementAndGet(); started.complete(Unit)
+            try { awaitCancellation() } finally { stopped.complete(Unit) }
+        } }
+        val gate = RoomCloudProviderGate.forTesting(dao, upstream)
+        val http = RoomCloudHttpClient()
+        val host = "https://cloud.example"
+        val session = SyncSession("account", "generation-1")
+        val user = CloudUser(id = "account", aiApiKey = "secret")
+        val stored = StoredCloudSession(session, "messenger_session=cookie", host, user)
+        fun round(identity: SyncSession) = KotlinTurnSnapshot("turn", "conversation", KotlinTurnPhase.REQUESTING_PROVIDER,
+            Provider(BUILTIN_PROVIDER_ID, "Cloud", "$host/v1", "secret", createdAt = 1, updatedAt = 1),
+            ChatCompletionRequestDto("model", emptyList()), cloudIdentity = KotlinCloudTurnIdentity(identity.accountId, identity.generation))
+        try {
+            dao.saveCredentials(stored)
+            dao.updateCloudUser(session, user, host)
+            db.rows().upsertValues(listOf(KeyValueRow("device_id", "device")))
+            val remote = KotlinRemoteControlScope(session.accountId, session.generation, host, "device")
+            RoomDeviceControlGrantStore(db).save(remote, null, kotlinx.serialization.json.buildJsonObject {
+                put("enabled", kotlinx.serialization.json.JsonPrimitive(true))
+            })
+            val replies = RoomDeviceControlFence.forDao(dao).replies(db, stored, "device")
+            val reply = async { replies.send(1) { enteredReply.complete(Unit); releaseReply.await() } }
+            withTimeout(5_000) { enteredReply.await() }
+            val stream = async { runCatching { gate.stream(round(session)).toList() } }
+            withTimeout(5_000) { started.await() }
+            val auth = RoomCloudAuthentication(dao, http)
+            val expiry = async(Dispatchers.Default) { auth.expireIfCurrent(session) }
+            withTimeout(5_000) { stopped.await() }
+            assertFalse(expiry.isCompleted, "durable clearing still waits for the admitted reply")
+            assertEquals(session, dao.currentSession())
+            assertFailsWith<IllegalStateException> { withTimeout(1_000) { gate.stream(round(session)).toList() } }
+            assertEquals(1, calls.get())
+            releaseReply.complete(Unit)
+            withTimeout(5_000) { reply.await(); expiry.await(); stream.await() }
+            assertNull(dao.currentSession())
+            assertTrue(auth.sessionExpired.value)
+
+            val newer = session.copy(generation = "generation-2")
+            dao.saveCredentials(stored.copy(session = newer))
+            dao.updateCloudUser(newer, user, host)
+            auth.expireIfCurrent(session)
+            assertEquals(newer, dao.currentSession())
+            val second = async { runCatching { gate.stream(round(newer)).toList() } }
+            withTimeout(5_000) { while (calls.get() < 2) yield() }
+            assertFalse(second.isCompleted, "a stale 401 must not revoke the new provider")
+            second.cancelAndJoin()
+        } finally {
+            releaseReply.complete(Unit)
+            gate.shutdown(); http.close(); db.close(); dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun session401DuringRoomValidationPreventsProviderStart(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-cloud-admission-401")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val dao = db.cloudSync()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val calls = AtomicInteger()
+        val upstream = KotlinTurnProvider { _, _ -> flow { calls.incrementAndGet(); awaitCancellation() } }
+        val gate = RoomCloudProviderGate.forTesting(dao, upstream) { entered.complete(Unit); release.await() }
+        val http = RoomCloudHttpClient()
+        val host = "https://cloud.example"
+        val session = SyncSession("account", "generation")
+        val user = CloudUser(id = "account", aiApiKey = "secret")
+        try {
+            dao.saveCredentials(StoredCloudSession(session, "messenger_session=cookie", host, user))
+            dao.updateCloudUser(session, user, host)
+            val round = KotlinTurnSnapshot("turn", "conversation", KotlinTurnPhase.REQUESTING_PROVIDER,
+                Provider(BUILTIN_PROVIDER_ID, "Cloud", "$host/v1", "secret", createdAt = 1, updatedAt = 1),
+                ChatCompletionRequestDto("model", emptyList()), cloudIdentity = KotlinCloudTurnIdentity(session.accountId, session.generation))
+            val stream = async { runCatching { gate.stream(round).toList() } }
+            withTimeout(5_000) { entered.await() }
+            val auth = RoomCloudAuthentication(dao, http)
+            val expiry = async(start = CoroutineStart.UNDISPATCHED) { auth.expireIfCurrent(session) }
+            assertFalse(expiry.isCompleted)
+            release.complete(Unit)
+            val result = withTimeout(5_000) { stream.await() }
+            assertTrue(result.isFailure)
+            withTimeout(5_000) { expiry.await() }
+            assertEquals(0, calls.get())
+            assertNull(dao.currentSession())
+        } finally {
+            release.complete(Unit)
+            gate.shutdown(); http.close(); db.close(); dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun cancelled401WaitsForCoordinatorAndStillClearsExactSession(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("room-cloud-cancelled-401")
+        val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("local.db").toString()).setDriver(BundledSQLiteDriver()).build()
+        val dao = db.cloudSync()
+        val gate = RoomCloudProviderGate.forTesting(dao, KotlinTurnProvider { _, _ -> flow { awaitCancellation() } })
+        val http = RoomCloudHttpClient()
+        val session = SyncSession("account", "generation")
+        val host = "https://cloud.example"
+        val user = CloudUser(id = "account", aiApiKey = "secret")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            dao.saveCredentials(StoredCloudSession(session, "messenger_session=cookie", host, user))
+            dao.updateCloudUser(session, user, host)
+            val coordinator = RoomCloudCoordinator(db, http, host,
+                RoomAvatarCache(dir.resolve("avatars").toString().toPath()), CloudImageRehydrator(dir.resolve("images")))
+            coordinator.restore()
+            val holder = async { coordinator.withSession { _, _ -> entered.complete(Unit); release.await() } }
+            withTimeout(5_000) { entered.await() }
+            val rejection = launch(start = CoroutineStart.UNDISPATCHED) { coordinator.rejectSession(session) }
+            rejection.cancel()
+            val round = KotlinTurnSnapshot("turn", "conversation", KotlinTurnPhase.REQUESTING_PROVIDER,
+                Provider(BUILTIN_PROVIDER_ID, "Cloud", "$host/v1", "secret", createdAt = 1, updatedAt = 1),
+                ChatCompletionRequestDto("model", emptyList()), cloudIdentity = KotlinCloudTurnIdentity(session.accountId, session.generation))
+            assertFailsWith<IllegalStateException> { withTimeout(1_000) { gate.stream(round).toList() } }
+            assertEquals(session, dao.currentSession())
+            release.complete(Unit)
+            withTimeout(5_000) { holder.await(); rejection.join() }
+            assertNull(dao.currentSession())
+            assertNull(coordinator.user.value)
+            assertTrue(coordinator.sessionExpired.value)
+        } finally {
+            release.complete(Unit)
+            gate.shutdown(); http.close(); db.close(); dir.toFile().deleteRecursively()
         }
     }
 }

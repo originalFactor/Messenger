@@ -80,7 +80,7 @@ internal class RoomCloudCoordinator(
         mutableSyncError.value = null
         mutableReplacementProgress.value = null
     }
-    private suspend fun expire(session: SyncSession) {
+    private suspend fun expire(session: SyncSession) = withContext(NonCancellable) {
         auth.expireIfCurrent(session)
         if (active?.session == session && dao.currentSession() != session) {
             active = null
@@ -89,7 +89,10 @@ internal class RoomCloudCoordinator(
             mutableReplacementProgress.value = null
         }
     }
-    internal suspend fun rejectSession(session: SyncSession) = mutex.withLock { expire(session) }
+    internal suspend fun rejectSession(session: SyncSession) = withContext(NonCancellable) {
+        providerGate.invalidate(session)
+        mutex.withLock { expire(session) }
+    }
     private fun bound(): StoredCloudSession = checkNotNull(active) { "Please sign in first" }
     private fun api(current: StoredCloudSession) = RoomCloudApi(transport, serverUrl, current, ::expire)
     private suspend fun <T> cloudOperation(current: StoredCloudSession, block: suspend () -> T): T {

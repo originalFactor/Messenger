@@ -36,6 +36,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okio.Path.Companion.toPath
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -161,6 +168,49 @@ class KotlinRoomAppBackendTest {
             db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", acpRecord.replace("\"timestamp\":3", "\"timestamp\":\"invalid\""))))
             assertFailsWith<IllegalStateException> { app.messageRepository.getByConversationIds(listOf("c", "acp:session")) }
             db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", acpRecord)))
+            val transcript = (1..25).joinToString(",") { index ->
+                """{"id":"m$index","role":"assistant","text":"text $index","status":"sent","timestamp":$index,"events":[{"type":"ToolUpdate","update":{"title":"read","rawInput":{"path":"file$index"}}}]}"""
+            }
+            val pagedRecord = """{"acp:pages":{"id":"acp:pages","title":"ACP pages","profile":"codex","updated_at":5,"messages":[$transcript]}}"""
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", pagedRecord)))
+            suspend fun history(before: String? = null): kotlinx.serialization.json.JsonObject {
+                var result: kotlinx.serialization.json.JsonObject? = null
+                app.coreBridge.controlCommand("history", buildJsonObject {
+                    put("action", "history"); put("sessionId", "acp:pages"); before?.let { put("before", it) }
+                }) { result = it }
+                return checkNotNull(result)
+            }
+            val newest = history()
+            assertEquals("History", newest.getValue("type").jsonPrimitive.content)
+            assertEquals("m6", newest.getValue("before").jsonPrimitive.content)
+            assertEquals(JsonNull, newest.getValue("writable"))
+            assertEquals((6..25).map { "m$it" }, newest.getValue("messages").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            val expectedEvent = Json.parseToJsonElement("""{"type":"ToolUpdate","update":{"title":"read","rawInput":{"path":"file25"}}}""")
+            assertEquals(expectedEvent, newest.getValue("messages").jsonArray.last().jsonObject.getValue("events").jsonArray.single())
+            val older = history("m6")
+            assertEquals((1..5).map { "m$it" }, older.getValue("messages").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            assertEquals(JsonNull, older.getValue("before"))
+            assertEquals(newest, history("unknown")) // Matches the existing ACP history cursor behavior.
+            assertEquals(newest, app.coreBridge.localAcpHistory("acp:pages", null))
+            var nullCursor: kotlinx.serialization.json.JsonObject? = null
+            app.coreBridge.controlCommand("history", buildJsonObject {
+                put("action", "history"); put("sessionId", "acp:pages"); put("before", JsonNull)
+            }) { nullCursor = it }
+            assertEquals(newest, nullCursor)
+            assertTrue(app.coreBridge.getConversationJson("acp:pages")!!.contains("ACP pages"))
+            assertFailsWith<IllegalStateException> { app.coreBridge.localAcpHistory("acp:missing", null) }
+            assertFailsWith<IllegalStateException> {
+                app.coreBridge.controlCommand("history", buildJsonObject {
+                    put("action", "history"); put("sessionId", "acp:pages"); put("before", JsonPrimitive(3))
+                }) { }
+            }
+            assertFailsWith<IllegalStateException> {
+                app.coreBridge.controlCommand("create", buildJsonObject { put("action", "create"); put("agentId", "acp:codex") }) { }
+            }
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", pagedRecord.replace("\"id\":\"m6\"", "\"id\":\"\""))))
+            assertFailsWith<IllegalStateException> { history() }
+            db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", pagedRecord)))
+            assertEquals(2, requests.get(), "history must not start a provider or ACP worker")
             assertEquals(0, mcpRequests.get())
             assertFailsWith<IllegalStateException> { app.clearAllDataAndReinit() }
             assertEquals(listOf("hello", "reply"), app.messageRepository.getByConversationId("c").first().map { it.content })
@@ -169,6 +219,7 @@ class KotlinRoomAppBackendTest {
             lifecycle.stopAndAwait() // The enclosing owner can also await the same stop before closing Room.
             assertEquals(RoomShutdownState.Stopped, lifecycle.state.value)
             assertFailsWith<IllegalStateException> { app.coreBridge.startBackgroundTurn(config) }
+            assertFailsWith<IllegalStateException> { app.coreBridge.localAcpHistory("acp:pages", null) }
             assertFailsWith<IllegalStateException> { slice.asAppBackend() }
             assertEquals(null, CoreBridgeRegistry.bridge)
         } finally {

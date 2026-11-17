@@ -56,7 +56,7 @@ class KotlinCoreAssetToolsTest {
             assertFalse(result.isError, result.output)
             assertEquals("learningRecord", result.structuredContent!!.jsonObject.getValue("type").jsonPrimitive.content)
             assertEquals("Notes", db.learningReview().record("note")?.title)
-            assertTrue(tool.execute(id, call).isError)
+            assertFailsWith<IllegalStateException> { tool.execute(id, call) }
             assertEquals(1L, db.learningReview().record("note")?.version)
             store.completeTool(id, call, result); store.cancel(id); store.release(id)
         } finally { db.close(); dir.toFile().deleteRecursively() }

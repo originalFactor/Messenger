@@ -29,6 +29,7 @@ import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class KotlinRoomAcpSliceTest {
@@ -155,6 +156,17 @@ class KotlinRoomAcpSliceTest {
             var history: JsonObject? = null
             bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "history"); put("sessionId", id) }) { history = it }
             assertEquals(listOf("hello", "answer"), checkNotNull(history).getValue("messages").jsonArray.map { it.jsonObject.getValue("text").jsonPrimitive.content })
+            assertEquals(history, bridge.localAcpHistory(id, null))
+            var nullCursor: JsonObject? = null
+            bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                put("action", "history"); put("sessionId", id); put("before", JsonNull)
+            }) { nullCursor = it }
+            assertEquals(history, nullCursor)
+            assertFailsWith<IllegalStateException> {
+                bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject {
+                    put("action", "history"); put("sessionId", id); put("before", 3)
+                }) { }
+            }
             assertFalse(bridge.hasActiveTasks())
             assertTrue(transports.all { it.stopped })
             lifecycle.stopAndAwait()

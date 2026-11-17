@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 /** Recovery is allowed only after the caller proves every prior-process worker is stopped. */
 internal fun interface ScheduledRecoveryBarrier { suspend fun awaitPreviousWorkersStopped() }
@@ -16,6 +17,8 @@ internal fun interface ScheduledTurnHost {
 }
 
 internal interface ScheduledTaskLifecycle {
+    /** Hold foreground ownership until every committed claim is handed off or retired. */
+    fun beginAdmission(): () -> Unit = {}
     fun begin(taskId: String) {}
     fun end(taskId: String) {}
     fun status(taskId: String, status: String) {}
@@ -35,12 +38,20 @@ internal class RoomScheduledTaskRunner(
 ) {
     private val lock = Mutex()
     private var loop: Job? = null
-    private val workers = mutableMapOf<String, Job>()
+    private val workers = ConcurrentHashMap<String, Job>()
+    private var activeTicks = 0
 
     suspend fun start(): Job = lock.withLock {
-        loop?.takeIf { it.isActive }?.let { return@withLock it }
-        check(workers.values.none { it.isActive }) { "Scheduled workers are still stopping" }
+        loop?.let {
+            if (it.isActive) return@withLock it
+            check(it.isCompleted) { "Scheduled loop is still stopping" }
+        }
+        check(activeTicks == 0) { "Scheduled claim handoff is still stopping" }
+        check(workers.values.all { it.isCompleted }) { "Scheduled workers are still stopping" }
+        val ownerJob = owner.coroutineContext[Job]
+        check(ownerJob?.isActive != false) { "Scheduled owner is stopping" }
         recoveryBarrier.awaitPreviousWorkersStopped()
+        check(ownerJob?.isActive != false) { "Scheduled owner is stopping" }
         store.recoverInterrupted()
         owner.launch {
             try {
@@ -52,22 +63,67 @@ internal class RoomScheduledTaskRunner(
 
     /** One process-owned poll, exposed for deterministic validation. */
     suspend fun tick() {
-        val claims = claimDue(now())
-        for ((_, claim) in claims) {
-            val worker = owner.launch(start = CoroutineStart.LAZY) { execute(claim) }
-            lock.withLock { workers[claim.token] = worker }
-            worker.invokeOnCompletion { owner.launch { lock.withLock { if (workers[claim.token] === worker) workers.remove(claim.token) } } }
-            worker.start()
+        currentCoroutineContext().ensureActive()
+        lock.withLock { activeTicks++ }
+        try { tickAdmitted() }
+        finally { withContext(NonCancellable) { lock.withLock { activeTicks-- } } }
+    }
+
+    private suspend fun tickAdmitted() {
+        val caller = currentCoroutineContext()[Job]
+        val ownerJob = owner.coroutineContext[Job]
+        val timestamp = now()
+        require(timestamp > 0) { "Invalid scheduled task time" }
+        // Do not start a foreground service on every idle poll. A task that becomes
+        // due after this snapshot will be claimed by the next poll.
+        if (store.list().none { it.enabled && it.nextRunAt <= timestamp }) return
+        withContext(NonCancellable) {
+            if (caller?.isActive == false || ownerJob?.isActive == false) return@withContext
+            val endAdmission = lifecycle.beginAdmission()
+            try {
+                // A committed batch must be handed to workers or retired before cancellation returns.
+                val claims = claimDue(timestamp)
+                var failed: Throwable? = null
+                for ((_, claim) in claims) {
+                    try {
+                        if (caller?.isActive == false || ownerJob?.isActive == false) {
+                            retireUnstarted(claim)
+                            continue
+                        }
+                        val started = CompletableDeferred<Boolean>()
+                        val worker = owner.launch(start = CoroutineStart.LAZY) {
+                            execute(claim) { started.complete(true) }
+                        }
+                        lock.withLock { workers[claim.token] = worker }
+                        worker.invokeOnCompletion {
+                            started.complete(false)
+                            workers.remove(claim.token, worker)
+                        }
+                        worker.start()
+                        // A cancelled lazy job may never enter its body or run execute's finally.
+                        if (!started.await()) retireUnstarted(claim)
+                    } catch (failure: Throwable) {
+                        if (failed == null) failed = failure else if (failed !== failure) failed.addSuppressed(failure)
+                    }
+                }
+                failed?.let { throw it }
+            } finally { endAdmission() }
         }
     }
 
-    private suspend fun execute(claim: ScheduledRunClaim) {
+    private suspend fun retireUnstarted(claim: ScheduledRunClaim) {
+        val status = store.finishWithStatus(claim, "Execution interrupted or cancelled", null)
+        if (status != null) lifecycle.status(claim.taskId, status)
+    }
+
+    private suspend fun execute(claim: ScheduledRunClaim, onStarted: () -> Unit) {
         var failure: String? = null
         var conversationId: String? = null
         var began = false
         try {
             lifecycle.begin(claim.taskId)
             began = true
+            onStarted()
             coroutineScope {
                 val execution = async {
                     val scope = store.executionScope(claim, availableNames())

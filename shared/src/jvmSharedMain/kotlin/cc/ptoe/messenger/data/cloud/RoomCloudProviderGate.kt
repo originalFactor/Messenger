@@ -46,11 +46,14 @@ import kotlinx.io.readByteArray
 /** One gate per Room DAO. All Cloud session invalidation and built-in provider streams use it.
  * The owning Room lease must exclude other database instances and all direct credential writers. */
 class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
-    private val upstream: KotlinTurnProvider, private val closeTransport: () -> Unit) {
+    private val upstream: KotlinTurnProvider, private val closeTransport: () -> Unit,
+    private val beforeRegistration: suspend () -> Unit = {}) {
     private data class Request(val session: SyncSession, val job: Job, val revoked: AtomicBoolean)
     private val mutex = Mutex()
     private val deviceFence = RoomDeviceControlFence.forDao(dao)
+    private val admissionLock = Any()
     private val requests = mutableSetOf<Request>()
+    private val invalidated = mutableSetOf<SyncSession>()
     private var stopped = false
 
     internal companion object {
@@ -82,13 +85,15 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
                         }
                     }
                 }
-                RoomCloudProviderGate(dao, provider) { if (transport.isInitialized()) transport.value.close() }.also { gates[dao] = WeakReference(it) }
+                RoomCloudProviderGate(dao, provider, closeTransport = { if (transport.isInitialized()) transport.value.close() })
+                    .also { gates[dao] = WeakReference(it) }
             }
         }
         /** Tests may inject a controlled cooperative stream before any owner obtains the gate. */
-        fun forTesting(dao: CloudSyncDao, upstream: KotlinTurnProvider): RoomCloudProviderGate = synchronized(gates) {
+        fun forTesting(dao: CloudSyncDao, upstream: KotlinTurnProvider,
+            beforeRegistration: suspend () -> Unit = {}): RoomCloudProviderGate = synchronized(gates) {
             check(gates[dao]?.get() == null) { "Cloud gate already exists" }
-            RoomCloudProviderGate(dao, upstream) {}.also { gates[dao] = WeakReference(it) }
+            RoomCloudProviderGate(dao, upstream, {}, beforeRegistration).also { gates[dao] = WeakReference(it) }
         }
         private fun forget(dao: CloudSyncDao, gate: RoomCloudProviderGate) = synchronized(gates) {
             if (gates[dao]?.get() === gate) gates.remove(dao)
@@ -98,6 +103,11 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
     internal fun stream(round: KotlinTurnSnapshot): Flow<ChatStreamEvent> = dispatch(round, false)
     internal fun complete(round: KotlinTurnSnapshot): Flow<ChatStreamEvent> = dispatch(round, true)
 
+    /** Linearization point for work derived from a Cloud turn, including tool claims. */
+    internal fun requireValid(session: SyncSession) = synchronized(admissionLock) {
+        check(!stopped && session !in invalidated) { "Cloud session expired" }
+    }
+
     private fun dispatch(round: KotlinTurnSnapshot, completion: Boolean): Flow<ChatStreamEvent> = flow {
         val identity = checkNotNull(round.cloudIdentity) { "Cloud turn has no session identity" }
         val session = SyncSession(identity.accountId, identity.generation)
@@ -106,6 +116,9 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             val revoked = AtomicBoolean(false)
             val worker = launch(start = CoroutineStart.LAZY) {
                 try {
+                    synchronized(admissionLock) {
+                        if (stopped || session in invalidated || revoked.get()) throw CloudSessionExpired()
+                    }
                     (if (completion) upstream.complete(round.provider, round.request) else upstream.stream(round.provider, round.request)).collect { events.send(it) }
                     events.close()
                 } catch (cancelled: CancellationException) {
@@ -120,47 +133,67 @@ class RoomCloudProviderGate private constructor(private val dao: CloudSyncDao,
             }
             val request = Request(session, worker, revoked)
             try {
-                mutex.withLock {
+                synchronized(admissionLock) {
                     check(!stopped) { "Cloud provider gate is closed" }
+                    check(session !in invalidated) { "Cloud session expired" }
+                }
+                mutex.withLock {
                     check(dao.currentSession() == session && dao.value(DEFERRED_BUILTIN_PROVIDER_CLEANUP) == null) { "Cloud session expired" }
                     val current = dao.providerRow(BUILTIN_PROVIDER_ID)
                     check(current != null && current.apiKey.isNotBlank() && current.apiKey == round.provider.apiKey &&
                         current.baseUrl == round.provider.baseUrl && current.apiFormat == round.provider.apiFormat.wireName &&
                         current.nativeWebSearch == round.provider.nativeWebSearch) { "Cloud provider changed" }
-                    requests.add(request)
-                    worker.start()
+                    beforeRegistration()
+                    synchronized(admissionLock) {
+                        check(!stopped) { "Cloud provider gate is closed" }
+                        check(session !in invalidated) { "Cloud session expired" }
+                        requests.add(request)
+                    }
                 }
+                worker.start()
                 for (event in events) emit(event)
             } finally {
                 withContext(NonCancellable) {
                     worker.cancelAndJoin()
-                    mutex.withLock { requests.remove(request) }
+                    synchronized(admissionLock) { requests.remove(request) }
                     events.cancel()
                 }
             }
         }
     }
 
-    /** Clear/revoke under the same lock as dispatch, then cancel and join admitted network work. */
-    internal suspend fun revoke(session: SyncSession): Boolean = withContext(NonCancellable) {
-        val jobs = mutex.withLock {
-            if (!deviceFence.mutate { dao.clearCredentialsIfCurrent(session) }) return@withContext false
-            requests.filter { it.session == session }.onEach {
-                it.revoked.set(true)
-                it.job.cancel(CancellationException("Cloud session revoked"))
-            }.map { it.job }
+    /** Reject an exact session immediately, without waiting for Room or an in-flight reply. */
+    internal fun invalidate(session: SyncSession) {
+        val jobs = synchronized(admissionLock) {
+            invalidated.add(session)
+            requests.filter { it.session == session }.onEach { it.revoked.set(true) }.map { it.job }
         }
+        jobs.forEach { it.cancel(CancellationException("Cloud session revoked")) }
+    }
+
+    /** Invalidate first; durable revocation and worker drain may wait for other owners. */
+    internal suspend fun revoke(session: SyncSession): Boolean = withContext(NonCancellable) {
+        invalidate(session)
+        val cleared = mutex.withLock {
+            val cleared = deviceFence.mutate { dao.clearCredentialsIfCurrent(session) }
+            // No validated admission can pass the mutex until the old identity is gone.
+            if (cleared || dao.currentSession() != session) synchronized(admissionLock) { invalidated.remove(session) }
+            cleared
+        }
+        val jobs = synchronized(admissionLock) { requests.filter { it.session == session }.map { it.job } }
         jobs.joinAll()
-        true
+        cleared
     }
 
     /** Close admissions and drain the provider jobs before the Room owner closes the database. */
     internal suspend fun shutdown() = withContext(NonCancellable) {
-        val jobs = mutex.withLock {
+        val jobs = synchronized(admissionLock) {
             stopped = true
-            requests.onEach { it.revoked.set(true); it.job.cancel(CancellationException("Cloud provider gate closed")) }.map { it.job }
+            requests.onEach { it.revoked.set(true) }.map { it.job }
         }
+        jobs.forEach { it.cancel(CancellationException("Cloud provider gate closed")) }
         jobs.joinAll()
+        mutex.withLock { /* Wait for any pending database admission check. */ }
         closeTransport()
         forget(dao, this@RoomCloudProviderGate)
     }

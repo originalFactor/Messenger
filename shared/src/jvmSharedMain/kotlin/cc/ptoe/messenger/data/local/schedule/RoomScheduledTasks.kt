@@ -169,6 +169,7 @@ internal class RoomScheduledTasks(private val db: LocalDatabase) {
         check(task.enabled && task.lastRunAt == claim.startedAt) { "Scheduled task changed" }
         rows.validate(task)
         val agent = requireNotNull(rows.agent(task.agentId))
+        check(agent.defaultModelId != null) { "Scheduled Agent requires a model" }
         val default = rows.defaultAgents().singleOrNull() ?: error("Default Agent not found")
         val modelId = if (!agent.isDefault && agent.followDefaultModel) default.defaultModelId else agent.defaultModelId
         val model = modelId?.let { rows.model(it) } ?: error("Scheduled Agent requires a model")

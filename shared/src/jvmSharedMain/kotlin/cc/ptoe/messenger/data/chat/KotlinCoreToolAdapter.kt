@@ -40,7 +40,7 @@ internal class KotlinCoreToolAdapter private constructor(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             val detail = failure.message ?: "Core tool failed"
-            if (store().coreToolInvocationStarted(turnId, call)) ToolExecutionResult("$detail; the operation may have completed", isError = true)
+            if (store().coreToolInvocationStarted(turnId, call)) throw IllegalStateException("$detail; the operation may have completed", failure)
             else store().executeRoomCoreTool(turnId, call) { ToolExecutionResult(detail, isError = true) }
         }
     }

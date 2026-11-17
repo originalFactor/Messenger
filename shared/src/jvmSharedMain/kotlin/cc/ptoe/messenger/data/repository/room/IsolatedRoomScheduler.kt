@@ -20,6 +20,7 @@ import cc.ptoe.messenger.data.remote.dto.ChatCompletionRequestDto
 import cc.ptoe.messenger.data.repository.LearningOwnership
 import cc.ptoe.messenger.domain.chat.KotlinTurnProvider
 import cc.ptoe.messenger.domain.model.Provider
+import cc.ptoe.messenger.presentation.platform.ForegroundTaskRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +36,8 @@ internal class IsolatedRoomScheduler(
     previousWorkersStopped: ScheduledRecoveryBarrier,
     private val now: () -> Long,
     private val admissions: PartialChatCalls,
+    taskStatus: (String, String) -> Unit = { _, _ -> },
+    providerOverride: KotlinTurnProvider? = null,
     claimDue: suspend (Long) -> List<Pair<KotlinScheduledTask, ScheduledRunClaim>> = { tasks.claimDue(it) },
 ) {
     private val failureState = MutableStateFlow<String?>(null)
@@ -42,7 +45,7 @@ internal class IsolatedRoomScheduler(
     val failure = failureState.asStateFlow()
     private val supported = IsolatedCoreTools.supportedNames
     private val direct = DirectProviderStream()
-    private val provider = object : KotlinTurnProvider {
+    private val provider = providerOverride ?: object : KotlinTurnProvider {
         override fun stream(provider: Provider, request: ChatCompletionRequestDto) = direct.stream(provider, request)
         override fun complete(provider: Provider, request: ChatCompletionRequestDto) = direct.complete(provider, request)
     }
@@ -64,6 +67,28 @@ internal class IsolatedRoomScheduler(
     }, { supported }, now)
     private val runner = RoomScheduledTaskRunner(tasks, host, { supported }, previousWorkersStopped,
         processScope, now, object : ScheduledTaskLifecycle {
+            private val lock = Any()
+            private val ends = mutableMapOf<String, () -> Unit>()
+            override fun beginAdmission(): () -> Unit {
+                val begin = ForegroundTaskRegistry.begin ?: return {}
+                val end = ForegroundTaskRegistry.end ?: return {}
+                begin()
+                return end
+            }
+            override fun begin(taskId: String) {
+                val begin = ForegroundTaskRegistry.begin ?: return
+                val end = ForegroundTaskRegistry.end ?: return
+                synchronized(lock) {
+                    check(taskId !in ends) { "Scheduled foreground lease already exists" }
+                    ends[taskId] = end
+                }
+                try { begin() } catch (failure: Throwable) {
+                    synchronized(lock) { ends.remove(taskId) }
+                    throw failure
+                }
+            }
+            override fun status(taskId: String, status: String) { runCatching { taskStatus(taskId, status) } }
+            override fun end(taskId: String) { synchronized(lock) { ends.remove(taskId) }?.invoke() }
             override fun schedulerFailed(message: String) { failureState.value = message }
         }, claimDue)
 

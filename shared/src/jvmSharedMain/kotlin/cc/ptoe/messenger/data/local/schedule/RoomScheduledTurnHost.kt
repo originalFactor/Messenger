@@ -93,6 +93,7 @@ internal class RoomScheduledTurnHost(
         db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
             val rows = db.rows()
             val agent = requireNotNull(rows.agent(scope.agentId)) { "Scheduled Agent is unavailable" }
+            check(agent.defaultModelId != null) { "Scheduled Agent requires a model" }
             val default = rows.defaultAgents().singleOrNull() ?: error("Default Agent is unavailable")
             val modelId = if (!agent.isDefault && agent.followDefaultModel) default.defaultModelId else agent.defaultModelId
             val model = modelId?.let { rows.model(it) } ?: error("Scheduled Agent requires a model")

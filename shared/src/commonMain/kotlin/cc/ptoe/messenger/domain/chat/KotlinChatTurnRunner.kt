@@ -114,6 +114,8 @@ interface KotlinTurnStore {
     suspend fun completeTool(turnId: String, call: ToolCallData, result: ToolExecutionResult)
     /** Atomically reject a proven undispatched Runtime call; fail closed if the claim is uncertain. */
     suspend fun rejectUndispatchedRuntimeTool(turnId: String, call: ToolCallData, detail: String) { error("Undispatched Runtime rejection unavailable") }
+    /** Return true only when the exact Core call is atomically proven not to have been claimed. */
+    suspend fun rejectUndispatchedCoreTool(turnId: String, call: ToolCallData, detail: String): Boolean = false
     suspend fun fail(turnId: String, detail: String)
     suspend fun cancel(turnId: String)
     suspend fun cancelRemote(scope: KotlinRemoteControlScope, conversationId: String, turnId: String) { error("Remote cancellation unavailable") }
@@ -348,6 +350,12 @@ class KotlinChatTurnRunner(
                         catch (rejected: RuntimeToolNotDispatchedException) {
                             store.rejectUndispatchedRuntimeTool(turnId, call, rejected.message ?: "Runtime tool was not dispatched")
                             null
+                        }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            if (call.name.startsWith("messenger_") &&
+                                store.rejectUndispatchedCoreTool(turnId, call, failure.message ?: "Core tool failed")) null
+                            else throw failure
                         }
                     } ?: return
                     currentCoroutineContext().ensureActive()

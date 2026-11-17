@@ -4,6 +4,7 @@ package cc.ptoe.messenger.data.local.acp
 import cc.ptoe.messenger.core.CoreBridge
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -25,6 +26,7 @@ internal class KotlinAcpBackgroundBridge(
 
     override suspend fun backgroundAcpBySession(sessionId: String): JsonObject? = owner.bySession(sessionId)
     override suspend fun backgroundAcpEvents(requestId: String, after: Long): JsonObject = owner.events(requestId, after)
+    override suspend fun localAcpHistory(sessionId: String, before: String?): JsonObject = owner.history(sessionId, before)
     override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) {
         val action = (command["action"] as? JsonPrimitive)?.contentOrNull
         val session = (command["sessionId"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
@@ -37,8 +39,10 @@ internal class KotlinAcpBackgroundBridge(
             val created = owner.createFrom(agentId.removePrefix("acp:"), projectId, newSession)
             onEvent(buildJsonObject { put("type", "Created"); put("sessionId", created.conversationId) })
         } else if (action == "history" && session?.startsWith("acp:") == true) {
-            val before = command["before"]?.let { value ->
-                (value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP history cursor")
+            val before = when (val value = command["before"]) {
+                null, JsonNull -> null
+                is JsonPrimitive -> value.takeIf { it.isString }?.contentOrNull ?: error("Invalid ACP history cursor")
+                else -> error("Invalid ACP history cursor")
             }
             onEvent(owner.history(session, before))
         } else delegate.controlCommand(requestId, command, onEvent)

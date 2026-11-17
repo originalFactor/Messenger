@@ -61,6 +61,17 @@ internal class KotlinRoomEventsBridge(
         for (subscriber in subscribers) runCatching { subscriber("taskStatus", ids) }
     }
 
+    /** Called after the scheduler has durably committed its run result. */
+    fun scheduledTaskStatus(taskId: String, status: String) {
+        require(status in setOf("completed", "failed", "cancelled"))
+        val subscribers = synchronized(lock) {
+            if (closed) return
+            listeners.toList()
+        }
+        val ids = listOf(status, "scheduled", taskId)
+        for (subscriber in subscribers) runCatching { subscriber("localTaskStatus", ids) }
+    }
+
     /** The database owner must call this and wait before closing Room. */
     suspend fun shutdown() = withContext(NonCancellable) {
         val job = synchronized(lock) {

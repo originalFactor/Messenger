@@ -6,6 +6,7 @@ import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
 import cc.ptoe.messenger.data.cloud.SyncCollection
 import cc.ptoe.messenger.data.cloud.SyncMutation
+import cc.ptoe.messenger.data.cloud.SyncSession
 import cc.ptoe.messenger.data.cloud.RoomCloudProviderGate
 import cc.ptoe.messenger.data.cloud.canonicalCloudBase
 import cc.ptoe.messenger.data.cloud.requireRemoteControl
@@ -161,6 +162,10 @@ class RoomKotlinTurnStore(
         val session = db.cloudSync().currentSession()
         check(session?.accountId == identity.accountId && session.generation == identity.generation &&
             getValue(DEFERRED_BUILTIN_PROVIDER_CLEANUP) == null) { "Cloud session changed" }
+        // A 401 invalidates this identity before durable credentials can be cleared. The
+        // gate check and invalidation share a short lock, never held during tool execution.
+        checkNotNull(cloudGate) { "Cloud provider dispatch gate is unavailable" }
+            .requireValid(SyncSession(identity.accountId, identity.generation))
     }
     private suspend fun LocalRowsDao.approvalPhase(turn: StoredTurn, call: ToolCallData): KotlinTurnPhase = when {
         isTrustedReadOnlyTool(call) -> KotlinTurnPhase.READY_TOOL
@@ -469,6 +474,7 @@ class RoomKotlinTurnStore(
 
     override suspend fun completeProvider(turnId: String, calls: List<ToolCallData>, usage: UsageDto?) { transaction { rows, mark ->
         val turn = rows.read(turnId); turn.requireOwner(); turn.requirePhase(KotlinTurnPhase.REQUESTING_PROVIDER)
+        rows.requireTurnCloudSession(turn)
         val advertised = turn.request.tools.orEmpty().map { it.function.name }.toSet()
         require(calls.all { it.callId.isNotBlank() && it.name.isNotBlank() && it.name in advertised } && calls.map { it.callId }.distinct().size == calls.size) { "Provider requested an undeclared or invalid tool" }
         val assistant = checkNotNull(rows.message(turn.assistantId))
@@ -691,6 +697,23 @@ class RoomKotlinTurnStore(
         rows.refreshConversationPreview(turn.conversationId)
         mark(turn.conversationId)
     } }
+    override suspend fun rejectUndispatchedCoreTool(turnId: String, call: ToolCallData, detail: String): Boolean = transaction { rows, mark ->
+        val turn = rows.read(turnId)
+        if (turn.owner != owner || turn.phase() !in setOf(KotlinTurnPhase.EXECUTING_TOOL, KotlinTurnPhase.CANCELLING_TOOL) ||
+            rows.getValue(ACTIVE + turn.conversationId)?.value != turnId || turn.invocationStarted ||
+            turn.coreGrant?.let { it.conversationId == turn.conversationId && call.name in it.allowedNames } != true ||
+            turn.calls.getOrNull(turn.index)?.domain() != call || !call.name.startsWith("messenger_")) return@transaction false
+        val cancelled = turn.phase() == KotlinTurnPhase.CANCELLING_TOOL
+        val assistant = checkNotNull(rows.message(turn.assistantId))
+        check(assistant.conversationId == turn.conversationId && assistant.role.equals("assistant", ignoreCase = true)) { "Invalid turn message" }
+        rows.upsertMessages(listOf(assistant.copy(status = if (cancelled) "sent" else "error", errorMessage = if (cancelled) null else detail)))
+        rows.write(turn.copy(phase = if (cancelled) KotlinTurnPhase.CANCELLED.name else KotlinTurnPhase.FAILED.name, detail = if (cancelled) null else detail))
+        if (!cancelled) rows.addTurnFailure(turn, detail)
+        rows.deleteValue(ACTIVE + turn.conversationId)
+        rows.refreshConversationPreview(turn.conversationId)
+        mark(turn.conversationId)
+        true
+    }
     private suspend fun LocalRowsDao.completeToolResult(turn: StoredTurn, call: ToolCallData, result: ToolExecutionResult) {
         val now = nextMessageTimestamp(turn.conversationId)
         val part = ContentPart.ToolResult(call.callId, call.name, result.output, result.isError, result.structuredContent)

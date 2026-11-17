@@ -197,7 +197,8 @@ internal class KotlinRoomBackendSlice private constructor(
 
             val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = remoteSkills)
             val controls = KotlinControlSettingsBridge(skills, db)
-            val acpBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession) else controls
+            val acpBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession)
+                else RoomAcpHistoryBridge(controls, acp)
             var modelImageTool: IsolatedModelImageTool? = null
             var sharedImageService: ImageGenerationService? = null
             val imageOwner = imageJobs?.let { config ->
@@ -231,7 +232,8 @@ internal class KotlinRoomBackendSlice private constructor(
             }
             composition.bindChatWorkers(processJob)
             val scheduler = schedulerRecovery?.let {
-                IsolatedRoomScheduler(db, checkNotNull(scheduledTasks), learningOwnership, artifacts, cloud.providerGate, processScope, it, now, admissions)
+                IsolatedRoomScheduler(db, checkNotNull(scheduledTasks), learningOwnership, artifacts, cloud.providerGate, processScope, it, now, admissions,
+                    taskStatus = composition::scheduledTaskStatus)
                     .also { scheduler -> scheduler.start() }
             }
             val attachedDeviceHost = deviceHost?.let { IsolatedRoomDeviceHost.attach(db, cloud, shutdown, it) }
@@ -285,6 +287,10 @@ private class PartialChatBridge(
     override suspend fun previewRemoteSkill(requestJson: String) = admitted { delegate.previewRemoteSkill(requestJson) }
     override suspend fun scheduledTaskRequest(method: String, path: String, body: String?) =
         admitted { delegate.scheduledTaskRequest(method, path, body) }
+    override suspend fun controlCommand(requestId: String, command: JsonObject, onEvent: (JsonObject) -> Unit) =
+        admitted { delegate.controlCommand(requestId, command, onEvent) }
+    override suspend fun localAcpHistory(sessionId: String, before: String?) =
+        admitted { delegate.localAcpHistory(sessionId, before) }
     override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit) = withForegroundAdmission {
         admitted { delegate.runTurn(config, toolExecutor, onEventJson) }
