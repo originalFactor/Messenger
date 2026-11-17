@@ -24,7 +24,8 @@ internal interface CoreAssetGate {
  * Unconnected asset migration service. Image imports require bounded platform decoding; package import remains unimplemented.
  * The caller supplies a private directory and a gate shared by every resource/domain mutation.
  */
-internal class CoreAssetService(private val root: Path, private val dao: CoreAssetMetadataDao, private val gate: CoreAssetGate) {
+internal class CoreAssetService(private val assetRoot: Path, private val dao: CoreAssetMetadataDao, private val gate: CoreAssetGate) {
+    internal val root: Path = assetRoot.toAbsolutePath().normalize()
     private val json = Json { encodeDefaults = true }
 
     /** Caller must use this same gate for learning, artifacts and package mutations. */

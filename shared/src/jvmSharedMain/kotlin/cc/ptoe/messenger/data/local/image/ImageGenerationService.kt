@@ -40,6 +40,7 @@ internal class ImageGenerationService(
     private val syncStore: (Path) -> Unit = ::syncAssetRoot,
 ) {
     private val active = ConcurrentHashMap<String, CompletableJob>()
+    private val reservations = ImageReservationJournal(db.imageJobs())
     private val recoveryRequired = AtomicBoolean(false)
     private val stopping = AtomicBoolean(false)
     private val admissionLock = Mutex()
@@ -85,6 +86,7 @@ internal class ImageGenerationService(
         selectedAuthorization.requireAllowed(request)
         currentCoroutineContext().ensureActive()
         var reservation: Path? = null
+        var reservationJournal: ImageReservationRecord? = null
         var committedId: String? = null
         val admission = try { withContext(NonCancellable) { assets.withExclusive {
             requireDurableDirectory(storeDirectory)
@@ -105,6 +107,9 @@ internal class ImageGenerationService(
                     val result = db.imageJobs().admit(request, now())
                     if (result.created) {
                         reservation = assets.reserveImageQuotaWithGateHeld()
+                        val journal = reservations.record(result.job.id, assets.root, reservation!!, now())
+                        reservations.insert(journal)
+                        reservationJournal = journal
                         result.copy(job = db.imageJobs().markRunning(result.job.id, now()))
                     } else result
                 }
@@ -117,7 +122,7 @@ internal class ImageGenerationService(
         } } } catch (failure: Throwable) {
             withContext(NonCancellable) {
                 try { committedId?.let { markIfRunning(it, "Image request did not start; local preparation failed. No automatic retry.", false) } }
-                finally { reservation?.let { held -> releaseReservation(held) } }
+                finally { reservation?.let { held -> releaseReservation(held, reservationJournal) } }
             }
             throw failure
         }
@@ -156,7 +161,16 @@ internal class ImageGenerationService(
                     assets.withExclusive {
                         val current = db.imageJobs().read(running.id)
                         if (current.status != ImageJobStatus.running) return@withExclusive current
-                        reservation?.let { assets.releaseImageQuotaWithGateHeld(it); reservation = null }
+                        val journal = reservationJournal
+                        db.useWriterConnection { connection ->
+                            connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                                reservation?.let { held -> assets.releaseImageQuotaWithGateHeld(held) }
+                                if (journal != null) reservations.delete(journal.jobId)
+                            }
+                        }
+                        reservation = null
+                        reservationJournal = null
+                        assets.syncDirectoryWithGateHeld()
                         for ((result, bytes) in output) assets.stageVerifiedFile(result.metadata, bytes)
                         assets.syncDirectoryWithGateHeld()
                         db.imageJobs().complete(running.id, output.map { it.first }, response.usage, now())
@@ -182,7 +196,7 @@ internal class ImageGenerationService(
             active.remove(admission.job.id, worker)
             worker.complete()
             withContext(NonCancellable) {
-                reservation?.let { held -> releaseReservation(held) }
+                reservation?.let { held -> releaseReservation(held, reservationJournal) }
             }
         }
     }
@@ -193,8 +207,16 @@ internal class ImageGenerationService(
         return result
     }
 
-    private suspend fun releaseReservation(path: Path) {
-        try { assets.withExclusive { assets.releaseImageQuotaWithGateHeld(path) } }
+    private suspend fun releaseReservation(path: Path, journal: ImageReservationRecord?) {
+        try { assets.withExclusive {
+            db.useWriterConnection { connection ->
+                connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                    assets.releaseImageQuotaWithGateHeld(path)
+                    if (journal != null) reservations.delete(journal.jobId)
+                }
+            }
+            assets.syncDirectoryWithGateHeld()
+        } }
         catch (failure: Throwable) { recoveryRequired.set(true); throw failure }
     }
 

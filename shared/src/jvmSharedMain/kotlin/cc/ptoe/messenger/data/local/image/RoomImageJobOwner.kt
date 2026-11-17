@@ -43,6 +43,7 @@ internal class RoomImageJobOwner private constructor(
     private val shutdown: RoomManagedShutdown,
 ) {
     private class Worker(val request: ImageRequest, val admission: CompletableDeferred<ImageJob>, val job: Job)
+    private val reservations = ImageReservationJournal(db.imageJobs())
     private val mutex = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workers = ConcurrentHashMap<String, Worker>()
@@ -55,9 +56,8 @@ internal class RoomImageJobOwner private constructor(
         suspend fun open(db: LocalDatabase, assets: CoreAssetService, service: ImageGenerationService,
             shutdown: RoomManagedShutdown, priorStopped: PriorImageWorkersStopped, now: () -> Long,
             onRegistered: (RoomImageJobOwner) -> Unit = {}): RoomImageJobOwner {
-            priorStopped.verify()
-            assets.withExclusive { db.imageJobs().recoverInterrupted(now()) }
             val owner = RoomImageJobOwner(db, assets, service, now, shutdown)
+            owner.recoverInterrupted(assets, priorStopped)
             try { withContext(NonCancellable) {
                 shutdown.registerStop { owner.shutdown() }
                 // Expose the recovery handle only after its shutdown action is registered.
@@ -141,8 +141,7 @@ internal class RoomImageJobOwner private constructor(
     suspend fun recoverAfterStop(proof: PriorImageWorkersStopped) = shutdown.withRecovery {
         mutex.withLock {
             check(closed && workers.isEmpty()) { "Image workers are still active" }
-            proof.verify()
-            assets.withRecovery { db.imageJobs().recoverInterrupted(now()) }
+            recoverInterruptedForStoppedOwner(proof)
             service.markRecovered()
             mutableFailure.value = null
         }
@@ -158,6 +157,22 @@ internal class RoomImageJobOwner private constructor(
             }
         } catch (failure: Throwable) {
             mutableFailure.value = "Image job status could not be recorded; its outcome may be unknown. Recovery is required."
+        }
+    }
+
+    private suspend fun recoverInterrupted(assets: CoreAssetService, priorStopped: PriorImageWorkersStopped) {
+        priorStopped.verify()
+        assets.withExclusive {
+            reservations.reconcile(assets.root, emptySet())
+            db.imageJobs().recoverInterrupted(now())
+        }
+    }
+
+    private suspend fun recoverInterruptedForStoppedOwner(proof: PriorImageWorkersStopped) {
+        proof.verify()
+        assets.withRecovery {
+            reservations.reconcile(assets.root, emptySet())
+            db.imageJobs().recoverInterrupted(now())
         }
     }
 }

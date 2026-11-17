@@ -71,6 +71,12 @@ receipt still match. Under exclusive ownership, validate the restored database's
 current asset references and their hashes before any restore rebind. This is an
 explicit restore check, not a requirement to scan every asset on normal startup.
 
+Image quota reservations now use a durable job-to-file journal and proof-gated
+reconciliation in the isolated Kotlin service. This removes one class of
+quota-counted orphan files after a normal or interrupted process, but it does
+not replace the platform owner proof, Windows/Android directory durability
+validation or cross-process file exclusion required for production cutover.
+
 The current Kotlin backend slice exercises Room-backed chat, selected local tools,
 optional scheduling, Skills and image jobs in isolation. It is not an AppBackend
 and is not selected by Android or Desktop. Cutover still needs platform ownership

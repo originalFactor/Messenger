@@ -52,6 +52,10 @@
 
 随后修复隔离 Room Cloud gate 的一个可验证边界：`RoomCloudProviderGate` 将失效集合从按 session 无界累积改为按账号保留精确 generation、按 LRU 限额淘汰；旧 generation 的 stale 401 仍不能撤销当前新会话，且不再让 device-host 回调无限增长内存。新增 `invalidationBoundReplacesStaleGenerationWithoutRevokingNewSession`，定向 Cloud gate/coordinator/remote-turn 测试通过。淘汰旧账号标记会移除该旧 generation 的 in-memory admission guard，因此这仍不是跨进程或全部写入者的持久 fence；生产切换仍未进行。
 
+旧数据与资源生命周期继续推进：隔离 `ImageGenerationService` 为每次付费请求前的 `.stage-image-reserve-*` 文件写入持久 `local_image_reservation:<jobId>` journal（精确文件名、fileKey、大小），成功/失败/取消在同一 Room writer 事务中同步退休；`RoomImageJobOwner` 在启动和 stopped-owner recovery 中都必须先验证 prior-worker proof，再对未知文件、active job、身份/大小变化 fail-closed，且只通过 secure directory 删除精确记录并同步目录。新增 `ImageReservationJournalTest` 覆盖正常退休、未知文件、active job、伪造身份与崩溃恢复，定向 image 测试通过。它仍是 POSIX 隔离原型，不提供 Windows/Android 掉电耐久性、跨进程排除或生产平台 worker-stop 证明。
+
+此改动后的 `:shared:allTests` 全量通过；CI selector/audit fixture 通过，严格审计仍为 `blocking_references=29`、`rust_workspace=present`、`native_bindings=present`。这证明隔离 Kotlin 原型没有回归，不证明生产启动已切换或 Rust Core 可删除。
+
 本轮首次定向 shared 测试 14/14 通过，清理两处编译警告后 12 项相关测试重跑通过；`:runtime:testDebugUnitTest`、Runtime/Android debug 及 instrumentation APK 构建通过。验证日志：`/tmp/messenger-resume-shared-tests.log`、`/tmp/messenger-resume-runtime-android-build.log`、`/tmp/messenger-resume-candidate-device.log`、`/tmp/messenger-resume-runtime-device.log`、`/tmp/messenger-resume-hardlink-device.log`、`/tmp/messenger-resume-final-shared-tests.log` 和 `/tmp/messenger-resume-final-runtime-tests.log`。临时日志不是长期证据；以仓库中的测试和文档为准。
 
 原有用户工作区：`.idea/*` 修改、未跟踪的 `google-services.json` 和 `jpush-android-6.3.1-release.zip`、`server` gitlink 的修改。不要覆盖、删除或纳入无关提交。`server` 子模块当前 `fd15f7b`，其中本会话有本地提交 `c6ec1c8` 和 `fd15f7b`；父仓库 gitlink 未提交。renderer 子模块自己有 `cb42531`。没有请求 push。
