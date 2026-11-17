@@ -74,6 +74,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
     var learningMessage by remember { mutableStateOf<Message?>(null) }
     var selectedMessage by remember { mutableStateOf<Message?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    var showReplaySnapshots by remember(sessionId) { mutableStateOf(false) }
     var settingsBusy by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(buildJsonObject {}) }
@@ -223,8 +224,9 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { report(failure.message.orEmpty()) }
     } }
+    val supportsSteering = acpSupportsSteering(settings)
     fun steer(text: String, files: List<AcpAttachment>, onAccepted: () -> Unit) {
-        if ((settings["steering"] as? JsonObject)?.get("supported") != JsonPrimitive(true)) { report("This Agent does not support steering"); return }
+        if (!supportsSteering) { report("This Agent does not support steering"); return }
         if (steering || (text.isBlank() && files.isEmpty())) return
         steering = true
         scope.launch {
@@ -345,6 +347,9 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                     } },
                     navigationIcon = { if (showBackButton) androidx.compose.material3.FilledTonalIconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.action_back)) } },
                     actions = {
+                        if (core.supportsAcpReplaySnapshots) TextButton(onClick = { showReplaySnapshots = true }) {
+                            Text(stringResource(Res.string.acp_replay_open))
+                        }
                         TooltipBox(positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above), tooltip = { PlainTooltip { Text(stringResource(Res.string.conversation_settings_title)) } }, state = rememberTooltipState()) {
                             IconButton(enabled = active.isEmpty() && !settingsBusy && !loading, onClick = { showSettings = true; readSettings() }) {
                                 Icon(Icons.Default.Settings, stringResource(Res.string.conversation_settings_title))
@@ -376,7 +381,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                     if (queuePaused && queue.isNotEmpty()) TextButton(onClick = { queuePaused = false }) { Text(stringResource(Res.string.acp_resume_queue)) }
                     queue.forEach { queued -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(queued.text.ifBlank { queued.attachments.joinToString { it.name } }, Modifier.weight(1f), maxLines = 2)
-                        TextButton(enabled = active.isNotEmpty() && !steering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
+                        TextButton(enabled = active.isNotEmpty() && !steering && supportsSteering, onClick = { steer(queued.text, queued.attachments) { queue = queue - queued } }) { Text(stringResource(Res.string.acp_steer)) }
                         TextButton(onClick = { queue = queue - queued }) { Text("×") }
                     } }
                     attachments.forEach { attachment -> TextButton(onClick = { attachments = attachments - attachment }) { Text("${attachment.name} ×") } }
@@ -414,13 +419,13 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
                                 CircularProgressIndicator(progress = { if (used != null && size != null && size > 0) (used.toFloat() / size).coerceIn(0f, 1f) else 0f }, modifier = Modifier.padding(8.dp).size(24.dp).semantics { contentDescription = if (used != null && size != null) "Context: $used / $size tokens" else "Context usage unavailable" }, strokeWidth = 3.dp)
                             }
                         },
-                        onSendLongClick = {
+                        onSendLongClick = if (active.isNotEmpty() && !supportsSteering) null else { {
                             val original = draft; val files = attachments
                             if (active.isNotEmpty()) steer(original.text, files) {
                                 if (draft == original) draft = TextFieldValue("")
                                 attachments = attachments.filterNot { it in files }
                             } else sendPrompt(Queued(original.text, files), true)
-                        },
+                        } },
                         onStopClick = { scope.launch { try { core.controlCancel(active) } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { report(failure.message.orEmpty()) } } },
                         onSendClick = {
                             if (active.isNotEmpty()) {
@@ -467,6 +472,7 @@ internal fun AcpConversationScreen(sessionId: String, onBackClick: () -> Unit, s
         }
         cc.ptoe.messenger.presentation.platform.BackHandler(enabled = showSettings, onBack = { showSettings = false }) {}
         if (showSettings) AcpSessionSettingsScreen(settings, settingsBusy, { showSettings = false }, ::readSettings, settingsError)
+        if (showReplaySnapshots) AcpReplaySnapshotsScreen(core, sessionId) { showReplaySnapshots = false }
     }
 }
 

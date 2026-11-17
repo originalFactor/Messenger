@@ -418,6 +418,39 @@ internal class RoomAcpBackgroundOwner private constructor(
         buildJsonObject { put("type", "History"); put("messages", JsonArray(page)); put("before", next?.let(::JsonPrimitive) ?: JsonNull); put("writable", JsonNull) }
     }
 
+    /** Read a live agent snapshot under the same configuration and worker ownership as a turn. */
+    suspend fun sessionSettings(sessionId: String): JsonObject = admitted {
+        admissions.withLock {
+            synchronized(lock) { check(pendingConfigurationWriters == 0) { "ACP configuration is being changed" } }
+            exclusive.withOwner {
+                check(ledger.activeRequest(sessionId) == null) { "ACP session has an active or unresolved request" }
+                val (binding, configuration) = source.load(sessionId)
+                check(binding.conversationId == sessionId && !binding.delegated) { "ACP session binding changed" }
+                requireSupportedScope(configuration)
+                val retainedBefore = synchronized(lock) {
+                    check(sessionId !in foregroundEnds) { "ACP session has an unresolved request" }
+                    sessionId in retained
+                }
+                val end = foreground()
+                synchronized(lock) { foregroundEnds[sessionId] = end; sessions.add(sessionId) }
+                var success = false
+                try {
+                    acquireOrReuseLease(binding)
+                    authority.verify(binding, configuration)
+                    manager.sessionSettings(binding, configuration) { coordinator.preserveSettingsReplay(binding) }.also { success = true }
+                } finally {
+                    withContext(NonCancellable) {
+                        if (!success || !retainedBefore) {
+                            manager.retireAndAwait(sessionId)
+                            releaseLease(sessionId)
+                        }
+                        releaseForeground(sessionId)
+                    }
+                }
+            }
+        }
+    }
+
     /** An unproven worker retains its lease even after its coroutine exits. */
     suspend fun hasActiveTasks(): Boolean = admitted { synchronized(lock) { liveTasks.any { !it.isCompleted } || leases.isNotEmpty() || foregroundEnds.isNotEmpty() } }
 

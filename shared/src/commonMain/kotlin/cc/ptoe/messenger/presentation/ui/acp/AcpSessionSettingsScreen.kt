@@ -33,6 +33,13 @@ import org.jetbrains.compose.resources.stringResource
 
 internal data class AcpSettingChoice(val value: JsonElement, val name: String, val description: String, val group: String = "")
 
+/** Older backends omit this field and retain their existing supported behavior. */
+internal fun acpBackendAllows(settings: JsonObject, capability: String): Boolean =
+    ((settings["_messengerCapabilities"] as? JsonObject)?.get(capability) as? JsonPrimitive)?.booleanOrNull != false
+
+internal fun acpSupportsSteering(settings: JsonObject): Boolean = acpBackendAllows(settings, "steering") &&
+    (settings["steering"] as? JsonObject)?.get("supported") == JsonPrimitive(true)
+
 /** ACP select options may be flat or grouped; IDs are opaque, never inferred from labels. */
 internal fun acpSettingChoices(options: JsonArray): List<AcpSettingChoice> = options.flatMap { element ->
     val option = element.jsonObject
@@ -52,6 +59,7 @@ internal fun AcpSessionSettingsScreen(
     errorMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val editable = acpBackendAllows(settings, "settingsWritable")
     val options = settings.objects("configOptions").filter { it.text("type") in listOf("select", "boolean") }.toMutableList()
     val modes = settings["modes"] as? JsonObject
     val modeLabel = stringResource(Res.string.acp_session_mode)
@@ -63,6 +71,7 @@ internal fun AcpSessionSettingsScreen(
         }) } })
     }
     var choosing by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(editable) { if (!editable) choosing = null }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
         ExpressiveScaffold(
             modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -83,6 +92,7 @@ internal fun AcpSessionSettingsScreen(
                 Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (busy) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
+                    if (!editable) Text(stringResource(Res.string.acp_settings_read_only), style = MaterialTheme.typography.bodyMedium)
                     if (!errorMessage.isNullOrBlank()) Surface(shape = MaterialTheme.shapes.extraLarge,
                         color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
                         Text(errorMessage, Modifier.fillMaxWidth().padding(24.dp), style = MaterialTheme.typography.bodyMedium)
@@ -95,7 +105,7 @@ internal fun AcpSessionSettingsScreen(
                             val choices = acpSettingChoices(option["options"] as? JsonArray ?: JsonArray(emptyList()))
                             val current = choices.firstOrNull { it.value == option["currentValue"] }?.name ?: option.text("currentValue")
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = false, enabled = !busy && (boolean || choices.isNotEmpty()),
+                                selected = false, enabled = editable && !busy && (boolean || choices.isNotEmpty()),
                                 onClick = {
                                     if (boolean) onChange(buildJsonObject { put("configId", option.text("id")); put("value", !checked) })
                                     else choosing = option.text("id")
@@ -111,7 +121,7 @@ internal fun AcpSessionSettingsScreen(
                                     if (option.text("description").isNotBlank()) Text(option.text("description"), style = MaterialTheme.typography.bodyMedium)
                                 } },
                                 trailingContent = {
-                                    if (boolean) Switch(checked, null, enabled = !busy, modifier = Modifier.clearAndSetSemantics {}, thumbContent = {
+                                    if (boolean) Switch(checked, null, enabled = editable && !busy, modifier = Modifier.clearAndSetSemantics {}, thumbContent = {
                                         Icon(if (checked) Icons.Default.Check else Icons.Default.Close, null, Modifier.size(SwitchDefaults.IconSize))
                                     }) else Icon(Icons.Default.ExpandMore, null)
                                 },
@@ -135,7 +145,7 @@ internal fun AcpSessionSettingsScreen(
                             }
                             val selectedChoice = choice.value == option["currentValue"]
                             cc.ptoe.messenger.presentation.ui.components.SettingsItem(
-                                selected = selectedChoice, enabled = !busy,
+                                selected = selectedChoice, enabled = editable && !busy,
                                 onClick = {
                                     choosing = null
                                     onChange(buildJsonObject {
@@ -148,7 +158,7 @@ internal fun AcpSessionSettingsScreen(
                                 containerColor = MaterialTheme.colorScheme.surfaceBright,
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 supportingContent = choice.description.takeIf { it.isNotBlank() }?.let { description -> { Text(description) } },
-                                trailingContent = { RadioButton(selectedChoice, null, enabled = !busy, modifier = Modifier.clearAndSetSemantics {}) },
+                                trailingContent = { RadioButton(selectedChoice, null, enabled = editable && !busy, modifier = Modifier.clearAndSetSemantics {}) },
                                 headlineContent = { Text(choice.name, style = MaterialTheme.typography.titleMedium) },
                             )
                         }
@@ -163,15 +173,16 @@ internal fun AcpSessionSettingsScreen(
 @Composable
 internal fun AcpSessionControls(settings: JsonObject, busy: Boolean, onChange: (JsonObject) -> Unit) {
     val options = settings.objects("configOptions")
+    val editable = acpBackendAllows(settings, "settingsWritable")
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.sortedBy { when (it.text("category")) { "model" -> 0; "thought_level" -> 1; else -> 2 } }.forEach { option ->
             key(option.text("id")) {
                 when (option.text("type")) {
-                    "select" -> AcpSettingSelector(option, !busy, onChange)
+                    "select" -> AcpSettingSelector(option, editable && !busy, onChange)
                     "boolean" -> FilterChip(
                         selected = (option["currentValue"] as? JsonPrimitive)?.booleanOrNull == true,
-                        enabled = !busy,
+                        enabled = editable && !busy,
                         onClick = { onChange(buildJsonObject {
                             put("configId", option.text("id"))
                             put("value", (option["currentValue"] as? JsonPrimitive)?.booleanOrNull != true)

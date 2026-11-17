@@ -18,6 +18,7 @@ internal interface AcpStdioEvents {
     suspend fun restoreStarted(replay: Boolean) {}
     suspend fun restoreFinished(success: Boolean) {}
     suspend fun update(turnId: String?, update: JsonObject) {}
+    suspend fun settings(turnId: String?, settings: JsonObject) {}
     suspend fun permission(turnId: String, prompt: AcpPermissionPrompt?) {}
 }
 
@@ -27,7 +28,7 @@ internal class AcpStdioWorker(
     private val endpoints: AcpGatewayEndpointFactory,
     private val discovery: suspend () -> String?,
     private val events: AcpStdioEvents,
-) : AcpWorkerProcess, AcpNewSessionBinding {
+) : AcpWorkerProcess, AcpNewSessionBinding, AcpWorkerSettings {
     private data class Active(val turnId: String, val broker: AcpPermissionBroker, val response: Deferred<JsonElement>)
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.IO)
@@ -38,6 +39,23 @@ internal class AcpStdioWorker(
     private var endpoint: AcpGatewayEndpoint? = null
     private var active: Active? = null
     private var gatewayAvailable = false
+    private var settings = buildJsonObject { put("configOptions", JsonArray(emptyList())); put("steering", JsonNull) }
+
+    private fun mergeSettings(current: JsonObject, update: JsonObject): JsonObject {
+        val values = current.toMutableMap()
+        for (key in listOf("configOptions", "modes", "availableCommands", "usage")) update[key]?.let { values[key] = it }
+        update["currentModeId"]?.let { mode ->
+            val modes = values["modes"] as? JsonObject ?: JsonObject(emptyMap())
+            values["modes"] = JsonObject(modes + ("currentModeId" to mode))
+        }
+        if ((update["sessionUpdate"] as? JsonPrimitive)?.contentOrNull == "usage_update") values["usage"] = update
+        return JsonObject(values)
+    }
+
+    override suspend fun sessionSettings(): JsonObject = gate.withLock {
+        check(session != null && peer != null) { "ACP session is unavailable" }
+        settings
+    }
 
     override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
         check(startupBinding == null) { "ACP worker already started" }
@@ -51,6 +69,9 @@ internal class AcpStdioWorker(
             put("clientInfo", buildJsonObject { put("name", "Messenger"); put("version", "1") })
         }) as? JsonObject ?: error("Invalid ACP initialization")
         check((initialized["protocolVersion"] as? JsonPrimitive)?.intOrNull == 1) { "Unsupported ACP protocol version" }
+        gate.withLock {
+            settings = buildJsonObject { put("configOptions", JsonArray(emptyList())); put("steering", (initialized["_meta"] as? JsonObject)?.get("steering") ?: JsonNull) }
+        }
         val capabilities = initialized["agentCapabilities"] as? JsonObject ?: JsonObject(emptyMap())
         val mcp = capabilities["mcpCapabilities"] as? JsonObject ?: JsonObject(emptyMap())
         val sse = (mcp["sse"] as? JsonPrimitive)?.booleanOrNull == true
@@ -91,6 +112,7 @@ internal class AcpStdioWorker(
             ?: error("ACP agent returned no session ID")
         require(sessionId.isNotBlank() && sessionId.length <= 1024 && sessionId.none { it.isISOControl() }) { "Invalid ACP session ID" }
         session = sessionId
+        gate.withLock { settings = mergeSettings(settings, result) }
         return AcpWorkerReady(gatewayAvailable, sessionId)
     }
 
@@ -146,8 +168,17 @@ internal class AcpStdioWorker(
         if (method != "session/update") return
         check((params["sessionId"] as? JsonPrimitive)?.contentOrNull == session) { "ACP update belongs to another session" }
         val update = params["update"] as? JsonObject ?: error("Invalid ACP session update")
-        val turnId = gate.withLock { active?.turnId }
+        val kind = (update["sessionUpdate"] as? JsonPrimitive)?.contentOrNull
+        val (turnId, snapshot) = gate.withLock {
+            if (kind in setOf("config_option_update", "current_mode_update", "usage_update", "available_commands_update")) {
+                settings = mergeSettings(settings, update)
+                active?.turnId to settings
+            } else active?.turnId to null
+        }
+        // Raw notifications still reach the replay capture; live observers also receive the
+        // complete merged settings object expected by the chat UI.
         events.update(turnId, update)
+        if (snapshot != null) events.settings(turnId, snapshot)
     }
 
     private suspend fun incomingRequest(method: String, params: JsonObject): JsonElement {

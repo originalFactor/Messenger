@@ -43,19 +43,24 @@ internal object RoomStoreStartup {
      */
     suspend fun <T> withLeasedCoreStore(source: Path, destination: Path, sourceAssets: Path, destinationAssets: Path,
         ownership: RoomStoreOwnership, shutdown: RoomManagedShutdown, openRoom: (Path) -> LocalDatabase,
+        verifyLegacy: suspend () -> Unit = {},
         useRoom: suspend (LocalDatabase) -> T): T = ownership.withExclusiveOwnership {
             val oldStore = source.toAbsolutePath().normalize()
             val target = destination.toAbsolutePath().normalize()
             require(oldStore != target) { "Core and Room stores must be distinct" }
+            verifyLegacy()
             CoreSourceSqliteLease.acquire(oldStore).use { lease ->
+                verifyLegacy()
                 CoreStorePairedCutover.migrate(lease, sourceAssets, target, destinationAssets,
-                    { initializeEmptyRoom(it, openRoom) }, { verifyRoom(it, openRoom) })
+                    { initializeEmptyRoom(it, openRoom) }, { verifyLegacy(); verifyRoom(it, openRoom) })
+                verifyLegacy()
                 val room = openRoom(target)
                 try {
                     checkDatabasePath(room, target)
                     check(room.rows().defaultAgents().size == 1) { "Exactly one default Agent is required" }
                     check(room.rows().getValue(RoomClearAll.PENDING_KEY) == null) { "Clear-all recovery is required" }
                     check(room.rows().getValue(RoomRestorePreflight.PENDING_KEY) == null) { "Restore recovery is required" }
+                    verifyLegacy()
                     shutdown.enter()
                     try { useRoom(room) } finally { shutdown.stopAndAwait() }
                 } finally { room.close() }

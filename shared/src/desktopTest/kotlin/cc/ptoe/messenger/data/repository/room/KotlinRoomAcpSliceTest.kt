@@ -145,6 +145,11 @@ class KotlinRoomAcpSliceTest {
             assertEquals(2, transports.size)
             assertEquals(1, transports[1].loads)
             assertTrue(bridge.hasActiveTasks())
+            assertTrue(bridge.supportsAcpReplaySnapshots)
+            assertTrue(bridge.supportsAcpReplayDeletion)
+            val loadedReplay = bridge.listAcpReplaySnapshots(id).single()
+            assertEquals(0, bridge.readAcpReplaySnapshot(id, loadedReplay.id, 0).events.size)
+            assertFailsWith<IllegalStateException> { bridge.deleteAcpReplaySnapshot(id, loadedReplay.id) }
             assertEquals(requestId, bridge.backgroundAcpBySession(id)?.get("requestId")?.jsonPrimitive?.content)
             bridge.controlPermission(requestId, permission.getValue("options").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content)
             val done = withTimeout(5_000) {
@@ -169,7 +174,10 @@ class KotlinRoomAcpSliceTest {
             }
             assertFalse(bridge.hasActiveTasks())
             assertTrue(transports.all { it.stopped })
+            bridge.deleteAcpReplaySnapshot(id, loadedReplay.id)
+            assertTrue(bridge.listAcpReplaySnapshots(id).isEmpty())
             lifecycle.stopAndAwait()
+            assertFailsWith<IllegalStateException> { bridge.listAcpReplaySnapshots(id) }
         } finally { db.close(); dir.toFile().deleteRecursively() }
     }
 }

@@ -5,12 +5,18 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.room.Room
+import androidx.room.Transactor
+import androidx.room.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import cc.ptoe.messenger.core.CoreBridgeRegistry
+import cc.ptoe.messenger.core.CoreBridge
 import cc.ptoe.messenger.core.TurnConfigBridge
 import cc.ptoe.messenger.data.local.AppPreferences
 import cc.ptoe.messenger.data.local.ChatImageStore
 import cc.ptoe.messenger.data.local.ThemePreferences
+import cc.ptoe.messenger.data.local.acp.AcpWorkerBinding
+import cc.ptoe.messenger.data.local.acp.RoomAcpReplaySnapshots
+import cc.ptoe.messenger.data.repository.exportAcpReplay
 import cc.ptoe.messenger.data.local.room.LocalDatabase
 import cc.ptoe.messenger.data.local.room.KeyValueRow
 import cc.ptoe.messenger.data.migration.RoomManagedShutdown
@@ -37,6 +43,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -171,8 +178,31 @@ class KotlinRoomAppBackendTest {
             val transcript = (1..25).joinToString(",") { index ->
                 """{"id":"m$index","role":"assistant","text":"text $index","status":"sent","timestamp":$index,"events":[{"type":"ToolUpdate","update":{"title":"read","rawInput":{"path":"file$index"}}}]}"""
             }
-            val pagedRecord = """{"acp:pages":{"id":"acp:pages","title":"ACP pages","profile":"codex","updated_at":5,"messages":[$transcript]}}"""
+            val pagedRecord = """{"acp:pages":{"id":"acp:pages","title":"ACP pages","profile":"codex","project":"project","cwd":"/workspace","agent_session":"worker","updated_at":5,"messages":[$transcript]}}"""
             db.rows().upsertValues(listOf(KeyValueRow("local_acp_sessions", pagedRecord)))
+            val rawReplay = JsonArray((0..104).map { index -> buildJsonObject {
+                put("sessionUpdate", if (index == 104) "future_update" else "agent_message_chunk")
+                put("number", index)
+                if (index == 103) put("content", buildJsonObject { put("type", "image"); put("data", "aW1hZ2U="); put("mimeType", "image/png") })
+            } })
+            db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                RoomAcpReplaySnapshots.record(db.rows(), AcpWorkerBinding("acp:pages", "codex", "project", "/workspace", "worker", false), rawReplay, 7)
+            } }
+            assertTrue(app.coreBridge.supportsAcpReplaySnapshots)
+            assertTrue(!app.coreBridge.supportsAcpReplayDeletion)
+            val replay = app.coreBridge.listAcpReplaySnapshots("acp:pages").single()
+            val firstReplayPage = app.coreBridge.readAcpReplaySnapshot("acp:pages", replay.id, 0)
+            assertEquals(100, firstReplayPage.events.size)
+            assertEquals(100, firstReplayPage.next)
+            val exportedReplay = Json.parseToJsonElement(exportAcpReplay(app.coreBridge, "acp:pages", replay).decodeToString()).jsonObject
+            assertEquals(rawReplay, exportedReplay.getValue("snapshot").jsonObject.getValue("events"))
+            val truncatedReplay = object : CoreBridge by app.coreBridge {
+                override suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int) =
+                    app.coreBridge.readAcpReplaySnapshot(sessionId, snapshotId, after).copy(next = null)
+            }
+            assertFailsWith<IllegalStateException> { exportAcpReplay(truncatedReplay, "acp:pages", replay) }
+            assertFailsWith<IllegalStateException> { app.coreBridge.deleteAcpReplaySnapshot("acp:pages", replay.id) }
+            assertEquals(1, app.coreBridge.listAcpReplaySnapshots("acp:pages").size)
             suspend fun history(before: String? = null): kotlinx.serialization.json.JsonObject {
                 var result: kotlinx.serialization.json.JsonObject? = null
                 app.coreBridge.controlCommand("history", buildJsonObject {
@@ -220,6 +250,8 @@ class KotlinRoomAppBackendTest {
             assertEquals(RoomShutdownState.Stopped, lifecycle.state.value)
             assertFailsWith<IllegalStateException> { app.coreBridge.startBackgroundTurn(config) }
             assertFailsWith<IllegalStateException> { app.coreBridge.localAcpHistory("acp:pages", null) }
+            assertTrue(!app.coreBridge.supportsAcpReplaySnapshots)
+            assertFailsWith<IllegalStateException> { app.coreBridge.listAcpReplaySnapshots("acp:pages") }
             assertFailsWith<IllegalStateException> { slice.asAppBackend() }
             assertSame(backend.coreBridge, CoreBridgeRegistry.bridge)
         } finally {

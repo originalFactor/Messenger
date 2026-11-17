@@ -19,6 +19,12 @@ internal interface AcpActiveTurnGuard {
 
 /** Preserves the existing Core KV record and unknown fields; no ACP content is sent to Cloud. */
 internal class RoomAcpSessionJournal(private val db: LocalDatabase, private val guard: AcpActiveTurnGuard) {
+    /** Caller holds the manager's exclusive session reservation and the enclosing owner. */
+    suspend fun preserveReplayUnderReservation(binding: AcpWorkerBinding, replay: AcpCompletedReplay, now: Long) {
+        db.useWriterConnection { connection -> connection.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+            RoomAcpReplaySnapshots.record(db.rows(), binding, replay.updates, now)
+        } }
+    }
     /** Writes user input before sending an ACP prompt; repeated admission never duplicates it. */
     suspend fun begin(sessionId: String, turnId: String, text: String, content: JsonArray, now: Long,
         replay: AcpCompletedReplay? = null, binding: AcpWorkerBinding? = null) = guard.withActiveTurn(sessionId, turnId) {

@@ -52,15 +52,20 @@ class RoomAcpBackgroundOwnerTest {
         private val allowStop: CompletableDeferred<Unit>? = null,
         private val holdPrompt: Boolean = stopEntered != null,
         private val failFirstStop: Boolean = false,
-    ) : AcpWorkerProcess, AcpNewSessionBinding {
+        private val settingsUpdate: Boolean = false,
+    ) : AcpWorkerProcess, AcpNewSessionBinding, AcpWorkerSettings {
         var stopped = false
         private var stopAttempts = 0
         override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore) =
             AcpWorkerReady(skillsGatewayAvailable = true, agentSessionId = binding.agentSessionId.ifEmpty { "new-session" })
         override fun bindCreatedSession(binding: AcpWorkerBinding) { check(binding.agentSessionId == "new-session") }
+        override suspend fun sessionSettings() = buildJsonObject {
+            put("configOptions", JsonArray(listOf(buildJsonObject { put("id", "mode"); put("currentValue", "safe") })))
+        }
         override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject {
             waiting.complete(Unit)
             if (holdPrompt) awaitCancellation()
+            if (settingsUpdate) events.settings(turnId, sessionSettings())
             val selected = permissions.request(turnId, listOf(AcpPermissionOption("allow", "Allow", "allow_once")), "Read", "test") {
                 events.permission(turnId, it)
             }
@@ -76,13 +81,13 @@ class RoomAcpBackgroundOwnerTest {
         }
     }
 
-    private suspend fun fixture(dir: Path): Pair<LocalDatabase, AcpWorkerBinding> {
+    private suspend fun fixture(dir: Path, agentSessionId: String = "session"): Pair<LocalDatabase, AcpWorkerBinding> {
         val db = Room.databaseBuilder<LocalDatabase>(name = dir.resolve("room.db").toString()).setDriver(BundledSQLiteDriver()).build()
         val workspace = Files.createDirectory(dir.resolve("project")).toString()
         db.rows().upsertValues(listOf(KeyValueRow("device_id", "device"), KeyValueRow("device_control_config",
             """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"fake","args":[],"env":{}}]}""")))
         db.rows().upsertProjects(listOf(ProjectRow("project", "Project", workspace, "device", 1, 1)))
-        val binding = AcpWorkerBinding("acp:one", "agent", "project", workspace, "session", false)
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", workspace, agentSessionId, false)
         val setup = object : AcpSessionMutationGate {
             override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T = action()
         }
@@ -112,6 +117,119 @@ class RoomAcpBackgroundOwnerTest {
 
     private suspend fun LocalDatabase.openHelperPathForTest(): String = useReaderConnection { connection ->
         connection.usePrepared("PRAGMA database_list") { check(it.step()); it.getText(2) }
+    }
+
+    @Test fun settingsReadUsesOwnedWorkerAndRejectsActiveTurn(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-settings")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val foreground = Foreground()
+        val entered = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        val allowStop = CompletableDeferred<Unit>()
+        val workers = mutableListOf<Worker>()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, events ->
+                Worker(events, waiting = entered, stopEntered = if (workers.isEmpty()) null else stopped,
+                    allowStop = if (workers.isEmpty()) null else allowStop, holdPrompt = workers.isNotEmpty()).also { workers.add(it) }
+            }, foreground = foreground::acquire)
+            val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
+                arrayOf(CoreBridge::class.java)) { _, _, _ -> error("Unexpected delegate call") })
+            val bridge = KotlinAcpBackgroundBridge(delegate, owner, AcpNewSessionSource { _, _ -> error("Unexpected creation") })
+            var response: JsonObject? = null
+            bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", "sessionSettings"); put("sessionId", binding.conversationId) }) { response = it }
+            assertEquals("SessionSettings", checkNotNull(response).getValue("type").jsonPrimitive.content)
+            assertEquals("safe", checkNotNull(response).getValue("settings").jsonObject.getValue("configOptions").jsonArray.single().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertFalse(checkNotNull(response).getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("settingsWritable").jsonPrimitive.boolean)
+            assertFalse(checkNotNull(response).getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("steering").jsonPrimitive.boolean)
+            for (action in listOf("setSessionConfig", "steer")) {
+                assertFailsWith<IllegalStateException> {
+                    bridge.controlCommand(UUID.randomUUID().toString(), buildJsonObject { put("action", action); put("sessionId", binding.conversationId) }) {}
+                }
+            }
+            assertTrue(workers.single().stopped)
+            assertEquals(1, foreground.ends.get())
+            val request = UUID.randomUUID().toString()
+            owner.start(request, binding.conversationId, content())
+            withTimeout(5_000) { entered.await() }
+            assertFailsWith<IllegalStateException> { owner.sessionSettings(binding.conversationId) }
+            assertTrue(owner.cancel(request))
+            withTimeout(5_000) { stopped.await() }
+            assertEquals(1, foreground.ends.get())
+            allowStop.complete(Unit)
+            withTimeout(5_000) { lifecycle.stopAndAwait() }
+            assertEquals(2, foreground.ends.get())
+        } finally { allowStop.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun settingsOnlyRestorePreservesAgentReplayWithoutChangingLocalHistory(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-settings-replay")
+        val (db, binding) = fixture(dir, agentSessionId = "fixture-session")
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val config = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
+        try {
+            db.rows().upsertValues(listOf(KeyValueRow("device_control_config",
+                """{"agents":[{"id":"agent","name":"Agent","enabled":true,"command":"python3","args":[],"env":{}}]}""")))
+            val owner = owner(db, binding, lifecycle, { bound, events ->
+                AcpStdioWorker(AcpStdioWorkerTest.FixtureTransport(Path.of(bound.workspace), "settings"),
+                    AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, events)
+            }, source = AcpSessionConfigurationSource { binding to config })
+            val settings = withTimeout(10_000) { owner.sessionSettings(binding.conversationId) }
+            assertEquals("read-only", settings.getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            val snapshots = RoomAcpReplaySnapshots(db, owner.mutationGate)
+            val snapshot = snapshots.list(binding.conversationId).single()
+            val replay = snapshots.page(binding.conversationId, snapshot.id)
+            assertEquals("replayed question", replay.events.first().jsonObject.getValue("content").jsonObject.getValue("text").jsonPrimitive.content)
+            assertTrue(owner.history(binding.conversationId, null).getValue("messages").jsonArray.isEmpty())
+            lifecycle.stopAndAwait()
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun settingsStopFailureRetainsForegroundAndOwnerUntilShutdownRecovery(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-settings-stop")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val foreground = Foreground()
+        lateinit var worker: Worker
+        try {
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, failFirstStop = true).also { worker = it } }, foreground = foreground::acquire)
+            assertFailsWith<IllegalStateException> { owner.sessionSettings(binding.conversationId) }
+            assertFalse(worker.stopped)
+            assertEquals(0, foreground.ends.get())
+            assertTrue(owner.hasActiveTasks())
+            withTimeout(5_000) { lifecycle.stopAndAwait() }
+            assertTrue(worker.stopped)
+            assertEquals(1, foreground.ends.get())
+        } finally { db.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun cancelledSettingsStartupWaitsForWorkerStop(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-owner-settings-cancel")
+        val (db, binding) = fixture(dir)
+        val lifecycle = RoomManagedShutdown { }; lifecycle.enter()
+        val foreground = Foreground()
+        val started = CompletableDeferred<Unit>(); val stopEntered = CompletableDeferred<Unit>(); val allowStop = CompletableDeferred<Unit>()
+        try {
+            val owner = owner(db, binding, lifecycle, { _, _ -> object : AcpWorkerProcess, AcpWorkerSettings {
+                override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
+                    started.complete(Unit); awaitCancellation()
+                }
+                override suspend fun sessionSettings() = JsonObject(emptyMap())
+                override suspend fun prompt(turnId: String, content: JsonArray, permissions: AcpPermissionBroker): JsonObject = error("Unexpected prompt")
+                override suspend fun cancelAndConfirm() = false
+                override suspend fun stopAndAwait() { stopEntered.complete(Unit); allowStop.await() }
+            } }, foreground = foreground::acquire)
+            val call = async { owner.sessionSettings(binding.conversationId) }
+            withTimeout(5_000) { started.await() }
+            call.cancel()
+            withTimeout(5_000) { stopEntered.await() }
+            assertFalse(call.isCompleted)
+            assertEquals(0, foreground.ends.get())
+            allowStop.complete(Unit)
+            withTimeout(5_000) { call.join() }
+            assertEquals(1, foreground.ends.get())
+            lifecycle.stopAndAwait()
+        } finally { allowStop.complete(Unit); db.close(); dir.toFile().deleteRecursively() }
     }
 
     @Test fun cancellationDuringAdmissionRetiresUnstartedRequestAndForegroundLease(): Unit = runBlocking {
@@ -159,7 +277,7 @@ class RoomAcpBackgroundOwnerTest {
         val foreground = Foreground()
         lateinit var worker: Worker
         try {
-            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events).also { worker = it } }, foreground = foreground::acquire)
+            val owner = owner(db, binding, lifecycle, { _, events -> Worker(events, settingsUpdate = true).also { worker = it } }, foreground = foreground::acquire)
             var delegated = 0
             val delegate = CoreBridge::class.java.cast(Proxy.newProxyInstance(CoreBridge::class.java.classLoader,
                 arrayOf(CoreBridge::class.java)) { _, _, _ -> delegated++; error("Unexpected delegate call") })
@@ -191,6 +309,9 @@ class RoomAcpBackgroundOwnerTest {
                 checkNotNull(found)
             }
             assertTrue(done.getValue("events").jsonArray.any { it.jsonObject["type"]?.jsonPrimitive?.content == "Finished" })
+            val settings = done.getValue("events").jsonArray.first { it.jsonObject["type"]?.jsonPrimitive?.content == "SessionSettings" }.jsonObject
+            assertEquals("safe", settings.getValue("settings").jsonObject.getValue("configOptions").jsonArray.single().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertFalse(settings.getValue("settings").jsonObject.getValue("_messengerCapabilities").jsonObject.getValue("settingsWritable").jsonPrimitive.boolean)
             assertEquals(null, owner.bySession(binding.conversationId))
             assertTrue(worker.stopped)
             assertEquals(1, foreground.begins.get())

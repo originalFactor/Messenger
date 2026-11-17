@@ -66,18 +66,20 @@ internal class AndroidRoomCutoverHost private constructor(
     /** Use only when there is no Core database; the startup also checks this before publication. */
     suspend fun <T> withFreshStore(useRoom: suspend (LocalDatabase) -> T): T = runOnce {
         RoomStoreStartup.withRoomStore(source, destination, owner, shutdown, openRoom,
-            verifyFreshSource = {
-                check(legacyDatabases.all { Files.notExists(it, LinkOption.NOFOLLOW_LINKS) }) {
-                    "Legacy Room database or sidecar exists; recovery or migration is required"
-                }
-            }, useRoom = useRoom)
+            verifyFreshSource = ::verifyLegacyAbsent, useRoom = useRoom)
     }
 
     /** Migrates database and assets under the held source lease and the independent platform fences. */
     suspend fun <T> withCoreStore(sourceAssets: Path, destinationAssets: Path,
         useRoom: suspend (LocalDatabase) -> T): T = runOnce {
         RoomStoreStartup.withLeasedCoreStore(source, destination, sourceAssets, destinationAssets,
-            owner, shutdown, openRoom, useRoom)
+            owner, shutdown, openRoom, verifyLegacy = ::verifyLegacyAbsent, useRoom = useRoom)
+    }
+
+    private fun verifyLegacyAbsent() {
+        check(legacyDatabases.all { Files.notExists(it, LinkOption.NOFOLLOW_LINKS) }) {
+            "Legacy Room database or sidecar exists; recovery or migration is required"
+        }
     }
 
     /** Retry from a separate recovery scope while a failed shutdown keeps the original call live. */

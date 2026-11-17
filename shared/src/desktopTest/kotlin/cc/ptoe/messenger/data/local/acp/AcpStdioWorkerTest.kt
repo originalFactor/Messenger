@@ -17,7 +17,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AcpStdioWorkerTest {
-    private class FixtureTransport(private val cwd: Path, private val mode: String = "load") : AcpLineTransport {
+    internal class FixtureTransport(private val cwd: Path, private val mode: String = "load") : AcpLineTransport {
         private lateinit var process: Process
         private lateinit var input: BufferedWriter
         private lateinit var output: BufferedReader
@@ -42,6 +42,38 @@ class AcpStdioWorkerTest {
     }
     private fun configuration() = AcpWorkerConfiguration("python3", emptyList(), emptyMap(), JsonArray(emptyList()), false, emptySet())
     private fun prompt(text: String) = JsonArray(listOf(buildJsonObject { put("type", "text"); put("text", text) }))
+
+    @Test fun settingsComeFromAgentRestoreAndLiveUpdates(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-stdio-settings")
+        val updates = mutableListOf<JsonObject>()
+        val worker = AcpStdioWorker(FixtureTransport(dir, "settings"), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {
+            override suspend fun settings(turnId: String?, settings: JsonObject) { if (turnId != null) updates.add(settings) }
+        })
+        val gateway = AcpGatewayCore(backend, false, emptySet())
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "fixture-session", false)
+        try {
+            worker.start(binding, configuration(), gateway)
+            val initial = worker.sessionSettings()
+            assertEquals("read-only", initial.getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertTrue(initial.getValue("steering").jsonObject.getValue("supported").jsonPrimitive.boolean)
+            worker.prompt("turn", prompt("tools"), AcpPermissionBroker())
+            assertEquals("workspace-write", worker.sessionSettings().getValue("configOptions").jsonArray.first().jsonObject.getValue("currentValue").jsonPrimitive.content)
+            assertEquals(worker.sessionSettings(), updates.last())
+        } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test fun currentModeUpdateIsRetainedWhenAgentOmittedInitialModes(): Unit = runBlocking {
+        val dir = Files.createTempDirectory("acp-stdio-mode")
+        val worker = AcpStdioWorker(FixtureTransport(dir, "settings-no-modes"), AcpGatewayEndpointFactory { _, _ -> error("unexpected gateway") }, { null }, object : AcpStdioEvents {})
+        val gateway = AcpGatewayCore(backend, false, emptySet())
+        val binding = AcpWorkerBinding("acp:one", "agent", "project", dir.toString(), "fixture-session", false)
+        try {
+            worker.start(binding, configuration(), gateway)
+            assertEquals(null, worker.sessionSettings()["modes"])
+            worker.prompt("turn", prompt("tools"), AcpPermissionBroker())
+            assertEquals("code", worker.sessionSettings().getValue("modes").jsonObject.getValue("currentModeId").jsonPrimitive.content)
+        } finally { worker.stopAndAwait(); gateway.close(); dir.toFile().deleteRecursively() }
+    }
 
     @Test fun createsANewAgentSessionThroughTheRealFixture(): Unit = runBlocking {
         val dir = Files.createTempDirectory("acp-new-session")

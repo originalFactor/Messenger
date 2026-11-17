@@ -10,6 +10,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+internal fun roomAcpSettings(settings: JsonObject): JsonObject = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject {
+    put("settingsWritable", false); put("steering", false)
+}))
+
 /** Existing UI polling surface backed by the isolated ACP owner; other commands delegate. */
 internal class KotlinAcpBackgroundBridge(
     private val delegate: CoreBridge,
@@ -45,6 +49,11 @@ internal class KotlinAcpBackgroundBridge(
                 else -> error("Invalid ACP history cursor")
             }
             onEvent(owner.history(session, before))
+        } else if (action == "sessionSettings" && session?.startsWith("acp:") == true) {
+            val settings = owner.sessionSettings(session)
+            onEvent(buildJsonObject { put("type", "SessionSettings"); put("settings", roomAcpSettings(settings)) })
+        } else if (action in setOf("setSessionConfig", "steer") && session?.startsWith("acp:") == true) {
+            error("This ACP operation is unavailable")
         } else delegate.controlCommand(requestId, command, onEvent)
     }
     override suspend fun hasActiveTasks(): Boolean = owner.hasActiveTasks() || delegate.hasActiveTasks()

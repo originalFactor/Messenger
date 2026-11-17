@@ -107,6 +107,92 @@ class AndroidRoomCutoverHostDeviceTest {
         } finally { second.recoverFailedStart() }
     }
 
+    private fun makeCore(path: Path, marker: String? = null) {
+        val sql = InstrumentationRegistry.getInstrumentation().context.assets.open("core-store-v9.sql")
+            .bufferedReader().use { it.readText() }
+        BundledSQLiteDriver().open(path.toString()).use { db ->
+            fun exec(statement: String) = db.prepare(statement).use { it.step(); Unit }
+            sql.split(';').map(String::trim).filter(String::isNotEmpty).forEach(::exec)
+            exec("INSERT INTO agents(id,name,systemPrompt,isDefault,createdAt,updatedAt) VALUES ('core-default','Default','prompt',1,1,1)")
+            exec("INSERT INTO kv VALUES ('migration-test','retained')")
+            if (marker != null) db.prepare("INSERT INTO kv VALUES (?, ?)").use { row ->
+                row.bindText(1, "legacy_import_done"); row.bindText(2, marker); row.step()
+            }
+        }
+    }
+
+    @Test fun existingCoreAndAnyLegacyFileBlockCutoverRegardlessOfImportMarker(): Unit = runBlocking {
+        val stopped = RoomWritersStoppedProof { }
+        val proofs = AndroidRoomCutoverProofs(stopped, stopped, stopped, stopped)
+        for (marker in listOf(null, "none:100", "v1:100")) {
+            for (name in listOf("messenger_database", "messenger_database.db")) {
+                for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                    val source = dir.resolve("core.db")
+                    if (!Files.exists(source)) makeCore(source, marker)
+                    val sourceBytes = Files.readAllBytes(source)
+                    val candidate = legacyDir.resolve(name + suffix)
+                    val original = "legacy-$name$suffix".toByteArray()
+                    Files.write(candidate, original)
+                    val target = dir.resolve("room.db")
+                    var opened = false
+                    val host = AndroidRoomCutoverHost.create(context, source, target, proofs, {},
+                        { opened = true; error("must not open Room") })
+                    try {
+                        assertTrue(runCatching { host.withCoreStore(dir.resolve("old-assets"), dir.resolve("new-assets")) { Unit } }
+                            .exceptionOrNull()?.message.orEmpty().contains("Legacy Room"))
+                        assertFalse(opened)
+                        assertFalse(Files.exists(target))
+                        assertTrue(Files.readAllBytes(source).contentEquals(sourceBytes))
+                        assertTrue(Files.readAllBytes(candidate).contentEquals(original))
+                    } finally {
+                        host.recoverFailedStart()
+                        Files.delete(candidate)
+                    }
+                }
+            }
+            Files.delete(dir.resolve("core.db"))
+        }
+    }
+
+    @Test fun legacyAppearingDuringCoreMigrationBlocksPublication(): Unit = runBlocking {
+        val source = dir.resolve("core.db")
+        makeCore(source, "v1:100")
+        val target = dir.resolve("room.db")
+        val candidate = legacyDir.resolve("messenger_database-wal")
+        val stopped = RoomWritersStoppedProof { }
+        var introduced = false
+        val host = AndroidRoomCutoverHost.create(context, source, target,
+            AndroidRoomCutoverProofs(stopped, stopped, stopped, stopped), {}, { path ->
+                if (!introduced) { introduced = true; Files.write(candidate, byteArrayOf(7, 8, 9)) }
+                Room.databaseBuilder<LocalDatabase>(context, path.toString()).setDriver(BundledSQLiteDriver()).build()
+            })
+        try {
+            assertTrue(runCatching { host.withCoreStore(dir.resolve("old-assets"), dir.resolve("new-assets")) { error("must not enter Room") } }
+                .exceptionOrNull()?.message.orEmpty().contains("Legacy Room"))
+            assertTrue(introduced)
+            assertFalse(Files.exists(target))
+            assertTrue(Files.readAllBytes(candidate).contentEquals(byteArrayOf(7, 8, 9)))
+            assertTrue(Files.exists(source))
+        } finally { host.recoverFailedStart() }
+    }
+
+    @Test fun existingCoreWithoutLegacyFilesStillMigrates(): Unit = runBlocking {
+        val source = dir.resolve("core.db")
+        makeCore(source, "none:100")
+        val target = dir.resolve("room.db")
+        val stopped = RoomWritersStoppedProof { }
+        val host = AndroidRoomCutoverHost.create(context, source, target,
+            AndroidRoomCutoverProofs(stopped, stopped, stopped, stopped), {}, { path ->
+                Room.databaseBuilder<LocalDatabase>(context, path.toString()).setDriver(BundledSQLiteDriver()).build()
+            })
+        host.withCoreStore(dir.resolve("old-assets"), dir.resolve("new-assets")) { room ->
+            assertEquals("retained", room.rows().getValue("migration-test")?.value)
+            assertEquals("core-default", room.rows().defaultAgents().single().id)
+        }
+        assertTrue(Files.exists(source))
+        assertTrue(Files.exists(CoreStorePairedCutover.receiptFor(target)))
+    }
+
     @After fun tearDown() {
         if (::dir.isInitialized && Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             Files.walk(dir).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }

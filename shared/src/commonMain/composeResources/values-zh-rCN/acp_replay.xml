@@ -1,0 +1,16 @@
+<resources>
+    <string name="acp_replay_title">Agent 回放快照</string>
+    <string name="acp_replay_open">回放</string>
+    <string name="acp_replay_explanation">这些快照包含 Agent 加载会话时回放的更新，独立于已保存的对话；两者的对应关系可能不完整或无法确定。</string>
+    <string name="acp_replay_empty">此会话没有回放快照。</string>
+    <string name="acp_replay_count">%1$d 条更新 · %2$d 字节</string>
+    <string name="acp_replay_load_more">加载更多更新</string>
+    <string name="acp_replay_show_details">查看原始更新</string>
+    <string name="acp_replay_hide_details">收起原始更新</string>
+    <string name="acp_replay_export">导出快照</string>
+    <string name="acp_replay_exported">快照已导出</string>
+    <string name="acp_replay_delete">删除快照</string>
+    <string name="acp_replay_delete_confirm">删除此回放快照？已保存的对话不会受影响。</string>
+    <string name="acp_replay_delete_unavailable">ACP 会话所有者确认会话已停止后才能删除。</string>
+    <string name="acp_replay_update">Agent 更新</string>
+</resources>

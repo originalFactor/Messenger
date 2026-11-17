@@ -38,6 +38,24 @@ class AcpSessionSettingsScreenTest {
     }
 
     @Test
+    fun readOnlyBackendShowsSettingsWithoutEnablingChangesOrSteering() = runComposeUiTest {
+        val readonly = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject { put("settingsWritable", false); put("steering", false) }) +
+            ("steering" to buildJsonObject { put("supported", true) }))
+        assertEquals(false, acpSupportsSteering(readonly))
+        assertEquals(true, acpSupportsSteering(JsonObject(settings + ("steering" to buildJsonObject { put("supported", true) }))))
+        setContent { MaterialTheme { AcpSessionSettingsScreen(readonly, false, {}, {}) } }
+        onNodeWithText("These session settings are read-only on this device.").assertExists()
+        onNodeWithText("Read only").assertIsNotEnabled()
+    }
+
+    @Test
+    fun readOnlyBackendDisablesComposerSettings() = runComposeUiTest {
+        val readonly = JsonObject(settings + ("_messengerCapabilities" to buildJsonObject { put("settingsWritable", false) }))
+        setContent { MaterialTheme { AcpSessionControls(readonly, false, {}) } }
+        onNodeWithText("Permissions: Read only").assertIsNotEnabled()
+    }
+
+    @Test
     fun modelAndEffortControlsFollowTheAgentsReplacementSnapshot() = runComposeUiTest {
         val initial = Json.parseToJsonElement("""{"configOptions":[
             {"id":"model","name":"Model","category":"model","type":"select","currentValue":"first",

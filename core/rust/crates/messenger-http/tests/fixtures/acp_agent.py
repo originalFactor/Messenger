@@ -78,7 +78,7 @@ for line in sys.stdin:
     if method in ("session/new", "session/load", "session/resume") and mode.startswith("skills-"):
         mcp_url = next(server["url"] for server in packet["params"]["mcpServers"] if server["name"] == "Messenger Skills")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "mcp-load")}
+        capabilities = {"loadSession": mode in ("load", "load-media", "load-live-media", "settings", "settings-hang", "settings-no-modes", "mcp-load")}
         if mode.startswith("mcp-") or mode == "agent-mcp":
             capabilities["mcpCapabilities"] = {"sse": True}
         if mode == "agent-mcp-http":
@@ -121,7 +121,10 @@ for line in sys.stdin:
                 {"type": "resource_link", "uri": "file:///result.txt", "name": "result.txt", "mimeType": "text/plain"},
             ]:
                 send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "agent_message_chunk", "messageId": "assistant-media", "content": content}})
-        send(id=request_id, result=session_settings() if mode.startswith("settings") else {})
+        settings = session_settings() if mode.startswith("settings") else {}
+        if mode == "settings-no-modes":
+            settings.pop("modes")
+        send(id=request_id, result=settings)
     elif method == "session/set_config_option":
         params = packet["params"]
         if mode == "settings-hang" and params.get("value") == "full-access":
@@ -172,7 +175,7 @@ for line in sys.stdin:
                     assert resource["content"][0]["text"] == "PRIVATE RESOURCE"
             update("agent_message_chunk", "skill disabled" if text == "disabled" else "skill read")
             send(id=pending, result={"stopReason":"end_turn"})
-        elif text == "tools" and mode == "settings":
+        elif text == "tools" and mode in ("settings", "settings-no-modes"):
             update("agent_thought_chunk", "Inspect the file")
             update("agent_message_chunk", "I will read the file. ")
             send(method="session/update", params={"sessionId": session_id, "update": {
@@ -184,6 +187,8 @@ for line in sys.stdin:
             permissions = "workspace-write"
             send(method="session/update", params={"sessionId": session_id, "update": {
                 "sessionUpdate": "config_option_update", "configOptions": session_settings()["configOptions"]}})
+            if mode == "settings-no-modes":
+                send(method="session/update", params={"sessionId": session_id, "update": {"sessionUpdate": "current_mode_update", "currentModeId": "code"}})
             update("agent_message_chunk", "Read complete")
             send(id=pending, result={"stopReason": "end_turn"})
         elif text == "wait":

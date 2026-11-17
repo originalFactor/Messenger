@@ -24,6 +24,7 @@ import cc.ptoe.messenger.data.local.acp.AcpSkillsGatewayBackend
 import cc.ptoe.messenger.data.local.acp.AcpStdioWorker
 import cc.ptoe.messenger.data.local.acp.KotlinAcpBackgroundBridge
 import cc.ptoe.messenger.data.local.acp.RoomAcpBackgroundOwner
+import cc.ptoe.messenger.data.local.acp.RoomAcpReplaySnapshots
 import cc.ptoe.messenger.data.local.artifact.RoomArtifactService
 import cc.ptoe.messenger.data.local.artifact.ArtifactExecutionService
 import cc.ptoe.messenger.data.local.artifact.ArtifactSandboxHost
@@ -180,10 +181,12 @@ internal class KotlinRoomBackendSlice private constructor(
                         AcpStdioWorker(config.transport(binding), config.endpoints, { skillStore.discovery(permitted = true) }, events)
                     }, now)
             }
-            val acp = RoomAcpConversationStore(db, acpOwner?.mutationGate ?: object : AcpSessionMutationGate {
+            val acpMutationGate = acpOwner?.mutationGate ?: object : AcpSessionMutationGate {
                 override suspend fun <T> withInactiveSession(id: String, deleting: Boolean, action: suspend () -> T): T =
                     error("ACP session mutations require the Kotlin ACP host")
-            })
+            }
+            val acp = RoomAcpConversationStore(db, acpMutationGate)
+            val acpSnapshots = RoomAcpReplaySnapshots(db, acpMutationGate)
             val providers = RoomProviderRepository(db) { _, _ -> cloud.requestLocalSync() }
             val models = RoomModelRepository(db) { _, _ -> cloud.requestLocalSync() }
             val agents = RoomAgentRepository(db) { previous, current ->
@@ -197,8 +200,9 @@ internal class KotlinRoomBackendSlice private constructor(
 
             val skills = KotlinSkillBridge(composition.bridge, skillStore, remote = remoteSkills)
             val controls = KotlinControlSettingsBridge(skills, db)
-            val acpBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession)
-                else RoomAcpHistoryBridge(controls, acp)
+            val workerBridge = if (acpOwner != null) KotlinAcpBackgroundBridge(controls, acpOwner, checkNotNull(acpConfig).newSession)
+                else controls
+            val acpBridge = RoomAcpHistoryBridge(workerBridge, acp, acpSnapshots, deletionAvailable = acpOwner != null)
             var modelImageTool: IsolatedModelImageTool? = null
             var sharedImageService: ImageGenerationService? = null
             val imageOwner = imageJobs?.let { config ->
@@ -291,6 +295,13 @@ private class PartialChatBridge(
         admitted { delegate.controlCommand(requestId, command, onEvent) }
     override suspend fun localAcpHistory(sessionId: String, before: String?) =
         admitted { delegate.localAcpHistory(sessionId, before) }
+    override val supportsAcpReplaySnapshots: Boolean get() = !calls.isClosing && delegate.supportsAcpReplaySnapshots
+    override val supportsAcpReplayDeletion: Boolean get() = !calls.isClosing && delegate.supportsAcpReplayDeletion
+    override suspend fun listAcpReplaySnapshots(sessionId: String) = admitted { delegate.listAcpReplaySnapshots(sessionId) }
+    override suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int) =
+        admitted { delegate.readAcpReplaySnapshot(sessionId, snapshotId, after) }
+    override suspend fun deleteAcpReplaySnapshot(sessionId: String, snapshotId: String) =
+        admitted { delegate.deleteAcpReplaySnapshot(sessionId, snapshotId) }
     override suspend fun runTurn(config: TurnConfigBridge, toolExecutor: suspend (String, String) -> Pair<String, Boolean>,
         onEventJson: (String) -> Unit) = withForegroundAdmission {
         admitted { delegate.runTurn(config, toolExecutor, onEventJson) }

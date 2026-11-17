@@ -47,6 +47,9 @@ internal interface AcpWorkerProcess {
     suspend fun stopAndAwait()
 }
 
+/** Agent-reported settings only; this interface does not mutate a session. */
+internal interface AcpWorkerSettings { suspend fun sessionSettings(): JsonObject }
+
 /**
  * Optional platform-provided proof for an ACP process which can remain alive between turns.
  * Both checks must establish that its prior work, descendants and external side effects have
@@ -118,6 +121,29 @@ internal class AcpWorkerManager(
 
     /** Retire an idle worker without deleting its session; success requires platform stop proof. */
     suspend fun retireAndAwait(id: String) = withInactiveSession(id, true) { }
+
+    /** Read only agent-reported settings while excluding turns and session mutation. */
+    suspend fun sessionSettings(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration,
+        afterRestore: suspend () -> Unit): JsonObject = slot(binding.conversationId).mutex.withLock {
+        val current = slot(binding.conversationId)
+        check(!current.unsafe && current.active == null && !current.settlementPending) { "ACP session is active or its worker has not stopped" }
+        workspace.requireLocalUnchanged(binding)
+        val worker = current.worker?.also { check(it.binding == binding) { "ACP session binding changed" } } ?: run {
+            val process = factory.create(binding)
+            val gateway = AcpGatewayCore(backend, configuration.allowDelegation && !binding.delegated,
+                if (binding.delegated) emptySet() else configuration.coreToolScope)
+            Worker(binding, process, gateway).also { current.worker = it }
+        }
+        if (worker.ready == null) {
+            worker.ready = withTimeout(startupTimeoutMillis) { worker.process.start(binding, configuration, worker.gateway) }
+            worker.configuration = configuration
+            check(worker.ready!!.agentSessionId == null || worker.ready!!.agentSessionId == binding.agentSessionId) { "ACP worker restored a different session" }
+        } else check(worker.configuration?.sameAs(configuration) == true) { "ACP worker configuration changed; restart is required" }
+        workspace.requireLocalUnchanged(binding)
+        check(worker.ready!!.skillsGatewayAvailable || !needsGateway()) { "This ACP agent needs MCP SSE or HTTP support; restart with a compatible agent" }
+        afterRestore()
+        (worker.process as? AcpWorkerSettings ?: error("ACP session settings are unavailable")).sessionSettings()
+    }
 
     override suspend fun <T> withActiveTurn(sessionId: String, turnId: String, action: suspend () -> T): T = slot(sessionId).mutex.withLock {
         val current = slot(sessionId)

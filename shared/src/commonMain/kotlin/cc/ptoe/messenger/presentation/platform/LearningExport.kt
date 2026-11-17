@@ -12,7 +12,7 @@ internal expect fun rememberLearningImportLauncher(onPicked: (String) -> Unit, o
 
 /** User-selected destination; resource bytes never enter saved-state Bundles. */
 @Composable
-internal expect fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit = {}): LearningExportLauncher
+internal expect fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit = {}, pickerTitle: String? = null): LearningExportLauncher
 
 @Composable
 internal fun rememberLearningAssetExportLauncher(onError: (String) -> Unit): (String, String, ByteArray) -> Unit {

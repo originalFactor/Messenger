@@ -18,11 +18,12 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 @Composable
-internal actual fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit): LearningExportLauncher {
+internal actual fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit, pickerTitle: String?): LearningExportLauncher {
     val scope = rememberCoroutineScope()
     val failed by rememberUpdatedState(onError)
     val saved by rememberUpdatedState(onSaved)
-    val title = stringResource(Res.string.learning_export)
+    val title = pickerTitle ?: stringResource(Res.string.learning_export)
+    val currentTitle by rememberUpdatedState(title)
     return remember(scope) { object : LearningExportLauncher {
         override fun launch(filename: String, bytes: ByteArray, mimeType: String) {
             scope.launch {
@@ -31,7 +32,7 @@ internal actual fun rememberLearningExportLauncher(onError: (String) -> Unit, on
                         EventQueue.invokeLater {
                             if (continuation.isActive) {
                                 try {
-                                    val dialog = FileDialog(null as Frame?, title, FileDialog.SAVE)
+                                    val dialog = FileDialog(null as Frame?, currentTitle, FileDialog.SAVE)
                                     continuation.invokeOnCancellation { EventQueue.invokeLater { dialog.dispose() } }
                                     val selected = try {
                                         dialog.file = filename

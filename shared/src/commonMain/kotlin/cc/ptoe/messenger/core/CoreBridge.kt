@@ -206,6 +206,12 @@ interface CoreBridge {
         }
         return checkNotNull(result) { "ACP history ended without a result" }
     }
+    /** Optional owner-local inspection of saved agent replay, independent of ACP workers. */
+    val supportsAcpReplaySnapshots: Boolean get() = false
+    val supportsAcpReplayDeletion: Boolean get() = false
+    suspend fun listAcpReplaySnapshots(sessionId: String): List<AcpReplaySnapshot> = error("ACP replay snapshots unavailable")
+    suspend fun readAcpReplaySnapshot(sessionId: String, snapshotId: String, after: Int): AcpReplayPage = error("ACP replay snapshots unavailable")
+    suspend fun deleteAcpReplaySnapshot(sessionId: String, snapshotId: String): Unit = error("ACP replay snapshots unavailable")
     suspend fun remoteControlCommand(
         requestId: String, deviceId: String, command: kotlinx.serialization.json.JsonObject,
         onEvent: (kotlinx.serialization.json.JsonObject) -> Unit,

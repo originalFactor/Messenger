@@ -35,6 +35,16 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
 
     fun eventsFor(binding: AcpWorkerBinding): AcpStdioEvents = eventsFor { binding }
 
+    /** Caller holds the manager's exclusive session reservation during this transaction. */
+    suspend fun preserveSettingsReplay(binding: AcpWorkerBinding) {
+        val replay = gate.withLock { restores[binding.conversationId]?.completed } ?: return
+        journal.preserveReplayUnderReservation(binding, replay, now())
+        gate.withLock {
+            val state = restores[binding.conversationId]
+            if (state?.completed === replay) state.completed = null
+        }
+    }
+
     internal fun eventsFor(binding: () -> AcpWorkerBinding): AcpStdioEvents = object : AcpStdioEvents {
         override suspend fun restoreStarted(replay: Boolean) {
             val binding = binding()
@@ -73,8 +83,6 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
                     }
                     "agent_thought_chunk" -> buildJsonObject { put("type", "ThoughtDelta"); put("text", text) }
                     "tool_call", "tool_call_update" -> buildJsonObject { put("type", "ToolUpdate"); put("update", update) }
-                    "config_option_update", "current_mode_update", "usage_update", "available_commands_update" ->
-                        buildJsonObject { put("type", "SessionSettings"); put("update", update) }
                     else -> return@withLock
                 }
                 if (kind == "agent_message_chunk") {
@@ -88,6 +96,13 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
                     turn.transcript.add(event)
                 }
                 turn.replay.append(event)
+            }
+        }
+        override suspend fun settings(turnId: String?, settings: JsonObject) {
+            if (turnId == null) return
+            gate.withLock {
+                val turn = turns[turnId]?.takeIf { it.binding == binding() && !it.completed } ?: return@withLock
+                turn.replay.append(buildJsonObject { put("type", "SessionSettings"); put("settings", roomAcpSettings(settings)) })
             }
         }
         override suspend fun permission(turnId: String, prompt: AcpPermissionPrompt?) {
@@ -178,7 +193,7 @@ internal class AcpTurnCoordinator(private val journal: RoomAcpSessionJournal, pr
 
 /** Adds durable input, transcript and replay without changing the ACP wire implementation. */
 internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val worker: AcpWorkerProcess, private val events: AcpTurnCoordinator,
-    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof {
+    private val onBind: (AcpWorkerBinding) -> Unit = {}) : AcpWorkerProcess, AcpTurnFinalizer, AcpNewSessionBinding, AcpReusableWorkerProof, AcpWorkerSettings {
     @Volatile private var binding = initialBinding
     private val begun = mutableSetOf<String>()
     override suspend fun start(binding: AcpWorkerBinding, configuration: AcpWorkerConfiguration, gateway: AcpGatewayCore): AcpWorkerReady {
@@ -202,6 +217,8 @@ internal class RecordingAcpWorker(initialBinding: AcpWorkerBinding, private val 
     }
     override suspend fun cancelAndConfirm() = worker.cancelAndConfirm()
     override suspend fun stopAndAwait() = worker.stopAndAwait()
+    override suspend fun sessionSettings(): JsonObject =
+        (worker as? AcpWorkerSettings ?: error("ACP session settings are unavailable")).sessionSettings()
     override val supportsReusableTurns: Boolean get() = (worker as? AcpReusableWorkerProof)?.supportsReusableTurns == true
     override suspend fun requireInitialQuiescence() =
         (worker as? AcpReusableWorkerProof ?: error("ACP reusable-worker proof is unavailable")).requireInitialQuiescence()

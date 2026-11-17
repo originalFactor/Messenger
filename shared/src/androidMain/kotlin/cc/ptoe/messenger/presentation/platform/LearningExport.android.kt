@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
-internal actual fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit): LearningExportLauncher {
+internal actual fun rememberLearningExportLauncher(onError: (String) -> Unit, onSaved: () -> Unit, pickerTitle: String?): LearningExportLauncher {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val failed by rememberUpdatedState(onError)
